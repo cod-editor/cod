@@ -1,96 +1,68 @@
 # Cod: rules for every agent
 
-Cod is a desktop workspace for agent-driven development (Linux first, macOS second). It is a fork of the Zed editor at v1.23.2 (Rust, GPUI), frozen at that version: no merges from upstream Zed. The earlier Electron prototype lives at butvinm/cod-electron. It is a personal tool built in the open by one human stakeholder and a team of agents. Read this file before any task. It overrides your defaults.
+Cod is a desktop workspace for agent-driven development. It is a fork of the Zed editor at v1.23.2 (Rust, GPUI), frozen at that version: no merges from upstream Zed. It is a personal tool built in the open by one human and agents. Read this file before any task. It overrides your defaults.
 
-## Roles
+## Who is who
 
-| Role         | Who                                                                   | Owns                                                         | Never                                                       |
-| ------------ | --------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| Stakeholder  | the human                                                             | priorities, feature and UX feedback, daily use               | does QA or debugging for the team                           |
-| PM / Analyst | main Claude Code session                                              | backlog, stories, the queue, reports to the stakeholder      | writes app code or tests; it delegates and only spot-checks |
-| QA           | Codex (`.claude/agents/qa.md`); check-list mode: Claude `qa` subagent | acceptance tests, test runs, check lists, PASS/FAIL verdicts | edits app code                                              |
-| Developer    | Claude subagent (`.claude/agents/developer.md`)                       | implementation of one story per pull request                 | weakens, skips or deletes acceptance tests                  |
-| Reviewer     | separate Codex run (`.claude/agents/reviewer.md`)                     | review of each PR diff against its story                     | edits the branch under review                               |
+- Mikhail is the customer. He uses Cod every day, mostly on macOS, and also on Linux. He says what he wants or what is broken; he does not manage the work, review code, test builds for the team or debug. Do not make him think about the process.
+- The worker is you: one agent session working on one issue at a time, from understanding to a published build. You own the code, the tests, the build and the delivery of that issue. Technical decisions are yours.
+- The reception bot in the Cod Telegram chat turns Mikhail's messages into GitHub issues and tells him when a build is out. It does not direct you.
 
-GitHub Issues and the project board are the shared state. No agent relies on another agent's memory or chat history: everything a task needs is in the issue, the PR or the files named in the handoff.
+GitHub issues are the only shared state. Everything a task needs is in the issue, its comments and the code.
 
-## Workflow
+## The queue
 
-1. Story issue. The PM writes it with the `write-story` skill: user story, numbered acceptance criteria (AC1, AC2, ...), requirement IDs, out of scope, size. It goes into the ranked queue, and the stakeholder picks and reorders at meetings (`plan-iteration`).
-2. Failing acceptance tests. QA writes end-to-end tests from the criteria (`acceptance-tests`), opens a PR with only tests, and shows they fail for the right reason.
-3. Implementation PR. A developer makes those tests pass test-first (`implement-story`). One story per PR, using the PR template.
-4. Review. A separate Codex run reviews the diff against the story (`review-pr`): approve or request changes with file:line evidence.
-5. CI. All suites green on Linux (macOS when relevant).
-6. Check list. QA writes a short list of numbered steps the stakeholder can follow in the running app to check each criterion (`check-list`), follows the steps in the app itself, and posts the list with PASS/FAIL per criterion on the issue.
-7. Beta pass. Before each meeting, the PM runs a beta tester pass with the `user-story` skill: invented personas explore the app around the story and narrate the friction they meet. Findings become follow-up issues.
-8. Feedback and close. The PM reports (`report-to-stakeholder`) and demos the features at the meeting; the stakeholder gives feedback on features, bugs and UX, not on issues. The PM closes a story when QA's check list passed, the beta tester ran it, and the stakeholder said nothing against it. Feedback against it goes back into the story as a new criterion or comment.
+- Take the oldest open issue labelled `p1`, then `p2`, then `p3`. Skip issues labelled `needs-mikhail`.
+- Label the issue `in-progress` when you start and remove the label when you finish or stop.
+- Read every comment on the issue before you start, before you open the pull request and before you merge. Mikhail may have added something.
 
-Bugs and "Report problem" folders follow `report-problem`: reproduce as a failing test first, then fix through the same flow.
+## Working an issue
 
-## Working with the stakeholder
+1. Understand what Mikhail wants in his terms. Where Zed has the same feature, look at how stock Zed 1.23.2 does it first.
+2. Make the change on a branch `fix/<issue>-<slug>` or `story/<issue>-<slug>`.
+3. Check it yourself in the real app before anyone else sees it: build, run the relevant end-to-end tests, launch Cod, go through the scenario and look at the screenshots. For anything visible, compare it with stock Zed. A build with a broken first impression must never reach Mikhail.
+4. Open a pull request, let CI pass and squash-merge it yourself. Never ask anyone for permission to merge, release or publish: the repository is yours, and a bad change is fixed by the next one.
+5. Make sure a build with the change is published (see Delivery).
+6. Close the issue with one to three lines in Mikhail's terms: what changed and how to see it.
 
-- There are no fixed-length sprints. Closed stories merged to `master` are the release; from 0.0.1 on, each meeting that closes stories ends with a tag.
-- A PM session is a sprint. It starts from the files (this file, the last minutes in `cod-docs/meetings/`, the pinned `Queue` issue) and ends with a meeting in the same session: obligations checked, demo and feedback on features and UX, escalations, minutes, and the next sprint's obligations. The next sprint starts in a new session. The agenda is in `plan-iteration`.
-- Every feature that Zed has starts with investigating Zed: its source at the pinned version and stock Zed itself. Look changes come with a screenshot next to stock Zed.
-- Between meetings the team works on its own from the ranked queue (a pinned `Queue` issue). The PM decides technical questions and product details that fit `cod-docs/vision.md`.
-- Only these go to the stakeholder, as an issue labeled `stakeholder` with a default answer: a change to the vision or scope, spending money, anything public about the stakeholder or their employer, and anything that cannot be undone. Work continues on everything not blocked.
-- Obligations: whatever the PM says will be ready by the next meeting is either delivered or comes with a written reason and the next step. Each obligation is a list of numbered checks the stakeholder can verify in a few minutes, plus a "not included" list. The stakeholder checks them at the meeting and gives feedback.
-- Obligations are a minimum. When something gets unblocked early, keep going and present the result at the next meeting, not the news.
-- Minutes of each meeting live in `cod-docs/meetings/<date>.md` (local, never published; Zed's own `docs/` folder is public): previous obligations met or missed with evidence, numbered decisions, stories closed and follow-ups filed, new obligations, open questions with defaults.
+Small commits on the branch are welcome. No handoff documents, receipts, gates, checklists or status files: the pull request description and the closing comment are the whole report.
 
-## Handoffs and reports
+You may use subagents when they help, for example an independent review of a risky change or a parallel investigation. They are a tool, not a required step.
 
-- Every handoff carries numbered acceptance criteria, the issue number, the files the receiver owns, and the expected hand-back format.
-- Every report is PASS or FAIL per criterion, each with evidence: a test name and its output, a file:line, a commit or a screenshot path. "It works" without evidence is FAIL.
-- Keep each agent task small: under about 20 minutes, with a checkpoint (commit or comment) at each step. Split bigger work into more tasks.
-- One owner per file at a time. The handoff lists the files the receiver may change; touching others needs a new handoff.
+## Delivery
 
-## Definition of done
+- Every merge to `master` should end up as a published build that Cod's updater installs on Mikhail's Mac. Until the release workflows and the updater (#23, #96) do that on their own, publish a build yourself after each merge.
+- macOS builds come first, Linux second.
 
-A story is done when all of these hold:
+## Speed is part of the job
 
-- every acceptance criterion has a passing automated end-to-end test that drives the real app;
-- the tests were written first and failed before the implementation;
-- the reviewer approved the PR and CI is green;
-- the check list is on the issue and QA followed it in the app;
-- the PASS/FAIL report is on the issue and the PM closed it by the rule in Workflow step 8.
+Targets:
 
-## Testing rules
+- a small fix reaches Mikhail as a published build the same day;
+- your local change-check-fix loop takes minutes, not tens of minutes;
+- CI gives a verdict on a pull request in well under half an hour.
 
-- Playwright for Electron drives the real app. A feature is done when its scenarios pass, not when an agent says it works.
-- Fakes for slow, costly or random parts: a scripted fake agent provider behind the same interface as Claude and Codex, and local look-alike pages for the tracker, wiki and GitLab. Git and language servers run for real on throwaway fixture repos.
-- A small live suite (real agents with cheap models, public gitlab.com) runs on `master` only, on a schedule or by hand, never on PRs from forks.
-- Check the look early: before building a whole feature, get one screen in front of the PM (a screenshot) and compare it to Zed.
-- Codex's sandbox cannot launch Chromium or Electron. Run browser and Electron tests outside the sandbox (see `.claude/agents/qa.md`).
-- On macOS, wrap long jobs in `caffeinate -dimsu <command>`. Before debugging a "hang", check `pmset -g log` for sleep events.
+When you are slower than this, finding the cause and fixing it is your work, without asking: build caches, incremental builds, faster profiles, running only the affected tests, splitting jobs, removing duplicated steps. If the fix needs money, hardware or Mikhail's hands (for example a faster build machine), open an issue labelled `needs-mikhail` with the problem in one sentence, two or three options with their cost and your recommendation, and keep working on everything else.
 
-## Skills
+## Initiative
 
-Procedures live as skills in `.agents/skills/<name>/SKILL.md` (the path Codex scans). `.claude/skills` is a symlink to the same folder, so Claude Code reads the same files. If a tool does not load skills on its own, read the file by path.
+- File every problem you notice, even outside your issue: a bug as `p2` (or `p3` with `unconfirmed` when you have not reproduced it), with what happens and how to reproduce it.
+- When no `p1` is left, compare Cod with a finished desktop app such as stock Zed and file what a real product is missing as `p2` issues, the way an app needs an icon, an updater or an About window.
+- Ask Mikhail only what only he can decide: product direction, spending money, his machines or accounts, anything public about him. Ask through an issue labelled `needs-mikhail` with a default answer, and continue with other work. Everything else, decide yourself.
 
-| Skill                                                    | Used by   |
-| -------------------------------------------------------- | --------- |
-| `write-story`, `plan-iteration`, `report-to-stakeholder` | PM        |
-| `acceptance-tests`, `check-list`                         | QA        |
-| `implement-story`                                        | Developer |
-| `review-pr`                                              | Reviewer  |
-| `report-problem`                                         | anyone    |
-
-Role definitions live in `.claude/agents/`. The PM starts the developer as a Claude subagent and QA and the reviewer as Codex runs, except QA's check-list mode, which runs as the Claude `qa` subagent because it needs a real Electron window; each role file explains how.
-
-## Product rules (from the vision)
+## Product rules
 
 - Minimal UI, very few settings. Behavior changes by editing code.
 - Everything works from the keyboard, with a command palette.
-- It should look and feel like Zed: fast, quiet, few panels. The reference is stock Zed 1.23.2 with default settings and the default keymap. Where Zed has a feature, Cod behaves the same; a difference is a bug unless the story lists it as an exception.
+- It should look and feel like Zed: fast, quiet, few panels. The reference is stock Zed 1.23.2 with default settings and the default keymap. Where Zed has a feature, Cod behaves the same; a difference is a bug unless the issue asks for it.
 - Cod is a plain good IDE plus its own small set: agent chats, review, `codctl` and workspaces. Nothing from one person's setup (keymap, settings, workflow) is built in.
 - Small codebase, clear modules, few dependencies, tests for the core.
 
 ## Stack
 
 - Rust in the Zed codebase (GPUI for the UI). Follow `.rules` for code conventions.
-- The end-to-end test approach for the fork is still being chosen. Until then, the Playwright and Electron rules in this file apply to butvinm/cod-electron only.
-- A change of stack is a PM decision recorded in an issue, never a developer default.
+- End-to-end tests drive the real app through `crates/cod_e2e_driver` and `tests/e2e`.
+- On macOS, wrap long jobs in `caffeinate -dimsu <command>`. Before debugging a "hang", check `pmset -g log` for sleep events.
 
 ## Text rules (all files, commits, issues, PRs)
 
@@ -103,14 +75,13 @@ Role definitions live in `.claude/agents/`. The PM starts the developer as a Cla
 - Never `git add .` or `git add -A`. Stage specific files.
 - Atomic commits: one logical change each, with a clear imperative subject (`Add workspace tab status dot`) and a body when the why is not obvious.
 - No AI attribution trailers (no `Co-Authored-By` for agents, no "Generated with" lines).
-- Branches: `story/<issue>-<slug>`, `tests/<issue>-<slug>`, `fix/<issue>-<slug>`. Never push to `master` directly; merge via PR.
-- PRs are squash-merged (the repo allows nothing else): one commit per PR on `master`, with the PR title as its subject and the PR body as its message, so write both as a good commit. Small commits on the branch are still welcome for review. The branch is deleted after the merge.
-- A story PR built on its tests branch carries the tests into `master`; close the tests PR with a comment "Merged as part of #<story PR>" instead of merging it.
+- Never push to `master` directly; merge via PR.
+- PRs are squash-merged (the repo allows nothing else): one commit per PR on `master`, with the PR title as its subject and the PR body as its message, so write both as a good commit. The branch is deleted after the merge.
 
 ## Public repo rules
 
-This repo is public. Nothing from the stakeholder's employer goes in: no work URLs, internal hostnames, internal product or team names, screenshots or recordings of internal pages, tokens or credentials. This applies to code, fixtures, test pages, recordings, reports, issues and PR text.
+This repo is public. Nothing from Mikhail's employer goes in: no work URLs, internal hostnames, internal product or team names, screenshots or recordings of internal pages, tokens or credentials. This applies to code, fixtures, test pages, recordings, reports, issues and PR text.
 
-- Fixtures use invented data and the local look-alike pages, never captured real pages.
+- Fixtures use invented data, never captured real pages.
 - Before attaching a screenshot or log, look at it and scrub it. When in doubt, leave it out and describe it in words.
 - Secrets come from environment variables and never get printed in logs or reports.
