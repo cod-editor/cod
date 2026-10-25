@@ -110,8 +110,8 @@ jobs:
           version: v0.18.0
 
       # Only the cargo registry and git checkouts, like linux-release.yml; the target folder is
-      # left to sccache. Only a push to macos-preview/** writes the cache (this workflow never
-      # runs on master), so a one-off dispatch run from another branch cannot fill or poison it.
+      # left to sccache. Master and native preview branches write caches; other branches only
+      # read them. Master must save its own caches because it cannot restore topic-branch caches.
       - name: Restore the cargo registry cache
         if: steps.reuse.outputs.commit == ''
         uses: Swatinem/rust-cache@v2.8.0
@@ -119,7 +119,7 @@ jobs:
           key: release-fast
           cache-targets: false
           cache-on-failure: true
-          save-if: ${{ startsWith(github.ref, 'refs/heads/macos-preview/') }}
+          save-if: ${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/macos-preview/') }}
 
       # remote_server is a Linux-only concern for this preview. cod_browser (the off-screen CEF
       # page-tab helper) now builds here too (#23 round 1): its cef dependency needs the CEF
@@ -136,7 +136,7 @@ jobs:
         if: steps.reuse.outputs.commit == ''
         env:
           SCCACHE_GHA_ENABLED: "true"
-          SCCACHE_GHA_RW_MODE: ${{ startsWith(github.ref, 'refs/heads/macos-preview/') && 'READ_WRITE' || 'READ_ONLY' }}
+          SCCACHE_GHA_RW_MODE: ${{ (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/macos-preview/')) && 'READ_WRITE' || 'READ_ONLY' }}
           RUSTC_WRAPPER: sccache
         run: |
           sccache --zero-stats
@@ -145,7 +145,7 @@ jobs:
           df -h /
 
       - name: Save the CEF download
-        if: steps.reuse.outputs.commit == '' && startsWith(github.ref, 'refs/heads/macos-preview/') && steps.cef-cache.outputs.cache-hit != 'true'
+        if: steps.reuse.outputs.commit == '' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/macos-preview/')) && steps.cef-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CEF_PATH }}
