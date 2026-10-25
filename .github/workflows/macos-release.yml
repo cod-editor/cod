@@ -84,9 +84,9 @@ jobs:
           source_commit=$(python3 -c 'import json; r=json.load(open("reuse-run.json")); assert r["status"] == "completed"; assert r["path"] == ".github/workflows/macos-release.yml"; print(r["head_sha"])')
           source_number=$(python3 -c 'import json; print(json.load(open("reuse-run.json"))["run_number"])')
           git fetch --no-tags --depth=1 origin "$source_commit"
-          # Only this workflow and the external smoke driver may differ. Application,
+          # Only release workflows and the external smoke driver may differ. Application,
           # embedded driver, bundler and dependencies must match the retained package.
-          git diff --exit-code "$source_commit" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py'
+          git diff --exit-code "$source_commit" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude).github/workflows/linux-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py'
           gh run download "$REUSE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name cod-macos-aarch64
           shasum -a 256 -c cod-macos-aarch64.zip.sha256
           mkdir -p dist
@@ -1082,6 +1082,8 @@ jobs:
               repo = make_repo(data, "ordinary-notes", {"README.txt": "Existing release notes.\n"})
               settings = cod_settings()
               settings["theme"] = theme
+              if fresh:
+                  settings["use_system_path_prompts"] = True
               (data / "config").mkdir()
               (data / "config/settings.json").write_text(json.dumps(settings))
               (output / "settings.json").write_text(json.dumps(settings, indent=2))
