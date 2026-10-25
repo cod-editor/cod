@@ -8,6 +8,8 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 
 unset WAYLAND_DISPLAY
+COD_WEBVIEW_BACKEND=webkitgtk
+export COD_WEBVIEW_BACKEND
 
 if [ "$#" -gt 0 ]; then
     COD_SPIKE_URL=$1
