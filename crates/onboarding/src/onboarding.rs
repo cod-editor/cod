@@ -304,7 +304,7 @@ impl Onboarding {
     }
 
     fn render_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        crate::basics_page::render_basics_page(&self.user_store, cx).into_any_element()
+        crate::basics_page::render_basics_page(cx).into_any_element()
     }
 }
 
@@ -362,11 +362,6 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        // #77 F5: the header matches the welcome
-                                                        // page's own Cod text; other Zed mentions
-                                                        // further down this page (for example
-                                                        // "Zed Agent", keymap names) are left as
-                                                        // is, a remaining rough edge.
                                                         Headline::new(self.cod_header_label())
                                                             .size(HeadlineSize::Small),
                                                     )

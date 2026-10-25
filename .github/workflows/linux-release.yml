@@ -2,7 +2,7 @@
 # A pushed tag v* makes a prerelease named for the tag; a manual run makes a prerelease preview-<run number>.
 # The CEF runtime (about 100 MB compressed) is not part of the preview tarball. It is a separate asset of a
 # prerelease named cef-<CEF version>, built once per CEF version, and cod-wayland.sh downloads it on first start.
-name: Linux release
+name: Preview release
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 # One run at a time, so two runs never publish the CEF release together. A run waits for the one in progress.
 # queue: max keeps every waiting run in line instead of cancelling an older waiting one.
@@ -21,6 +22,9 @@ concurrency:
   queue: max
 
 jobs:
+  macos:
+    uses: ./.github/workflows/macos-release.yml
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 350
@@ -213,21 +217,45 @@ jobs:
           tar -tJf cod-linux-x86_64.tar.xz
           df -h /
 
-      - name: Upload to a prerelease
+      - name: Upload the Linux archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: cod-linux-x86_64
+          path: cod-linux-x86_64.tar.xz
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    needs: [build, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the tested macOS archive
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-macos-aarch64
+
+      - name: Download the Linux archive
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-linux-x86_64
+
+      - name: Publish both platforms together
         env:
           GH_TOKEN: ${{ github.token }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
+          set -euo pipefail
+          sha256sum --check cod-macos-aarch64.zip.sha256
           if [ "$REF_TYPE" = "tag" ]; then
             tag="$REF_NAME"
           else
             tag="preview-$RUN_NUMBER"
           fi
-          gh release create "$tag" cod-linux-x86_64.tar.xz \
+          gh release create "$tag" cod-linux-x86_64.tar.xz cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "$tag" \
-            --notes "Cod preview for x86_64 Linux, built from $GITHUB_SHA. See the README for how to try it."
+            --notes "Cod preview for Apple Silicon macOS and x86_64 Linux, built from $GITHUB_SHA. The macOS app includes page tabs and restricted agent-made HTML pages. The macOS archive is unsigned: see the README for installation steps."
