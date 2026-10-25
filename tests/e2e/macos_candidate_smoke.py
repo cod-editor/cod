@@ -115,6 +115,15 @@ def exercise(data: Path, socket_path: Path, codctl: str, artifacts: Path) -> Non
                     pending.communicate(timeout=5)
         print("PASS native page text input, backspace and submitted value", flush=True)
 
+        scripted = data / "scripted.html"
+        scripted.write_text('<title>Script disabled</title>'
+                            '<script>document.title = "Script enabled";</script>')
+        scripted_id = ctl("open", "--html", str(scripted), "--js")
+        page(scripted_id, "Script enabled")
+        capture("mac-script-enabled")
+        ctl("page", "close", scripted_id)
+        print("PASS explicit --js enables the page script", flush=True)
+
         # A file link must go through the editor's ordinary URL action.
         document = data / "reference.txt"
         document.write_text("https://example.com/\n")

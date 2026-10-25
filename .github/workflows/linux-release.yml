@@ -2,7 +2,7 @@
 # A pushed tag v* makes a prerelease named for the tag; a manual run makes a prerelease preview-<run number>.
 # The CEF runtime (about 100 MB compressed) is not part of the preview tarball. It is a separate asset of a
 # prerelease named cef-<CEF version>, built once per CEF version, and cod-wayland.sh downloads it on first start.
-name: Linux release
+name: Preview release
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 # One run at a time, so two runs never publish the CEF release together. A run waits for the one in progress.
 # queue: max keeps every waiting run in line instead of cancelling an older waiting one.
@@ -21,7 +22,12 @@ concurrency:
   queue: max
 
 jobs:
+  macos:
+    uses: ./.github/workflows/macos-release.yml
+
   build:
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     env:
@@ -214,6 +220,7 @@ jobs:
           df -h /
 
       - name: Upload to a prerelease
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           REF_TYPE: ${{ github.ref_type }}
@@ -231,3 +238,24 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$tag" \
             --notes "Cod preview for x86_64 Linux, built from $GITHUB_SHA. See the README for how to try it."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  publish-macos:
+    needs: [build, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the tested macOS archive
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-macos-aarch64
+
+      - name: Add macOS to the same preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          sha256sum --check cod-macos-aarch64.zip.sha256
+          gh release upload "$RELEASE_TAG" cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 --repo "$GITHUB_REPOSITORY"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes "Cod preview for Apple Silicon macOS and x86_64 Linux, built from $GITHUB_SHA. The macOS app includes page tabs and restricted agent-made HTML pages. The macOS archive is unsigned: see the README for installation steps."

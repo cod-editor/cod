@@ -1,23 +1,10 @@
-# Builds the Cod preview for Apple Silicon macOS and uploads it to a GitHub prerelease (issue #23).
-# This workflow is separate from linux-release.yml so a macOS build never costs Linux preview
-# minutes, and the other way around.
-#
-# It can only start by hand (workflow_dispatch) or by a push to macos-preview/**: a workflow file
-# that is not yet on the default branch cannot be started by workflow_dispatch alone, so a branch
-# push is the only way to try this workflow itself before it is merged. It never runs on
-# pull_request, so a fork's PR (or any PR) never spends these minutes.
-#
-# The macOS archive is unsigned (ad-hoc signature only, script/bundle-cod-mac): code signing and
-# notarization cost money and need a stakeholder decision (#23 out of scope). It targets Apple
-# Silicon only.
-#
-# #23 round 1 ports Linux's off-screen CEF page-tab backend (cod_browser) to macOS: the CEF
-# runtime is downloaded and cached the same way as linux-release.yml's own CEF steps (CEF_PATH,
-# restored/saved by actions/cache, keyed by CEF version and this platform), and script/bundle-cod-mac
-# packages "Chromium Embedded Framework.framework" plus one helper app bundle inside Cod.app.
+# Builds and tests the Apple Silicon preview. Linux release calls this workflow so both
+# platforms ship from the same commit. Manual runs and macos-preview/** pushes allow native QA
+# without charging macOS minutes to pull requests.
 name: macOS release
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       publish:
@@ -43,6 +30,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: macos-15
     timeout-minutes: 300
     env:
@@ -662,7 +650,7 @@ jobs:
           # Enter (refused, logged, the page stays open), then Tab to the allowed "submit" button
           # and Enter (codctl prints the field's value and exits 0). No new input system: the keys
           # reach the page the ordinary way, through Cod's window. If this runner does not let
-          # osascript send keystrokes, that is reported as a gap, not faked.
+          # osascript send keystrokes, the smoke test fails.
           echo "== round 6 P2b: agent page actions by keyboard (codctl open --html --wait) =="
           p2b_out=smoke-artifacts/codctl-open-p2b-wait.txt
           p2b_log=smoke-artifacts/osascript-p2b.txt
@@ -696,7 +684,8 @@ jobs:
             status=1
           elif ! osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true" >> "$p2b_log" 2>&1 \
             || ! sleep 1 || ! send_key 48 || ! sleep 0.5 || ! send_key 36; then
-            echo "P2b GAP: this runner refused synthetic key presses (osascript/System Events, accessibility permission), so the allowed and the disallowed action could not be triggered here; they need a real click or key press on macOS by QA."
+            echo "::error::P2b FAIL: native keyboard access is required to verify the restricted action bridge"
+            status=1
             cat "$p2b_log"
           else
             # Tab, Enter on "erase-everything": refused in Cod and logged, the page stays open.
@@ -1297,14 +1286,18 @@ jobs:
                       keys("super-enter")
                       wait(lambda s: s["active_tab"] != "Onboarding" and s["onboarding_header"] is None,
                            "finish setup")
-                      action("workspace: add folder to project")
-                      wait(lambda s: s["path_prompt"] is not None, "folder picker")
-                      keys("super-a")
-                      driver.type(str(repo))
-                      wait(lambda s: s["path_prompt"] is not None and s["path_prompt"]["query"] == str(repo)
-                           and s["path_prompt"]["match_count"] == 1, "exact folder match")
-                      keys("enter")
-                      wait(lambda s: s["path_prompt"] is None and len(s["worktrees"]) == 1, "folder opened")
+                      os_window('keystroke "o" using command down')
+                      time.sleep(1)
+                      capture("01a-native-open-dialog")
+                      os_window('keystroke "g" using {command down, shift down}')
+                      time.sleep(.5)
+                      os_window("keystroke " + json.dumps(str(repo)))
+                      time.sleep(.5)
+                      os_window("key code 36")
+                      time.sleep(.5)
+                      os_window("key code 36")
+                      wait(lambda s: len(s["worktrees"]) == 1, "Cmd-O opens folder")
+                      print("PASS native Cmd-O opens the selected folder", flush=True)
                   keys("super-p")
                   wait(lambda s: s["file_finder_ready"], "ordinary file finder")
                   driver.type("README.txt")

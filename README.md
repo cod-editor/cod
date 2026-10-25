@@ -39,9 +39,9 @@ Both start scripts keep its settings and data in `~/.local/share/cod-preview`, s
 
 ## macOS (Apple Silicon) preview
 
-The macOS preview is unsigned (ad-hoc signature only, no Apple Developer certificate: code signing and notarization cost money and are a separate decision) and built for Apple Silicon only (no Intel build). The current candidate includes web page tabs and agent-made pages (`codctl open --html`) through the same off-screen browser backend as Linux. Native package acceptance is still required before a new preview is offered for use.
+The macOS preview is unsigned (ad-hoc signature only, no Apple Developer certificate: code signing and notarization cost money and are a separate decision) and built for Apple Silicon only (no Intel build). It includes web page tabs and agent-made pages (`codctl open --html`) through the same off-screen browser backend as Linux.
 
-1. Download `cod-macos-aarch64.zip` from the latest macOS preview prerelease on the [Releases](https://github.com/cod-editor/cod/releases) page (a release titled like `macos-preview-N (macOS, Apple Silicon, unsigned)`).
+1. Download `cod-macos-aarch64.zip` next to `cod-linux-x86_64.tar.xz` in the latest `preview-*` prerelease on the [Releases](https://github.com/cod-editor/cod/releases) page.
 2. Unzip it and move `Cod.app` to `/Applications`.
 3. Because it is unsigned, the first open needs one extra step: right-click `Cod.app` in Finder, choose Open, then confirm in the dialog. (After that, opening it normally works.) Instead of the right-click, you can also run `xattr -dr com.apple.quarantine /Applications/Cod.app` once in Terminal.
 
@@ -49,7 +49,7 @@ Cod's data lives in `~/Library/Application Support/Cod-preview`, separate from s
 
 `codctl` is bundled inside the app, at `/Applications/Cod.app/Contents/MacOS/codctl`. To use it from a terminal, put it on your `PATH`, for example `ln -s /Applications/Cod.app/Contents/MacOS/codctl /usr/local/bin/codctl` (or any folder already on your `PATH`).
 
-The macOS preview is built by `.github/workflows/macos-release.yml`, on a free GitHub-hosted Apple Silicon runner.
+Each preview builds both platforms from the same commit. `.github/workflows/linux-release.yml` calls `.github/workflows/macos-release.yml` on a free GitHub-hosted Apple Silicon runner, then attaches the tested macOS archive to the same release. macOS builds also run by hand, never on pull requests.
 
 ## Building
 
