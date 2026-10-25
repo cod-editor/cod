@@ -26,8 +26,6 @@ jobs:
     uses: ./.github/workflows/macos-release.yml
 
   build:
-    outputs:
-      release_tag: ${{ steps.release.outputs.tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     env:
@@ -219,28 +217,15 @@ jobs:
           tar -tJf cod-linux-x86_64.tar.xz
           df -h /
 
-      - name: Upload to a prerelease
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          if [ "$REF_TYPE" = "tag" ]; then
-            tag="$REF_NAME"
-          else
-            tag="preview-$RUN_NUMBER"
-          fi
-          gh release create "$tag" cod-linux-x86_64.tar.xz \
-            --repo "$GITHUB_REPOSITORY" \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "$tag" \
-            --notes "Cod preview for x86_64 Linux, built from $GITHUB_SHA. See the README for how to try it."
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Upload the Linux archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: cod-linux-x86_64
+          path: cod-linux-x86_64.tar.xz
+          retention-days: 14
+          if-no-files-found: error
 
-  publish-macos:
+  publish:
     needs: [build, macos]
     runs-on: ubuntu-24.04
     steps:
@@ -249,13 +234,28 @@ jobs:
         with:
           name: cod-macos-aarch64
 
-      - name: Add macOS to the same preview
+      - name: Download the Linux archive
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-linux-x86_64
+
+      - name: Publish both platforms together
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
           sha256sum --check cod-macos-aarch64.zip.sha256
-          gh release upload "$RELEASE_TAG" cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 --repo "$GITHUB_REPOSITORY"
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+          else
+            tag="preview-$RUN_NUMBER"
+          fi
+          gh release create "$tag" cod-linux-x86_64.tar.xz cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
             --notes "Cod preview for Apple Silicon macOS and x86_64 Linux, built from $GITHUB_SHA. The macOS app includes page tabs and restricted agent-made HTML pages. The macOS archive is unsigned: see the README for installation steps."
