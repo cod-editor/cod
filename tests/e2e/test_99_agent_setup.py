@@ -2,10 +2,11 @@
 
 import json
 import os
-import subprocess
+from unittest.mock import patch
 
 from cod_e2e import CodTestCase, make_repo
 from fake_acp_agent import fake_agent_settings
+from test_37_codctl import Codctl
 
 
 class AgentSetupTest(CodTestCase):
@@ -21,7 +22,9 @@ class AgentSetupTest(CodTestCase):
             f"Path({str(environment_file)!r}).write_text(json.dumps(os.environ.get('COD_WORKSPACE'))); "
             f"runpy.run_path({agent_script!r}, run_name='__main__')"
         )]
-        self.start_cod(repo, extra_settings={"agent_servers": {"claude-acp": agent}})
+        codex_home = self.workdir / "codex-home"
+        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+            self.start_cod(repo, extra_settings={"agent_servers": {"claude-acp": agent}})
         home = self.cod.home
         with self.step("install from the command palette"):
             self.run_command("cod: set up coding agents")
@@ -30,18 +33,20 @@ class AgentSetupTest(CodTestCase):
             control = home / ".local/bin/codctl"
             self.assertTrue(control.is_symlink())
             claude = home / ".claude/skills/cod-control/SKILL.md"
-            codex = home / ".codex/skills/cod-control/SKILL.md"
+            codex = codex_home / "skills/cod-control/SKILL.md"
             self.assertEqual(claude.read_text(), codex.read_text())
             self.assertIn("COD_WORKSPACE", claude.read_text())
-            result = subprocess.run([str(control), "workspace", "list"], env={**os.environ, "HOME": str(home)}, capture_output=True, text=True, timeout=15)
+            client = Codctl(control, home)
+            result = client.run("workspace", "list")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.keys("enter")
             self.wait_for(lambda state: state.get("prompt") is None, 15, "confirmation closed")
             self.wait_for(lambda state: state.get("agent_panel_ready") is True, 15, "agent panel")
-            result = subprocess.run([str(control), "session", "new", "--agent", "claude"], env={**os.environ, "HOME": str(home)}, capture_output=True, text=True, timeout=30)
+            result = client.run("session", "new", "--agent", "claude")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "setup-session")
-            listed = subprocess.run([str(control), "workspace", "list", "--json"], env={**os.environ, "HOME": str(home)}, check=True, capture_output=True, text=True, timeout=15)
+            listed = client.run("workspace", "list", "--json")
+            self.assertEqual(listed.returncode, 0, listed.stderr)
             workspace_id = json.loads(listed.stdout)[0]["id"]
             self.assertEqual(json.loads(environment_file.read_text()), str(workspace_id))
         with self.step("run setup again without changing other agent settings"):
@@ -54,7 +59,8 @@ class AgentSetupTest(CodTestCase):
 
     def test_setup_preserves_an_existing_unrelated_skill(self):
         repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
-        self.start_cod(repo)
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.workdir / "codex-home")}):
+            self.start_cod(repo)
         skill = self.cod.home / ".claude/skills/cod-control/SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text("A different skill\n")
