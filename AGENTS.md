@@ -19,11 +19,12 @@ GitHub issues are the only shared state. Everything a task needs is in the issue
 ## Working an issue
 
 1. Understand what Mikhail wants in his terms. Where Zed has the same feature, look at how stock Zed 1.23.2 does it first.
-2. Make the change on a branch `fix/<issue>-<slug>` or `story/<issue>-<slug>`.
-3. Check it yourself in the real app before anyone else sees it: build, run the relevant end-to-end tests, launch Cod, go through the scenario and look at the screenshots. For anything visible, compare it with stock Zed. A build with a broken first impression must never reach Mikhail.
-4. Open a pull request, let CI pass and squash-merge it yourself. Never ask anyone for permission to merge, release or publish: the repository is yours, and a bad change is fixed by the next one.
-5. Make sure a build with the change is published (see Delivery).
-6. Close the issue with one to three lines in Mikhail's terms: what changed and how to see it.
+2. Once you know the scope, comment on the issue with a line `Estimate: <UTC time in ISO format, for example 2026-10-26T13:00Z>` and a few words on why, the time a published build with the change will be out. The PM gives Mikhail dates from it. If the scope turns out bigger or smaller, post a new `Estimate:` line right away.
+3. Make the change on a branch `fix/<issue>-<slug>` or `story/<issue>-<slug>`.
+4. Check it yourself in the real app before anyone else sees it: build, run the relevant end-to-end tests, launch Cod, go through the scenario and look at the screenshots. For anything visible, compare it with stock Zed. A build with a broken first impression must never reach Mikhail.
+5. Open a pull request, let CI pass and squash-merge it yourself. Never ask anyone for permission to merge, release or publish: the repository is yours, and a bad change is fixed by the next one.
+6. Make sure a build with the change is published (see Delivery).
+7. Close the issue with one to three lines in Mikhail's terms: what changed and how to see it.
 
 Small commits on the branch are welcome. No handoff documents, receipts, gates, checklists or status files: the pull request description and the closing comment are the whole report.
 
