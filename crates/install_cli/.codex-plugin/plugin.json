@@ -1,0 +1,16 @@
+{
+  "name": "cod-control",
+  "version": "1.0.0",
+  "description": "Control the running Cod editor with codctl.",
+  "author": {
+    "name": "Cod"
+  },
+  "repository": "https://github.com/cod-editor/cod",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Cod control",
+    "shortDescription": "Control the Cod editor from Codex",
+    "developerName": "Cod",
+    "category": "Productivity"
+  }
+}

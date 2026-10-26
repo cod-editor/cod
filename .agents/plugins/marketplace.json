@@ -1,0 +1,19 @@
+{
+  "name": "cod",
+  "interface": {
+    "displayName": "Cod"
+  },
+  "plugins": [
+    {
+      "name": "cod-control",
+      "source": {
+        "source": "local",
+        "path": "./crates/install_cli"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
