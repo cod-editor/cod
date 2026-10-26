@@ -1,8 +1,6 @@
 """Set up both coding agents through the real command palette."""
 
 import json
-import os
-from unittest.mock import patch
 
 from cod_e2e import CodTestCase, make_repo
 from fake_acp_agent import fake_agent_settings
@@ -22,9 +20,7 @@ class AgentSetupTest(CodTestCase):
             f"Path({str(environment_file)!r}).write_text(json.dumps(os.environ.get('COD_WORKSPACE'))); "
             f"runpy.run_path({agent_script!r}, run_name='__main__')"
         )]
-        codex_home = self.workdir / "codex-home"
-        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
-            self.start_cod(repo, extra_settings={"agent_servers": {"claude": agent}})
+        self.start_cod(repo, extra_settings={"agent_servers": {"claude": agent}})
         home = self.cod.home
         with self.step("install from the command palette"):
             self.run_command("cod: set up coding agents")
@@ -33,7 +29,7 @@ class AgentSetupTest(CodTestCase):
             control = home / ".local/bin/codctl"
             self.assertTrue(control.is_symlink())
             claude = home / ".claude/skills/cod-control/SKILL.md"
-            codex = codex_home / "skills/cod-control/SKILL.md"
+            codex = home / ".agents/skills/cod-control/SKILL.md"
             self.assertEqual(claude.read_text(), codex.read_text())
             self.assertIn("COD_WORKSPACE", claude.read_text())
             client = Codctl(control, home)
@@ -59,8 +55,7 @@ class AgentSetupTest(CodTestCase):
 
     def test_setup_preserves_an_existing_unrelated_skill(self):
         repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
-        with patch.dict(os.environ, {"CODEX_HOME": str(self.workdir / "codex-home")}):
-            self.start_cod(repo)
+        self.start_cod(repo)
         skill = self.cod.home / ".claude/skills/cod-control/SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text("A different skill\n")

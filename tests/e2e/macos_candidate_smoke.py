@@ -7,7 +7,6 @@ workflow separately retains its System Events keyboard proof. Fixtures are inven
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -74,7 +73,7 @@ def exercise(data: Path, socket_path: Path, codctl: str, artifacts: Path) -> Non
         assert "Coding agents are ready" in str(state["prompt"]), state["prompt"]
         home = Path.home()
         claude_skill = home / ".claude/skills/cod-control/SKILL.md"
-        codex_skill = Path(os.environ.get("CODEX_HOME", str(home / ".codex"))) / "skills/cod-control/SKILL.md"
+        codex_skill = home / ".agents/skills/cod-control/SKILL.md"
         assert claude_skill.read_text() == codex_skill.read_text()
         installed_control = Path("/usr/local/bin/codctl")
         assert installed_control.resolve() == Path(codctl).resolve()

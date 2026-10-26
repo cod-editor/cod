@@ -20,16 +20,13 @@ pub fn set_up_coding_agents(window: &mut Window, cx: &mut Context<Workspace>) {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("HOME is not set")?;
-        let codex_home = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".codex"));
         let bin = if cfg!(target_os = "macos") {
             PathBuf::from("/usr/local/bin")
         } else {
             home.join(".local/bin")
         };
         let detail = cx
-            .background_spawn(async move { install(&executable, &home, &codex_home, &bin).await })
+            .background_spawn(async move { install(&executable, &home, &bin).await })
             .await?;
         cx.prompt(
             PromptLevel::Info,
@@ -43,7 +40,7 @@ pub fn set_up_coding_agents(window: &mut Window, cx: &mut Context<Workspace>) {
     .detach_and_prompt_err("Could not set up coding agents", window, cx, |_, _, _| None);
 }
 
-async fn install(executable: &Path, home: &Path, codex_home: &Path, bin: &Path) -> Result<String> {
+async fn install(executable: &Path, home: &Path, bin: &Path) -> Result<String> {
     let siblings = executable
         .parent()
         .context("Cod has no executable directory")?;
@@ -55,7 +52,7 @@ async fn install(executable: &Path, home: &Path, codex_home: &Path, bin: &Path) 
     );
     let skills = [
         home.join(".claude/skills/cod-control"),
-        codex_home.join("skills/cod-control"),
+        home.join(".agents/skills/cod-control"),
     ];
     for skill in &skills {
         let path = skill.join("SKILL.md");
