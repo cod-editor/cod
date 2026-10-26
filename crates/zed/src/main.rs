@@ -1576,8 +1576,7 @@ pub(crate) async fn restore_or_create_workspace(
     let restorable = match registry_windows {
         Some(windows) => Some(windows),
         None => {
-            let mut restorable =
-                                    restorable_workspaces(cx, &app_state).await;
+            let mut restorable = restorable_workspaces(cx, &app_state).await;
             match cod_seed_registry_and_publish_session(&mut restorable, &app_state, cx).await {
                 Ok(_) => restorable,
                 // Restoring would re-bind the previous session's workspaces to this start's

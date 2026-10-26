@@ -276,6 +276,9 @@ jobs:
       # way Finder does (open -n) with an isolated, temporary data folder, waiting for the window
       # before poking at it with codctl. A crash report for one of Cod's own executables, created
       # after this run's own launch, also fails the job, even if the process looked alive below.
+      - name: Verify native local-network permission identity
+        run: python3 tests/e2e/macos_network_identity.py dist/Cod.app smoke-artifacts/network-identity
+
       - name: Smoke test the zip
         id: smoke
         run: |
