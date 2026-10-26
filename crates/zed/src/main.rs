@@ -211,6 +211,35 @@ fn main() {
     util::prevent_root_execution();
 
     let args = Args::parse();
+    #[cfg(target_os = "macos")]
+    let args = {
+        let mut args = args;
+        // LaunchServices must launch the native executable itself so macOS privacy
+        // dialogs attribute network access to Cod instead of the old shell's child.
+        // Keep the data isolation that the removed bundle launcher provided.
+        if args.user_data_dir.is_none()
+            && std::env::current_exe().is_ok_and(|executable| {
+                executable.file_name().is_some_and(|name| name == "Cod")
+                    && executable
+                        .parent()
+                        .and_then(|path| path.parent())
+                        .is_some_and(|contents| contents.join("Resources/cod-commit.txt").is_file())
+            })
+        {
+            args.user_data_dir = Some(
+                std::env::var("COD_PREVIEW_DIR")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| {
+                        paths::home_dir()
+                            .join("Library/Application Support/Cod-preview")
+                            .to_string_lossy()
+                            .into_owned()
+                    }),
+            );
+        }
+        args
+    };
 
     // `zed --askpass` Makes zed operate in nc/netcat mode for use with askpass
     #[cfg(not(target_os = "windows"))]
