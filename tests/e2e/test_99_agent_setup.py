@@ -1,6 +1,8 @@
 """Discover agent plugins without changing agent configuration."""
 
 import json
+import os
+from pathlib import Path
 
 from cod_e2e import CodTestCase, make_repo
 from fake_acp_agent import fake_agent_settings
@@ -17,6 +19,12 @@ class AgentSetupTest(CodTestCase):
         for directory in (".claude", ".agents", ".codex"):
             self.assertFalse((self.cod.home / directory / "skills/cod-control/SKILL.md").exists())
         self.assertFalse((self.cod.home / ".local/bin/codctl").exists())
+        client = Codctl(Path(os.environ["COD_E2E_RUN_DIR"]) / "codctl", self.cod.home)
+        other = make_repo(self.workdir, "other", {"other.txt": "Other\n"})
+        result = client.run("workspace", "new", "--folder", str(other), "--focus")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.wait_for(lambda state: state["active_workspace"] == 1, 15, "other workspace focused")
+        self.assertTrue(state["coding_agent_setup_notice"])
         self.restart_cod()
         self.assertFalse(self.state()["coding_agent_setup_notice"])
         self.run_command("cod: set up coding agents")

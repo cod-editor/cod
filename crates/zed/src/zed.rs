@@ -1383,8 +1383,8 @@ fn register_actions(
     #[cfg(not(target_os = "windows"))]
     {
         workspace.register_action(install_cli);
-        workspace.register_action(|workspace, _: &install_cli::SetUpCodingAgents, _, cx| {
-            install_cli::set_up_coding_agents(workspace, cx);
+        workspace.register_action(|_, _: &install_cli::SetUpCodingAgents, _, cx| {
+            install_cli::set_up_coding_agents(cx);
         });
         workspace.register_action(|_, _: &install_cli::InstallCodctl, window, cx| {
             install_cli::install_codctl(window, cx);
@@ -1398,7 +1398,7 @@ fn register_actions(
                 .flatten()
                 .is_none()
             {
-                install_cli::set_up_coding_agents(workspace, cx);
+                install_cli::set_up_coding_agents(cx);
                 db::write_and_log(cx, move || async move {
                     store
                         .write_kvp("cod-agent-setup-notice-shown".into(), "1".into())

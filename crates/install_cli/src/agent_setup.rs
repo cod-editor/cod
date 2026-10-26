@@ -1,9 +1,10 @@
 use anyhow::{Context as _, Result, bail};
-use gpui::{AppContext as _, ClipboardItem, Context, PromptLevel, Window, actions};
+use gpui::{App, AppContext as _, ClipboardItem, Context, PromptLevel, Window, actions};
 use std::path::{Path, PathBuf};
 use workspace::Workspace;
 use workspace::notifications::{
-    DetachAndPromptErr, NotificationId, simple_message_notification::MessageNotification,
+    DetachAndPromptErr, NotificationId, show_app_notification,
+    simple_message_notification::MessageNotification,
 };
 
 actions!(
@@ -21,8 +22,8 @@ const CLAUDE_COMMANDS: &str =
 const CODEX_COMMANDS: &str =
     "codex plugin marketplace add cod-editor/cod\ncodex plugin add cod-control@cod";
 
-pub fn set_up_coding_agents(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
-    workspace.show_notification(NotificationId::named("cod-agent-setup".into()), cx, |cx| {
+pub fn set_up_coding_agents(cx: &mut App) {
+    show_app_notification(NotificationId::named("cod-agent-setup".into()), cx, |cx| {
         cx.new(|cx| {
             MessageNotification::new(
                 format!("Install the Cod control plugin in your agent's terminal.\n\nClaude Code:\n{CLAUDE_COMMANDS}\n\nCodex:\n{CODEX_COMMANDS}"),
