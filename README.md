@@ -18,6 +18,10 @@ Cod is in an early preview. On top of stock Zed 1.23.2 (default settings and key
 - `codctl`, a command-line tool for scripts and agents, included in the tarball. It controls workspaces, panes, opening files and URLs, diffs and agent sessions (`new`, `list`, `send`, `wait`, `status`). Run `codctl --help` and `codctl <command> --help`.
 - Agent-made pages: `codctl open --html FILE --wait` shows an HTML file as a page tab and waits for the user's answer. The page's own scripts do not run unless `--js` is given. Elements talk to Cod through `data-cod` attributes: `data-cod="submit"` with `data-cod-value-from="<css selector>"` answers the waiting `codctl` with that field's value (a plain HTML form submit does nothing), `data-cod="open-file" data-cod-path="src/main.rs:18"` opens a file of the workspace, and `data-cod="focus-session" data-cod-session="<session id>"` focuses an agent chat. Closing the tab without an answer makes `codctl` exit with code 2.
 
+The preview does not yet include terminal session handoff, inline review comments, `codctl review`, an event stream or the agent-chat relay skill.
+`codctl session new --pane` currently opens the chat in the agent panel; placing chats in editor panes is still tracked in [#39](https://github.com/cod-editor/cod/issues/39).
+Page tabs support navigation shortcuts and `codctl page` commands, but the visible page controls are still tracked in [#31](https://github.com/cod-editor/cod/issues/31).
+
 ## Try it on Linux
 
 The preview runs on x86_64 Linux. It is built on Ubuntu 24.04, so it needs glibc 2.39 or newer (for example Ubuntu 24.04, Debian 13, Fedora 40 or a current Arch).
