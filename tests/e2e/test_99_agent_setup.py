@@ -24,7 +24,7 @@ class AgentSetupTest(CodTestCase):
         )]
         codex_home = self.workdir / "codex-home"
         with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
-            self.start_cod(repo, extra_settings={"agent_servers": {"claude-acp": agent}})
+            self.start_cod(repo, extra_settings={"agent_servers": {"claude": agent}})
         home = self.cod.home
         with self.step("install from the command palette"):
             self.run_command("cod: set up coding agents")
