@@ -141,7 +141,7 @@ jobs:
           RUSTC_WRAPPER: sccache
         run: |
           sccache --zero-stats
-          cargo build --locked --profile release-fast -p zed -p codctl -p cod_browser
+          caffeinate -dimsu cargo build --locked --profile release-fast -p zed -p codctl -p cod_browser
           sccache --show-stats
           df -h /
 
