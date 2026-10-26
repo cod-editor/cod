@@ -125,6 +125,8 @@ pub enum Request {
     /// A left click at a window position, with the control key held when `ctrl` is set (#25, see
     /// `cod_tabs_state`; the control modifier was added for #32 AC3's Ctrl-click on a URL).
     Click { x: f32, y: f32, ctrl: bool },
+    RightClick { x: f32, y: f32 },
+    DoubleClick { x: f32, y: f32 },
     /// Moves the mouse to a window position without pressing a button, so a test can check a
     /// hover style (issue #77: the workspace tabs' hover background and close control).
     Hover { x: f32, y: f32 },
@@ -150,6 +152,8 @@ enum WireRequest {
         #[serde(default)]
         ctrl: bool,
     },
+    RightClick { x: f32, y: f32 },
+    DoubleClick { x: f32, y: f32 },
     Hover {
         x: f32,
         y: f32,
@@ -176,6 +180,14 @@ pub fn parse_request(line: &str) -> Result<Request> {
         WireRequest::Click { x, y, ctrl } => {
             cod_tabs_state::check_click(x, y)?;
             Request::Click { x, y, ctrl }
+        }
+        WireRequest::RightClick { x, y } => {
+            cod_tabs_state::check_click(x, y)?;
+            Request::RightClick { x, y }
+        }
+        WireRequest::DoubleClick { x, y } => {
+            cod_tabs_state::check_click(x, y)?;
+            Request::DoubleClick { x, y }
         }
         WireRequest::Hover { x, y } => {
             cod_tabs_state::check_click(x, y)?;
@@ -446,6 +458,15 @@ async fn run(
         }
         Request::Click { x, y, ctrl } => {
             cod_tabs_state::click(x, y, ctrl, memory, cx).await.map(|()| None)
+        }
+        Request::RightClick { x, y } => {
+            cod_tabs_state::mouse_click(x, y, false, gpui::MouseButton::Right, 1, memory, cx)
+                .await.map(|()| None)
+        }
+        Request::DoubleClick { x, y } => {
+            cod_tabs_state::click(x, y, false, memory, cx).await?;
+            cod_tabs_state::mouse_click(x, y, false, gpui::MouseButton::Left, 2, memory, cx)
+                .await.map(|()| None)
         }
         Request::Hover { x, y } => cod_tabs_state::hover(x, y, memory, cx).await.map(|()| None),
         Request::MouseDown { x, y } => cod_tabs_state::mouse_down(x, y, memory, cx).await.map(|()| None),

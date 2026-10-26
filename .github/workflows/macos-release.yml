@@ -1203,8 +1203,11 @@ jobs:
                   driver.request("click", **tab_point(index))
 
               def rename(name):
-                  action("workspace: rename workspace")
-                  wait(lambda s: s["rename_input"] is not None, "rename")
+                  state = wait(lambda s: len(s["title_bar"]["tabs"]) == s["workspace_count"]
+                               and s["title_bar"]["tabs"][s["active_workspace"]]["active"], "active workspace tab")
+                  bounds = state["title_bar"]["tabs"][state["active_workspace"]]["bounds"]
+                  driver.request("double_click", x=bounds["x"] + 20, y=bounds["y"] + bounds["height"] / 2)
+                  wait(lambda s: s["rename_input"] is not None, "rename from the workspace tab")
                   driver.type(name)
                   keys("enter")
                   wait(lambda s: s["rename_input"] is None
@@ -1321,6 +1324,12 @@ jobs:
                   wait(lambda s: not s["dirty_tabs"], "created file saved")
                   assert (repo / "release-notes.txt").read_text() == "Created in ordinary package QA.\n"
                   rename("Release preparation and documentation notes")
+                  state = wait(lambda s: s["title_bar"]["tabs"][0]["visible"]
+                               == "Release preparation and documentation notes", "full workspace label")
+                  tab = state["title_bar"]["tabs"][0]
+                  assert not tab["truncated"], tab
+                  assert tab["visible"] == "Release preparation and documentation notes", tab
+                  assert tab["bounds"]["width"] > 242, tab
                   capture("02-created-saved-file")
                   add = driver.state()["title_bar"]["add_button"]["bounds"]
                   driver.request("click", x=add["x"] + add["width"] / 2, y=add["y"] + add["height"] / 2)

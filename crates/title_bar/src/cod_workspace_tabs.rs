@@ -18,7 +18,8 @@ use gpui::{
     Animation, AnimationExt as _, Bounds, ElementId, Entity, FocusHandle, MouseButton,
     ScrollHandle, WeakEntity, pulsating_between,
 };
-use ui::{IconButtonShape, Tooltip, prelude::*};
+use ui::{ContextMenu, IconButtonShape, Tooltip, prelude::*, right_click_menu};
+use util::ResultExt;
 use workspace::{CodMember, CodStatus, MultiWorkspace, NewWorkspace};
 // The names moved to the workspace crate (#81) so a close prompt names a workspace the way its
 // tab does; kept reachable here for the overview.
@@ -26,8 +27,6 @@ pub use workspace::{
     COD_UNNAMED_WORKSPACE, is_unnamed_default, member_name_and_folders, tab_display_name,
 };
 
-/// The widest a tab gets, in logical pixels (#25 open question 1).
-pub const COD_TAB_MAX_WIDTH: f32 = 242.;
 const COD_TAB_MIN_WIDTH: f32 = 114.;
 
 #[derive(Default)]
@@ -385,6 +384,10 @@ pub fn render_cod_workspace_tabs(
         // `on_children_prepainted` is only on the plain `Div` gpui gives back from `h_flex()`,
         // not on the `Stateful<Div>` that `.id(...)` turns it into below (needed for `tooltip`,
         // `on_mouse_down` and `on_mouse_up`), so it is attached first.
+        let rename_member = member.clone();
+        let menu_id = tab_id.clone();
+        let menu_member = member.clone();
+        let menu_workspace = weak.clone();
         let tab = h_flex()
             .when(has_close, |tab| {
                 tab.on_children_prepainted(move |bounds, _window, _cx| {
@@ -397,10 +400,9 @@ pub fn render_cod_workspace_tabs(
             .group("cod-workspace-tab")
             .tab_index(0isize)
             .track_focus(&tab_focus)
-            .flex_none()
+            .flex_shrink_1()
             .h(px(32.))
             .min_w(px(COD_TAB_MIN_WIDTH))
-            .max_w(px(COD_TAB_MAX_WIDTH))
             .pl(px(12.))
             .pr(px(5.))
             .gap(px(8.))
@@ -430,7 +432,7 @@ pub fn render_cod_workspace_tabs(
                     )
                 },
             )
-            .tooltip(Tooltip::text(name.clone()))
+            .tooltip(Tooltip::text(format!("{name}\nDouble-click to rename")))
             .on_key_down({
                 let weak = weak.clone();
                 let member = member.clone();
@@ -466,13 +468,39 @@ pub fn render_cod_workspace_tabs(
                     .ok();
                 }
             })
-            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+            .on_mouse_up(MouseButton::Left, move |event, window, cx| {
                 weak.update(cx, |multi_workspace, cx| {
-                    multi_workspace.cod_release_tab(&member, window, cx)
+                    let selected = multi_workspace.cod_release_tab(&member, window, cx);
+                    if selected && event.click_count == 2 {
+                        multi_workspace.cod_rename_member(rename_member.clone(), window, cx);
+                    }
                 })
-                .ok();
+                .log_err();
             });
-        tabs.push(tab.into_any_element());
+        // The menu's default automatic minimum would otherwise prevent a tab from shrinking.
+        tabs.push(
+            div()
+                .min_w(px(COD_TAB_MIN_WIDTH))
+                .flex_shrink_1()
+                .child(
+                    right_click_menu(menu_id)
+                        .trigger(move |_, _, _| tab)
+                        .menu(move |window, cx| {
+                            let member = menu_member.clone();
+                            let workspace = menu_workspace.clone();
+                            ContextMenu::build(window, cx, |menu, _, _| {
+                                menu.entry("Rename Workspace", None, move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            workspace.cod_rename_member(member.clone(), window, cx);
+                                        })
+                                        .log_err();
+                                })
+                            })
+                        })
+                )
+                .into_any_element(),
+        );
     }
     state
         .focus

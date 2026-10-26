@@ -482,6 +482,34 @@ impl MultiWorkspace {
         });
     }
 
+    pub fn cod_rename_member(
+        &mut self,
+        member: CodMember,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_id = Self::cod_member_id(&member, cx);
+        let shown = self.cod_show_member_awaiting(member.clone(), window, cx);
+        let activation_intent = CodActivationIntents::current(cx, cx.entity_id());
+        cx.spawn_in(window, async move |this, cx| {
+            shown.await?;
+            this.update_in(cx, |this, window, cx| {
+                // Loading a saved workspace can be overtaken by a newer tab click.
+                let is_target = match &member {
+                    CodMember::Live(workspace) => this.workspace() == workspace,
+                    CodMember::Pending(_) => this.workspace().read(cx).database_id() == target_id,
+                };
+                if is_target
+                    && CodActivationIntents::current(cx, cx.entity_id()) == activation_intent
+                {
+                    this.rename_workspace(&RenameWorkspace, window, cx);
+                }
+            })?;
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     pub(super) fn next_workspace(
         &mut self,
         _: &NextWorkspace,

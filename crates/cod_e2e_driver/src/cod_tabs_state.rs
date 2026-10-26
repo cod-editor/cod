@@ -161,6 +161,19 @@ pub(crate) async fn click(
     memory: &std::rc::Rc<std::cell::RefCell<super::Memory>>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
+    mouse_click(x, y, ctrl, MouseButton::Left, 1, memory, cx).await
+}
+
+#[cfg(unix)]
+pub(crate) async fn mouse_click(
+    x: f32,
+    y: f32,
+    ctrl: bool,
+    button: MouseButton,
+    click_count: usize,
+    memory: &std::rc::Rc<std::cell::RefCell<super::Memory>>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
     let position = point(px(x), px(y));
     let modifiers = Modifiers {
         control: ctrl,
@@ -173,17 +186,17 @@ pub(crate) async fn click(
             modifiers,
         }),
         PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left,
+            button,
             position,
             modifiers,
-            click_count: 1,
+            click_count,
             first_mouse: false,
         }),
         PlatformInput::MouseUp(MouseUpEvent {
-            button: MouseButton::Left,
+            button,
             position,
             modifiers,
-            click_count: 1,
+            click_count,
         }),
     ];
     for (index, event) in events.into_iter().enumerate() {
