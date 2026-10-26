@@ -49,7 +49,7 @@ print(String(data: data, encoding: .utf8)!)
     run("open", "-n", "--env", f"COD_PREVIEW_DIR={data}", str(app))
     time.sleep(8)
     try:
-        run(str(app / "Contents/MacOS/codctl"), "open", f"http://{gateway[1]}:9/")
+        run(str(app / "Contents/MacOS/codctl"), "open", f"http://{gateway[1]}:8080/")
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             image = output / "permission.png"
