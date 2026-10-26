@@ -1,15 +1,27 @@
 """Set up both coding agents through the real command palette."""
 
+import json
 import os
 import subprocess
 
 from cod_e2e import CodTestCase, make_repo
+from fake_acp_agent import fake_agent_settings
 
 
 class AgentSetupTest(CodTestCase):
     def test_setup_installs_tools_and_both_skills_and_can_run_again(self):
         repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
-        self.start_cod(repo)
+        script = self.workdir / "agent.json"
+        script.write_text(json.dumps({"session_ids": ["setup-session"], "turns": []}))
+        environment_file = self.workdir / "agent-environment.json"
+        agent = fake_agent_settings(script)
+        agent_script = agent["args"][0]
+        agent["args"] = ["-c", (
+            "import json,os,runpy; from pathlib import Path; "
+            f"Path({str(environment_file)!r}).write_text(json.dumps(os.environ.get('COD_WORKSPACE'))); "
+            f"runpy.run_path({agent_script!r}, run_name='__main__')"
+        )]
+        self.start_cod(repo, extra_settings={"agent_servers": {"claude-acp": agent}})
         home = self.cod.home
         with self.step("install from the command palette"):
             self.run_command("cod: set up coding agents")
@@ -24,6 +36,14 @@ class AgentSetupTest(CodTestCase):
             result = subprocess.run([str(control), "workspace", "list"], env={**os.environ, "HOME": str(home)}, capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.keys("enter")
+            self.wait_for(lambda state: state.get("prompt") is None, 15, "confirmation closed")
+            self.wait_for(lambda state: state.get("agent_panel_ready") is True, 15, "agent panel")
+            result = subprocess.run([str(control), "session", "new", "--agent", "claude"], env={**os.environ, "HOME": str(home)}, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "setup-session")
+            listed = subprocess.run([str(control), "workspace", "list", "--json"], env={**os.environ, "HOME": str(home)}, check=True, capture_output=True, text=True, timeout=15)
+            workspace_id = json.loads(listed.stdout)[0]["id"]
+            self.assertEqual(json.loads(environment_file.read_text()), str(workspace_id))
         with self.step("run setup again without changing other agent settings"):
             settings = home / ".claude/settings.json"
             settings.write_text('{"theme":"dark"}\n')

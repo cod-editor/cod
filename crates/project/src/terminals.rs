@@ -56,7 +56,7 @@ pub fn cod_set_terminal_env(
     }
 }
 
-fn cod_terminal_env(project: gpui::EntityId, cx: &App) -> HashMap<String, String> {
+pub fn cod_terminal_env(project: gpui::EntityId, cx: &App) -> HashMap<String, String> {
     cx.try_global::<CodTerminalEnv>()
         .and_then(|vars| vars.0.get(&project).cloned())
         .unwrap_or_default()
