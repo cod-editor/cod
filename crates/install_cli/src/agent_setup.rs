@@ -1,20 +1,45 @@
 use anyhow::{Context as _, Result, bail};
-use gpui::{AppContext as _, Context, PromptLevel, Window, actions};
+use gpui::{AppContext as _, ClipboardItem, Context, PromptLevel, Window, actions};
 use std::path::{Path, PathBuf};
 use workspace::Workspace;
-use workspace::notifications::DetachAndPromptErr;
+use workspace::notifications::{
+    DetachAndPromptErr, NotificationId, simple_message_notification::MessageNotification,
+};
 
 actions!(
     cod,
     [
-        /// Installs codctl and the control skill for Claude Code and Codex.
+        /// Shows plugin installation commands for Claude Code and Codex.
         SetUpCodingAgents,
+        /// Installs the bundled codctl command line tool.
+        InstallCodctl,
     ]
 );
 
-const SKILL: &str = include_str!("../skills/cod-control/SKILL.md");
+const CLAUDE_COMMANDS: &str =
+    "claude plugin marketplace add cod-editor/cod\nclaude plugin install cod-control@cod";
+const CODEX_COMMANDS: &str =
+    "codex plugin marketplace add cod-editor/cod\ncodex plugin add cod-control@cod";
 
-pub fn set_up_coding_agents(window: &mut Window, cx: &mut Context<Workspace>) {
+pub fn set_up_coding_agents(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
+    workspace.show_notification(NotificationId::named("cod-agent-setup".into()), cx, |cx| {
+        cx.new(|cx| {
+            MessageNotification::new(
+                format!("Install the Cod control plugin in your agent's terminal.\n\nClaude Code:\n{CLAUDE_COMMANDS}\n\nCodex:\n{CODEX_COMMANDS}"),
+                cx,
+            )
+            .with_title("Let your coding agents use Cod")
+            .secondary_content("Then start a new agent session. Help > Install codctl adds the editor command to PATH. Reopen these instructions from Help > Set Up Coding Agents.")
+            .show_suppress_button(false)
+            .primary_message("Copy Claude")
+            .primary_on_click(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(CLAUDE_COMMANDS.into())))
+            .secondary_message("Copy Codex")
+            .secondary_on_click(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(CODEX_COMMANDS.into())))
+        })
+    });
+}
+
+pub fn install_codctl(window: &mut Window, cx: &mut Context<Workspace>) {
     cx.spawn_in(window, async move |_, cx| {
         let executable = std::env::current_exe()?.canonicalize()?;
         let home = std::env::var_os("HOME")
@@ -26,21 +51,16 @@ pub fn set_up_coding_agents(window: &mut Window, cx: &mut Context<Workspace>) {
             home.join(".local/bin")
         };
         let detail = cx
-            .background_spawn(async move { install(&executable, &home, &bin).await })
+            .background_spawn(async move { install(&executable, &bin).await })
             .await?;
-        cx.prompt(
-            PromptLevel::Info,
-            "Coding agents are ready",
-            Some(&detail),
-            &["OK"],
-        )
-        .await?;
+        cx.prompt(PromptLevel::Info, "codctl is ready", Some(&detail), &["OK"])
+            .await?;
         Ok(())
     })
-    .detach_and_prompt_err("Could not set up coding agents", window, cx, |_, _, _| None);
+    .detach_and_prompt_err("Could not install codctl", window, cx, |_, _, _| None);
 }
 
-async fn install(executable: &Path, home: &Path, bin: &Path) -> Result<String> {
+async fn install(executable: &Path, bin: &Path) -> Result<String> {
     let siblings = executable
         .parent()
         .context("Cod has no executable directory")?;
@@ -50,26 +70,6 @@ async fn install(executable: &Path, home: &Path, bin: &Path) -> Result<String> {
         "The bundled codctl is missing at {}",
         control.display()
     );
-    let skills = [
-        home.join(".claude/skills/cod-control"),
-        home.join(".agents/skills/cod-control"),
-    ];
-    for skill in &skills {
-        let path = skill.join("SKILL.md");
-        match smol::fs::read_to_string(&path).await {
-            Ok(content) if !content.contains("<!-- cod-control-skill -->") => {
-                bail!(
-                    "{} already contains a different skill. Move it before running setup again.",
-                    path.display()
-                );
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("Cannot read {}", path.display()));
-            }
-        }
-    }
     let links = [(control.as_path(), bin.join("codctl"))];
     for (_, destination) in &links {
         match smol::fs::symlink_metadata(destination).await {
@@ -123,20 +123,16 @@ async fn install(executable: &Path, home: &Path, bin: &Path) -> Result<String> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    for skill in &skills {
-        smol::fs::create_dir_all(skill).await?;
-        smol::fs::write(skill.join("SKILL.md"), SKILL).await?;
-    }
     let path_has_bin = std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|entry| entry == bin));
     Ok(format!(
-        "Installed codctl in {} and the Cod control skill for Claude Code and Codex.\n\nStart a new agent session from your Cod workspace to load the skill.{}",
+        "Installed codctl in {}.{}",
         bin.display(),
         if path_has_bin {
             String::new()
         } else {
             format!(
-                "\n\nThe skill also knows the full path in {} when it is not on PATH.",
+                "\n\nAdd {} to PATH, or use the full path to codctl.",
                 bin.display()
             )
         }

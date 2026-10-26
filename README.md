@@ -24,11 +24,10 @@ Page tabs support navigation shortcuts and `codctl page` commands, but the visib
 
 ## Set up coding agents
 
-Choose **Help > Set Up Coding Agents** in Cod, or run `cod: set up coding agents` from the command palette.
-This installs `codctl` and the same Cod control skill for Claude Code and Codex.
-Start a new agent session from your Cod workspace to load it.
-
-Alternatively, install the skill as a repository plugin:
+Cod shows a quiet notification on first launch with the plugin commands for Claude Code and Codex.
+Open **Help > Set Up Coding Agents**, or run `cod: set up coding agents` from the command palette, to see them again and copy the commands for your tool.
+Run the commands in a terminal, then start a new agent session from your Cod workspace.
+Cod leaves installation to the agent's plugin manager and does not write agent skills or settings itself.
 
 ```sh
 # Claude Code
@@ -40,8 +39,8 @@ codex plugin marketplace add cod-editor/cod
 codex plugin add cod-control@cod
 ```
 
-Install the skill through the app or the plugin, not both, so agents find one copy.
-The plugin only installs the skill; put the bundled `codctl` on PATH separately, as described below for macOS, or link the Linux tarball's `codctl` into `~/.local/bin`.
+Choose **Help > Install codctl**, or run `cod: install codctl` from the command palette, to put the bundled editor command on PATH.
+If you installed an earlier copy of the skill manually, remove it before using the plugin so agents find one copy.
 
 ## Try it on Linux
 

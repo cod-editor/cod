@@ -953,6 +953,7 @@ fn read_state(
         "window_active": window_active,
         "focus": focus,
         "prompt": prompt,
+        "coding_agent_setup_notice": workspace.has_notification(&workspace::notifications::NotificationId::named("cod-agent-setup".into())),
         "title_bar": cod_tabs_state::title_bar_state(&active, cx),
     });
     // Set outside `json!` to keep the macro's recursion short.

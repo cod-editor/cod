@@ -305,6 +305,8 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             items: vec![
                 #[cfg(not(target_os = "windows"))]
                 MenuItem::action("Set Up Coding Agents", install_cli::SetUpCodingAgents),
+                #[cfg(not(target_os = "windows"))]
+                MenuItem::action("Install codctl", install_cli::InstallCodctl),
                 MenuItem::separator(),
                 MenuItem::action("View Telemetry", zed_actions::OpenTelemetryLog),
                 MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),

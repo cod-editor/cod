@@ -1,4 +1,4 @@
-"""Set up both coding agents through the real command palette."""
+"""Discover agent plugins without changing agent configuration."""
 
 import json
 
@@ -8,7 +8,22 @@ from test_37_codctl import Codctl
 
 
 class AgentSetupTest(CodTestCase):
-    def test_setup_installs_tools_and_both_skills_and_can_run_again(self):
+    def test_notice_is_nonmodal_shown_once_and_can_be_reopened(self):
+        repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
+        self.start_cod(repo, persistent=True)
+        state = self.wait_for(lambda state: state.get("coding_agent_setup_notice"), 15, "first-use plugin notice")
+        self.assertIsNone(state["prompt"])
+        self.assertIsNone(state["modal"])
+        for directory in (".claude", ".agents", ".codex"):
+            self.assertFalse((self.cod.home / directory / "skills/cod-control/SKILL.md").exists())
+        self.assertFalse((self.cod.home / ".local/bin/codctl").exists())
+        self.restart_cod()
+        self.assertFalse(self.state()["coding_agent_setup_notice"])
+        self.run_command("cod: set up coding agents")
+        self.wait_for(lambda state: state.get("coding_agent_setup_notice"), 15, "reopened plugin notice")
+        self.assertIsNone(self.state()["prompt"])
+
+    def test_explicit_codctl_install_can_run_again_and_agents_receive_workspace(self):
         repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
         script = self.workdir / "agent.json"
         script.write_text(json.dumps({"session_ids": ["setup-session"], "turns": []}))
@@ -23,15 +38,11 @@ class AgentSetupTest(CodTestCase):
         self.start_cod(repo, extra_settings={"agent_servers": {"claude": agent}})
         home = self.cod.home
         with self.step("install from the command palette"):
-            self.run_command("cod: set up coding agents")
+            self.run_command("cod: install codctl")
             state = self.wait_for(lambda state: state.get("prompt") is not None, 15, "setup confirmation")
-            self.assertIn("Coding agents are ready", str(state["prompt"]))
+            self.assertIn("codctl is ready", str(state["prompt"]))
             control = home / ".local/bin/codctl"
             self.assertTrue(control.is_symlink())
-            claude = home / ".claude/skills/cod-control/SKILL.md"
-            codex = home / ".agents/skills/cod-control/SKILL.md"
-            self.assertEqual(claude.read_text(), codex.read_text())
-            self.assertIn("COD_WORKSPACE", claude.read_text())
             client = Codctl(control, home)
             result = client.run("workspace", "list")
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -47,20 +58,20 @@ class AgentSetupTest(CodTestCase):
             self.assertEqual(json.loads(environment_file.read_text()), str(workspace_id))
         with self.step("run setup again without changing other agent settings"):
             settings = home / ".claude/settings.json"
+            settings.parent.mkdir(exist_ok=True)
             settings.write_text('{"theme":"dark"}\n')
-            self.run_command("cod: set up coding agents")
+            self.run_command("cod: install codctl")
             state = self.wait_for(lambda state: state.get("prompt") is not None, 15, "repeat setup confirmation")
-            self.assertIn("Coding agents are ready", str(state["prompt"]))
+            self.assertIn("codctl is ready", str(state["prompt"]))
             self.assertEqual(settings.read_text(), '{"theme":"dark"}\n')
 
-    def test_setup_preserves_an_existing_unrelated_skill(self):
+    def test_codctl_install_preserves_an_existing_regular_file(self):
         repo = make_repo(self.workdir, "project", {"hello.txt": "Hello\n"})
         self.start_cod(repo)
-        skill = self.cod.home / ".claude/skills/cod-control/SKILL.md"
-        skill.parent.mkdir(parents=True)
-        skill.write_text("A different skill\n")
-        self.run_command("cod: set up coding agents")
-        state = self.wait_for(lambda state: state.get("prompt") is not None, 15, "setup failure")
-        self.assertIn("different skill", str(state["prompt"]))
-        self.assertEqual(skill.read_text(), "A different skill\n")
-        self.assertFalse((self.cod.home / ".local/bin/codctl").exists())
+        control = self.cod.home / ".local/bin/codctl"
+        control.parent.mkdir(parents=True)
+        control.write_text("An unrelated command\n")
+        self.run_command("cod: install codctl")
+        state = self.wait_for(lambda state: state.get("prompt") is not None, 15, "installation failure")
+        self.assertIn("not a symlink", str(state["prompt"]))
+        self.assertEqual(control.read_text(), "An unrelated command\n")

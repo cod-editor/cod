@@ -7,7 +7,7 @@ description: Control the running Cod editor with codctl when working in a Cod wo
 
 # Control Cod
 
-Use `codctl` to show relevant work in the user's editor when it helps the current task. Run `codctl --help` for the installed command syntax. Commands require Cod to be running. If `codctl` is not on PATH, use `/usr/local/bin/codctl` on macOS or `~/.local/bin/codctl` on Linux after running Help > Set Up Coding Agents.
+Use `codctl` to show relevant work in the user's editor when it helps the current task. Run `codctl --help` for the installed command syntax. Commands require Cod to be running. If `codctl` is not on PATH, use `/usr/local/bin/codctl` on macOS or `~/.local/bin/codctl` on Linux after running Help > Install codctl.
 
 ## Choose the workspace
 
