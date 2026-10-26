@@ -1232,7 +1232,6 @@ async fn install_release_macos(
             .context("Cod bundle has no parent")?,
     )?;
     let staged = staging_dir.path().join("Cod.app");
-    let backup = staging_dir.path().join("previous.app");
     let output = new_command("/usr/bin/ditto")
         .arg(&updated_app)
         .arg(&staged)
@@ -1243,10 +1242,18 @@ async fn install_release_macos(
         "failed to stage Cod update: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    fs::rename(&running_app_path, &backup).await?;
-    if let Err(error) = fs::rename(&staged, &running_app_path).await {
-        if let Err(restore_error) = fs::rename(&backup, &running_app_path).await {
-            // Keep the backup on disk if restoring failed so recovery is still possible.
+    replace_app(staging_dir, &running_app_path)?;
+    Ok(None)
+}
+
+fn replace_app(staging_dir: tempfile::TempDir, running_app_path: &Path) -> Result<()> {
+    let staged = staging_dir.path().join("Cod.app");
+    let backup = staging_dir.path().join("previous.app");
+    // No await between moving the running app and replacing it: cancellation
+    // must not drop the staging directory while it contains the only copy.
+    std::fs::rename(running_app_path, &backup)?;
+    if let Err(error) = std::fs::rename(&staged, running_app_path) {
+        if let Err(restore_error) = std::fs::rename(&backup, running_app_path) {
             let recovery_path = staging_dir.keep();
             anyhow::bail!(
                 "failed to install Cod: {error}; failed to restore previous app: {restore_error}; previous app retained at {}",
@@ -1255,7 +1262,7 @@ async fn install_release_macos(
         }
         return Err(error.into());
     }
-    Ok(None)
+    Ok(())
 }
 
 /// Removes stale installer dirs from the system temp dir. Older Zed versions
@@ -1574,6 +1581,41 @@ mod tests {
 
         let downloaded_len = std::fs::metadata(&target_path).unwrap().len();
         assert_eq!(downloaded_len, content_length as u64);
+    }
+
+    #[test]
+    fn test_failed_replacement_restores_running_app() {
+        let directory = tempdir().unwrap();
+        let app = directory.path().join("Cod.app");
+        std::fs::create_dir(&app).unwrap();
+        std::fs::write(app.join("identity"), "old").unwrap();
+        let staging = tempfile::Builder::new()
+            .tempdir_in(directory.path())
+            .unwrap();
+        assert!(replace_app(staging, &app).is_err());
+        assert_eq!(
+            std::fs::read_to_string(app.join("identity")).unwrap(),
+            "old"
+        );
+    }
+
+    #[test]
+    fn test_replacement_installs_staged_app() {
+        let directory = tempdir().unwrap();
+        let app = directory.path().join("Cod.app");
+        std::fs::create_dir(&app).unwrap();
+        std::fs::write(app.join("identity"), "old").unwrap();
+        let staging = tempfile::Builder::new()
+            .tempdir_in(directory.path())
+            .unwrap();
+        let staged = staging.path().join("Cod.app");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("identity"), "new").unwrap();
+        replace_app(staging, &app).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(app.join("identity")).unwrap(),
+            "new"
+        );
     }
 
     #[test]
