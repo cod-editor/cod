@@ -569,6 +569,60 @@ class WorkspaceTabsTest(CodStatusFixtures, CodTestCase):
             self.assert_plus_reachable(state, 560)
             self.assert_tab_controls_in_view(state, 1)
 
+    def test_crowded_issue_ids_keep_room_for_status_and_close(self) -> None:
+        names = [f"[TEAM-{12345 + index}] Review invoice rounding for every annual plan" for index in range(6)]
+        with self.step("create six issue workspaces"):
+            self.start_cod(None)
+            for index, name in enumerate(names):
+                if index:
+                    self.new_workspace()
+                self.rename_workspace(name)
+
+        with self.step("crowded protected issue IDs retain their own room beside the close button"):
+            self.narrow_the_output(640, 600)
+            state = self.wait_for(
+                lambda state: self.cod_window_width() == 640
+                and title_bar(state)["tabs"][5]["truncated"]
+                and contains_bounds(title_bar(state)["tabs_viewport"], title_bar(state)["tabs"][5]["bounds"]),
+                SHOW_TIMEOUT,
+                "the crowded active tab to be revealed",
+            )
+            self.set_entry(5, "review-session", "working", title="Review invoice rounding")
+            state = self.wait_for(
+                lambda state: title_bar(state)["tabs"][5]["dot"] == "blue"
+                and contains_bounds(title_bar(state)["tabs_viewport"], title_bar(state)["tabs"][5]["bounds"]),
+                SHOW_TIMEOUT,
+                "the wider working tab to stay revealed",
+            )
+            self.assert_plus_reachable(state, 640)
+            self.assert_tab_controls_in_view(state, 5)
+            tab = title_bar(state)["tabs"][5]
+            self.expect_equal("protected issue ID", "[TEAM-12350]", tab["visible"].split(" ")[0])
+            # The former 114 px minimum let this ID paint underneath the close button.
+            if tab["bounds"]["width"] < 150:
+                raise AssertionError(f"expected room for the issue ID, dot, truncated title and close button, actual {tab!r}")
+            x, y = center(tab["close_bounds"])
+            self.driver.request("hover", x=x, y=y)
+            time.sleep(0.3)
+            samples = self.workdir / "sampled-frames"
+            samples.mkdir(exist_ok=True)
+            screenshot_ppm(samples / "crowded-issue-id-close.ppm")
+
+        with self.step("renaming to a wider protected ID keeps the close button revealed"):
+            self.rename_workspace("[LONGTEAM-12350] Review invoice rounding for every annual plan")
+            state = self.wait_for(
+                lambda state: title_bar(state)["tabs"][5]["visible"].startswith("[LONGTEAM-12350]")
+                and contains_bounds(title_bar(state)["tabs_viewport"], title_bar(state)["tabs"][5]["bounds"]),
+                SHOW_TIMEOUT,
+                "the renamed tab to stay revealed",
+            )
+            self.assert_plus_reachable(state, 640)
+            self.assert_tab_controls_in_view(state, 5)
+            x, y = center(title_bar(state)["tabs"][5]["close_bounds"])
+            self.driver.request("hover", x=x, y=y)
+            time.sleep(0.3)
+            screenshot_ppm(samples / "crowded-renamed-issue-id-close.ppm")
+
     # Issue #93 replaces the ghost selected surface with a native selected fill and contour.
 
     def test_ac7_tabs_have_a_selected_surface_contour_and_subtle_separators(self) -> None:
