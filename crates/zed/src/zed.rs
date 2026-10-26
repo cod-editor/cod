@@ -1378,7 +1378,12 @@ fn register_actions(
         });
 
     #[cfg(not(target_os = "windows"))]
-    workspace.register_action(install_cli);
+    {
+        workspace.register_action(install_cli);
+        workspace.register_action(|_, _: &install_cli::SetUpCodingAgents, window, cx| {
+            install_cli::set_up_coding_agents(window, cx);
+        });
+    }
 
     if workspace.project().read(cx).is_via_remote_server() {
         workspace.register_action({

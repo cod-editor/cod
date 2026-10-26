@@ -68,6 +68,21 @@ def exercise(data: Path, socket_path: Path, codctl: str, artifacts: Path) -> Non
         (artifacts / f"{name}.json").write_text(json.dumps(driver.state(), indent=2))
 
     try:
+        command("cod: set up coding agents")
+        state = wait(lambda s: s.get("prompt") is not None, "agent setup confirmation")
+        assert "Coding agents are ready" in str(state["prompt"]), state["prompt"]
+        home = Path.home()
+        claude_skill = home / ".claude/skills/cod-control/SKILL.md"
+        codex_skill = home / ".codex/skills/cod-control/SKILL.md"
+        assert claude_skill.read_text() == codex_skill.read_text()
+        installed_control = Path("/usr/local/bin/codctl")
+        assert installed_control.resolve() == Path(codctl).resolve()
+        subprocess.run([str(installed_control), "workspace", "list"], check=True,
+                       capture_output=True, text=True, timeout=15)
+        capture("mac-agent-setup")
+        driver.keys("enter")
+        wait(lambda s: s.get("prompt") is None, "setup confirmation closed")
+        print("PASS one-action coding agent setup", flush=True)
         # Follow an actual in-page link, then assert both history destinations.
         (data / "history-next.html").write_text("<title>Mac history destination</title><h1>Destination</h1>")
         (data / "history.html").write_text(
