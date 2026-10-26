@@ -71,7 +71,9 @@ def run(archive: Path, artifacts: Path) -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     data = root / "profile"
     (data / "config").mkdir(parents=True)
-    (data / "config/settings.json").write_text(json.dumps(cod_settings()))
+    settings = cod_settings()
+    settings_path = data / "config/settings.json"
+    settings_path.write_text(json.dumps(settings))
     project = make_repo(data, "update-notes", {"README.txt": "Update smoke fixture.\n"})
     socket_path = root / "driver.sock"
     launch = ["open", "-n", "--env", f"COD_PREVIEW_DIR={data}", "--env",
@@ -129,14 +131,22 @@ def run(archive: Path, artifacts: Path) -> None:
         driver = connect()
         wait(lambda s: len(s["worktrees"]) == 1, "project ready")
         capture("before-update")
+        assert not requested, requested
+        settings["auto_update"] = True
+        settings_path.write_text(json.dumps(settings))
+        wait(lambda s: str(s.get("auto_update", "")).startswith("Updated"), "automatic update installed", 180)
+        checks = requested.count("/metadata")
         command("auto update: check")
-        wait(lambda s: str(s.get("auto_update", "")).startswith("Updated"), "update installed", 180)
+        wait(lambda s: str(s.get("auto_update", "")).startswith("Updated")
+             and requested.count("/metadata") > checks, "manual check preserves installed update")
+        assert requested.count("/Cod.zip") == 1, requested
         assert version_file.read_text().strip() == target_version
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
         capture("update-ready")
         pids = subprocess.check_output(["pgrep", "-f", str(app / "Contents/MacOS/Cod")], text=True).split()
         assert len(pids) == 1, pids
         pid = int(pids[0])
+        checks = requested.count("/metadata")
         try:
             command("workspace: reload")
         except DriverError:
@@ -155,12 +165,15 @@ def run(archive: Path, artifacts: Path) -> None:
             raise AssertionError("Old app did not exit for restart")
         driver = connect()
         wait(lambda s: len(s["worktrees"]) == 1, "project restored after update")
+        wait(lambda s: s.get("auto_update") == "Idle" and requested.count("/metadata") > checks,
+             "automatic startup check finds installed release current")
+        checks = requested.count("/metadata")
         command("auto update: check")
-        wait(lambda s: s.get("auto_update") == "Idle" and requested.count("/metadata") >= 2,
-             "installed release is current")
+        wait(lambda s: s.get("auto_update") == "Idle" and requested.count("/metadata") > checks,
+             "manual check finds installed release current")
         assert requested.count("/Cod.zip") == 1, requested
         capture("restarted-current")
-        print("PASS native updater downloads, verifies, installs and relaunches the current release", flush=True)
+        print("PASS enabling automatic updates installs the release; manual checks and native restart preserve it", flush=True)
     finally:
         (artifacts / "requests.json").write_text(json.dumps(requested, indent=2))
         if driver is not None:
