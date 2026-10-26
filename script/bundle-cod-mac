@@ -67,7 +67,7 @@ cat > "$app_path/Contents/Info.plist" <<PLIST
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>cod</string>
+	<string>Cod</string>
 	<key>CFBundleIconFile</key>
 	<string>Cod</string>
 	<key>CFBundleIdentifier</key>
@@ -122,9 +122,9 @@ iconutil -c icns "$iconset" -o "$app_path/Contents/Resources/Cod.icns"
 rm -rf "$(dirname "$iconset")"
 
 # --- Binaries (stripped) ------------------------------------------------------------------------
-cp "$zed_bin" "$app_path/Contents/MacOS/zed"
+cp "$zed_bin" "$app_path/Contents/MacOS/Cod"
 cp "$codctl_bin" "$app_path/Contents/MacOS/codctl"
-strip -x "$app_path/Contents/MacOS/zed" "$app_path/Contents/MacOS/codctl"
+strip -x "$app_path/Contents/MacOS/Cod" "$app_path/Contents/MacOS/codctl"
 
 # --- Page tabs: cod-browser, one CEF subprocess helper bundle, and the CEF framework -----------
 # (issue #23 round 1: porting Linux's off-screen CEF backend to macOS.)
@@ -204,32 +204,13 @@ PLIST
 		"$app_path/Contents/Frameworks/Chromium Embedded Framework.framework"
 fi
 
-# --- Launcher (CFBundleExecutable) ----------------------------------------------------------
-# Mirrors script/cod-wayland.sh: an isolated data folder, not stock Zed's
-# ~/Library/Application Support/Zed, and the app's stderr appended to a log inside it.
-# COD_PREVIEW_DIR overrides the folder, the same variable name as cod-wayland.sh's COD_PREVIEW_DIR
-# on Linux (there it overrides ~/.local/share/cod-preview).
-cat > "$app_path/Contents/MacOS/cod" <<'LAUNCHER'
-#!/usr/bin/env sh
-# Starts Cod on macOS with its own, isolated data folder (issue #23).
-# COD_PREVIEW_DIR overrides the folder; otherwise it is ~/Library/Application Support/Cod-preview.
-set -eu
-here=$(cd "$(dirname "$0")" && pwd)
-data="${COD_PREVIEW_DIR:-$HOME/Library/Application Support/Cod-preview}"
-logs="$data/logs"
-mkdir -p "$logs"
-echo "=== cod start $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$logs/cod-stderr.log"
-exec "$here/zed" --user-data-dir "$data" "$@" 2>> "$logs/cod-stderr.log"
-LAUNCHER
-chmod +x "$app_path/Contents/MacOS/cod"
-
 # --- Commit stamp (checked against the zed binary by the workflow) ----------------------------
 printf '%s\n' "$commit" > "$app_path/Contents/Resources/cod-commit.txt"
 
 # --- Ad-hoc signature (no certificate: Code signing and notarization are out of scope, #23) ----
 # Signed inside-out: the CEF framework and every helper bundle nested under it first (codesign
 # refuses to sign an outer bundle whose nested code is unsigned), then the whole of Cod.app last,
-# which also covers zed, codctl and cod-browser in Contents/MacOS.
+# which also covers Cod, codctl and cod-browser in Contents/MacOS.
 if [ "$bundle_pages" = 1 ]; then
 	codesign --force --sign - "$app_path/Contents/Frameworks/Chromium Embedded Framework.framework"
 	for variant_suffix in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do

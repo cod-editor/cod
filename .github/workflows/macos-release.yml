@@ -183,6 +183,13 @@ jobs:
           echo "== plutil -lint Info.plist =="
           plutil -lint "$app/Contents/Info.plist"
 
+          echo "== native bundle identity =="
+          executable=$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          [ "$executable" = "Cod" ]
+          [ "$(plutil -extract CFBundleDisplayName raw "$app/Contents/Info.plist")" = "Cod" ]
+          file "$app/Contents/MacOS/$executable" | grep -q 'Mach-O.*executable'
+          test ! -e "$app/Contents/MacOS/zed"
+
           echo "== codesign --verify =="
           codesign --verify --deep --strict --verbose=2 "$app"
 
@@ -202,7 +209,7 @@ jobs:
           done
 
           echo "== file: arch must be arm64 =="
-          for bin in "$app/Contents/MacOS/zed" "$app/Contents/MacOS/codctl" \
+          for bin in "$app/Contents/MacOS/Cod" "$app/Contents/MacOS/codctl" \
             "$app/Contents/MacOS/cod-browser" "${helpers[@]}"; do
             file "$bin"
             file "$bin" | grep -q "arm64" || {
@@ -225,7 +232,7 @@ jobs:
           # the arch check above (plain `file`, not otool) already found and read the same file
           # correctly.
           echo "== otool -L: only /System/, /usr/lib/, and the bundled CEF framework =="
-          for bin in "$app/Contents/MacOS/zed" "$app/Contents/MacOS/codctl" \
+          for bin in "$app/Contents/MacOS/Cod" "$app/Contents/MacOS/codctl" \
             "$app/Contents/MacOS/cod-browser" "$app/Contents/Frameworks/Cod Helper.app/Contents/MacOS/Cod Helper"; do
             echo "-- $bin --"
             otool -L "$bin"
@@ -240,7 +247,7 @@ jobs:
 
           echo "== commit stamp =="
           echo "Expecting commit $COMMIT"
-          count=$(strings "$app/Contents/MacOS/zed" | grep -c "$COMMIT" || true)
+          count=$(strings "$app/Contents/MacOS/Cod" | grep -c "$COMMIT" || true)
           echo "Found $count occurrence(s) of $COMMIT in the zed binary"
           [ "$count" -ge 1 ] || { echo "::error::the zed binary does not contain the full commit $COMMIT"; exit 1; }
           stamped=$(cat "$app/Contents/Resources/cod-commit.txt")
@@ -361,11 +368,11 @@ jobs:
           fi
 
           # open -n returns as soon as launchd takes over, so its own $! is already gone; the
-          # launcher script (Contents/MacOS/cod) execs zed in place (same PID, new process
-          # image), so the running process is found by the extracted bundle's own zed path.
-          pid=$(pgrep -f "$app/Contents/MacOS/zed" | head -n 1)
+          # native executable is also CFBundleExecutable, so find the process by its
+          # path inside the extracted bundle.
+          pid=$(pgrep -f "$app/Contents/MacOS/Cod" | head -n 1)
           if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::Cod is not running 20 seconds after open -n (no process matches $app/Contents/MacOS/zed); a stock Zed Stable instance on the same port may have been mistaken for Cod itself (AC-R2)"
+            echo "::error::Cod is not running 20 seconds after open -n (no process matches $app/Contents/MacOS/Cod); a stock Zed Stable instance on the same port may have been mistaken for Cod itself (AC-R2)"
             status=1
           fi
 
@@ -952,7 +959,7 @@ jobs:
               --env "COD_E2E_SOCKET=$driver_dir/driver.sock" "$app" \
               > smoke-artifacts/open-relaunch.txt 2>&1
             sleep 20
-            pid=$(pgrep -f "$app/Contents/MacOS/zed" | head -n 1)
+            pid=$(pgrep -f "$app/Contents/MacOS/Cod" | head -n 1)
             if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
               echo "::error::P4 FAIL: Cod is not running 20s after the relaunch"
               status=1
@@ -1106,7 +1113,7 @@ jobs:
               while not socket_path.exists() and time.monotonic() < deadline:
                   time.sleep(.1)
               driver = Driver(socket_path)
-              pid_text = subprocess.check_output(["pgrep", "-f", str(app / "Contents/MacOS/zed")], text=True)
+              pid_text = subprocess.check_output(["pgrep", "-f", str(app / "Contents/MacOS/Cod")], text=True)
               pids = [int(x) for x in pid_text.split()]
               (output / "initial-pgrep-pids.json").write_text(json.dumps(pids))
               assert 0 < len(pids) <= 32, ("unexpected package process count", pids)
@@ -1117,7 +1124,7 @@ jobs:
                   capture_output=True, text=True, timeout=10)
               (output / "process-snapshot-stderr.txt").write_text(process_snapshot.stderr[-4096:])
               process_snapshot.check_returncode()
-              expected_executable = str(app / "Contents/MacOS/zed")
+              expected_executable = str(app / "Contents/MacOS/Cod")
               observed = {}
               editors = []
               excluded = []
@@ -1134,7 +1141,7 @@ jobs:
                   else:
                       arguments = shlex.split(command_line)
                       assert arguments[0] == expected_executable, ("unexpected package match", observed[process_id])
-                      assert arguments[1:3] == ["--user-data-dir", str(data)], ("unexpected profile", observed[process_id])
+                      assert (data / "logs/Zed.log").is_file(), ("missing isolated profile log", str(data))
                       editors.append(process_id)
               (output / "process-selection.json").write_text(json.dumps({
                   "initial_pids": pids, "observed": observed, "excluded_printenv": excluded, "editors": editors,
@@ -1500,8 +1507,8 @@ jobs:
           for line in snapshot.splitlines():
               process_id, command = line.strip().split(None, 1)
               args = shlex.split(command)
-              if args and args[0] == str(app / "Contents/MacOS/zed") and "--printenv" not in args:
-                  assert args[1:3] == ["--user-data-dir", str(data)], args
+              if args and args[0] == str(app / "Contents/MacOS/Cod") and "--printenv" not in args:
+                  assert (data / "logs/Zed.log").is_file(), ("missing isolated profile log", str(data))
                   editors.append(int(process_id))
           assert len(editors) == 1, editors
           pid = editors[0]
