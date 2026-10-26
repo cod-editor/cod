@@ -67,10 +67,9 @@ UNNAMED_3 = "New workspace 3"
 # right pixel coordinates too.
 FIRST_USE_OUTPUT_SCALE = output_scale()
 
-# Issue #93's approved compact layout replaces the older 280 px cap in the shared fixture.
+# Tabs retain readable minimum widths when the title bar becomes crowded.
 # Keep these acceptance values independent of the implementation's constants.
 TAB_MIN_WIDTH = 114.0
-TAB_MAX_WIDTH = 242.0
 TAB_HEIGHT = 32.0
 
 # Compare painted surfaces in the same image so the checks work in either native theme.
@@ -263,11 +262,9 @@ class WorkspaceTabsTest(CodStatusFixtures, CodTestCase):
             if add["x"] < last["x"] + last["width"] - 1:
                 raise AssertionError(f"expected + right of the last tab {last!r}, actual {add!r}")
 
-        with self.step("check that a name longer than the maximum width is cut and no tab is wider"):
-            self.expect_equal("PAY-1234 tab cut", True, tabs[0]["truncated"])
-            for index, tab in enumerate(tabs):
-                if tab["bounds"]["width"] > TAB_MAX_WIDTH + 0.5:
-                    raise AssertionError(f"expected tab {index} at most {TAB_MAX_WIDTH} px wide, actual {tab['bounds']['width']}")
+        with self.step("check tabs use the available title bar room"):
+            for index in range(len(tabs)):
+                self.assert_tab_controls_in_view(state, index)
 
         with self.step("check that one line of text fits each tab: every tab is as high as the title bar row"):
             heights = {round(tab["bounds"]["height"]) for tab in tabs}
@@ -421,6 +418,34 @@ class WorkspaceTabsTest(CodStatusFixtures, CodTestCase):
                 {"names": [*NAMES, UNNAMED], "active": one_hot(4, 3), "active_workspace": 3, "workspace_count": 4},
             )
 
+    def test_rename_from_tab_context_menu_and_double_click(self) -> None:
+        with self.step("create two workspaces in one window"):
+            self.start_cod(None)
+            self.click_add_button(self.state())
+            state = self.wait_for_tabs("two tabs", {"names": [UNNAMED, UNNAMED_2], "active": [False, True]})
+
+        with self.step("right-click the background tab and choose Rename Workspace"):
+            bounds = title_bar(state)["tabs"][0]["bounds"]
+            x, y = center(bounds)
+            self.driver.request("right_click", x=x, y=y)
+            time.sleep(0.3)
+            samples = self.workdir / "sampled-frames"
+            samples.mkdir(exist_ok=True)
+            screenshot_ppm(samples / "rename-menu.ppm")
+            self.keys("down enter")
+            self.wait_for(lambda state: state["rename_input"] is not None, SHOW_TIMEOUT, "rename from the context menu")
+            self.type("Planning")
+            self.keys("enter")
+            state = self.wait_for_tabs("renamed background workspace", {"names": ["Planning", UNNAMED], "active": [True, False]})
+
+        with self.step("double-click the other tab to rename it"):
+            x, y = center(title_bar(state)["tabs"][1]["bounds"])
+            self.driver.request("double_click", x=x, y=y)
+            self.wait_for(lambda state: state["rename_input"] is not None, SHOW_TIMEOUT, "rename from a double-click")
+            self.type("Notes")
+            self.keys("enter")
+            self.wait_for_tabs("both named through tabs", {"names": ["Planning", "Notes"], "active": [False, True], "workspace_count": 2})
+
     # AC6
 
     def test_ac6_next_and_previous_workspace_move_the_active_tab_and_wrap(self) -> None:
@@ -502,35 +527,47 @@ class WorkspaceTabsTest(CodStatusFixtures, CodTestCase):
 
     # Issue #77 AC(b): a long name ellipsizes only as needed and stays distinguishable.
 
-    def test_ac7_long_names_use_their_full_max_width_and_stay_distinguishable(self) -> None:
-        """Two long names without an "[ID]" prefix, differing only near the end (the part ellipsis
-        would cut first): if #77's layout bug squeezes both tabs far under their own 242 px max
-        width, they lose that distinguishing tail and look identical. 1280 px comfortably fits two
-        242 px tabs (484 px), so both should reach the max width, not something much smaller."""
+    def test_ac7_long_names_use_available_title_bar_room(self) -> None:
+        """Names wider than the old 242 px cap stay whole when the title bar has room."""
         long_a = "Fix invoice rounding for every annual plan in the EU region"
         long_b = "Fix invoice rounding for every annual plan in the US region"
 
-        with self.step("start Cod, name the first workspace, add a second with another long name"):
+        with self.step("a single long workspace name stays whole"):
             self.start_cod(None)
             self.rename_workspace(long_a)
+            state = self.wait_for_tabs("one long-named tab", {"names": [long_a], "active": [True]})
+            tab = title_bar(state)["tabs"][0]
+            self.expect_equal("single name is whole", False, tab["truncated"])
+            self.expect_equal("single visible name", long_a, tab["visible"])
+            if tab["bounds"]["width"] <= 242.5:
+                raise AssertionError(f"expected the long name to use more than the old 242 px cap, actual {tab!r}")
+            self.assert_tab_controls_in_view(state, 0)
+            samples = self.workdir / "sampled-frames"
+            samples.mkdir(exist_ok=True)
+            screenshot_ppm(samples / "single-full-name.ppm")
+
+        with self.step("two long names stay whole when both fit the title bar"):
             self.new_workspace()
             self.rename_workspace(long_b)
             state = self.wait_for_tabs("two long-named tabs", {"names": [long_a, long_b], "active": [False, True]})
-
-        with self.step("check the tooltips carry the full names"):
             tabs = title_bar(state)["tabs"]
             self.expect_equal("tooltips", [long_a, long_b], [tab["tooltip"] for tab in tabs])
-
-        with self.step(f"check neither tab is squeezed under its own {TAB_MAX_WIDTH} px max width"):
-            for index, tab in enumerate(tabs):
+            self.expect_equal("names stay whole", [False, False], [tab["truncated"] for tab in tabs])
+            self.expect_equal("visible names", [long_a, long_b], [tab["visible"] for tab in tabs])
+            for index in range(len(tabs)):
                 self.assert_tab_controls_in_view(state, index)
-                width = tab["bounds"]["width"]
-                if abs(width - TAB_MAX_WIDTH) > 1:
-                    raise AssertionError(
-                        f"expected tab {index} at its max width {TAB_MAX_WIDTH} px (two long tabs fit the "
-                        f"title bar), actual {width} px; a narrower tab has less of its name showing and "
-                        "both tabs can look the same"
-                    )
+            screenshot_ppm(samples / "two-full-names.ppm")
+
+        with self.step("a narrow window cuts names only after exhausting the available room"):
+            self.narrow_the_output(560, 600)
+            state = self.wait_for(
+                lambda state: self.cod_window_width() == 560
+                and title_bar(state)["tabs"][1]["truncated"],
+                SHOW_TIMEOUT,
+                "the constrained tab label",
+            )
+            self.assert_plus_reachable(state, 560)
+            self.assert_tab_controls_in_view(state, 1)
 
     # Issue #93 replaces the ghost selected surface with a native selected fill and contour.
 
@@ -1144,8 +1181,8 @@ class WorkspaceTabsTest(CodStatusFixtures, CodTestCase):
             for index, tab in enumerate(tabs):
                 if not drawn(tab["bounds"]) or tab["bounds"]["width"] <= 0:
                     raise AssertionError(f"expected tab {index} drawn with a positive width, actual {tab['bounds']!r}")
-                if not TAB_MIN_WIDTH - 0.5 <= tab["bounds"]["width"] <= TAB_MAX_WIDTH + 0.5:
-                    raise AssertionError(f"expected tab {index} width in {TAB_MIN_WIDTH}..{TAB_MAX_WIDTH}, actual {tab['bounds']!r}")
+                if tab["bounds"]["width"] < TAB_MIN_WIDTH - 0.5:
+                    raise AssertionError(f"expected tab {index} width at least {TAB_MIN_WIDTH}, actual {tab['bounds']!r}")
                 if abs(tab["bounds"]["height"] - TAB_HEIGHT) > 0.5:
                     raise AssertionError(f"expected tab {index} height {TAB_HEIGHT}, actual {tab['bounds']!r}")
             if all(contains_bounds(bar["tabs_viewport"], tab["bounds"]) for tab in tabs):
