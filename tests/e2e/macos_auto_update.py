@@ -152,7 +152,7 @@ def run(archive: Path, artifacts: Path) -> None:
         subprocess.run(launch, check=True, capture_output=True, timeout=30)
         driver = connect()
         wait(lambda s: len(s["worktrees"]) == 1, "project ready")
-        subprocess.run([str(app / "Contents/MacOS/codctl"), "open", str(project / "README.txt")],
+        subprocess.run([str(app / "Contents/MacOS/codctl"), "open", str((project / "README.txt").resolve())],
                        check=True, capture_output=True, text=True, timeout=30,
                        env={**os.environ, "COD_PREVIEW_DIR": str(data)})
         wait(lambda s: s["active_tab"] == "README.txt", "fixture notes open")
