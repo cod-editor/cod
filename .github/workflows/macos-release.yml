@@ -69,7 +69,7 @@ jobs:
           if [ -z "$REUSE_RUN_ID" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && \
             [ "$GITHUB_REF" = "refs/heads/macos-preview/remaining-acceptance-20261023" ]; then
             parent=$(git rev-parse HEAD^)
-            if git diff --quiet "$parent" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py' ':(exclude)tests/e2e/macos_network_identity.py' && \
+            if git diff --quiet "$parent" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py' ':(exclude)tests/e2e/macos_network_identity.py' ':(exclude)tests/e2e/macos_auto_update.py' && \
               ! git diff --quiet "$parent" HEAD -- .github/workflows/macos-release.yml tests/e2e/macos_candidate_smoke.py; then
               # Correct the external-file identity observation on the exact7190fac
               # package. Full application source and bundle identity must still match.
@@ -87,7 +87,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$source_commit"
           # Only release workflows and the external smoke driver may differ. Application,
           # embedded driver, bundler and dependencies must match the retained package.
-          git diff --exit-code "$source_commit" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude).github/workflows/linux-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py' ':(exclude)tests/e2e/macos_network_identity.py'
+          git diff --exit-code "$source_commit" HEAD -- . ':(exclude).github/workflows/macos-release.yml' ':(exclude).github/workflows/linux-release.yml' ':(exclude)tests/e2e/macos_candidate_smoke.py' ':(exclude)tests/e2e/macos_network_identity.py' ':(exclude)tests/e2e/macos_auto_update.py'
           gh run download "$REUSE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name cod-macos-aarch64
           shasum -a 256 -c cod-macos-aarch64.zip.sha256
           mkdir -p dist
@@ -1675,7 +1675,6 @@ jobs:
           PY
 
       - name: Install and restart through the native updater
-        if: steps.reuse.outputs.commit == ''
         run: caffeinate -dimsu python3 tests/e2e/macos_auto_update.py cod-macos-aarch64.zip smoke-artifacts/auto-update
 
       - name: Upload the zip and its checksum

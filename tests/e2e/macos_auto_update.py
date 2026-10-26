@@ -7,6 +7,7 @@ import http.server
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,8 @@ from cod_e2e import Driver, DriverError, cod_settings, make_repo, palette_proble
 
 def run(archive: Path, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
+    recognizer = artifacts.parent / "network-identity/recognize"
+    assert recognizer.is_file(), f"Run macos_network_identity.py first to build the native OCR helper: {recognizer}"
     root = Path(tempfile.mkdtemp(prefix="cod-update-"))
     subprocess.run(["ditto", "-x", "-k", str(archive), str(root)], check=True)
     app = root / "Cod.app"
@@ -111,8 +114,27 @@ def run(archive: Path, artifacts: Path) -> None:
         driver.keys("enter")
 
     def capture(name):
+        image = artifacts / f"{name}.jpg"
+        for attempt in range(3):
+            subprocess.run(["screencapture", "-x", "-t", "jpg", str(image)], check=True)
+            result = subprocess.run([str(recognizer), str(image)], check=True,
+                                    capture_output=True, text=True, timeout=30)
+            rows = json.loads(result.stdout)
+            text = "\n".join(row["text"] for row in rows)
+            if not re.search(r"local networks?", text, re.I):
+                break
+            # The HTTP fixture can trigger Python's own macOS permission alert.
+            # Other apps' permission decisions belong to their separate tests.
+            assert re.search(r"\bPython[\"\u201c\u201d]?\s+(?:to find|would like|wants)", text, re.I), ("Unexpected permission alert", text)
+            allow = next((row for row in rows if row["text"].strip() == "Allow"), None)
+            assert allow, ("Missing exact Python Allow button", text)
+            (artifacts / f"{name}-python-permission-{attempt}.json").write_text(json.dumps(rows, indent=2))
+            subprocess.run(["osascript", "-e", 'tell application "System Events" to click at '
+                            + "{%d, %d}" % (allow["x"], allow["y"])], check=True, timeout=15)
+            time.sleep(.5)
+        else:
+            raise AssertionError("Python permission alert did not dismiss")
         (artifacts / f"{name}.json").write_text(json.dumps(driver.state(), indent=2))
-        subprocess.run(["screencapture", "-x", "-t", "jpg", str(artifacts / f"{name}.jpg")], check=True)
 
     # LaunchServices starts a fresh process on native restart. Give launchd the
     # same isolated fixture environment and restore its previous values afterward.
@@ -130,6 +152,10 @@ def run(archive: Path, artifacts: Path) -> None:
         subprocess.run(launch, check=True, capture_output=True, timeout=30)
         driver = connect()
         wait(lambda s: len(s["worktrees"]) == 1, "project ready")
+        subprocess.run([str(app / "Contents/MacOS/codctl"), "open", str(project / "README.txt")],
+                       check=True, capture_output=True, text=True, timeout=30,
+                       env={**os.environ, "COD_PREVIEW_DIR": str(data)})
+        wait(lambda s: s["active_tab"] == "README.txt", "fixture notes open")
         capture("before-update")
         assert not requested, requested
         settings["auto_update"] = True
