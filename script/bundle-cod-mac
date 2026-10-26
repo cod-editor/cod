@@ -33,6 +33,7 @@ zip_name=${ZIP_NAME:-cod-macos-aarch64.zip}
 icon_src=${ICON_SRC:-crates/zed/resources/cod-app-icon-1024.png}
 commit=${COMMIT:-${GITHUB_SHA:-$(git rev-parse HEAD)}}
 run_number=${RUN_NUMBER:-1}
+update_version=${UPDATE_VERSION:-0.0.${GITHUB_RUN_ID:-0}}
 
 zed_bin="$build_dir/zed"
 codctl_bin="$build_dir/codctl"
@@ -208,6 +209,7 @@ fi
 
 # --- Commit stamp (checked against the zed binary by the workflow) ----------------------------
 printf '%s\n' "$commit" > "$app_path/Contents/Resources/cod-commit.txt"
+printf '%s\n' "$update_version" > "$app_path/Contents/Resources/cod-update-version.txt"
 
 # --- Ad-hoc signature (no certificate: Code signing and notarization are out of scope, #23) ----
 # Signed inside-out: the CEF framework and every helper bundle nested under it first (codesign

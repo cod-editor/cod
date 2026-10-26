@@ -473,6 +473,10 @@ async fn run(
         Request::MouseUp { x, y } => cod_tabs_state::mouse_up(x, y, memory, cx).await.map(|()| None),
         Request::SetEntry(entry) => cod_tabs_state::set_entry(entry, memory, cx).map(|()| None),
         Request::State => {
+            let auto_update = cx.update(|cx| {
+                auto_update::AutoUpdater::get(cx)
+                    .map(|updater| format!("{:?}", updater.read(cx).status()))
+            });
             // Counted outside update_window: while a window is being updated, App::windows leaves it out.
             let window_count = cx.update(|cx| cx.windows().len());
             let window = cx
@@ -482,7 +486,9 @@ async fn run(
                 let multi_workspace = root
                     .downcast::<MultiWorkspace>()
                     .map_err(|_| anyhow!("the window does not show a workspace"))?;
-                read_state(&multi_workspace, window, window_count, &memory.borrow(), cx)
+                let mut state = read_state(&multi_workspace, window, window_count, &memory.borrow(), cx)?;
+                state["auto_update"] = json!(auto_update);
+                Ok(state)
             })
             .context("the workspace window closed")?
             .map(Some)

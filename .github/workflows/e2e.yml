@@ -42,6 +42,9 @@ jobs:
           # A pull request checks out its merge commit; its first parent is the base, which is enough to list the changed files.
           fetch-depth: 2
 
+      - name: Test updater release metadata
+        run: python3 script/test-cod-update-manifest.py
+
       - name: Check the app icons
         run: sha256sum --check --strict --quiet script/cod-app-icons.sha256
 
