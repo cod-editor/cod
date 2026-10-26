@@ -1211,7 +1211,8 @@ jobs:
                   driver.type(name)
                   keys("enter")
                   wait(lambda s: s["rename_input"] is None
-                       and s["workspaces"][s["active_workspace"]]["name"] == name, "renamed")
+                       and s["workspaces"][s["active_workspace"]]["name"] == name
+                       and s["title_bar"]["tabs"][s["active_workspace"]]["name"] == name, "renamed and painted")
 
               def capture(name):
                   time.sleep(.7)
@@ -1404,6 +1405,21 @@ jobs:
                   wait(lambda s: s["workspace_count"] == 1 and s["active_tab"] == "Ordinary release reference",
                        "clean background UI close")
                   capture("05-after-close")
+                  rename("[TEAM-12345] Review invoice rounding for every annual plan")
+                  for index in range(1, 6):
+                      add = driver.state()["title_bar"]["add_button"]["bounds"]
+                      driver.request("click", x=add["x"] + add["width"] / 2, y=add["y"] + add["height"] / 2)
+                      wait(lambda s: s["workspace_count"] == index + 1 and s["active_workspace"] == index,
+                           "another issue workspace")
+                      rename(f"[TEAM-{12345 + index}] Review invoice rounding for every annual plan")
+                  os_window("set size of front window to {640, 600}")
+                  wait(lambda s: contains_bounds(s["title_bar"]["tabs_viewport"],
+                                                s["title_bar"]["tabs"][5]["bounds"]), "revealed crowded issue tab")
+                  driver.request("hover", **tab_point(5, close=True))
+                  capture("06-crowded-issue-id-close")
+                  tab = driver.state()["title_bar"]["tabs"][5]
+                  assert tab["visible"].startswith("[TEAM-12350]"), tab
+                  assert tab["bounds"]["width"] >= 140, tab
                   print("PASS prepared scenario executed:", theme, "fresh focused QA" if fresh else "nonempty planning beta",
                         flush=True)
               finally:

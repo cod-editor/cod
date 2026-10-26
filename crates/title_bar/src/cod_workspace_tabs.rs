@@ -35,6 +35,7 @@ pub struct CodTabsState {
     focus: HashMap<ElementId, (FocusHandle, FocusHandle)>,
     revealed: Option<(ElementId, Pixels, usize)>,
     viewport_width: Rc<Cell<Option<Pixels>>>,
+    tab_widths: Rc<RefCell<Vec<Pixels>>>,
 }
 
 /// One tab as it was last drawn, for the end-to-end driver.
@@ -243,6 +244,40 @@ pub fn render_cod_workspace_tabs(
         let drawn_number = number_text.clone();
         let measured_layout = layout.clone();
         let dot = status_dot(status, index, &layout, cx);
+        // A protected ID or default number must fit beside the close slot even when the
+        // rest shrinks away. Use the same font as the labels, including the selected weight.
+        let mut font = theme::theme_settings(cx).ui_font(cx).clone();
+        if is_active {
+            font.weight = gpui::FontWeight::SEMIBOLD;
+        }
+        let font_size = TextSize::Small.rems(cx).to_pixels(window.rem_size());
+        let measure = |text: &str| {
+            let runs = [gpui::TextRun {
+                len: text.len(),
+                font: font.clone(),
+                ..Default::default()
+            }];
+            window
+                .text_system()
+                .shape_line(text.to_string().into(), font_size, &runs, None)
+                .width()
+        };
+        let content_count = usize::from(dot.is_some())
+            + usize::from(id.is_some())
+            + usize::from(!rest.is_empty())
+            + usize::from(number_text.is_some());
+        // Horizontal padding (17), borders (2), close slot (22) and its gap (8).
+        let minimum_width = (px(49.)
+            + if dot.is_some() { px(5.) } else { px(0.) }
+            + id.map(&measure).unwrap_or_default()
+            + number_text.as_deref().map(&measure).unwrap_or_default()
+            + if rest.is_empty() {
+                px(0.)
+            } else {
+                measure("\u{2026}")
+            }
+            + px(8. * content_count.saturating_sub(1) as f32))
+        .max(px(COD_TAB_MIN_WIDTH));
         // The place of the rest among the drawn children: after the dot and the "[ID]".
         let rest_index = usize::from(dot.is_some()) + usize::from(id.is_some());
         // Only the name shrinks inside a tab; its identity and default number stay whole.
@@ -402,7 +437,7 @@ pub fn render_cod_workspace_tabs(
             .track_focus(&tab_focus)
             .flex_shrink_1()
             .h(px(32.))
-            .min_w(px(COD_TAB_MIN_WIDTH))
+            .min_w(minimum_width)
             .pl(px(12.))
             .pr(px(5.))
             .gap(px(8.))
@@ -480,7 +515,7 @@ pub fn render_cod_workspace_tabs(
         // The menu's default automatic minimum would otherwise prevent a tab from shrinking.
         tabs.push(
             div()
-                .min_w(px(COD_TAB_MIN_WIDTH))
+                .min_w(minimum_width)
                 .flex_shrink_1()
                 .child(
                     right_click_menu(menu_id)
@@ -536,6 +571,7 @@ pub fn render_cod_workspace_tabs(
     let drawn_scroll = state.scroll.clone();
     let resized_scroll = state.scroll.clone();
     let viewport_width = state.viewport_width.clone();
+    let tab_widths = state.tab_widths.clone();
     h_flex()
         .min_w_0()
         .h_full()
@@ -545,12 +581,21 @@ pub fn render_cod_workspace_tabs(
             let mut layout = layout.borrow_mut();
             layout.tabs_viewport = bounds.first().copied();
             layout.add_button = bounds.get(1).copied();
-            if let Some(viewport) = layout.tabs_viewport
-                && viewport_width.replace(Some(viewport.size.width)) != Some(viewport.size.width)
+            let widths: Vec<_> = layout
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.bounds.map(|bounds| bounds.size.width))
+                .collect();
+            let widths_changed = *tab_widths.borrow() != widths;
+            *tab_widths.borrow_mut() = widths;
+            let viewport_changed = layout.tabs_viewport.is_some_and(|viewport| {
+                viewport_width.replace(Some(viewport.size.width)) != Some(viewport.size.width)
+            });
+            if (viewport_changed || widths_changed)
                 && let Some(reveal_index) = reveal_index
             {
-                // The scroll handle learns the resized viewport during prepaint, after its
-                // reveal pass. Repeat once with those actual bounds instead of the old width.
+                // Status changes and renames can widen a tab without resizing the viewport.
+                // Repeat the reveal after the scroll handle learns those actual bounds.
                 resized_scroll.scroll_to_item(reveal_index);
                 // Refresh is ignored during prepaint, so invalidate after drawing finishes.
                 window.defer(cx, |window, _cx| window.refresh());
