@@ -1300,7 +1300,25 @@ jobs:
                       time.sleep(.5)
                       os_window("key code 36")
                       time.sleep(.5)
-                      os_window("key code 36")
+                      confirm_folder = f'''tell application "System Events"
+                  tell first process whose unix id is {pid}
+                      if exists sheet 1 of front window then return false
+                      if not (exists button "Open" of front window) then return false
+                      if not (enabled of button "Open" of front window) then return false
+                      click button "Open" of front window
+                      return true
+                  end tell
+              end tell'''
+                      deadline = time.monotonic() + 20
+                      while True:
+                          confirmed = subprocess.check_output(["osascript", "-e", confirm_folder],
+                                                              text=True, timeout=15).strip()
+                          assert confirmed in ("true", "false"), confirmed
+                          if confirmed == "true":
+                              break
+                          if time.monotonic() >= deadline:
+                              raise AssertionError("native folder picker Open button did not become ready")
+                          time.sleep(.1)
                       wait(lambda s: len(s["worktrees"]) == 1, "Cmd-O opens folder")
                       print("PASS native Cmd-O opens the selected folder", flush=True)
                   keys("super-p")
