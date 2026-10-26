@@ -49,6 +49,12 @@ Cod's data lives in `~/Library/Application Support/Cod-preview`, separate from s
 
 `codctl` is bundled inside the app, at `/Applications/Cod.app/Contents/MacOS/codctl`. To use it from a terminal, put it on your `PATH`, for example `ln -s /Applications/Cod.app/Contents/MacOS/codctl /usr/local/bin/codctl` (or any folder already on your `PATH`).
 
+Every merge to `master` publishes a preview with both platforms built from the same commit.
+Bundled Apple Silicon macOS builds check GitHub releases automatically, verify the archive checksum and install newer builds in place.
+Click the restart button when the update is ready, or run `auto update: check` from the command palette.
+Existing builds from before the updater was added need one manual download.
+Linux updates still require a manual download.
+
 Each preview builds both platforms from the same commit. `.github/workflows/linux-release.yml` calls `.github/workflows/macos-release.yml` on a free GitHub-hosted Apple Silicon runner, then attaches the tested macOS archive to the same release. macOS builds also run by hand, never on pull requests.
 
 ## Building

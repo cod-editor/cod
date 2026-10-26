@@ -6,25 +6,21 @@ use gpui::{
     App, AppContext as _, AsyncApp, BackgroundExecutor, Context, Entity, EventEmitter, Global,
     Task, TaskExt, Window, actions,
 };
-use http_client::{HttpClient, HttpClientWithUrl};
+use http_client::{HttpClient, HttpClientWithUrl, HttpRequestExt as _};
 use paths::remote_servers_dir;
-use release_channel::{AppCommitSha, ReleaseChannel};
+use release_channel::ReleaseChannel;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings};
+use sha2::{Digest, Sha256};
 use smol::fs::File;
 use smol::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
 };
-use std::mem;
 use std::{
-    env::{
-        self,
-        consts::{ARCH, OS},
-    },
+    env::{self, consts::OS},
     ffi::OsStr,
-    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -46,55 +42,6 @@ impl std::error::Error for MissingDependencyError {}
 const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const REMOTE_SERVER_CACHE_LIMIT: usize = 5;
-
-#[cfg(target_os = "linux")]
-fn linux_rsync_install_hint() -> &'static str {
-    let os_release = match std::fs::read_to_string("/etc/os-release") {
-        Ok(os_release) => os_release,
-        Err(_) => return "Please install rsync using your package manager",
-    };
-
-    let mut distribution_ids = Vec::new();
-    for line in os_release.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("ID=") {
-            distribution_ids.push(value.trim_matches('"').to_ascii_lowercase());
-        } else if let Some(value) = trimmed.strip_prefix("ID_LIKE=") {
-            for id in value.trim_matches('"').split_whitespace() {
-                distribution_ids.push(id.to_ascii_lowercase());
-            }
-        }
-    }
-
-    let package_manager_hint = if distribution_ids
-        .iter()
-        .any(|distribution_id| distribution_id == "arch")
-    {
-        Some("Install it with: sudo pacman -S rsync")
-    } else if distribution_ids
-        .iter()
-        .any(|distribution_id| distribution_id == "debian" || distribution_id == "ubuntu")
-    {
-        Some("Install it with: sudo apt install rsync")
-    } else if distribution_ids.iter().any(|distribution_id| {
-        distribution_id == "fedora"
-            || distribution_id == "rhel"
-            || distribution_id == "centos"
-            || distribution_id == "rocky"
-            || distribution_id == "almalinux"
-    }) {
-        Some("Install it with: sudo dnf install rsync")
-    } else if distribution_ids
-        .iter()
-        .any(|distribution_id| distribution_id == "nixos")
-    {
-        Some("Install pkgs.rsync from nixpkgs")
-    } else {
-        None
-    };
-
-    package_manager_hint.unwrap_or("Please install rsync using your package manager")
-}
 
 actions!(
     auto_update,
@@ -186,64 +133,13 @@ pub struct AutoUpdater {
     update_check_type: UpdateCheckType,
     _wake_subscription: gpui::Subscription,
     dismissed_status: Option<AutoUpdateStatus>,
+    polling_task: Option<Task<Result<()>>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ReleaseAsset {
     pub version: String,
     pub url: String,
-}
-
-struct MacOsUnmounter<'a> {
-    mount_path: PathBuf,
-    background_executor: &'a BackgroundExecutor,
-}
-
-impl MacOsUnmounter<'_> {
-    /// Unmounts the disk image and waits for completion. This must happen
-    /// before the `InstallerDir` is dropped: deleting the temp dir while the
-    /// image is still mounted inside it fails silently and leaks the
-    /// directory (and the downloaded DMG) in the system temp dir.
-    async fn unmount(mut self) {
-        let mount_path = mem::take(&mut self.mount_path);
-        unmount_disk_image(&mount_path).await;
-    }
-}
-
-impl Drop for MacOsUnmounter<'_> {
-    fn drop(&mut self) {
-        let mount_path = mem::take(&mut self.mount_path);
-        // Safety net for early exits and cancellation; the happy path calls
-        // `unmount`, which leaves the path empty.
-        if mount_path.as_os_str().is_empty() {
-            return;
-        }
-        self.background_executor
-            .spawn(async move { unmount_disk_image(&mount_path).await })
-            .detach();
-    }
-}
-
-async fn unmount_disk_image(mount_path: &Path) {
-    let unmount_output = new_command("hdiutil")
-        .args(["detach", "-force"])
-        .arg(mount_path)
-        .output()
-        .await;
-    match unmount_output {
-        Ok(output) if output.status.success() => {
-            log::info!("Successfully unmounted the disk image");
-        }
-        Ok(output) => {
-            log::error!(
-                "Failed to unmount disk image: {:?}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        Err(error) => {
-            log::error!("Error while trying to unmount disk image: {:?}", error);
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, RegisterSetting)]
@@ -258,22 +154,54 @@ impl Settings for AutoUpdateSetting {
     }
 }
 
-/// Cod never updates itself from Zed releases. Changing this is not a setting on purpose.
-const DESKTOP_UPDATES_ENABLED: bool = false;
+const DESKTOP_UPDATES_ENABLED: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+const COD_RELEASES_URL: &str = "https://api.github.com/repos/cod-editor/cod/releases?per_page=100";
 
 #[derive(Default)]
 struct GlobalAutoUpdate(Option<Entity<AutoUpdater>>);
-
 impl Global for GlobalAutoUpdate {}
 
-/// Cod: this only creates the global that the remote-server downloads
-/// (`download_remote_server_release`, `get_remote_server_release_url`) need.
-/// It registers no "check for updates" actions and starts no polling,
-/// and `AutoUpdater::poll` is disabled, so Cod never fetches or installs a Zed update.
+fn bundled_update_version(app_path: &Path) -> Result<Version> {
+    anyhow::ensure!(
+        app_path.extension() == Some(OsStr::new("app")),
+        "not a bundled app"
+    );
+    let version =
+        std::fs::read_to_string(app_path.join("Contents/Resources/cod-update-version.txt"))?;
+    let version: Version = version.trim().parse()?;
+    validate_update_version(&version)?;
+    Ok(version)
+}
+
 pub fn init(client: Arc<Client>, cx: &mut App) {
-    let version = release_channel::AppVersion::global(cx);
+    AutoUpdateSetting::register(cx);
+    let bundled_version = DESKTOP_UPDATES_ENABLED
+        .then(|| cx.app_path().and_then(|path| bundled_update_version(&path)))
+        .and_then(Result::ok);
+    let version = bundled_version
+        .clone()
+        .unwrap_or_else(|| release_channel::AppVersion::global(cx));
     let auto_updater = cx.new(|cx| AutoUpdater::new(version, client, cx));
-    cx.set_global(GlobalAutoUpdate(Some(auto_updater)));
+    cx.set_global(GlobalAutoUpdate(Some(auto_updater.clone())));
+    if bundled_version.is_some() {
+        cx.on_action(|action: &ViewReleaseNotes, cx| {
+            view_release_notes(action, cx);
+        });
+        cx.observe_new(|workspace: &mut workspace::Workspace, _, _| {
+            workspace.register_action(|_, action: &Check, window, cx| check(action, window, cx));
+        })
+        .detach();
+        cx.on_action(|_: &DismissMessage, cx| {
+            if let Some(updater) = AutoUpdater::get(cx) {
+                updater.update(cx, |updater, cx| updater.dismiss(cx));
+            }
+        });
+        auto_updater.update(cx, |updater, cx| updater.update_polling(cx));
+        cx.observe_global::<settings::SettingsStore>(move |cx| {
+            auto_updater.update(cx, |updater, cx| updater.update_polling(cx));
+        })
+        .detach();
+    }
 }
 
 pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
@@ -283,18 +211,11 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Zed was installed via a package manager.",
+            "Cod was installed via a package manager.",
             Some(&message),
             &["OK"],
             cx,
         ));
-        return;
-    }
-
-    if !ReleaseChannel::try_global(cx)
-        .map(|channel| channel.poll_for_updates())
-        .unwrap_or(false)
-    {
         return;
     }
 
@@ -311,25 +232,8 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     }
 }
 
-pub fn release_notes_url(cx: &mut App) -> Option<String> {
-    let release_channel = ReleaseChannel::try_global(cx)?;
-    let url = match release_channel {
-        ReleaseChannel::Stable | ReleaseChannel::Preview => {
-            let auto_updater = AutoUpdater::get(cx)?;
-            let auto_updater = auto_updater.read(cx);
-            let mut current_version = auto_updater.current_version.clone();
-            current_version.pre = semver::Prerelease::EMPTY;
-            current_version.build = semver::BuildMetadata::EMPTY;
-            let release_channel = release_channel.dev_name();
-            let path = format!("/releases/{release_channel}/{current_version}");
-            auto_updater.client.http_client().build_url(&path)
-        }
-        ReleaseChannel::Nightly => {
-            "https://github.com/zed-industries/zed/commits/nightly/".to_string()
-        }
-        ReleaseChannel::Dev => "https://github.com/zed-industries/zed/commits/main/".to_string(),
-    };
-    Some(url)
+pub fn release_notes_url(_cx: &mut App) -> Option<String> {
+    Some("https://github.com/cod-editor/cod/releases".to_string())
 }
 
 pub fn view_release_notes(_: &ViewReleaseNotes, cx: &mut App) -> Option<()> {
@@ -339,7 +243,7 @@ pub fn view_release_notes(_: &ViewReleaseNotes, cx: &mut App) -> Option<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-const INSTALLER_DIR_PREFIX: &str = "zed-auto-update";
+const INSTALLER_DIR_PREFIX: &str = "cod-auto-update";
 
 #[cfg(not(target_os = "windows"))]
 struct InstallerDir(tempfile::TempDir);
@@ -410,8 +314,8 @@ impl AutoUpdater {
         // and then spawn the new binary.
         // Cod: this quit hook installs a staged update, so it is off with desktop updates.
         #[cfg(target_os = "windows")]
-        let quit_subscription = DESKTOP_UPDATES_ENABLED
-            .then(|| cx.on_app_quit(|_, _| finalize_auto_update_on_quit()));
+        let quit_subscription =
+            DESKTOP_UPDATES_ENABLED.then(|| cx.on_app_quit(|_, _| finalize_auto_update_on_quit()));
         #[cfg(not(target_os = "windows"))]
         let quit_subscription = None;
 
@@ -439,6 +343,7 @@ impl AutoUpdater {
             update_check_type: UpdateCheckType::Automatic,
             _wake_subscription: wake_subscription,
             dismissed_status: None,
+            polling_task: None,
         }
     }
 
@@ -456,6 +361,16 @@ impl AutoUpdater {
         self.pending_poll.take();
         self.status = AutoUpdateStatus::Idle;
         self.poll(check_type, cx);
+    }
+
+    fn update_polling(&mut self, cx: &mut Context<Self>) {
+        if AutoUpdateSetting::get_global(cx).0 {
+            if self.polling_task.is_none() {
+                self.polling_task = Some(self.start_polling(cx));
+            }
+        } else {
+            self.polling_task.take();
+        }
     }
 
     pub fn start_polling(&self, cx: &mut Context<Self>) -> Task<Result<()>> {
@@ -491,7 +406,12 @@ impl AutoUpdater {
 
     pub fn poll(&mut self, check_type: UpdateCheckType, cx: &mut Context<Self>) {
         // Cod: every desktop update check, download and install starts here. Disabled for good.
-        if !DESKTOP_UPDATES_ENABLED {
+        if !DESKTOP_UPDATES_ENABLED
+            || cx
+                .app_path()
+                .and_then(|path| bundled_update_version(&path))
+                .is_err()
+        {
             return;
         }
         if check_type.is_manual() {
@@ -713,17 +633,13 @@ impl AutoUpdater {
     }
 
     async fn update(this: Entity<Self>, cx: &mut AsyncApp) -> Result<()> {
-        let (client, installed_version, previous_status, release_channel) =
-            this.read_with(cx, |this, cx| {
-                (
-                    this.client.http_client(),
-                    this.current_version.clone(),
-                    this.status.clone(),
-                    ReleaseChannel::try_global(cx).unwrap_or(ReleaseChannel::Stable),
-                )
-            });
-
-        Self::check_dependencies()?;
+        let (client, installed_version, previous_status) = this.read_with(cx, |this, _| {
+            (
+                this.client.http_client(),
+                this.current_version.clone(),
+                this.status.clone(),
+            )
+        });
 
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Checking;
@@ -731,17 +647,17 @@ impl AutoUpdater {
             cx.notify();
         });
 
-        let fetched_release_data =
-            Self::get_release_asset(&this, release_channel, None, "zed", OS, ARCH, cx).await?;
-        let fetched_version = fetched_release_data.clone().version;
-        let app_commit_sha = Ok(cx.update(|cx| AppCommitSha::try_global(cx).map(|sha| sha.full())));
-        let newer_version = Self::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version,
-            previous_status.clone(),
-        )?;
+        let metadata = fetch_cod_release(client.clone()).await?;
+        let fetched_version: Version = metadata.version.parse()?;
+        let current_version = match &previous_status {
+            AutoUpdateStatus::Updated { version } => version,
+            _ => &installed_version,
+        };
+        let newer_version = newer_cod_version(current_version, fetched_version);
+        let fetched_release_data = ReleaseAsset {
+            version: metadata.version.clone(),
+            url: metadata.macos_aarch64.url.clone(),
+        };
 
         let Some(newer_version) = newer_version else {
             this.update(cx, |this, cx| {
@@ -793,6 +709,13 @@ impl AutoUpdater {
         .await
         .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
 
+        cx.background_spawn({
+            let path = target_path.clone();
+            let checksum = metadata.macos_aarch64.sha256.clone();
+            async move { verify_download(&path, &checksum).await }
+        })
+        .await?;
+
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Installing {
                 version: newer_version.clone(),
@@ -820,6 +743,8 @@ impl AutoUpdater {
                 running_app_path,
                 channel,
                 background_executor,
+                newer_version.clone(),
+                metadata.commit.clone(),
             ))
             .await
         };
@@ -840,64 +765,9 @@ impl AutoUpdater {
         Ok(())
     }
 
-    fn check_if_fetched_version_is_newer(
-        release_channel: ReleaseChannel,
-        app_commit_sha: Result<Option<String>>,
-        installed_version: Version,
-        fetched_version: String,
-        status: AutoUpdateStatus,
-    ) -> Result<Option<Version>> {
-        let fetched_version = fetched_version.parse::<Version>()?;
-
-        match release_channel {
-            ReleaseChannel::Nightly => {
-                let should_download = if let AutoUpdateStatus::Updated { version } = status {
-                    fetched_version != version
-                } else {
-                    let fetched_sha = fetched_version.build.as_str().rsplit('.').next();
-                    app_commit_sha
-                        .ok()
-                        .flatten()
-                        .is_none_or(|sha| fetched_sha != Some(sha.as_str()))
-                };
-                Ok(should_download.then_some(fetched_version))
-            }
-            _ => {
-                let current_version = if let AutoUpdateStatus::Updated { version } = status {
-                    version
-                } else {
-                    installed_version
-                };
-                Ok(Self::check_if_fetched_version_is_newer_non_nightly(
-                    current_version,
-                    fetched_version,
-                ))
-            }
-        }
-    }
-
-    fn check_dependencies() -> Result<()> {
-        #[cfg(target_os = "linux")]
-        if which::which("rsync").is_err() {
-            let install_hint = linux_rsync_install_hint();
-            return Err(MissingDependencyError(format!(
-                "rsync is required for auto-updates but is not installed. {install_hint}"
-            ))
-            .into());
-        }
-
-        #[cfg(target_os = "macos")]
-        anyhow::ensure!(
-            which::which("rsync").is_ok(),
-            "Could not auto-update because the required rsync utility was not found."
-        );
-
-        Ok(())
-    }
-
     async fn target_path(installer_dir: &InstallerDir) -> Result<PathBuf> {
         let filename = match OS {
-            "macos" => anyhow::Ok("Zed.dmg"),
+            "macos" => anyhow::Ok("Cod.zip"),
             "linux" => Ok("zed.tar.gz"),
             "windows" => Ok("Zed.exe"),
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
@@ -913,6 +783,8 @@ impl AutoUpdater {
         running_app_path: PathBuf,
         channel: &str,
         background_executor: BackgroundExecutor,
+        expected_version: Version,
+        expected_commit: String,
     ) -> Result<Option<PathBuf>> {
         match OS {
             "macos" => {
@@ -921,6 +793,8 @@ impl AutoUpdater {
                     &target_path,
                     running_app_path,
                     &background_executor,
+                    &expected_version,
+                    &expected_commit,
                 )
                 .await
             }
@@ -930,16 +804,6 @@ impl AutoUpdater {
             "windows" => install_release_windows(&target_path).await,
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
         }
-    }
-
-    fn check_if_fetched_version_is_newer_non_nightly(
-        mut installed_version: Version,
-        fetched_version: Version,
-    ) -> Option<Version> {
-        // For non-nightly releases, ignore build and pre-release fields as they're not provided by our endpoints right now.
-        installed_version.pre = semver::Prerelease::EMPTY;
-        installed_version.build = semver::BuildMetadata::EMPTY;
-        (fetched_version > installed_version).then_some(fetched_version)
     }
 
     pub fn set_should_show_update_notification(
@@ -1045,6 +909,158 @@ async fn cleanup_remote_server_cache(
         }
     }
 
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    draft: bool,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct CodRelease {
+    commit: String,
+    version: String,
+    macos_aarch64: CodAsset,
+}
+
+#[derive(Deserialize)]
+struct CodAsset {
+    url: String,
+    sha256: String,
+}
+
+fn update_fixture_enabled() -> bool {
+    env::var_os("COD_E2E_SOCKET").is_some()
+}
+
+fn newer_cod_version(installed: &Version, fetched: Version) -> Option<Version> {
+    (fetched > *installed).then_some(fetched)
+}
+
+fn validate_update_version(version: &Version) -> Result<()> {
+    anyhow::ensure!(
+        version.major == 0
+            && version.minor == 0
+            && version.pre.is_empty()
+            && version.build.is_empty(),
+        "invalid Cod update version"
+    );
+    Ok(())
+}
+
+fn validate_cod_release(release: &CodRelease) -> Result<Version> {
+    let version: Version = release.version.parse()?;
+    validate_update_version(&version)?;
+    anyhow::ensure!(
+        release.commit.len() == 40 && release.commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid Cod update commit"
+    );
+    anyhow::ensure!(
+        release.macos_aarch64.sha256.len() == 64
+            && release
+                .macos_aarch64
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()),
+        "invalid Cod update checksum"
+    );
+    validate_asset_url(&release.macos_aarch64.url)?;
+    Ok(version)
+}
+
+fn validate_asset_url(url: &str) -> Result<()> {
+    anyhow::ensure!(
+        url.starts_with("https://github.com/cod-editor/cod/releases/download/")
+            || (update_fixture_enabled() && url.starts_with("http://127.0.0.1:")),
+        "update asset must belong to cod-editor/cod"
+    );
+    Ok(())
+}
+
+async fn get_json<T: serde::de::DeserializeOwned>(client: &dyn HttpClient, url: &str) -> Result<T> {
+    let request = http_client::Request::builder()
+        .uri(url)
+        .header("User-Agent", "Cod-Updater")
+        .follow_redirects(http_client::RedirectPolicy::FollowAll)
+        .timeout(Duration::from_secs(30))
+        .body(Default::default())?;
+    let mut response = client.send(request).await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "failed to fetch Cod update: {}",
+        response.status()
+    );
+    let mut bytes = Vec::new();
+    response.body_mut().read_to_end(&mut bytes).await?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn fetch_cod_release(client: Arc<HttpClientWithUrl>) -> Result<CodRelease> {
+    let url = if update_fixture_enabled() {
+        env::var("COD_UPDATE_RELEASES_URL").unwrap_or_else(|_| COD_RELEASES_URL.to_string())
+    } else {
+        COD_RELEASES_URL.to_string()
+    };
+    let releases: Vec<GithubRelease> = get_json(client.as_ref(), &url).await?;
+    let mut newest: Option<(Version, CodRelease)> = None;
+    for release in releases.into_iter().filter(|release| !release.draft) {
+        let Some(asset) = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == "cod-update.json")
+        else {
+            continue;
+        };
+        let candidate = async {
+            validate_asset_url(&asset.browser_download_url)?;
+            let metadata: CodRelease =
+                get_json(client.as_ref(), &asset.browser_download_url).await?;
+            let version = validate_cod_release(&metadata)?;
+            anyhow::Ok((version, metadata))
+        }
+        .await;
+        let (version, metadata) = match candidate {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                log::warn!("ignoring unusable Cod release metadata: {error:#}");
+                continue;
+            }
+        };
+        if newest
+            .as_ref()
+            .is_none_or(|(current, _)| version > *current)
+        {
+            newest = Some((version, metadata));
+        }
+    }
+    newest
+        .map(|(_, release)| release)
+        .context("no published Cod update is available")
+}
+
+async fn verify_download(path: &Path, expected: &str) -> Result<()> {
+    let mut file = File::open(path).await?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = file.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    anyhow::ensure!(
+        format!("{:x}", digest.finalize()).eq_ignore_ascii_case(expected),
+        "Cod update checksum does not match the published release"
+    );
     Ok(())
 }
 
@@ -1171,57 +1187,74 @@ async fn install_release_linux(
 
 async fn install_release_macos(
     temp_dir: &InstallerDir,
-    downloaded_dmg: &Path,
+    downloaded_zip: &Path,
     running_app_path: PathBuf,
-    background_executor: &BackgroundExecutor,
+    _background_executor: &BackgroundExecutor,
+    expected_version: &Version,
+    expected_commit: &str,
 ) -> Result<Option<PathBuf>> {
-    let running_app_filename = running_app_path
-        .file_name()
-        .with_context(|| format!("invalid running app path {running_app_path:?}"))?;
-
-    let mount_path = temp_dir.path().join("Zed");
-    let mut mounted_app_path: OsString = mount_path.join(running_app_filename).into();
-
-    mounted_app_path.push("/");
-    let mut cmd = new_command("hdiutil");
-    cmd.args(["attach", "-nobrowse"])
-        .arg(&downloaded_dmg)
-        .arg("-mountroot")
-        .arg(temp_dir.path());
-    let output = cmd
+    let extracted = temp_dir.path().join("extracted");
+    let output = new_command("/usr/bin/ditto")
+        .args(["-x", "-k"])
+        .arg(downloaded_zip)
+        .arg(&extracted)
         .output()
-        .await
-        .with_context(|| "failed to mount: {cmd}")?;
-
+        .await?;
     anyhow::ensure!(
         output.status.success(),
-        "failed to mount: {:?}",
+        "failed to extract Cod update: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let unmounter = MacOsUnmounter {
-        mount_path: mount_path.clone(),
-        background_executor,
-    };
-
-    let mut cmd = new_command("rsync");
-    cmd.args(["-av", "--delete", "--exclude", "Icon?"])
-        .arg(&mounted_app_path)
-        .arg(&running_app_path);
-    let rsync_output = cmd.output().await;
-
-    // Await the unmount (even if rsync failed) so that the installer temp dir
-    // can be deleted once this function returns.
-    unmounter.unmount().await;
-
-    let output = rsync_output.with_context(|| "failed to rsync: {cmd}")?;
-
+    let updated_app = extracted.join("Cod.app");
+    anyhow::ensure!(
+        bundled_update_version(&updated_app)? == *expected_version,
+        "Cod bundle version does not match the published update"
+    );
+    let bundled_commit =
+        fs::read_to_string(updated_app.join("Contents/Resources/cod-commit.txt")).await?;
+    anyhow::ensure!(
+        bundled_commit.trim() == expected_commit,
+        "Cod bundle commit does not match the published update"
+    );
+    let output = new_command("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(&updated_app)
+        .output()
+        .await?;
     anyhow::ensure!(
         output.status.success(),
-        "failed to copy app: {:?}",
+        "Cod update signature verification failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
+    let staging_dir = tempfile::Builder::new().prefix(".cod-update-").tempdir_in(
+        running_app_path
+            .parent()
+            .context("Cod bundle has no parent")?,
+    )?;
+    let staged = staging_dir.path().join("Cod.app");
+    let backup = staging_dir.path().join("previous.app");
+    let output = new_command("/usr/bin/ditto")
+        .arg(&updated_app)
+        .arg(&staged)
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "failed to stage Cod update: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::rename(&running_app_path, &backup).await?;
+    if let Err(error) = fs::rename(&staged, &running_app_path).await {
+        if let Err(restore_error) = fs::rename(&backup, &running_app_path).await {
+            // Keep the backup on disk if restoring failed so recovery is still possible.
+            let recovery_path = staging_dir.keep();
+            anyhow::bail!(
+                "failed to install Cod: {error}; failed to restore previous app: {restore_error}; previous app retained at {}",
+                recovery_path.display()
+            );
+        }
+        return Err(error.into());
+    }
     Ok(None)
 }
 
@@ -1544,269 +1577,93 @@ mod tests {
     }
 
     #[test]
-    fn test_stable_does_not_update_when_fetched_version_is_not_higher() {
-        let release_channel = ReleaseChannel::Stable;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Idle;
-        let fetched_version = semver::Version::new(1, 0, 0);
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.to_string(),
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), None);
-    }
-
-    #[test]
-    fn test_stable_does_update_when_fetched_version_is_higher() {
-        let release_channel = ReleaseChannel::Stable;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Idle;
-        let fetched_version = semver::Version::new(1, 0, 1);
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.to_string(),
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), Some(fetched_version));
-    }
-
-    #[test]
-    fn test_stable_does_not_update_when_fetched_version_is_not_higher_than_cached() {
-        let release_channel = ReleaseChannel::Stable;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Updated {
-            version: semver::Version::new(1, 0, 1),
-        };
-        let fetched_version = semver::Version::new(1, 0, 1);
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.to_string(),
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), None);
-    }
-
-    #[test]
-    fn test_stable_does_update_when_fetched_version_is_higher_than_cached() {
-        let release_channel = ReleaseChannel::Stable;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Updated {
-            version: semver::Version::new(1, 0, 1),
-        };
-        let fetched_version = semver::Version::new(1, 0, 2);
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.to_string(),
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), Some(fetched_version));
-    }
-
-    #[test]
-    fn test_nightly_does_not_update_when_fetched_sha_is_same() {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let mut installed_version = semver::Version::new(1, 0, 0);
-        installed_version.build = semver::BuildMetadata::new("a").unwrap();
-        let status = AutoUpdateStatus::Idle;
-        let fetched_version = "1.0.0+a".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version,
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), None);
-    }
-
-    #[test]
-    fn test_nightly_does_update_when_fetched_sha_is_not_same() {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Idle;
-        let fetched_version = "1.0.0+b".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.clone(),
-            status,
-        );
-
+    fn test_cod_versions_never_downgrade_or_reinstall() {
+        let current = Version::new(0, 0, 200);
+        assert!(newer_cod_version(&current, Version::new(0, 0, 199)).is_none());
+        assert!(newer_cod_version(&current, current.clone()).is_none());
         assert_eq!(
-            newer_version.unwrap(),
-            Some(fetched_version.parse().unwrap())
+            newer_cod_version(&current, Version::new(0, 0, 201)),
+            Some(Version::new(0, 0, 201))
         );
     }
 
     #[test]
-    fn test_nightly_does_not_update_when_fetched_version_is_same_as_cached() {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let mut installed_version = semver::Version::new(1, 0, 0);
-        installed_version.build = semver::BuildMetadata::new("a").unwrap();
-        let status = AutoUpdateStatus::Updated {
-            version: "1.0.0+b".parse().unwrap(),
-        };
-        let fetched_version = "1.0.0+b".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version,
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), None);
-    }
-
-    #[test]
-    fn test_nightly_does_update_when_fetched_sha_is_not_same_as_cached() {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(Some("a".to_string()));
-        let mut installed_version = semver::Version::new(1, 0, 0);
-        installed_version.build = semver::BuildMetadata::new("a").unwrap();
-        let status = AutoUpdateStatus::Updated {
-            version: "1.0.0+b".parse().unwrap(),
-        };
-        let fetched_version = "1.0.0+c".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.clone(),
-            status,
-        );
-
+    fn test_bundle_version_requires_monotonic_cod_identity() {
+        let directory = tempdir().unwrap();
+        let app = directory.path().join("Cod.app");
+        std::fs::create_dir_all(app.join("Contents/Resources")).unwrap();
+        let version_path = app.join("Contents/Resources/cod-update-version.txt");
+        assert!(bundled_update_version(&app).is_err());
+        for invalid in ["0.0.1+abc", "1.23.2", "invalid", "0.0.1-beta"] {
+            std::fs::write(&version_path, invalid).unwrap();
+            assert!(bundled_update_version(&app).is_err(), "{invalid}");
+        }
+        std::fs::write(&version_path, "0.0.123456\n").unwrap();
         assert_eq!(
-            newer_version.unwrap(),
-            Some(fetched_version.parse().unwrap())
+            bundled_update_version(&app).unwrap(),
+            Version::new(0, 0, 123456)
         );
     }
 
-    #[test]
-    fn test_nightly_does_not_redownload_after_updating_to_fetched_version() {
-        let release_channel = ReleaseChannel::Nightly;
-        let installed_version = semver::Version::new(1, 0, 0);
-        let fetched_version = "1.0.0+nightly.b".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            Ok(Some("a".to_string())),
-            installed_version.clone(),
-            fetched_version.clone(),
-            AutoUpdateStatus::Idle,
+    #[gpui::test]
+    async fn test_checksum_rejects_corruption(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Cod.zip");
+        std::fs::write(&path, b"hello").unwrap();
+        verify_download(
+            &path,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
         )
-        .unwrap()
-        .expect("a newer nightly version should be available");
-
-        let next_check = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            Ok(Some("a".to_string())),
-            installed_version,
-            fetched_version,
-            AutoUpdateStatus::Updated {
-                version: newer_version,
-            },
-        );
-
-        assert_eq!(next_check.unwrap(), None);
-    }
-
-    #[test]
-    fn test_nightly_does_update_when_installed_versions_sha_cannot_be_retrieved() {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(None);
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Idle;
-        let fetched_version = "1.0.0+a".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.clone(),
-            status,
-        );
-
-        assert_eq!(
-            newer_version.unwrap(),
-            Some(fetched_version.parse().unwrap())
+        .await
+        .unwrap();
+        std::fs::write(&path, b"corrupted").unwrap();
+        assert!(
+            verify_download(
+                &path,
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+            )
+            .await
+            .is_err()
         );
     }
 
-    #[test]
-    fn test_nightly_does_not_update_when_cached_update_is_same_as_fetched_and_installed_versions_sha_cannot_be_retrieved()
-     {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(None);
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Updated {
-            version: "1.0.0+b".parse().unwrap(),
-        };
-        let fetched_version = "1.0.0+b".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version,
-            status,
-        );
-
-        assert_eq!(newer_version.unwrap(), None);
-    }
-
-    #[test]
-    fn test_nightly_does_update_when_cached_update_is_not_same_as_fetched_and_installed_versions_sha_cannot_be_retrieved()
-     {
-        let release_channel = ReleaseChannel::Nightly;
-        let app_commit_sha = Ok(None);
-        let installed_version = semver::Version::new(1, 0, 0);
-        let status = AutoUpdateStatus::Updated {
-            version: "1.0.0+b".parse().unwrap(),
-        };
-        let fetched_version = "1.0.0+c".to_string();
-
-        let newer_version = AutoUpdater::check_if_fetched_version_is_newer(
-            release_channel,
-            app_commit_sha,
-            installed_version,
-            fetched_version.clone(),
-            status,
-        );
-
-        assert_eq!(
-            newer_version.unwrap(),
-            Some(fetched_version.parse().unwrap())
-        );
+    #[gpui::test]
+    async fn test_release_selection_ignores_drafts_and_legacy_releases(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let client = FakeHttpClient::create(|request| async move {
+            let body = if request.uri().path() == "/repos/cod-editor/cod/releases" {
+                serde_json::json!([
+                    {"draft":true,"assets":[{"name":"cod-update.json","browser_download_url":"https://github.com/cod-editor/cod/releases/download/draft/cod-update.json"}]},
+                    {"draft":false,"assets":[{"name":"Cod.zip","browser_download_url":"https://github.com/cod-editor/cod/releases/download/legacy/Cod.zip"}]},
+                    {"draft":false,"assets":[{"name":"cod-update.json","browser_download_url":"https://github.com/cod-editor/cod/releases/download/broken/cod-update.json"}]},
+                    {"draft":false,"assets":[{"name":"cod-update.json","browser_download_url":"https://github.com/cod-editor/cod/releases/download/older/cod-update.json"}]},
+                    {"draft":false,"assets":[{"name":"cod-update.json","browser_download_url":"https://github.com/cod-editor/cod/releases/download/newer/cod-update.json"}]}
+                ])
+            } else if request.uri().path().contains("/broken/") {
+                serde_json::json!({"invalid":true})
+            } else {
+                let version = if request.uri().path().contains("/older/") {
+                    "0.0.20"
+                } else if request.uri().path().contains("/newer/") {
+                    "0.0.30"
+                } else {
+                    panic!("unexpected request: {}", request.uri())
+                };
+                serde_json::json!({"commit":"a".repeat(40),"version":version,"macos_aarch64":{"url":"https://github.com/cod-editor/cod/releases/download/newer/Cod.zip","sha256":"a".repeat(64)}})
+            };
+            Ok(Response::builder()
+                .status(200)
+                .body(body.to_string().into())
+                .unwrap())
+        });
+        let release = fetch_cod_release(Arc::new(HttpClientWithUrl::new(
+            client,
+            "https://example.com",
+            None,
+        )))
+        .await
+        .unwrap();
+        assert_eq!(release.version, "0.0.30");
     }
 }

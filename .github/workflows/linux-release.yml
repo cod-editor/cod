@@ -7,6 +7,7 @@ name: Preview release
 on:
   workflow_dispatch:
   push:
+    branches: [master]
     tags:
       - "v*"
 
@@ -229,6 +230,11 @@ jobs:
     needs: [build, macos]
     runs-on: ubuntu-24.04
     steps:
+      - name: Check out release metadata writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Download the tested macOS archive
         uses: actions/download-artifact@v4
         with:
@@ -253,7 +259,8 @@ jobs:
           else
             tag="preview-$RUN_NUMBER"
           fi
-          gh release create "$tag" cod-linux-x86_64.tar.xz cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 \
+          python3 script/cod-update-manifest --tag "$tag" --version "0.0.$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+          gh release create "$tag" cod-linux-x86_64.tar.xz cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 cod-update.json \
             --repo "$GITHUB_REPOSITORY" \
             --prerelease \
             --target "$GITHUB_SHA" \

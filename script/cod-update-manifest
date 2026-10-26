@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Write the updater metadata only after the release archive passed native checks."""
+
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+from urllib.parse import quote
+
+
+def write_manifest(tag, version, commit, directory=Path(".")):
+    if not re.fullmatch(r"0\.0\.[1-9][0-9]*", version):
+        raise ValueError("The update version must contain a nonzero GitHub run ID")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("The commit must be a full Git SHA")
+    archive = directory / "cod-macos-aarch64.zip"
+    with archive.open("rb") as archive_file:
+        checksum = hashlib.file_digest(archive_file, "sha256").hexdigest()
+    recorded = (directory / "cod-macos-aarch64.zip.sha256").read_text().split()[0]
+    if checksum != recorded:
+        raise ValueError("The tested macOS archive checksum does not match")
+    manifest = {
+        "version": version,
+        "commit": commit,
+        "macos_aarch64": {
+            "url": f"https://github.com/cod-editor/cod/releases/download/{quote(tag, safe='')}/{archive.name}",
+            "sha256": checksum,
+        },
+    }
+    (directory / "cod-update.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--commit", required=True)
+    arguments = parser.parse_args()
+    write_manifest(arguments.tag, arguments.version, arguments.commit)

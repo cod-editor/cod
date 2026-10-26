@@ -27,6 +27,7 @@ permissions:
 concurrency:
   group: macos-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   build:
@@ -1673,6 +1674,10 @@ jobs:
                               (output / name).write_bytes(source.read_bytes()[-512 * 1024:])
           PY
 
+      - name: Install and restart through the native updater
+        if: steps.reuse.outputs.commit == ''
+        run: caffeinate -dimsu python3 tests/e2e/macos_auto_update.py cod-macos-aarch64.zip smoke-artifacts/auto-update
+
       - name: Upload the zip and its checksum
         if: always()
         uses: actions/upload-artifact@v4
@@ -1711,7 +1716,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="macos-preview-${{ github.run_number }}"
-          gh release create "$tag" cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 \
+          python3 script/cod-update-manifest --tag "$tag" --version "0.0.$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+          gh release create "$tag" cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 cod-update.json \
             --repo "$GITHUB_REPOSITORY" \
             --prerelease \
             --target "$GITHUB_SHA" \

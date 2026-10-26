@@ -60,6 +60,9 @@ jobs:
           # A pull request checks out its merge commit; its first parent is the base, which is enough to list the changed files.
           fetch-depth: 2
 
+      - name: Test updater release metadata
+        run: python3 script/test-cod-update-manifest.py
+
       # Pins the bytes, and so the presence and pixel sizes, of every shipped Cod icon to the approved master (issue #75).
       # A binary icon change is unreadable in a pull request diff, and nothing else fails when, for example, an upstream Zed merge brings Zed's icons back.
       # After an approved icon change, record the new files with: sha256sum <the paths in the list> > script/cod-app-icons.sha256

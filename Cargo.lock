@@ -1427,6 +1427,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "sha2",
  "smol",
  "tempfile",
  "util",
@@ -3432,6 +3433,7 @@ version = "0.1.0"
 dependencies = [
  "agent_ui",
  "anyhow",
+ "auto_update",
  "command_palette",
  "editor",
  "file_finder",
