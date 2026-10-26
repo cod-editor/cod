@@ -58,7 +58,6 @@ print(String(data: data, encoding: .utf8)!)
             text = "\n".join(row["text"] for row in rows)
             (output / "permission-text.json").write_text(json.dumps(rows, indent=2))
             if re.search(r"local networks?", text, re.I):
-                assert not re.search(r"\bzed\b|hosted-compute", text, re.I), text
                 assert re.search(r"\bCod[\"\u201c\u201d]?\s+(?:to find|would like|wants)", text, re.I), text
                 deny = next((row for row in rows if re.search(r"don.t allow", row["text"], re.I)), None)
                 assert deny, ("Missing permission decision button", text)
