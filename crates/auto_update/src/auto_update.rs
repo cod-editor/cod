@@ -405,7 +405,7 @@ impl AutoUpdater {
     }
 
     pub fn poll(&mut self, check_type: UpdateCheckType, cx: &mut Context<Self>) {
-        // Cod: every desktop update check, download and install starts here. Disabled for good.
+        // Development binaries and unsupported platforms must never replace themselves.
         if !DESKTOP_UPDATES_ENABLED
             || cx
                 .app_path()
