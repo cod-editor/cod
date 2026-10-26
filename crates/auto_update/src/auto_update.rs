@@ -428,38 +428,44 @@ impl AutoUpdater {
 
         cx.notify();
 
+        let previous_status = self.status.clone();
         self.pending_poll = Some(cx.spawn(async move |this, cx| {
             let result = Self::update(this.upgrade()?, cx).await;
             this.update(cx, |this, cx| {
                 this.pending_poll = None;
                 if let Err(error) = result {
-                    let is_missing_dependency =
-                        error.downcast_ref::<MissingDependencyError>().is_some();
-                    this.status = match check_type {
-                        UpdateCheckType::Automatic if is_missing_dependency => {
-                            log::warn!("auto-update: {}", error);
-                            AutoUpdateStatus::Errored {
-                                error: Arc::new(error),
-                            }
-                        }
-                        // Be quiet if the check was automated (e.g. when offline)
-                        UpdateCheckType::Automatic => {
-                            log::info!("auto-update check failed: error:{:?}", error);
-                            AutoUpdateStatus::Idle
-                        }
-                        UpdateCheckType::Manual => {
-                            log::error!("auto-update failed: error:{:?}", error);
-                            AutoUpdateStatus::Errored {
-                                error: Arc::new(error),
-                            }
-                        }
-                    };
-
-                    cx.notify();
+                    this.check_failed(error, previous_status, cx);
                 }
             })
             .ok()
         }));
+    }
+
+    fn check_failed(
+        &mut self,
+        error: anyhow::Error,
+        previous_status: AutoUpdateStatus,
+        cx: &mut Context<Self>,
+    ) {
+        if previous_status.is_updated() {
+            log::warn!("auto-update check failed after installing an update: {error:#}");
+            self.status = previous_status;
+        } else {
+            let is_missing_dependency = error.downcast_ref::<MissingDependencyError>().is_some();
+            self.status = match self.update_check_type {
+                UpdateCheckType::Automatic if !is_missing_dependency => {
+                    log::info!("auto-update check failed: {error:#}");
+                    AutoUpdateStatus::Idle
+                }
+                _ => {
+                    log::error!("auto-update failed: {error:#}");
+                    AutoUpdateStatus::Errored {
+                        error: Arc::new(error),
+                    }
+                }
+            };
+        }
+        cx.notify();
     }
 
     pub fn current_version(&self) -> Version {
@@ -757,6 +763,7 @@ impl AutoUpdater {
         this.update(cx, |this, cx| {
             this.set_should_show_update_notification(true, cx)
                 .detach_and_log_err(cx);
+            this.current_version = newer_version.clone();
             this.status = AutoUpdateStatus::Updated {
                 version: newer_version,
             };
@@ -1581,6 +1588,84 @@ mod tests {
 
         let downloaded_len = std::fs::metadata(&target_path).unwrap().len();
         assert_eq!(downloaded_len, content_length as u64);
+    }
+
+    #[gpui::test]
+    async fn test_installed_version_survives_failed_checks(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let phase = Arc::new(AtomicUsize::new(0));
+        let fake_http = FakeHttpClient::create({
+            let phase = phase.clone();
+            move |request| {
+                let phase = phase.load(atomic::Ordering::SeqCst);
+                async move {
+                    if phase == 1 {
+                        return Ok(Response::builder()
+                            .status(503)
+                            .body("offline".into())
+                            .unwrap());
+                    }
+                    let body = if request.uri().path() == "/repos/cod-editor/cod/releases" {
+                        serde_json::json!([{"draft":false,"assets":[{"name":"cod-update.json","browser_download_url":"https://github.com/cod-editor/cod/releases/download/test/cod-update.json"}]}]).to_string()
+                    } else if request.uri().path().ends_with("cod-update.json") {
+                        let version = if phase == 3 { "0.0.250" } else { "0.0.300" };
+                        serde_json::json!({"commit":"a".repeat(40),"version":version,"macos_aarch64":{"url":"https://github.com/cod-editor/cod/releases/download/test/Cod.zip","sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}).to_string()
+                    } else if request.uri().path().ends_with("Cod.zip") {
+                        "hello".to_string()
+                    } else {
+                        panic!("unexpected request: {}", request.uri())
+                    };
+                    Ok(Response::builder().status(200).body(body.into()).unwrap())
+                }
+            }
+        });
+        let installs = Rc::new(std::cell::Cell::new(0));
+        let updater = cx.update(|cx| {
+            cx.set_global(db::AppDatabase::test_new());
+            settings::init(cx);
+            release_channel::init_test(Version::new(0, 0, 200), ReleaseChannel::Stable, cx);
+            let client = Client::new(Arc::new(FakeSystemClock::new()), fake_http, cx);
+            crate::init(client, cx);
+            cx.set_global(InstallOverride(Rc::new({
+                let installs = installs.clone();
+                move |_, _| {
+                    installs.set(installs.get() + 1);
+                    Ok(None)
+                }
+            })));
+            AutoUpdater::get(cx).unwrap()
+        });
+        AutoUpdater::update(updater.clone(), &mut cx.to_async())
+            .await
+            .unwrap();
+        assert_eq!(installs.get(), 1);
+        updater.read_with(cx, |updater, _| {
+            assert_eq!(updater.current_version(), Version::new(0, 0, 300))
+        });
+        for check_type in [UpdateCheckType::Automatic, UpdateCheckType::Manual] {
+            phase.store(1, atomic::Ordering::SeqCst);
+            let previous_status = updater.read_with(cx, |updater, _| updater.status());
+            let error = AutoUpdater::update(updater.clone(), &mut cx.to_async())
+                .await
+                .unwrap_err();
+            updater.update(cx, |updater, cx| {
+                updater.update_check_type = check_type;
+                updater.check_failed(error, previous_status.clone(), cx);
+                assert_eq!(updater.status(), previous_status);
+            });
+        }
+        for phase_number in [2, 3] {
+            phase.store(phase_number, atomic::Ordering::SeqCst);
+            updater.update(cx, |updater, _| updater.status = AutoUpdateStatus::Idle);
+            AutoUpdater::update(updater.clone(), &mut cx.to_async())
+                .await
+                .unwrap();
+            assert_eq!(
+                installs.get(),
+                1,
+                "must not reinstall or downgrade after an error"
+            );
+        }
     }
 
     #[test]
