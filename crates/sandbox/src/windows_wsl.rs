@@ -747,8 +747,8 @@ fn parse_probe_output(stdout: &str) -> Result<EnvironmentProbe> {
     })
 }
 
-// Cod does not publish a matching WSL helper. An upstream Zed binary can use a
-// different sandbox protocol, so only an explicitly supplied helper is safe.
+// Cod does not publish a matching WSL helper.
+// An upstream Zed binary can use a different sandbox protocol, so only an explicitly supplied helper is safe.
 async fn ensure_wsl_zed_helper(
     _wsl_exe: &Path,
     _distro: Option<&str>,
