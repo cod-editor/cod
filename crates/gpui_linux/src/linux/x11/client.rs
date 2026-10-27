@@ -8,9 +8,7 @@ use collections::HashMap;
 use core::str;
 use gpui::{Capslock, profiler};
 use gpui_util::ResultExt as _;
-use http_client::Url;
 use log::Level;
-use smallvec::SmallVec;
 use std::{
     cell::{RefCell, RefMut},
     collections::{BTreeMap, HashSet},
@@ -962,23 +960,16 @@ impl X11Client {
                     return Some(());
                 };
                 if let Ok(file_list) = str::from_utf8(&reply.value) {
-                    let paths: SmallVec<[_; 2]> = file_list
-                        .lines()
-                        .filter_map(|path| Url::parse(path).log_err())
-                        .filter_map(|url| match url.to_file_path() {
-                            Ok(url) => Some(url),
-                            Err(()) => {
-                                log::error!("Failed turn {url:?} into a file path");
-                                None
-                            }
-                        })
-                        .collect();
+                    let paths = crate::linux::file_paths_from_uri_list(file_list);
+                    let has_paths = !paths.is_empty();
                     let input = PlatformInput::FileDrop(FileDropEvent::Entered {
                         position: state.xdnd_state.position,
                         paths: gpui::ExternalPaths(paths),
                     });
                     drop(state);
-                    window.handle_input(input);
+                    if has_paths {
+                        window.handle_input(input);
+                    }
                     self.0.borrow_mut().xdnd_state.retrieved = true;
                 }
             }
