@@ -8,13 +8,19 @@ Each test is skipped with the reason when the service cannot run here (a failure
 
 from __future__ import annotations
 
+import gzip
+import http.server
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import loopback_ssh
 from cod_e2e import Cod, cod_command, cod_environment
@@ -36,7 +42,7 @@ from test_24_workspaces import (
 class RemoteWorkspacesTest(WorkspacesTest):
     """Uses the helpers of WorkspacesTest; load_tests below runs only the tests defined here, never the inherited ones."""
 
-    def loopback(self, name: str) -> loopback_ssh.LoopbackSsh:
+    def loopback(self, name: str, install_server: bool = True) -> loopback_ssh.LoopbackSsh:
         """A started loopback sshd for this test with the remote server binary in place, or a skip with the reason (a failure with COD_E2E_REQUIRE_SSH=1, as in CI)."""
         reason = loopback_ssh.missing_reason()
         if reason is not None:
@@ -46,7 +52,8 @@ class RemoteWorkspacesTest(WorkspacesTest):
         if reason is not None:
             self.loopback_unavailable(reason)
         self.addCleanup(ssh.stop)
-        ssh.install_remote_server()
+        if install_server:
+            ssh.install_remote_server()
         return ssh
 
     def loopback_unavailable(self, reason: str) -> None:
@@ -206,13 +213,61 @@ class RemoteWorkspacesTest(WorkspacesTest):
         result = subprocess.run(cod_command(self.cod.run_dir, None) + [url], cwd=self.workdir, env=env, capture_output=True, timeout=60)
         self.expect_equal(f"exit status of cod {url}", 0, result.returncode)
 
+    def test_download_matching_cod_server_and_edit_remote_file(self) -> None:
+        requests: list[str] = []
+        reason = loopback_ssh.missing_reason()
+        if reason is not None:
+            self.loopback_unavailable(reason)
+        commit = re.search(r"\.([a-fA-F0-9]{40})$", loopback_ssh.remote_server_name())
+        self.assertIsNotNone(commit, "the test app must include its exact commit identity")
+        assert commit is not None
+        expected_path = f"/remote-{commit.group(1)}/cod-remote-server-linux-x86_64.gz"
+        archive = self.workdir / "cod-remote-server-linux-x86_64.gz"
+        with Path(os.environ["COD_E2E_REMOTE_SERVER"]).open("rb") as source, gzip.open(archive, "wb", compresslevel=1) as target:
+            shutil.copyfileobj(source, target)
+
+        class ReleaseHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                requests.append(self.path)
+                if self.path != expected_path:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(archive.stat().st_size))
+                self.end_headers()
+                with archive.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ReleaseHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.dict(os.environ, {"COD_REMOTE_SERVER_RELEASE_BASE_URL": f"http://127.0.0.1:{server.server_port}"}):
+                self.open_ssh_project_at_start(download_server=True)
+            self.assertTrue(requests, "the remote helper must be downloaded from the release fixture")
+            self.assertTrue(all(path == expected_path for path in requests), requests)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_open_an_ssh_project_at_start(self) -> None:
+        self.open_ssh_project_at_start()
+
+    def open_ssh_project_at_start(self, download_server: bool = False) -> None:
         """The basic SSH ability Cod inherits from Zed, as Cod ships today: `cod ssh://user@host:port/path` on a fresh start (no saved remote state) opens the remote folder, and a file there opens, takes an edit and saves to the remote host.
 
         Opening an ssh:// url in a Cod that already runs is not tested here: the Linux preview has no command-line hand-off yet (issue "Opening a path while Cod runs does nothing"). The second-port tests in remote_tracking_24.py cover that path.
         """
         with self.step("start a loopback sshd on 127.0.0.1 with a key made for this test, and make the repo"):
-            ssh = self.loopback("open")
+            ssh = self.loopback("open", install_server=not download_server)
+            if download_server:
+                server_path = ssh.server_path()
+                server_path.unlink(missing_ok=True)
+                self.assertFalse(server_path.exists())
             remote = self.make_repo("ledger-remote", LEDGER_REMOTE)
             ledger = remote / "ledger.rs"
             ledger_before = ledger.read_text()
@@ -232,6 +287,8 @@ class RemoteWorkspacesTest(WorkspacesTest):
             self.expect_remote_flags(state, [remote])
 
         with self.step("open ledger.rs with the file finder and type an edit"):
+            if download_server:
+                self.assertTrue(ssh.server_path().is_file(), "Cod must install the downloaded server")
             self.open_file("ledger.rs")
             self.type("// checked ")
             self.wait_for_values(

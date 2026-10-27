@@ -8,7 +8,7 @@ use gpui::{
 };
 use http_client::{HttpClient, HttpClientWithUrl, HttpRequestExt as _};
 use paths::remote_servers_dir;
-use release_channel::ReleaseChannel;
+use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings};
@@ -54,16 +54,6 @@ actions!(
         ViewReleaseNotes,
     ]
 );
-
-#[derive(Serialize, Debug)]
-pub struct AssetQuery<'a> {
-    asset: &'a str,
-    os: &'a str,
-    arch: &'a str,
-    metrics_id: Option<&'a str>,
-    system_id: Option<&'a str>,
-    is_staff: Option<bool>,
-}
 
 #[derive(Clone, Debug)]
 pub enum AutoUpdateStatus {
@@ -494,12 +484,9 @@ impl AutoUpdater {
         true
     }
 
-    // If you are packaging Zed and need to override the place it downloads SSH remotes from,
-    // you can override this function. You should also update get_remote_server_release_url to return
-    // Ok(None).
     pub async fn download_remote_server_release(
         release_channel: ReleaseChannel,
-        version: Option<Version>,
+        _version: Option<Version>,
         os: &str,
         arch: &str,
         set_status: impl Fn(&str, &mut AsyncApp) + Send + 'static,
@@ -513,28 +500,19 @@ impl AutoUpdater {
         })?;
 
         set_status("Fetching remote server release", cx);
-        let release = Self::get_release_asset(
-            &this,
-            release_channel,
-            version,
-            "zed-remote-server",
-            os,
-            arch,
-            cx,
-        )
-        .await?;
+        let release = cod_remote_server_asset(os, arch, cx)?;
 
         let servers_dir = paths::remote_servers_dir();
         let channel_dir = servers_dir.join(release_channel.dev_name());
         let platform_dir = channel_dir.join(format!("{}-{}", os, arch));
         let version_path = platform_dir.join(format!("{}.gz", release.version));
-        smol::fs::create_dir_all(&platform_dir).await.ok();
+        smol::fs::create_dir_all(&platform_dir).await?;
 
         let client = this.read_with(cx, |this, _| this.client.http_client());
 
         if smol::fs::metadata(&version_path).await.is_err() {
             log::info!(
-                "downloading zed-remote-server {os} {arch} version {}",
+                "downloading Cod remote server {os} {arch} commit {}",
                 release.version
             );
             set_status("Downloading remote server", cx);
@@ -555,87 +533,13 @@ impl AutoUpdater {
     }
 
     pub async fn get_remote_server_release_url(
-        channel: ReleaseChannel,
-        version: Option<Version>,
+        _channel: ReleaseChannel,
+        _version: Option<Version>,
         os: &str,
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<Option<String>> {
-        let this = cx.update(|cx| {
-            cx.default_global::<GlobalAutoUpdate>()
-                .0
-                .clone()
-                .context("auto-update not initialized")
-        })?;
-
-        let release =
-            Self::get_release_asset(&this, channel, version, "zed-remote-server", os, arch, cx)
-                .await?;
-
-        Ok(Some(release.url))
-    }
-
-    async fn get_release_asset(
-        this: &Entity<Self>,
-        release_channel: ReleaseChannel,
-        version: Option<Version>,
-        asset: &str,
-        os: &str,
-        arch: &str,
-        cx: &mut AsyncApp,
-    ) -> Result<ReleaseAsset> {
-        let client = this.read_with(cx, |this, _| this.client.clone());
-
-        let (system_id, metrics_id, is_staff) = if client.telemetry().metrics_enabled() {
-            (
-                client.telemetry().system_id(),
-                client.telemetry().metrics_id(),
-                client.telemetry().is_staff(),
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let version = if let Some(mut version) = version {
-            version.pre = semver::Prerelease::EMPTY;
-            version.build = semver::BuildMetadata::EMPTY;
-            version.to_string()
-        } else {
-            "latest".to_string()
-        };
-        let http_client = client.http_client();
-
-        let path = format!("/releases/{}/{}/asset", release_channel.dev_name(), version,);
-        let url = http_client.build_zed_cloud_url_with_query(
-            &path,
-            AssetQuery {
-                os,
-                arch,
-                asset,
-                metrics_id: metrics_id.as_deref(),
-                system_id: system_id.as_deref(),
-                is_staff,
-            },
-        )?;
-
-        let mut response = http_client
-            .get(url.as_str(), Default::default(), true)
-            .await?;
-        let mut body = Vec::new();
-        response.body_mut().read_to_end(&mut body).await?;
-
-        anyhow::ensure!(
-            response.status().is_success(),
-            "failed to fetch release: {:?}",
-            String::from_utf8_lossy(&body),
-        );
-
-        serde_json::from_slice(body.as_slice()).with_context(|| {
-            format!(
-                "error deserializing release {:?}",
-                String::from_utf8_lossy(&body),
-            )
-        })
+        Ok(Some(cod_remote_server_asset(os, arch, cx)?.url))
     }
 
     async fn update(this: Entity<Self>, cx: &mut AsyncApp) -> Result<()> {
@@ -840,6 +744,44 @@ impl AutoUpdater {
             Ok(kvp.read_kvp(SHOULD_SHOW_UPDATE_NOTIFICATION_KEY)?.is_some())
         })
     }
+}
+
+fn cod_remote_server_asset(os: &str, arch: &str, cx: &mut AsyncApp) -> Result<ReleaseAsset> {
+    let commit = cx.update(|cx| AppCommitSha::try_global(cx)).context(
+        "This Cod build has no commit identity. Build and install its remote_server manually.",
+    )?;
+    let mut asset = remote_server_asset_for_commit(&commit.full(), os, arch)?;
+    if update_fixture_enabled()
+        && let Ok(base_url) = env::var("COD_REMOTE_SERVER_RELEASE_BASE_URL")
+    {
+        anyhow::ensure!(
+            base_url.starts_with("http://127.0.0.1:"),
+            "remote server fixture must use loopback"
+        );
+        asset.url = format!(
+            "{}/remote-{}/cod-remote-server-{os}-{arch}.gz",
+            base_url.trim_end_matches('/'),
+            commit.full()
+        );
+    }
+    Ok(asset)
+}
+
+fn remote_server_asset_for_commit(commit: &str, os: &str, arch: &str) -> Result<ReleaseAsset> {
+    anyhow::ensure!(
+        commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "This Cod build has an invalid commit identity"
+    );
+    anyhow::ensure!(
+        os == "linux" && arch == "x86_64",
+        "Cod does not publish a remote server for {os}-{arch}. Build and install its remote_server manually."
+    );
+    Ok(ReleaseAsset {
+        version: commit.to_string(),
+        url: format!(
+            "https://github.com/cod-editor/cod/releases/download/remote-{commit}/cod-remote-server-{os}-{arch}.gz"
+        ),
+    })
 }
 
 async fn download_remote_server_binary(
@@ -1406,6 +1348,22 @@ mod tests {
 
     pub(super) struct InstallOverride(pub Rc<dyn Fn(&Path, &AsyncApp) -> Result<Option<PathBuf>>>);
     impl Global for InstallOverride {}
+
+    #[test]
+    fn test_remote_server_release_matches_cod_commit() {
+        let commit = "a".repeat(40);
+        let asset = remote_server_asset_for_commit(&commit, "linux", "x86_64").unwrap();
+        assert_eq!(asset.version, commit);
+        assert_eq!(
+            asset.url,
+            format!(
+                "https://github.com/cod-editor/cod/releases/download/remote-{commit}/cod-remote-server-linux-x86_64.gz"
+            )
+        );
+        assert!(remote_server_asset_for_commit("../latest", "linux", "x86_64").is_err());
+        assert!(remote_server_asset_for_commit(&commit, "macos", "aarch64").is_err());
+        assert!(remote_server_asset_for_commit(&commit, "linux", "aarch64").is_err());
+    }
 
     #[gpui::test]
     fn test_auto_update_defaults_to_true(cx: &mut TestAppContext) {
