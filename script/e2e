@@ -11,6 +11,7 @@
 #   COD_E2E_BIN        a prebuilt zed binary with cod-browser and codctl next to it; skips the cargo build
 #   COD_CEF_DIR        the folder with libcef.so; found automatically when not set (see tests/e2e/README.md)
 #   COD_E2E_ARTIFACTS  where tests save a screenshot and logs; default target/e2e-artifacts
+#   COD_E2E_SHARD_INDEX and COD_E2E_SHARD_COUNT  run one zero-based partition of the default suite, with each test class kept together; explicit unittest arguments cannot be combined with sharding.
 #   COD_E2E_REMOTE_SERVER  the remote_server binary for the loopback SSH tests (cargo build --profile release-fast -p remote_server); default the one next to the zed binary when it exists.
 #                      Those tests run their own sshd on 127.0.0.1 as you, log in as the account COD_E2E_SSH_USER names, and copy the binary to ~/.zed_server/ in that account's home. Without sshd, the binary or that account they report skipped with the reason.
 #   COD_E2E_SSH_USER       a dedicated throwaway account for the loopback SSH tests, never your own: your uid, another name, and a home that is a throwaway folder outside your home, for example
@@ -26,6 +27,19 @@ cd "$root"
 say() {
     echo "e2e: $*" >&2
 }
+
+sharded=0
+if [ -n "${COD_E2E_SHARD_INDEX+x}" ] || [ -n "${COD_E2E_SHARD_COUNT+x}" ]; then
+    if ! [[ "${COD_E2E_SHARD_INDEX:-}" =~ ^[0-9]+$ && "${COD_E2E_SHARD_COUNT:-}" =~ ^[1-9][0-9]*$ ]]; then
+        say "sharding requires a nonnegative COD_E2E_SHARD_INDEX and positive COD_E2E_SHARD_COUNT"
+        exit 2
+    fi
+    if [ "$#" -ne 0 ]; then
+        say "sharding cannot be combined with explicit unittest arguments"
+        exit 2
+    fi
+    sharded=1
+fi
 
 # 1. Prerequisites.
 missing=()
@@ -105,8 +119,12 @@ export COD_CEF_DIR
 say "CEF runtime: $COD_CEF_DIR"
 
 # 4. A run folder like the release tarball, so the tests start Cod the way users do.
-run="$root/target/e2e-run/cod"
-rm -rf "$root/target/e2e-run"
+run_root="$root/target/e2e-run"
+if [ "$sharded" = 1 ]; then
+    run_root="$root/target/e2e-run-shard-$COD_E2E_SHARD_INDEX"
+fi
+run="$run_root/cod"
+rm -rf "$run_root"
 mkdir -p "$run"
 ln -f "$zed_bin" "$run/cod" 2> /dev/null || cp -f "$zed_bin" "$run/cod"
 ln -f "$browser_bin" "$run/cod-browser" 2> /dev/null || cp -f "$browser_bin" "$run/cod-browser"
@@ -212,7 +230,9 @@ for arg in "$@"; do
     fi
 done
 run_tests() {
-    if [ "$names" = 1 ]; then
+    if [ "$sharded" = 1 ]; then
+        python3 tests/e2e/shard.py --index "$COD_E2E_SHARD_INDEX" --count "$COD_E2E_SHARD_COUNT"
+    elif [ "$names" = 1 ]; then
         python3 -m unittest -v "$@"
     else
         python3 -m unittest discover -v -s tests/e2e -t tests/e2e "$@"
