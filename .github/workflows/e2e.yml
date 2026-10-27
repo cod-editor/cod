@@ -1,10 +1,6 @@
-# Runs the end-to-end tests (tests/e2e) against the real Cod app on Linux under a headless sway (issue #22).
-# The build uses the same environment as the Linux release workflow, so it reuses that workflow's compiled crates (sccache) and CEF download.
-# The tests run through script/e2e, the same command a developer runs locally; its own cargo build finds nothing to do.
-# A pull request that only changes docs (*.md, docs/**, LICENSE*) skips every step after "Detect code changes", and the job is still green.
-# Pushes to master run it too, which keeps the caches warm: only master writes them.
-# The job's status is the "Run end-to-end tests" step: every test_*.py, all local. The remote (SSH) tests need the remote server, which takes long to build, so they run only in the optional workflow "E2E remote (optional)" (e2e-remote.yml).
-# One locked build covers compilation and lockfile enforcement without a duplicate serial check.
+# Build once, then run every local E2E test class across four isolated Linux workers.
+# The optional remote workflow owns SSH tests and its matching remote helper.
+# The final e2e check publishes a candidate only after every shard passes; docs-only changes skip the app build and tests.
 name: E2E
 
 on:
@@ -21,8 +17,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  e2e:
-    name: e2e
+  build:
+    name: Build E2E app
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     # The same values as the build job of linux-release.yml. A difference makes sccache miss and rebuild everything.
@@ -97,6 +95,11 @@ jobs:
       - name: Install Linux dependencies
         if: steps.changes.outputs.code == 'true'
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang lld llvm libstdc++-14-dev \
@@ -164,20 +167,145 @@ jobs:
           path: ${{ env.CEF_PATH }}
           key: cef-${{ env.CEF_VERSION }}-linux-x86_64
 
-      # Exactly script/e2e: every test_*.py; the remote (SSH) tests are not test_*.py files. The build variables repeat the Build step's, so the cargo build inside script/e2e has nothing to do.
-      - name: Run end-to-end tests
+      - name: Package the shared app and browser runtime
         if: steps.changes.outputs.code == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-shared/bin e2e-shared/cef/locales
+          cp target/release-fast/zed target/release-fast/cod-browser target/release-fast/codctl e2e-shared/bin/
+          strip e2e-shared/bin/zed e2e-shared/bin/cod-browser e2e-shared/bin/codctl
+          cef_directory="$CEF_PATH/$CEF_VERSION/cef_linux_x86_64"
+          shopt -s nullglob
+          runtime_files=("$cef_directory"/*.so "$cef_directory"/*.so.* "$cef_directory"/*.bin "$cef_directory"/*.dat "$cef_directory"/*.pak "$cef_directory"/*.json)
+          cp "${runtime_files[@]}" e2e-shared/cef/
+          cp "$cef_directory/locales/en-US.pak" e2e-shared/cef/locales/
+          test -f e2e-shared/cef/libcef.so
+          test -f e2e-shared/cef/icudtl.dat
+          tar -C e2e-shared -cf - . | gzip -1 > e2e-shared.tar.gz
+
+      - name: Upload the shared app and browser runtime
+        if: steps.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shared
+          path: e2e-shared.tar.gz
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
+
+  tests:
+    name: E2E shard ${{ matrix.shard }}
+    needs: build
+    if: needs.build.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install runtime dependencies
+        run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libnspr4 libasound2t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libgl1-mesa-dri mesa-vulkan-drivers \
+            libxkbcommon0 libxkbcommon-x11-0 libpango-1.0-0 libxcomposite1 libxdamage1 libxrandr2 libx11-xcb1 \
+            libwebkit2gtk-4.1-0 libfontconfig1 libvulkan1 libva2 libxdo3 xz-utils util-linux sway grim dbus
+
+      - name: Download the shared app and browser runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-shared
+
+      - name: Unpack the shared app and browser runtime
+        run: |
+          mkdir -p e2e-shared
+          tar -xzf e2e-shared.tar.gz -C e2e-shared
+          chmod +x e2e-shared/bin/zed e2e-shared/bin/cod-browser e2e-shared/bin/codctl
+
+      - name: Run end-to-end tests
         env:
-          SCCACHE_GHA_ENABLED: "true"
-          SCCACHE_GHA_RW_MODE: ${{ (github.ref == 'refs/heads/master' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'READ_WRITE' || 'READ_ONLY' }}
-          RUSTC_WRAPPER: sccache
-          CARGO_BUILD_JOBS: "8"
-        run: script/e2e
+          COD_E2E_BIN: ${{ github.workspace }}/e2e-shared/bin/zed
+          COD_CEF_DIR: ${{ github.workspace }}/e2e-shared/cef
+          COD_E2E_SHARD_INDEX: ${{ matrix.shard }}
+          COD_E2E_SHARD_COUNT: "4"
+          COD_E2E_ARTIFACTS: ${{ github.workspace }}/target/e2e-artifacts/shard-${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/e2e-artifacts
+          script/e2e 2>&1 | tee target/e2e-artifacts/console.log
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ github.event.pull_request.head.sha || github.sha }}-shard-${{ matrix.shard }}
+          path: target/e2e-artifacts
+          retention-days: 14
+          if-no-files-found: warn
+
+  e2e:
+    name: e2e
+    needs: [build, tests]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require a successful build and every test shard
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_RESULT: ${{ needs.tests.result }}
+          CODE_CHANGED: ${{ needs.build.outputs.code }}
+        run: |
+          if [ "$BUILD_RESULT" != success ]; then
+            echo "::error::The E2E build failed or was cancelled ($BUILD_RESULT)"
+            exit 1
+          fi
+          if [ "$CODE_CHANGED" = true ] && [ "$TEST_RESULT" != success ]; then
+            echo "::error::An E2E shard failed or was cancelled ($TEST_RESULT)"
+            exit 1
+          fi
+
+      - name: Check out
+        if: needs.build.outputs.code == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read the CEF version
+        if: needs.build.outputs.code == 'true'
+        run: |
+          version=$(sed -n 's/^ *CEF_VERSION: *//p' .github/workflows/linux-release.yml | head -n 1)
+          test -n "$version"
+          echo "CEF_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download the tested app
+        if: needs.build.outputs.code == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-shared
+
+      - name: Unpack the tested app
+        if: needs.build.outputs.code == 'true'
+        run: |
+          mkdir -p e2e-shared
+          tar -xzf e2e-shared.tar.gz -C e2e-shared ./bin
+          chmod +x e2e-shared/bin/zed e2e-shared/bin/cod-browser e2e-shared/bin/codctl
 
       # Reuse this successful build for downloaded-package QA without publishing a release.
       # Packaging matches linux-release.yml; the existing CEF asset is read, never modified.
       - name: Package the tested Linux candidate
-        if: steps.changes.outputs.code == 'true'
+        if: needs.build.outputs.code == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -187,9 +315,9 @@ jobs:
             --pattern "$asset.sha256" --dir candidate-artifacts/cef-asset
           checksum=$(cat "candidate-artifacts/cef-asset/$asset.sha256")
           [[ "$checksum" =~ ^[0-9a-f]{64}$ ]]
-          cp target/release-fast/zed candidate-package/cod/cod
-          cp target/release-fast/cod-browser candidate-package/cod/cod-browser
-          cp target/release-fast/codctl candidate-package/cod/codctl
+          cp e2e-shared/bin/zed candidate-package/cod/cod
+          cp e2e-shared/bin/cod-browser candidate-package/cod/cod-browser
+          cp e2e-shared/bin/codctl candidate-package/cod/codctl
           strip candidate-package/cod/cod candidate-package/cod/cod-browser candidate-package/cod/codctl
           cp script/cod-xwayland.sh script/cod-wayland.sh LICENSE-GPL LICENSE-APACHE README.md candidate-package/cod/
           script/cod-linux-desktop-files candidate-package/cod
@@ -203,20 +331,10 @@ jobs:
           cp candidate-package/cod/cod-commit.txt candidate-package/cod/cod-tree.txt candidate-artifacts/
 
       - name: Upload the tested Linux package
-        if: steps.changes.outputs.code == 'true'
+        if: needs.build.outputs.code == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: cod-linux-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: candidate-artifacts
           retention-days: 14
           if-no-files-found: error
-
-      # Every run, green or red, keeps its screenshots and logs. The name carries the tested commit (the pull request head), and run.txt inside names the checked-out commit.
-      - name: Upload artifacts
-        if: always() && steps.changes.outputs.code == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-artifacts-${{ github.event.pull_request.head.sha || github.sha }}
-          path: target/e2e-artifacts
-          retention-days: 14
-          if-no-files-found: warn

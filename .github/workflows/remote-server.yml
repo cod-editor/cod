@@ -1,0 +1,77 @@
+name: Portable Cod SSH server
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_FAST_DEBUG: "0"
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config cmake clang lld llvm musl-tools musl-dev
+
+      - name: Install Rust toolchain and musl target
+        run: |
+          rustup toolchain install || rustup show
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+
+      - name: Restore the cargo registry cache
+        uses: Swatinem/rust-cache@v2.8.0
+        with:
+          key: remote-server-musl
+          cache-targets: false
+          cache-on-failure: true
+          save-if: true
+
+      - name: Build and package the matching portable Cod SSH server
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_GHA_RW_MODE: READ_WRITE
+          RUSTC_WRAPPER: sccache
+          CARGO_BUILD_JOBS: "8"
+        run: |
+          set -euo pipefail
+          cargo --config .cargo/bundle-config.toml build --locked --profile release-fast --target x86_64-unknown-linux-musl -p remote_server
+          server=target/x86_64-unknown-linux-musl/release-fast/remote_server
+          "$server" version
+          # A published helper must also work on hosts older than the build runner.
+          if readelf -l "$server" | grep -q INTERP || readelf -d "$server" | grep -q NEEDED; then
+            echo "::error::The Cod SSH server must be statically linked"
+            exit 1
+          fi
+          strip "$server"
+          gzip -n -c "$server" > cod-remote-server-linux-x86_64.gz
+
+      - name: Upload the Cod SSH server
+        uses: actions/upload-artifact@v4
+        with:
+          name: cod-remote-server-linux-x86_64
+          path: cod-remote-server-linux-x86_64.gz
+          retention-days: 14
+          if-no-files-found: error

@@ -19,7 +19,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  remote-server:
+    uses: ./.github/workflows/remote-server.yml
+
   e2e-remote:
+    needs: remote-server
     name: e2e-remote
     runs-on: ubuntu-24.04
     timeout-minutes: 150
@@ -49,6 +53,11 @@ jobs:
       # The packages of e2e.yml, plus openssh-client and openssh-server for the loopback SSH tests.
       - name: Install Linux dependencies
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang lld llvm libstdc++-14-dev \
@@ -111,18 +120,18 @@ jobs:
           sccache --show-stats
           echo "build finished at $(date -u '+%H:%M:%S')"
 
-      # The remote server for the loopback SSH tests, so Cod never downloads one. A separate cargo command, so the zed build above keeps its own feature set and cache hits.
-      - name: Build the remote server for the loopback SSH tests
+      - name: Download the portable Cod SSH server
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-remote-server-linux-x86_64
+          path: target/remote-server
+
+      - name: Prepare the portable Cod SSH server
         id: remote-server
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
-          RUSTC_WRAPPER: sccache
-          CARGO_BUILD_JOBS: "8"
         run: |
-          echo "remote server build started at $(date -u '+%H:%M:%S')"
-          cargo build --profile release-fast -p remote_server
-          echo "remote server build finished at $(date -u '+%H:%M:%S')"
+          gzip -d target/remote-server/cod-remote-server-linux-x86_64.gz
+          chmod +x target/remote-server/cod-remote-server-linux-x86_64
+          target/remote-server/cod-remote-server-linux-x86_64 version
 
       - name: Save the CEF download
         if: github.ref == 'refs/heads/master' && steps.cef-cache.outputs.cache-hit != 'true'
@@ -138,7 +147,7 @@ jobs:
           SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
           RUSTC_WRAPPER: sccache
           CARGO_BUILD_JOBS: "8"
-          COD_E2E_REMOTE_SERVER: ${{ github.workspace }}/target/release-fast/remote_server
+          COD_E2E_REMOTE_SERVER: ${{ github.workspace }}/target/remote-server/cod-remote-server-linux-x86_64
           COD_E2E_REQUIRE_SSH: "1"
         run: script/e2e remote_24
 
@@ -162,7 +171,7 @@ jobs:
           SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
           RUSTC_WRAPPER: sccache
           CARGO_BUILD_JOBS: "8"
-          COD_E2E_REMOTE_SERVER: ${{ github.workspace }}/target/release-fast/remote_server
+          COD_E2E_REMOTE_SERVER: ${{ github.workspace }}/target/remote-server/cod-remote-server-linux-x86_64
           COD_E2E_REQUIRE_SSH: "1"
           COD_E2E_ARTIFACTS: ${{ github.workspace }}/target/e2e-remote-tracking-artifacts
         run: |
