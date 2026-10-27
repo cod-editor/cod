@@ -42,12 +42,12 @@ jobs:
           key: remote-server-musl
           cache-targets: false
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/master' }}
+          save-if: true
 
       - name: Build and package the matching portable Cod SSH server
         env:
           SCCACHE_GHA_ENABLED: "true"
-          SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
+          SCCACHE_GHA_RW_MODE: READ_WRITE
           RUSTC_WRAPPER: sccache
           CARGO_BUILD_JOBS: "8"
         run: |
