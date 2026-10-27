@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cod",
+  "owner": {
+    "name": "Cod"
+  },
+  "plugins": [
+    {
+      "name": "cod-control",
+      "source": "./crates/install_cli",
+      "description": "Control the running Cod editor with codctl.",
+      "version": "1.0.0"
+    }
+  ]
+}

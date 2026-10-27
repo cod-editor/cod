@@ -22,6 +22,26 @@ The preview does not yet include terminal session handoff, inline review comment
 `codctl session new --pane` currently opens the chat in the agent panel; placing chats in editor panes is still tracked in [#39](https://github.com/cod-editor/cod/issues/39).
 Page tabs support navigation shortcuts and `codctl page` commands, but the visible page controls are still tracked in [#31](https://github.com/cod-editor/cod/issues/31).
 
+## Set up coding agents
+
+Cod shows a quiet notification on first launch with the plugin commands for Claude Code and Codex.
+Open **Help > Set Up Coding Agents**, or run `cod: set up coding agents` from the command palette, to see them again and copy the commands for your tool.
+Run the commands in a terminal, then start a new agent session from your Cod workspace.
+Cod leaves installation to the agent's plugin manager and does not write agent skills or settings itself.
+
+```sh
+# Claude Code
+claude plugin marketplace add cod-editor/cod
+claude plugin install cod-control@cod
+
+# Codex
+codex plugin marketplace add cod-editor/cod
+codex plugin add cod-control@cod
+```
+
+Choose **Help > Install codctl**, or run `cod: install codctl` from the command palette, to put the bundled editor command on PATH.
+If you installed an earlier copy of the skill manually, remove it before using the plugin so agents find one copy.
+
 ## Try it on Linux
 
 The preview runs on x86_64 Linux. It is built on Ubuntu 24.04, so it needs glibc 2.39 or newer (for example Ubuntu 24.04, Debian 13, Fedora 40 or a current Arch).

@@ -60,6 +60,15 @@ pub(super) fn spawn_stdio(
     let builder = ShellBuilder::new(&Shell::System, cfg!(windows)).non_interactive();
     let mut child = builder.build_std_command(Some(path.clone()), &arguments);
     child.envs(environment);
+    let project_id = project.entity_id();
+    let cod_environment = project.read_with(cx, |project, cx| {
+        project
+            .is_local()
+            .then(|| project::terminals::cod_terminal_env(project_id, cx))
+    });
+    if let Some(environment) = cod_environment {
+        child.envs(environment);
+    }
     if let Some(cwd) = project.read_with(cx, |project, _cx| {
         if project.is_local() {
             root_dir.as_ref()

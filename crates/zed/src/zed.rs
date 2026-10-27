@@ -911,6 +911,9 @@ async fn initialize_agent_panel(
     anyhow::Ok(())
 }
 
+struct CodingAgentSetupNoticeShown;
+impl gpui::Global for CodingAgentSetupNoticeShown {}
+
 fn register_actions(
     app_state: Arc<AppState>,
     workspace: &mut Workspace,
@@ -1378,7 +1381,32 @@ fn register_actions(
         });
 
     #[cfg(not(target_os = "windows"))]
-    workspace.register_action(install_cli);
+    {
+        workspace.register_action(install_cli);
+        workspace.register_action(|_, _: &install_cli::SetUpCodingAgents, _, cx| {
+            install_cli::set_up_coding_agents(cx);
+        });
+        workspace.register_action(|_, _: &install_cli::InstallCodctl, window, cx| {
+            install_cli::install_codctl(window, cx);
+        });
+        if !cx.has_global::<CodingAgentSetupNoticeShown>() {
+            cx.set_global(CodingAgentSetupNoticeShown);
+            let store = db::kvp::KeyValueStore::global(cx);
+            if store
+                .read_kvp("cod-agent-setup-notice-shown")
+                .log_err()
+                .flatten()
+                .is_none()
+            {
+                install_cli::set_up_coding_agents(cx);
+                db::write_and_log(cx, move || async move {
+                    store
+                        .write_kvp("cod-agent-setup-notice-shown".into(), "1".into())
+                        .await
+                });
+            }
+        }
+    }
 
     if workspace.project().read(cx).is_via_remote_server() {
         workspace.register_action({
