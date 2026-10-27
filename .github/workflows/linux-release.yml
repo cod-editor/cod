@@ -58,6 +58,11 @@ jobs:
       # pipewire, the desktop portal, jq, gettext, elfutils), without recommended packages, in one apt run.
       - name: Install Linux dependencies
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang lld llvm libstdc++-14-dev \

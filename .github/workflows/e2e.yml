@@ -95,6 +95,11 @@ jobs:
       - name: Install Linux dependencies
         if: steps.changes.outputs.code == 'true'
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang lld llvm libstdc++-14-dev \
@@ -206,6 +211,11 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libnss3 libnspr4 libasound2t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libgl1-mesa-dri mesa-vulkan-drivers \
