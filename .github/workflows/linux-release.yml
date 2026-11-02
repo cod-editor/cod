@@ -23,6 +23,9 @@ concurrency:
   queue: max
 
 jobs:
+  remote-server:
+    uses: ./.github/workflows/remote-server.yml
+
   macos:
     uses: ./.github/workflows/macos-release.yml
 
@@ -55,6 +58,11 @@ jobs:
       # pipewire, the desktop portal, jq, gettext, elfutils), without recommended packages, in one apt run.
       - name: Install Linux dependencies
         run: |
+          # Azure's slow mirror can trickle for minutes without timing out (actions/runner-images#14823).
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '\|^https\?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang lld llvm libstdc++-14-dev \
@@ -227,7 +235,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [build, macos]
+    needs: [build, macos, remote-server]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release metadata writer
@@ -244,6 +252,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: cod-linux-x86_64
+
+      - name: Download the Cod SSH server
+        uses: actions/download-artifact@v4
+        with:
+          name: cod-remote-server-linux-x86_64
+
+      - name: Publish the SSH server for this app commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="remote-$GITHUB_SHA"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$tag" cod-remote-server-linux-x86_64.gz \
+              --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "Cod SSH server $GITHUB_SHA" \
+              --notes "Linux x86_64 SSH helper for Cod built from $GITHUB_SHA. This is not a desktop update."
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fx cod-remote-server-linux-x86_64.gz
 
       - name: Publish both platforms together
         env:

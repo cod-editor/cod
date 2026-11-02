@@ -1714,6 +1714,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          if ! gh release view "remote-$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fx cod-remote-server-linux-x86_64.gz; then
+            echo "::error::A matching Cod SSH server is missing. Publish this commit through the Preview release workflow, which publishes both desktop platforms and their SSH server together."
+            exit 1
+          fi
           tag="macos-preview-${{ github.run_number }}"
           python3 script/cod-update-manifest --tag "$tag" --version "0.0.$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
           gh release create "$tag" cod-macos-aarch64.zip cod-macos-aarch64.zip.sha256 cod-update.json \

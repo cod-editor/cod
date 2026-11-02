@@ -224,7 +224,7 @@ impl DockerExecConnection {
             _ => version.to_string(),
         };
         let binary_name = format!(
-            "zed-remote-server-{}-{}",
+            "cod-remote-server-{}-{}",
             release_channel.dev_name(),
             version_str
         );

@@ -2,7 +2,7 @@
 
 It runs the system sshd as the current user (no root, no system config): its own host key, its own authorized_keys with a key pair made for this test, password and keyboard-interactive login off, bound to 127.0.0.1 on a free high port.
 Cod's ssh gets its key and known_hosts file through the "args" of an ssh_connections entry in settings.json, so nothing in ~/.ssh is read or written.
-The remote server binary is not downloaded: Zed runs ~/.zed_server/zed-remote-server-<channel>-<version> when "<binary> version" succeeds there (crates/remote/src/transport/ssh.rs), so the binary built in CI (COD_E2E_REMOTE_SERVER) is copied to that path in the home sshd logs in to.
+The remote server binary is not downloaded: Cod runs ~/.zed_server/cod-remote-server-<channel>-<version> when "<binary> version" succeeds there (crates/remote/src/transport/ssh.rs), so the binary built in CI (COD_E2E_REMOTE_SERVER) is copied to that path in the home sshd logs in to.
 That home is never the home of the person running the tests: sshd logs in only the dedicated test account named by COD_E2E_SSH_USER, whose passwd home is a throwaway folder made for the run. An sshd that is not root can only log in an account with its own uid, so that account shares the uid of the current user and differs in name and home. CI creates it in .github/workflows/e2e.yml (useradd --non-unique) and deletes it with its home at the end of the job.
 Without COD_E2E_SSH_USER, or when the account it names is the current user, has another uid, or has a home that is, holds or lies in the current user's home, the tests touch nothing and report the reason.
 Every reason the service cannot run is returned as a skip reason, so a missing sshd never looks like a pass.
@@ -17,6 +17,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -31,12 +32,26 @@ def free_port() -> int:
 
 
 def remote_server_name() -> str:
-    """The file name Zed looks for on the remote host: zed-remote-server-<channel>-<version> (SshRemoteConnection::ensure_server_binary)."""
-    channel = (REPO_ROOT / "crates" / "zed" / "RELEASE_CHANNEL").read_text().strip()
-    match = re.search(r'^version = "([^"]+)"', (REPO_ROOT / "crates" / "zed" / "Cargo.toml").read_text(), re.MULTILINE)
+    """The file name Cod looks for on the remote host: cod-remote-server-<channel>-<version> (SshRemoteConnection::ensure_server_binary)."""
+    binary = os.environ.get("COD_E2E_BIN")
+    if not binary:
+        run_dir = os.environ.get("COD_E2E_RUN_DIR")
+        if not run_dir:
+            raise RuntimeError("COD_E2E_BIN or COD_E2E_RUN_DIR is required to read the app version")
+        binary = str(Path(run_dir) / "cod")
+    with tempfile.TemporaryDirectory(prefix="cod-version-") as data_dir:
+        output = subprocess.run(
+            [binary, "--user-data-dir", data_dir, "--system-specs"],
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout
+    match = re.search(r"^(?:Zed|Cod): v(\S+)", output, re.MULTILINE)
     if match is None:
-        raise RuntimeError("no version in crates/zed/Cargo.toml")
-    return f"zed-remote-server-{channel}-{match.group(1)}"
+        raise RuntimeError("no app version in Cod --system-specs output")
+    version = match.group(1)
+    channel = (REPO_ROOT / "crates" / "zed" / "RELEASE_CHANNEL").read_text().strip()
+    if channel == "dev":
+        version = "build"
+    return f"cod-remote-server-{channel}-{version}"
 
 
 def required() -> bool:
