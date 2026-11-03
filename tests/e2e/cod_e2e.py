@@ -219,7 +219,7 @@ def cod_command(run_dir: Path, folder: Path | None) -> list[str]:
 
     The empty first argument means no start page (cod-wayland.sh takes [url] [folder]).
     """
-    command = ["dbus-run-session", "--", str(run_dir / "cod-wayland.sh"), ""]
+    command = ["dbus-run-session", "--config-file", str(Path(__file__).with_name("session-bus.conf")), "--", str(run_dir / "cod-wayland.sh"), ""]
     if folder is not None:
         command.append(str(folder))
     return command

@@ -170,16 +170,26 @@ class FixtureRepoTest(unittest.TestCase):
 
 
 class StartCommandTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("dbus-run-session") and shutil.which("dbus-send"), "D-Bus tools are required")
+    def test_session_bus_cannot_activate_desktop_services(self) -> None:
+        config = Path(cod_e2e.__file__).with_name("session-bus.conf")
+        result = subprocess.run(
+            ["dbus-run-session", "--config-file", str(config), "--", "dbus-send", "--session", "--print-reply", "--dest=org.freedesktop.DBus", "/", "org.freedesktop.DBus.ListActivatableNames"],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        names = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("string ")]
+        self.assertEqual(names, ['string "org.freedesktop.DBus"'])
+
     def test_cod_starts_through_cod_wayland_with_no_start_page(self) -> None:
         self.assertEqual(
             cod_e2e.cod_command(Path("/run/cod"), Path("/tmp/billing-api")),
-            ["dbus-run-session", "--", "/run/cod/cod-wayland.sh", "", "/tmp/billing-api"],
+            ["dbus-run-session", "--config-file", str(Path(cod_e2e.__file__).with_name("session-bus.conf")), "--", "/run/cod/cod-wayland.sh", "", "/tmp/billing-api"],
         )
 
     def test_cod_starts_without_a_folder_to_restore_its_session(self) -> None:
         self.assertEqual(
             cod_e2e.cod_command(Path("/run/cod"), None),
-            ["dbus-run-session", "--", "/run/cod/cod-wayland.sh", ""],
+            ["dbus-run-session", "--config-file", str(Path(cod_e2e.__file__).with_name("session-bus.conf")), "--", "/run/cod/cod-wayland.sh", ""],
         )
 
     def test_a_persistent_start_keeps_zed_state(self) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import unittest
 from typing import Any
+from urllib.parse import urlsplit
 
 from cod_e2e import CodTestCase
 from page_server import PageServer
@@ -106,8 +107,10 @@ class OverviewPagesTest(CodTestCase):
             row = page_row(state, PAY_1234)
             self.expect_equal("kind", "page", row["kind"])
             self.expect_equal("dot", None, row["dot"])
-            if "/tracker/PAY-1234" not in row["detail"]:
-                raise AssertionError(f"expected the page row's context to hold its path, actual {row['detail']!r}")
+            address = urlsplit(self.server.url("/tracker/PAY-1234"))
+            for part in (address.hostname, address.path):
+                if part not in row["detail"]:
+                    raise AssertionError(f"expected the page row's context to hold {part!r}, actual {row['detail']!r}")
 
     # AC6 (page part): Enter on a page row switches to its workspace and focuses its tab.
 

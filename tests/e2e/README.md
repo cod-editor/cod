@@ -82,6 +82,8 @@ A machine without the Rust toolchain can run the tests against a `zed` binary wi
 
 ## What every test start gets
 
+The private session bus uses `session-bus.conf` without desktop service activation. This prevents host keyring and portal services from waiting for desktop prompts in headless tests.
+
 Each Cod start has its own data folder (`--user-data-dir`) in the test's temp folder, with a `settings.json` from `cod_settings()` in `cod_e2e.py`: trusted worktrees, no automatic install of the html extension, no extension or app updates and no telemetry. A test that needs more settings adds them there.
 
 The settings also turn on Zed's own path picker and prompts (`use_system_path_prompts: false`, `use_system_prompts: false`), because the headless sway has no desktop portal, and turn off the command history of the palette (`command_palette.use_command_history: false`), so the palette ranks matches by the query alone and earlier commands of a test never change which row a command name highlights.
