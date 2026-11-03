@@ -154,6 +154,13 @@ class OverviewPagesTest(CodTestCase):
             )
             page = next(page for page in pages(state) if page["title"] == PAY_1234)
             self.expect_equal("page tab focused", True, page["focused"])
+            self.stays(
+                lambda state: state["overview"] is None
+                and state["active_workspace"] == a_index
+                and any(page["title"] == PAY_1234 and page["focused"] for page in pages(state)),
+                1.0,
+                "the selected page to keep keyboard focus",
+            )
 
 
 if __name__ == "__main__":

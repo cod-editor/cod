@@ -488,6 +488,16 @@ class WorkspaceOverviewTest(CodStatusFixtures, CodTestCase):
                 "DOC-208 active with README.md focused while PAY-1234 loads in the background",
             )
 
+        with self.step("type into README.md after the background restore completes"):
+            self.type("Focus stays here. ")
+            self.wait_for(
+                lambda state: any(item["tab"] == "README.md" and "Focus stays here. " in item["text"] for item in state["unsaved_texts"]),
+                SHOW_TIMEOUT,
+                "typed text to reach the newer workspace's editor",
+            )
+            self.keys("ctrl-s")
+            self.wait_for(lambda state: not state["dirty_tabs"], SHOW_TIMEOUT, "README.md to save")
+
     def test_ac6_enter_on_a_session_row_focuses_the_chat_itself(self) -> None:
         """RC fixes item 2: Enter on a session row must open that chat with the keyboard focus
         in it (the agent panel focused on that session), not leave the focus where it was in the

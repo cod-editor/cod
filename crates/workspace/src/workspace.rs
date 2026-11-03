@@ -1967,7 +1967,11 @@ impl Workspace {
         cx.subscribe_in(&center_pane, window, Self::handle_pane_event)
             .detach();
 
-        window.focus(&center_pane.focus_handle(cx), cx);
+        // Activation focuses a workspace after it joins the window. Constructing a
+        // background member must leave the currently displayed workspace's focus alone.
+        if window.focused(cx).is_none() {
+            window.focus(&center_pane.focus_handle(cx), cx);
+        }
 
         cx.emit(Event::PaneAdded(center_pane.clone()));
 
