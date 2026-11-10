@@ -584,32 +584,26 @@ test("Completed turns fold commentary and tools while final answers and decision
     await composer.fill("Show a recoverable tool failure.");
     await composer.press(`${modifier}+Enter`);
     const failure = app.page
-      .locator(".tool-activity[data-action-required]")
+      .locator(".tool-activity")
       .filter({ hasText: "Invented tool failed" });
-    await expect(failure).toBeVisible();
-    await expect(failure.locator(":scope > summary")).toContainText("failed");
-    expect(
-      await failure.evaluate((node) =>
-        Boolean(node.parentElement?.closest(".turn-activity")),
-      ),
-    ).toBe(false);
-    await failure.scrollIntoViewIfNeeded();
-    await app.page.screenshot({
-      path: info.outputPath("tool-error-remains-visible.png"),
-    });
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)
       .toBe("ready");
-    await expect(failure).toBeVisible();
-    expect(
-      await failure.evaluate(
-        (node) => !!node.parentElement?.closest(".turn-activity"),
-      ),
-    ).toBe(false);
-    await failure.scrollIntoViewIfNeeded();
+    await expect(failure.locator(":scope > summary")).toContainText("failed");
+    await expect(failure).not.toHaveAttribute("data-action-required", "true");
+    const failedTurn = app.page
+      .locator("details.turn-activity")
+      .filter({ has: failure });
+    await expect(failedTurn).toHaveCount(1);
+    await expect(failure).toBeHidden();
+    await failedTurn.scrollIntoViewIfNeeded();
     await app.page.screenshot({
-      path: info.outputPath("completed-tool-error-remains-visible.png"),
+      path: info.outputPath("completed-tool-error-collapsed.png"),
     });
+    await failedTurn.locator(":scope > summary").click();
+    await expect(failure).toBeVisible();
+    await failure.locator(":scope > summary").click();
+    await expect(failure.locator("pre")).toContainText("Invented tool failed");
     await app.send(conversationId, "[hold] Cancel this observed turn");
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)

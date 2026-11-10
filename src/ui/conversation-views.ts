@@ -643,11 +643,8 @@ export function createConversationViews({
         details.textContent =
           JSON.stringify(entry.tool.details, null, 2) ??
           String(entry.tool.details);
-        const actionable = !!(
-          failed ||
-          /request.?user.?input|ask.?user|question/i.test(
-            String(info?.name ?? info?.toolName ?? ""),
-          )
+        const actionable = /request.?user.?input|ask.?user|question/i.test(
+          String(info?.name ?? info?.toolName ?? ""),
         );
         if (actionable) {
           tool.dataset.actionRequired = "true";
