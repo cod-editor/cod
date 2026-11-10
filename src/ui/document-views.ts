@@ -2,6 +2,23 @@ import { highlightedEditor, setChangedLines } from "../editor-highlight";
 import { reconcileView } from "./view-reconcile";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+export function focusReadyEditor(
+  editor: HTMLTextAreaElement,
+  stillWanted: () => boolean,
+): void {
+  const focus = () => {
+    if (
+      editor.isConnected &&
+      !editor.disabled &&
+      stillWanted() &&
+      !document.querySelector("dialog[open]")
+    )
+      editor.focus({ preventScroll: true });
+  };
+  if (editor.disabled)
+    editor.addEventListener("cod:file-ready", focus, { once: true });
+  else focus();
+}
 export function createDocumentViews(
   getState: () => AppState,
   panes: HTMLElement,
@@ -13,6 +30,7 @@ export function createDocumentViews(
   const originals = new Map<string, string>();
   const messages = new Map<string, string>();
   const loading = new Set<string>();
+  const pendingLoads = new Map<string, Promise<void>>();
   const failedLoads = new Set<string>();
   const lineCache = new Map<string, number[]>();
   const lineLoading = new Set<string>();
@@ -55,7 +73,16 @@ export function createDocumentViews(
     }
   }
 
-  async function loadFile(workspaceId: string, paneId: string): Promise<void> {
+  function loadFile(workspaceId: string, paneId: string): Promise<void> {
+    const pending = pendingLoads.get(paneId);
+    if (pending) return pending;
+    const promise = readFile(workspaceId, paneId).finally(() =>
+      pendingLoads.delete(paneId),
+    );
+    pendingLoads.set(paneId, promise);
+    return promise;
+  }
+  async function readFile(workspaceId: string, paneId: string): Promise<void> {
     loading.add(paneId);
     const key = fileKey(paneId);
     try {
@@ -97,6 +124,10 @@ export function createDocumentViews(
     } finally {
       loading.delete(paneId);
       invalidate();
+      views
+        .get(paneId)
+        ?.querySelector("textarea.file-editor")
+        ?.dispatchEvent(new Event("cod:file-ready"));
     }
   }
 
@@ -106,9 +137,14 @@ export function createDocumentViews(
       setStatus("Save in progress; newer edits remain in the shared draft");
       return;
     }
+    if (!originals.has(key)) await loadFile(workspaceId, paneId);
+    if (savingFiles.has(key)) return;
     const content = drafts.get(key) ?? originals.get(key);
     const expectedContent = originals.get(key);
-    if (content === undefined || expectedContent === undefined) return;
+    if (content === undefined || expectedContent === undefined) {
+      setStatus("The file could not be loaded. Retry loading before saving.");
+      return;
+    }
     savingFiles.add(key);
     try {
       const result = await invoke<{ saved: boolean; conflict: boolean }>(
@@ -174,6 +210,16 @@ export function createDocumentViews(
       editor.spellcheck = false;
       const key = fileKey(pane.id);
       editor.dataset.documentKey = key;
+      editor.disabled = !originals.has(key);
+      editor.setAttribute(
+        "aria-busy",
+        String(!originals.has(key) && !failedLoads.has(pane.id)),
+      );
+      editor.placeholder = originals.has(key)
+        ? ""
+        : failedLoads.has(pane.id)
+          ? "File unavailable"
+          : "Loading file...";
       editor.value = drafts.get(key) ?? originals.get(key) ?? "";
       editor.addEventListener("input", () => {
         drafts.set(key, editor.value);

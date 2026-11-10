@@ -1,3 +1,4 @@
+import { focusReadyEditor } from "./document-views";
 import type { AppState, PaneState } from "../types";
 import type { Invoke } from "./contracts";
 import { paneRegions } from "./pane-layout";
@@ -43,7 +44,12 @@ export function createKeyboardNavigation(
       host.querySelector<HTMLElement>(
         'button, textarea, input, [tabindex="0"]',
       );
-    if (target) target.focus({ preventScroll: true });
+    if (
+      target instanceof HTMLTextAreaElement &&
+      target.classList.contains("file-editor")
+    )
+      focusReadyEditor(target, () => workspace()?.activePaneId === pane.id);
+    else if (target) target.focus({ preventScroll: true });
     else {
       host.tabIndex = 0;
       host.focus({ preventScroll: true });

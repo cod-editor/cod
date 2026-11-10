@@ -513,12 +513,17 @@ export function createCommands(
       ? getState().browsers.find((b) => b.id === browserId)
       : undefined;
     if (browserId && !browser) return;
+    const focusedPaneId =
+      document.activeElement?.closest<HTMLElement>("[data-pane-id]")?.dataset
+        .paneId;
     const w = browser
       ? getState().workspaces.find((w) => w.id === browser.workspaceId)
-      : activeWorkspace();
+      : (getState().workspaces.find((w) =>
+          w.panes.some((p) => p.id === focusedPaneId),
+        ) ?? activeWorkspace());
     const pane = browser
       ? w?.panes.find((p) => p.id === browser.paneId)
-      : currentPane();
+      : (w?.panes.find((p) => p.id === focusedPaneId) ?? currentPane());
     const group = w?.groups?.find((g) =>
       g.paneIds.includes(pane?.id ?? w.activePaneId),
     );

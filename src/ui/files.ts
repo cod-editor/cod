@@ -1,3 +1,4 @@
+import { focusReadyEditor } from "./document-views";
 import { treeRowParts } from "./tree-row";
 import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
@@ -404,15 +405,16 @@ export class FileTree {
       ...(line ? { line } : {}),
     });
     requestAnimationFrame(() => {
-      if (
-        this.workspace?.id === workspace.id &&
-        !document.querySelector("dialog[open]")
-      )
-        document
-          .querySelector<HTMLElement>(
-            `[data-pane-id="${result.paneId}"] .file-editor`,
-          )
-          ?.focus({ preventScroll: true });
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        `[data-pane-id="${result.paneId}"] .file-editor`,
+      );
+      if (editor)
+        focusReadyEditor(
+          editor,
+          () =>
+            this.workspace?.id === workspace.id &&
+            this.workspace?.activePaneId === result.paneId,
+        );
     });
   }
   search(path?: string): void {
