@@ -435,10 +435,12 @@ export function createCommands(
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);
   };
-  function disabledReason(id: CommandId): string | undefined {
-    const w = activeWorkspace(),
-      pane = currentPane(),
-      group = w?.groups?.find((g) => g.paneIds.includes(w.activePaneId));
+  function disabledReason(
+    id: CommandId,
+    w = activeWorkspace(),
+    pane = currentPane(),
+  ): string | undefined {
+    const group = w?.groups?.find((g) => g.paneIds.includes(w.activePaneId));
     if (
       [
         "palette",
@@ -507,14 +509,24 @@ export function createCommands(
   async function execute(id: CommandId, browserId?: string): Promise<void> {
     if (browserId) focus.native(browserId);
     if (document.querySelector("dialog[open]")) return;
-    const reason = disabledReason(id);
+    const browser = browserId
+      ? getState().browsers.find((b) => b.id === browserId)
+      : undefined;
+    if (browserId && !browser) return;
+    const w = browser
+      ? getState().workspaces.find((w) => w.id === browser.workspaceId)
+      : activeWorkspace();
+    const pane = browser
+      ? w?.panes.find((p) => p.id === browser.paneId)
+      : currentPane();
+    const group = w?.groups?.find((g) =>
+      g.paneIds.includes(pane?.id ?? w.activePaneId),
+    );
+    const reason = disabledReason(id, w, pane);
     if (reason) {
       setStatus(reason);
       return;
     }
-    const w = activeWorkspace(),
-      pane = currentPane(),
-      group = w?.groups?.find((g) => g.paneIds.includes(w.activePaneId));
     try {
       switch (id) {
         case "palette":
@@ -523,9 +535,14 @@ export function createCommands(
         case "shortcuts":
           showKeyboardShortcuts(focus);
           break;
-        case "settings":
-          appearanceDialog(() => showKeyboardShortcuts(focus));
+        case "settings": {
+          const origin = focus.capture();
+          appearanceDialog(() => {
+            focus.restore(origin);
+            showKeyboardShortcuts(focus);
+          });
           break;
+        }
         case "workspace.new":
           workspaceDialog("create");
           break;
@@ -653,10 +670,10 @@ export function createCommands(
           break;
         }
         case "pane.focus1":
-          await keys.spatial(0);
+          await keys.spatial(0, w?.id);
           break;
         case "pane.focus2":
-          await keys.spatial(1);
+          await keys.spatial(1, w?.id);
           break;
         case "pane.nextRegion":
           await keys.cycleRegion(1, browserId);
@@ -665,7 +682,8 @@ export function createCommands(
           await keys.cycleRegion(-1, browserId);
           break;
         case "pane.zoom":
-          layout.zoom();
+          if (w && group)
+            await invoke("group.zoom", { workspace: w.id, id: group.id });
           break;
         case "pane.splitRight":
           layout.split("right");
@@ -674,10 +692,10 @@ export function createCommands(
           layout.split("down");
           break;
         case "tab.next":
-          await keys.cycleTab(1);
+          await keys.cycleTab(1, w?.id, pane?.id);
           break;
         case "tab.previous":
-          await keys.cycleTab(-1);
+          await keys.cycleTab(-1, w?.id, pane?.id);
           break;
         case "tab.close":
           if (w && pane) {

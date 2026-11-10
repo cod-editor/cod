@@ -50,7 +50,9 @@ export function createKeyboardNavigation(
     }
   }
   async function focusPane(id: string): Promise<void> {
-    const w = workspace(),
+    const w = getState().workspaces.find((w) =>
+        w.panes.some((p) => p.id === id),
+      ),
       pane = w?.panes.find((p) => p.id === id);
     if (!w || !pane) return;
     await invoke("pane.focus", { workspace: w.id, id });
@@ -59,8 +61,10 @@ export function createKeyboardNavigation(
     await nextFrame();
     await content(pane);
   }
-  async function spatial(index: number): Promise<void> {
-    const w = workspace();
+  async function spatial(index: number, workspaceId?: string): Promise<void> {
+    const w = workspaceId
+      ? getState().workspaces.find((w) => w.id === workspaceId)
+      : workspace();
     if (!w) return;
     const region = paneRegions(w)
       .filter((r) => !r.id.startsWith("missing-"))
@@ -68,16 +72,27 @@ export function createKeyboardNavigation(
     const group = w.groups?.find((g) => g.id === region?.id);
     if (group) await focusPane(group.activePaneId);
   }
-  async function cycleTab(delta: number): Promise<void> {
-    const w = workspace(),
-      group = w?.groups?.find((g) => g.paneIds.includes(w.activePaneId));
+  async function cycleTab(
+    delta: number,
+    workspaceId?: string,
+    paneId?: string,
+  ): Promise<void> {
+    const w = workspaceId
+        ? getState().workspaces.find((w) => w.id === workspaceId)
+        : workspace(),
+      group = w?.groups?.find((g) =>
+        g.paneIds.includes(paneId ?? w.activePaneId),
+      );
     if (!group) return;
     const ids = group.paneIds.filter(
       (id) => w!.panes.find((p) => p.id === id)?.kind !== "empty",
     );
     if (!ids.length) return;
     await focusPane(
-      ids[(ids.indexOf(w!.activePaneId) + delta + ids.length) % ids.length],
+      ids[
+        (ids.indexOf(paneId ?? w!.activePaneId) + delta + ids.length) %
+          ids.length
+      ],
     );
   }
   async function cycleRegion(delta: number, browserId?: string): Promise<void> {

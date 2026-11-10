@@ -137,6 +137,8 @@ A new workspace opens with chat as its main view, with a provider selector in th
 Chat content and input use the available pane width up to a configurable pixel maximum. Keep input at the bottom in both empty and populated chats, without moving it after the first message.
 Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor and chat text sizes persist independently without zooming web pages.
 
+Keyboard navigation uses a shared command catalog for bindings, Commands, tooltips and a searchable Keyboard Shortcuts reference in Commands, Settings and Help. F6 cycles visible areas, Tab reaches local controls, and arrows navigate trees, tabs and review ranges. Pane visibility and tab management remain keyboard-accessible; context-specific bindings preserve website editing, terminal control keys and input-method composition.
+
 Use compact creation controls rather than oversized workspace buttons. Discover shortcuts through tooltips and the command palette rather than permanent instructional labels.
 The default working arrangement places documents, reviews and browser pages on the left, and conversations and terminals in a tabbed area on the right. A new workspace shows only chat. Either area can hide or expand without closing its tabs, and restoring it preserves the previous arrangement and state. No bottom terminal dock is part of this default. The workspace panel remains at the far left; file navigation opens when needed.
 

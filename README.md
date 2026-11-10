@@ -19,6 +19,8 @@ Dependency install scripts are disabled because the PTY package ships native pre
 
 A new workspace starts with a chat. Cmd/Ctrl+Enter sends; Enter inserts a newline. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses workspaces, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
+Keyboard shortcuts is searchable from Commands, Settings and the Help menu. F6 and Shift+F6 move between visible areas; Tab moves through controls within them. Trees and tab bars use arrow keys, and Shift+F10 opens context actions. The reference shows platform defaults and their contexts: web editing and terminal control keys stay with the page or shell.
+
 While Cod runs:
 
 ```sh

@@ -1,5 +1,6 @@
 import {
   commands,
+  localGestures,
   formatBinding,
   formatShortcut,
   type CommandId,
@@ -42,45 +43,70 @@ export function showKeyboardShortcuts(
   list.setAttribute("aria-label", "Keyboard shortcut reference");
   const fill = () => {
     list.replaceChildren();
+    const row = (
+      title: string,
+      keys: string,
+      context: string,
+      aliases = "",
+    ) => {
+      if (
+        !`${title} ${keys} ${context} ${aliases}`
+          .toLowerCase()
+          .includes(input.value.toLowerCase())
+      )
+        return;
+      const item = document.createElement("div");
+      item.className = "shortcut-row";
+      const name = document.createElement("span");
+      name.textContent = title;
+      const hint = document.createElement("kbd");
+      hint.textContent = keys;
+      const scope = document.createElement("small");
+      scope.textContent = context;
+      item.append(name, hint, scope);
+      list.append(item);
+    };
     for (const command of commands) {
       const bindings = command.bindings.filter(
         (b) => !b.platform || b.platform === keyboardPlatform,
       );
-      const key = bindings
-        .map((b) => formatBinding(b, keyboardPlatform))
-        .join(" / ");
-      if (
-        !`${command.title} ${command.category} ${command.aliases.join(" ")} ${key}`
-          .toLowerCase()
-          .includes(input.value.toLowerCase())
-      )
-        continue;
-      const row = document.createElement("div");
-      row.className = "shortcut-row";
-      const name = document.createElement("span");
-      name.textContent = command.title;
-      const hint = document.createElement("kbd");
-      hint.textContent = key || "Commands";
-      const context = document.createElement("small");
-      context.textContent = bindings.length
-        ? [...new Set(bindings.flatMap((b) => b.surfaces))]
-            .map(
-              (s) =>
-                ({
-                  shell: "Cod controls",
-                  editor: "Editor",
-                  composer: "Chat input",
-                  terminal: "Terminal",
-                  browser: "Web page",
-                  "agent-page": "Agent page",
-                  review: "Review source",
-                })[s],
-            )
-            .join(", ")
-        : command.category;
-      row.append(name, hint, context);
-      list.append(row);
+      const keys = [
+        ...new Set(bindings.map((b) => formatBinding(b, keyboardPlatform))),
+      ].join(" / ");
+      const surfaces = [...new Set(bindings.flatMap((b) => b.surfaces))];
+      const context =
+        surfaces.length === 7
+          ? "Anywhere in Cod"
+          : surfaces.length
+            ? surfaces
+                .map(
+                  (s) =>
+                    ({
+                      shell: "Cod controls",
+                      editor: "Editor",
+                      composer: "Chat input",
+                      terminal: "Terminal",
+                      browser: "Web page",
+                      "agent-page": "Agent page",
+                      review: "Review source",
+                    })[s],
+                )
+                .join(", ")
+            : command.category;
+      row(
+        command.title,
+        keys || "Commands",
+        context,
+        command.aliases.join(" "),
+      );
     }
+    for (const gesture of localGestures)
+      row(
+        gesture.title,
+        gesture.keys.join(" / "),
+        gesture.context,
+        gesture.aliases?.join(" ") ?? "",
+      );
     if (!list.childElementCount) list.textContent = "No matching commands";
   };
   input.oninput = fill;

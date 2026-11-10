@@ -38,7 +38,16 @@ export function createSearchList(input: HTMLInputElement, list: HTMLElement) {
     select(preferred && visible.includes(preferred) ? preferred : visible[0]);
   }
   input.addEventListener("keydown", (event) => {
-    if (event.isComposing) return;
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.getModifierState("AltGraph")
+    )
+      return;
+    if (event.key === "Enter" && event.repeat) {
+      event.preventDefault();
+      return;
+    }
     const visible = rows();
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
