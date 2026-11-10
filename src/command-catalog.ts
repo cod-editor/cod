@@ -39,7 +39,7 @@ export const commands = {
   "group.visibility": ["workspace", "id", "hidden?"],
   "group.zoom": ["workspace", "id"],
   "group.resize": ["workspace", "id", "ratio", "path?"],
-  "pane.move": ["workspace", "id", "group"],
+  "pane.move": ["workspace", "id", "group", "index?"],
   "conversation.discover": ["workspace", "provider", "cwd?"],
   "conversation.handoff": ["id"],
   "conversation.reclaim": ["id"],
@@ -197,6 +197,12 @@ export function parseArguments(argv: string[]): OperationRequest | undefined {
         throw new Error(`Invalid ${key}`);
       values[key] = number;
     }
+  if (values.index !== undefined) {
+    const index = Number(values.index);
+    if (!String(values.index).trim() || !Number.isInteger(index) || index < 0)
+      throw new Error("index must be a nonnegative integer");
+    values.index = index;
+  }
   if ((values.base === undefined) !== (values.head === undefined))
     throw new Error("Both --base and --head are required");
   for (const name of [

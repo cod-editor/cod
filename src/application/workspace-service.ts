@@ -174,9 +174,19 @@ export class WorkspaceApplicationService {
         (group) => group.id === requiredString(request, "group"),
       );
       if (!target) throw new Error("Target group not found");
+      const remaining = target.paneIds.filter((pane) => pane !== id);
+      const index =
+        request.index === undefined ? remaining.length : request.index;
+      if (
+        typeof index !== "number" ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index > remaining.length
+      )
+        throw new Error("Tab index must be within the destination group");
       for (const group of workspace.groups!)
         group.paneIds = group.paneIds.filter((pane) => pane !== id);
-      target.paneIds.push(id);
+      target.paneIds.splice(index, 0, id);
       target.activePaneId = id;
       target.hidden = false;
       workspace.activePaneId = id;

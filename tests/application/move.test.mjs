@@ -310,3 +310,42 @@ test("global new chat starts from no workspaces and preserves closed tasks", asy
   assert.deepEqual(restored.data.closedWorkspaces, archive);
   assert.equal(restored.data.activeWorkspaceId, second.workspaceId);
 });
+
+test("tab reorder uses the shared move operation without duplicating views", async () => {
+  const f = await setup("tab-reorder");
+  const first = await f.workspace.handle({
+    op: "conversation.draft",
+    workspace: f.source,
+  });
+  const second = await f.workspace.handle({
+    op: "conversation.draft",
+    workspace: f.source,
+  });
+  const workspace = f.store.workspace(f.source);
+  const group = workspace.groups.find((item) =>
+    item.paneIds.includes(second.paneId),
+  );
+  const before = [...group.paneIds];
+  await f.workspace.handle({
+    op: "pane.move",
+    workspace: f.source,
+    id: second.paneId,
+    group: group.id,
+    index: 0,
+  });
+  assert.deepEqual(group.paneIds, [
+    second.paneId,
+    ...before.filter((id) => id !== second.paneId),
+  ]);
+  await assert.rejects(
+    f.workspace.handle({
+      op: "pane.move",
+      workspace: f.source,
+      id: first.paneId,
+      group: group.id,
+      index: 99,
+    }),
+    /Tab index/,
+  );
+  assert.equal(new Set(group.paneIds).size, group.paneIds.length);
+});
