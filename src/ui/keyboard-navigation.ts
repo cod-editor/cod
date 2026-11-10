@@ -9,6 +9,7 @@ export function createKeyboardNavigation(
   invoke: Invoke,
   panes: HTMLElement,
   tree: HTMLElement,
+  nativeFocus: (id: string) => void,
 ) {
   const workspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
@@ -25,6 +26,7 @@ export function createKeyboardNavigation(
       pane.kind === "browser" &&
       !getState().browsers.find((b) => b.id === pane.browserId)?.error
     ) {
+      nativeFocus(pane.browserId);
       await window.cod.browserFocus(pane.browserId);
       return;
     }

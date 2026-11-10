@@ -44,7 +44,13 @@ export function createCommands(
   const { focus, files: projects, layout, chat: chats, navigation } = features;
   const localInvoke: Invoke = (op, values) =>
     invoke(op, values, { reportError: false });
-  const keys = createKeyboardNavigation(getState, invoke, panes, tree);
+  const keys = createKeyboardNavigation(
+    getState,
+    invoke,
+    panes,
+    tree,
+    focus.native,
+  );
   const events = new AbortController();
   const listen = (
     type: "keydown",
