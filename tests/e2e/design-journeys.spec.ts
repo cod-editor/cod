@@ -1,8 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { ChatApp } from "./helpers/chat-fixture/harness";
-import { modifier } from "./helpers/workspace-app";
-import { readFile, access } from "node:fs/promises";
+import { modifier, tabTo } from "./helpers/workspace-app";
+import { readFile, access, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createServer } from "node:http";
+import type { AppState } from "../../src/types";
 test.setTimeout(90_000);
 
 let shell: ChatApp;
@@ -42,6 +44,29 @@ test("New task stays a compact bottom-composer chat at normal and wide window si
     await expect
       .poll(async () => (await composer.boundingBox())?.y ?? 0)
       .toBeGreaterThan(600);
+    await expect(shell.page.locator("footer")).toHaveCount(0);
+    const header = shell.page.locator(".app-header");
+    const selector = header.getByRole("button", {
+      name: "Switch workspace",
+      exact: true,
+    });
+    const selectorBox = (await selector.boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(
+      Math.abs(selectorBox.x + selectorBox.width / 2 - headerBox.width / 2),
+    ).toBeLessThan(2);
+    const leftControls = (await header
+      .locator("#visibility-controls")
+      .boundingBox())!;
+    const rightControls = (await header
+      .locator("#pane-visibility")
+      .boundingBox())!;
+    expect(leftControls.x + leftControls.width).toBeLessThanOrEqual(
+      selectorBox.x,
+    );
+    expect(rightControls.x).toBeGreaterThanOrEqual(
+      selectorBox.x + selectorBox.width,
+    );
     const box = await composer.boundingBox();
     expect(box!.width).toBeLessThanOrEqual(1120);
     expect(box!.width).toBeGreaterThan(450);
@@ -583,7 +608,7 @@ test("First conversation initialization failure restores the same draft beside o
   ).toHaveValue(draftText);
 });
 
-test("Workspace attention uses the same ready marker as its chat and prioritizes actual failures", async () => {
+test("Workspace status icons match their chats and prioritize actual failures", async ({}, info) => {
   const workspace = await shell.create("Attention fixture");
   const ready = await shell.newChat(workspace, "codex");
   await shell.cli(
@@ -594,13 +619,16 @@ test("Workspace attention uses the same ready marker as its chat and prioritizes
     "--status",
     "ready",
   );
-  const workspaceBadge = shell.row("Attention fixture").locator(".attention");
-  const readyBadge = shell.page.locator(
-    `[data-workspace-id="${ready.id}"] .attention`,
-  );
-  await expect(readyBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveAttribute("title", "ready");
+  let workspaceRow = shell.row("Attention fixture");
+  let readyRow = shell.page.locator(`[data-workspace-id="${ready.id}"]`);
+  const color = (row: import("@playwright/test").Locator) =>
+    row
+      .locator(":scope > .icon, :scope > .tree-disclosure > .icon")
+      .evaluate((node) => getComputedStyle(node).color);
+  await expect(readyRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("aria-label", /Completed/);
+  expect(await color(workspaceRow)).toBe(await color(readyRow));
 
   const failed = await shell.newChat(workspace, "kimi");
   await shell.send(failed.id, "[crash]");
@@ -616,11 +644,416 @@ test("Workspace attention uses the same ready marker as its chat and prioritizes
     "--status",
     "ready",
   );
-  const failedBadge = shell.page.locator(
-    `[data-workspace-id="${failed.id}"] .attention`,
+  let failedRow = shell.page.locator(`[data-workspace-id="${failed.id}"]`);
+  await expect(failedRow).toHaveAttribute("data-status", "failed");
+  await expect(readyRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await expect(workspaceRow).toHaveAttribute("aria-label", /Error/);
+  expect(await color(workspaceRow)).toBe(await color(failedRow));
+  expect(await color(readyRow)).not.toBe(await color(failedRow));
+  const review = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    review.id,
+    "--status",
+    "review",
   );
-  await expect(failedBadge).toHaveText("!");
-  await expect(readyBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveText("!");
-  await expect(workspaceBadge).toHaveAttribute("title", "failed");
+  const waiting = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    waiting.id,
+    "--status",
+    "waiting",
+  );
+  const working = await shell.newChat(workspace, "codex");
+  await shell.send(working.id, "[hold] Implement export");
+  const workingRow = shell.page.locator(`[data-workspace-id="${working.id}"]`);
+  await expect(workingRow).toHaveAttribute("data-status", "working");
+  await expect(workingRow).toHaveAttribute("aria-label", /Working/);
+  const reviewRow = shell.page.locator(`[data-workspace-id="${review.id}"]`);
+  await expect(reviewRow).toHaveAttribute("data-status", "review");
+  await expect(reviewRow).toHaveAttribute("aria-label", /Review requested/);
+  expect(await color(workingRow)).not.toBe(await color(readyRow));
+  expect(await color(reviewRow)).not.toBe(await color(workingRow));
+  await expect(shell.page.locator("#workspace-tree .attention")).toHaveCount(0);
+  await failedRow.click();
+  await expect(failedRow).toHaveAttribute("aria-selected", "true");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await shell.page.screenshot({
+    path: info.outputPath("status-icons-mixed-selected.png"),
+  });
+  const failedColor = await color(failedRow);
+  await workspaceRow
+    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
+    .click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workingRow).toHaveCount(0);
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  expect(await color(workspaceRow)).toBe(failedColor);
+  await shell.page.screenshot({
+    path: info.outputPath("status-icons-collapsed-aggregate.png"),
+  });
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveAttribute(
+    "aria-label",
+    "5 hidden conversations",
+  );
+  await workspaceRow.locator(".tree-label").click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await shell.stop();
+  await shell.start();
+  workspaceRow = shell.row("Attention fixture");
+  readyRow = shell.page.locator(`[data-workspace-id="${ready.id}"]`);
+  failedRow = shell.page.locator(`[data-workspace-id="${failed.id}"]`);
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await shell.page.screenshot({
+    path: info.outputPath("workspace-collapsed-count-restored.png"),
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(workspaceRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowRight");
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "true");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveCount(0);
+  await shell.page.keyboard.press("ArrowRight");
+  await expect(readyRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowLeft");
+  await expect(workspaceRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowLeft");
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await workspaceRow
+    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
+    .click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "true");
+  await expect(failedRow).toHaveAttribute("aria-selected", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("workspace-icon-expanded.png"),
+  });
+});
+
+test("Header navigation and full-area pane zoom preserve layout and expose errors above native content", async ({}, info) => {
+  const server = createServer((_req, res) =>
+    res.end(
+      "<!doctype html><title>Invented zoom page</title><h1>Invented native browser</h1><p>Visible page remains usable after restoring the layout.</p>",
+    ),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("No fixture origin");
+  const url = `http://127.0.0.1:${address.port}/`;
+  const workspace = await shell.create("Full working area");
+  const chatPane = (await shell.workspace(workspace)).activePaneId;
+  const state = async () =>
+    (await shell.cli<AppState>("state")).workspaces.find(
+      (w) => w.id === workspace,
+    )!;
+  const nativeBounds = () =>
+    shell.app!.evaluate(({ BrowserWindow }, url) => {
+      for (const window of BrowserWindow.getAllWindows())
+        for (const child of window.contentView.children) {
+          const view = child as unknown as {
+            webContents?: { getURL(): string };
+            getBounds(): {
+              x: number;
+              y: number;
+              width: number;
+              height: number;
+            };
+            getVisible(): boolean;
+          };
+          if (view.webContents?.getURL() === url)
+            return { bounds: view.getBounds(), visible: view.getVisible() };
+        }
+      return null;
+    }, url);
+  try {
+    await shell.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      shell.folders[0],
+    );
+    await shell.cli(
+      "workspace",
+      "settings",
+      "--id",
+      workspace,
+      "--settings",
+      JSON.stringify({
+        filesVisible: true,
+        workspacesVisible: true,
+        workspacesWidth: 236,
+        filesWidth: 248,
+      }),
+    );
+    const browser = await shell.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
+    const browserGroup = (await state()).groups!.find((g) =>
+      g.paneIds.includes(browser.paneId),
+    )!;
+    await shell.cli(
+      "group",
+      "resize",
+      "--workspace",
+      workspace,
+      "--id",
+      browserGroup.id,
+      "--ratio",
+      "0.38",
+    );
+    await expect.poll(async () => (await nativeBounds())?.visible).toBe(true);
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(async ({ webContents }, url) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((w) => w.getURL() === url);
+          return contents
+            ? contents.executeJavaScript("document.body.innerText")
+            : "";
+        }, url),
+      )
+      .toContain("Invented native browser");
+    const captureNative = async (name: string) => {
+      const image = await shell.app!.evaluate(async ({ desktopCapturer }) => {
+        const screens = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1920, height: 1080 },
+        });
+        return screens[0].thumbnail.toPNG().toString("base64");
+      });
+      await writeFile(info.outputPath(name), Buffer.from(image, "base64"));
+    };
+    const before = await state();
+    const header = shell.page.locator(".app-header");
+    const workspacesToggle = header.getByRole("button", {
+      name: "Toggle workspaces",
+      exact: true,
+    });
+    const filesToggle = header.getByRole("button", {
+      name: "Toggle files",
+      exact: true,
+    });
+    await expect(workspacesToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(filesToggle).toHaveAttribute("aria-pressed", "true");
+    const panelWidths = async () => ({
+      workspaces: (await shell.page.locator(".sidebar").boundingBox())?.width,
+      files: (await shell.page.locator("#project-panel").boundingBox())?.width,
+    });
+    const widths = await panelWidths();
+    await captureNative("header-normal-split-native.png");
+    const chat = shell.pane(chatPane);
+    const chatGroup = chat.locator("xpath=..");
+    await chatGroup
+      .getByRole("button", { name: "Maximize pane", exact: true })
+      .click();
+    await expect(shell.page.locator(".sidebar")).toBeHidden();
+    await expect(shell.page.locator("#project-panel")).toBeHidden();
+    await expect(
+      shell.page.getByRole("separator", {
+        name: "Resize workspaces",
+        exact: true,
+      }),
+    ).toBeHidden();
+    await expect(workspacesToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(filesToggle).toHaveAttribute("aria-pressed", "false");
+    const viewport = await shell.page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    }));
+    const paneBox = (await shell.page.locator("#panes").boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(paneBox.x).toBe(0);
+    expect(paneBox.width).toBe(viewport.width);
+    expect(paneBox.y).toBe(headerBox.y + headerBox.height);
+    expect(paneBox.y + paneBox.height).toBe(viewport.height);
+    expect((await state()).settings).toEqual(before.settings);
+    expect((await state()).groupLayout).toEqual(before.groupLayout);
+    await shell.page.screenshot({
+      path: info.outputPath("chat-maximized-full-working-area.png"),
+    });
+    await shell.page.keyboard.press(`${modifier}+Shift+E`);
+    await expect(
+      shell.page
+        .getByRole("tree", { name: "File tree", exact: true })
+        .getByRole("treeitem")
+        .first(),
+    ).toBeFocused();
+    expect((await state()).zoomedGroupId).toBeFalsy();
+    expect(await panelWidths()).toEqual(widths);
+    await chatGroup
+      .getByRole("button", { name: "Maximize pane", exact: true })
+      .click();
+    await shell.page.keyboard.press(`${modifier}+Shift+W`);
+    await expect
+      .poll(() =>
+        shell.page
+          .locator("#workspace-tree")
+          .evaluate((node) => node.contains(document.activeElement)),
+      )
+      .toBe(true);
+    expect((await state()).zoomedGroupId).toBeFalsy();
+    const nativeGroup = shell.pane(browser.paneId).locator("xpath=..");
+    await nativeGroup
+      .getByRole("button", { name: "Maximize pane", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await nativeBounds())?.bounds.width)
+      .toBe(viewport.width);
+    const native = await nativeBounds();
+    expect(native!.bounds.x).toBe(0);
+    expect(native!.bounds.y + native!.bounds.height).toBe(viewport.height);
+    await captureNative("native-browser-maximized-full-working-area.png");
+    const addressInput = shell
+      .pane(browser.paneId)
+      .getByRole("textbox", { name: "Address", exact: true });
+    await addressInput.fill("file:///invented-forbidden-file");
+    await addressInput.press("Enter");
+    const localError = shell.pane(browser.paneId).getByRole("alert");
+    await expect(localError).toContainText("Unsupported browser URL protocol");
+    await expect
+      .poll(async () => {
+        const message = (await localError.boundingBox())!;
+        const content = (await nativeBounds())!.bounds;
+        return (
+          message.y >= content.y + content.height ||
+          message.y + message.height <= content.y
+        );
+      })
+      .toBe(true);
+    await nativeGroup
+      .getByRole("button", { name: "Restore panes", exact: true })
+      .click();
+    expect(await panelWidths()).toEqual(widths);
+    expect((await state()).groupLayout).toEqual(before.groupLayout);
+    // An enabled global command reports its empty result in the header.
+    await shell.command("Reopen closed workspace");
+    const error = shell.page.locator("#status");
+    await expect(error).toContainText("No closed workspace");
+    await expect(error).toBeVisible();
+    const errorBox = (await error.boundingBox())!;
+    expect(errorBox.y + errorBox.height).toBeLessThanOrEqual(
+      (await nativeBounds())!.bounds.y,
+    );
+    await captureNative("header-error-above-native-content.png");
+    // Header controls are real keyboard buttons; saved hidden state survives zoom.
+    await tabTo(shell.page, filesToggle);
+    await shell.page.keyboard.press("Space");
+    await expect(filesToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(shell.page.locator("#project-panel")).toBeHidden();
+    await nativeGroup
+      .getByRole("button", { name: "Maximize pane", exact: true })
+      .click();
+    await nativeGroup
+      .getByRole("button", { name: "Restore panes", exact: true })
+      .click();
+    await expect(shell.page.locator("#project-panel")).toBeHidden();
+    await filesToggle.click();
+    await shell.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 700),
+    );
+    await expect.poll(() => shell.page.evaluate(() => innerWidth)).toBe(760);
+    await expect
+      .poll(async () => (await header.boundingBox())?.width)
+      .toBe(760);
+    await shell.page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await captureNative("header-narrow-split.png");
+    await shell.stop();
+    await shell.start();
+    expect((await state()).settings).toEqual(before.settings);
+    expect((await state()).groupLayout).toEqual(before.groupLayout);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Header participates in keyboard area traversal and its controls remain sequentially reachable", async () => {
+  await writeFile(
+    path.join(shell.data, "keymap.json"),
+    JSON.stringify({
+      "pane.nextRegion": ["Ctrl+Alt+F6"],
+      "pane.previousRegion": ["Ctrl+Alt+Shift+F6"],
+    }),
+  );
+  await expect
+    .poll(() =>
+      shell.page.evaluate(
+        async () => (await window.cod.getKeymap()).overrides["pane.nextRegion"],
+      ),
+    )
+    .toEqual(["Ctrl+Alt+F6"]);
+  const composer = shell.page.getByRole("textbox", {
+    name: "Message",
+    exact: true,
+  });
+  await composer.click();
+  await shell.page.keyboard.press("Control+Alt+F6");
+  const header = shell.page.locator(".app-header");
+  await expect(
+    header.getByRole("button", { name: "Toggle workspaces", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press("Tab");
+  await expect(
+    header.getByRole("button", { name: "Toggle files", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press("Tab");
+  await expect(
+    header.getByRole("button", { name: "Switch workspace", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press("Tab");
+  await expect(
+    header.getByRole("button", { name: "Show left pane", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press("Control+Alt+Shift+F6");
+  await expect(composer).toBeFocused();
+  const active = (await shell.state()).activeWorkspaceId!;
+  await shell.cli("workspace", "close", "--id", active);
+  await expect(
+    header.getByRole("button", { name: "Toggle workspaces", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    header.getByRole("button", { name: "Toggle files", exact: true }),
+  ).toBeDisabled();
+  await expect(shell.page.locator(".sidebar")).toBeHidden();
+  const background = await shell.cli<{ id: string }>(
+    "workspace",
+    "create",
+    "--name",
+    "Background task without active workspace",
+  );
+  expect((await shell.state()).activeWorkspaceId).toBeNull();
+  await expect(shell.page.locator(".sidebar")).toBeVisible();
+  await expect(
+    header.getByRole("button", { name: "Toggle workspaces", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    header.getByRole("button", { name: "Toggle workspaces", exact: true }),
+  ).toBeDisabled();
+  await shell.row("Background task without active workspace").click();
+  await expect
+    .poll(async () => (await shell.state()).activeWorkspaceId)
+    .toBe(background.id);
+  await expect(
+    header.getByRole("button", { name: "Toggle files", exact: true }),
+  ).toBeEnabled();
 });

@@ -1,3 +1,4 @@
+import { shortcutTitle } from "./ui/keyboard-ui";
 import { conversationLabel } from "./ui/message-label";
 import { readPreference, writePreference } from "./ui/preferences";
 import { iconButton, menu } from "./ui/controls";
@@ -154,7 +155,16 @@ export function reviewPane(
       throw new Error("Select lines on the same file and side");
     return { ...a, endLine: b.endLine };
   }
-  const addComment = button("Add comment (Alt+Enter)", () => openComment());
+  host.addEventListener("cod:add-comment", () => {
+    const round = detail?.rounds.find((r) => r.id === selectedRound);
+    if (round?.status === "draft" && round.id === detail?.currentRoundId)
+      openComment();
+  });
+  host.addEventListener("cod:submit-review", () => {
+    if (!submit.disabled && !submit.hidden) submit.click();
+  });
+  const addComment = button("Add comment", () => openComment());
+  addComment.title = shortcutTitle("review.addComment", "Add comment");
   const refresh = button("Refresh round", async () => {
     if (!detail) return;
     await invoke("review.refresh", {
@@ -282,6 +292,7 @@ export function reviewPane(
       const index = buttons.length;
       const line = document.createElement("button");
       line.type = "button";
+      line.tabIndex = index === end ? 0 : -1;
       line.className = "review-line";
       line.textContent = text;
       line.setAttribute("aria-label", name);
@@ -295,26 +306,22 @@ export function reviewPane(
       ranges.push(range);
       buttons.push(line);
       line.addEventListener("focus", () => {
+        for (const item of buttons) item.tabIndex = item === line ? 0 : -1;
         if (!line.dataset.rangeMove) selection = end = index;
       });
       line.addEventListener("keydown", (event) => {
-        if (
-          (event.altKey && event.key === "Enter") ||
-          ((event.ctrlKey || event.metaKey) &&
-            event.shiftKey &&
-            event.key.toLowerCase() === "m")
-        ) {
-          event.preventDefault();
-          if (round.status === "draft" && round.id === detail!.currentRoundId)
-            openComment();
-        }
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (event.isComposing) return;
+        if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
           event.preventDefault();
           const next = Math.max(
             0,
             Math.min(
               buttons.length - 1,
-              index + (event.key === "ArrowDown" ? 1 : -1),
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? buttons.length - 1
+                  : index + (event.key === "ArrowDown" ? 1 : -1),
             ),
           );
           if (event.shiftKey) end = next;

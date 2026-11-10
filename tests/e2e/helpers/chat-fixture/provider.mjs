@@ -19,6 +19,20 @@ let nativeId;
 let active;
 let sequence = 0;
 let history = [];
+let selectedModel = "fixture-model";
+const kimiConfigOptions = () => [
+  {
+    id: "model",
+    type: "select",
+    currentValue: selectedModel,
+    options: [
+      { value: "fixture-model", name: "Fixture model" },
+      ...(configuration().multipleModels
+        ? [{ value: "fixture-alternate", name: "Alternate fixture" }]
+        : []),
+    ],
+  },
+];
 const historyDirectory = recording + ".sessions";
 mkdirSync(historyDirectory, { recursive: true });
 const persist = () => {
@@ -54,20 +68,47 @@ const clearTimers = () => {
   for (const timer of timers) clearTimeout(timer);
   timers.clear();
 };
-function text(value, foreign = false) {
+function text(
+  value,
+  foreign = false,
+  phase = "final_answer",
+  interactive = false,
+) {
+  const questions = interactive ? { questions: [{ question: value }] } : {};
   const itemId = `assistant-${active.turnId}-${active.turn.items.length}`;
   if (!foreign) {
-    active.turn.items.push({ id: itemId, type: "agentMessage", text: value });
+    active.turn.items.push({
+      id: itemId,
+      type: "agentMessage",
+      text: value,
+      ...(provider === "codex" ? { phase, ...questions } : {}),
+    });
     persist();
   }
-  if (provider === "codex")
+  if (provider === "codex") {
+    notify("item/started", {
+      threadId: foreign ? "foreign-session" : nativeId,
+      turnId: active.turnId,
+      item: { id: itemId, type: "agentMessage", phase, ...questions },
+    });
     notify("item/agentMessage/delta", {
       threadId: foreign ? "foreign-session" : nativeId,
       turnId: active.turnId,
       itemId,
       delta: value,
     });
-  else
+    notify("item/completed", {
+      threadId: foreign ? "foreign-session" : nativeId,
+      turnId: active.turnId,
+      item: {
+        id: itemId,
+        type: "agentMessage",
+        text: value,
+        phase,
+        ...questions,
+      },
+    });
+  } else
     notify("session/update", {
       sessionId: foreign ? "foreign-session" : nativeId,
       update: {
@@ -175,6 +216,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (message.method === "initialized") return;
+  if (message.method === "session/set_config_option" && provider === "kimi") {
+    later(() => {
+      if (configuration().optionError)
+        write({
+          id: message.id,
+          error: { code: -32000, message: "Invented selection rejection" },
+        });
+      else {
+        selectedModel = params.value;
+        reply(message, { configOptions: kimiConfigOptions() });
+      }
+    }, configuration().optionDelayMs ?? 0);
+    return;
+  }
   if (message.method === "model/list" && configuration().options) {
     reply(message, {
       data: [
@@ -259,16 +314,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
               sessionId: nativeId,
               ...(configuration().options
                 ? {
-                    configOptions: [
-                      {
-                        id: "model",
-                        type: "select",
-                        currentValue: "fixture-model",
-                        options: [
-                          { value: "fixture-model", name: "Fixture model" },
-                        ],
-                      },
-                    ],
+                    configOptions: kimiConfigOptions(),
                   }
                 : {}),
             },
@@ -320,9 +366,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   history.push(active.turn);
   persist();
   if (provider === "codex") reply(message, { turn: { id: active.turnId } });
+  if (configuration().finalOnly) {
+    later(() => {
+      text(`DONE ${prompt}`);
+      complete();
+    }, 100);
+    return;
+  }
   if (prompt.includes("[move-workspace]")) {
     later(() => {
-      text("Preparing the review before moving this conversation.\n");
+      text(
+        "Preparing the review before moving this conversation.\n",
+        false,
+        "commentary",
+      );
       void moveConversation(configuration, (event, data) =>
         record(event, { nativeId, ...data }),
       )
@@ -343,8 +400,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   later(() => {
     text("FOREIGN_OUTPUT", true);
-    if (configuration().narrative) text(configuration().narrative);
-    text(`STREAM ${prompt}\n`);
+    if (configuration().narrative)
+      text(configuration().narrative, false, "commentary");
+    text(`STREAM ${prompt}\n`, false, "commentary");
     const tool = {
       id: `fixture-tool-${active.turnId}`,
       type: "commandExecution",
@@ -429,8 +487,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
     } else if (!prompt.includes("[hold]"))
       later(() => {
+        if (configuration().interactiveQuestion)
+          text(
+            "Should the report include archived rows?",
+            false,
+            "commentary",
+            true,
+          );
         text(`DONE ${prompt}`);
         complete();
-      }, 500);
+      }, configuration().finalDelayMs ?? 500);
   }, configuration().streamDelayMs ?? 200);
 });

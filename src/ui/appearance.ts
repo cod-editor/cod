@@ -1,8 +1,14 @@
 import { readPreference, writePreference } from "./preferences";
 
-type TextSurface = "ui" | "editor" | "chat";
-const defaults: Record<TextSurface, number> = { ui: 14, editor: 16, chat: 15 };
+type TextSurface = "ui" | "editor" | "chat" | "terminal";
+const defaults: Record<TextSurface, number> = {
+  ui: 14,
+  editor: 16,
+  chat: 15,
+  terminal: 13,
+};
 let sizes = { ...defaults };
+export const terminalTextSize = () => sizes.terminal;
 export function applyAppearance(): void {
   const stored = readPreference<Partial<typeof defaults>>("font-sizes", {});
   for (const key of Object.keys(defaults) as TextSurface[]) {
@@ -29,10 +35,12 @@ export function changeTextSize(amount: number | "reset"): void {
     ? "editor"
     : pane?.querySelector(".composer")
       ? "chat"
-      : "ui";
+      : pane?.querySelector(".terminal-body")
+        ? "terminal"
+        : "ui";
   update(key, amount === "reset" ? defaults[key] : sizes[key] + amount);
 }
-export function appearanceDialog(): void {
+export function appearanceDialog(shortcuts?: () => void): void {
   if (document.querySelector("dialog[open]")) return;
   const dialog = document.createElement("dialog");
   dialog.className = "appearance-settings";
@@ -44,6 +52,7 @@ export function appearanceDialog(): void {
     ["ui", "Interface text"],
     ["editor", "Editor text"],
     ["chat", "Chat text"],
+    ["terminal", "Terminal text"],
   ] as const) {
     const row = document.createElement("label");
     row.className = "setting-row";
@@ -64,8 +73,7 @@ export function appearanceDialog(): void {
   }
   const note = document.createElement("p");
   note.className = "settings-note";
-  note.textContent =
-    "Sizes are in pixels. Web pages and terminals keep their own text size.";
+  note.textContent = "Sizes are in pixels. Web pages keep their own text size.";
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const reset = document.createElement("button");
@@ -83,6 +91,15 @@ export function appearanceDialog(): void {
   done.textContent = "Done";
   done.className = "primary";
   done.onclick = () => dialog.close();
+  if (shortcuts) {
+    const keys = document.createElement("button");
+    keys.textContent = "Keyboard shortcuts";
+    keys.onclick = () => {
+      dialog.close();
+      shortcuts();
+    };
+    actions.append(keys);
+  }
   actions.append(reset, done);
   dialog.append(note, actions);
   dialog.onclose = () => dialog.remove();

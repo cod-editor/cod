@@ -36,6 +36,8 @@ Cod should also serve as the user's main browser and the place they spend most o
 
 A conversation can move to another workspace without becoming a new native session or interrupting its active turn. Its history, composer draft and originating reviews follow it. Workspace membership and the native process working directory are distinct and must be presented honestly.
 
+Users can remove an idle conversation from a workspace without deleting its native provider session or history. Removal clears its workspace row and open chat view; the existing reopen-closed-tab action restores an accidentally removed conversation and its draft. Closing a tab alone keeps the conversation in the workspace. Active work and pending review or form submissions must not be silently abandoned.
+
 A task often corresponds to one workspace, but this is a workflow convention, not a built-in dependency on a tracker.
 The expected daily use includes 2-4 parallel tasks plus temporary conversations and browsing.
 
@@ -57,6 +59,7 @@ Cod owns status storage, display and CLI updates, plus technical process and con
 Agents and scripts use the same status and context CLI, including requesting a review. Verify that provider hooks run through the chat adapter as well as the native CLI; if they do not, prove an alternative event delivery path to the plugin before claiming compatibility.
 Updating a background session must not steal focus.
 Completion acknowledgment and status precedence are defined in the [implementation contracts](specs/implementation.md).
+Workspace and conversation rows show status through the color of their existing object icon: neutral, working, needs attention, completed and failed. Do not add a separate status dot, embedded status symbols or user-defined status glyphs. The workspace icon reflects the highest-priority status among its conversations using the existing precedence. Hover text and accessible labels name the state and available context; actionable reasons remain visible in the conversation. Review requests use the needs-attention color while retaining their object identity.
 
 ### Agent conversations and CLI
 
@@ -132,10 +135,13 @@ Agent screenshots and agent browser control are outside v1; opening a URL throug
 | P4  | Clear modules, few dependencies, quick builds and modest development disk use.                                                                          |
 
 The visible workspace panel is the starting navigation model. It lists expandable workspaces with summarized attention status, conversation children and pending review requests beneath their originating conversations. Selecting a conversation or request jumps directly to it, including across workspaces. Tabs still arrange open content within each workspace. Browser notifications may later join this navigation model; notification infrastructure is deferred. Workspace-row context menus provide Rename, Add folder and Close workspace. Repository-root context menus provide removal from the workspace without deleting files. File browsing, quick-open by filename and workspace text search are separate interactions.
+Workspace rows have no separate disclosure arrow. Clicking the workspace icon toggles its children; clicking its label selects the workspace. A collapsed row shows a muted conversation count. Preserve manual collapse across restart and ordinary selection/status updates; explicitly navigating to a hidden conversation reveals it.
 There is no separate overview dashboard requirement.
 A new workspace opens with chat as its main view, with a provider selector in the chat rather than a separate provider-selection step. Existing workspaces reopen as left.
 Chat content and input use the available pane width up to a configurable pixel maximum. Keep input at the bottom in both empty and populated chats, without moving it after the first message.
-Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor and chat text sizes persist independently without zooming web pages.
+Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor, chat and terminal text sizes persist independently without zooming web pages.
+
+Keyboard navigation uses a shared command catalog for bindings, Commands, tooltips and a searchable Keyboard Shortcuts reference in Commands, Settings and Help. Focus-and-return commands reveal navigation and content areas while preserving the previous caret; Tab reaches local controls, and arrows navigate trees, tabs and review ranges. Platform defaults can be overridden in a local keymap file, with effective shortcuts shown throughout the interface. Pane visibility and tab management remain keyboard-accessible; context-specific bindings preserve website editing, terminal control keys and input-method composition.
 
 Use compact creation controls rather than oversized workspace buttons. Discover shortcuts through tooltips and the command palette rather than permanent instructional labels.
 The default working arrangement places documents, reviews and browser pages on the left, and conversations and terminals in a tabbed area on the right. A new workspace shows only chat. Either area can hide or expand without closing its tabs, and restoring it preserves the previous arrangement and state. No bottom terminal dock is part of this default. The workspace panel remains at the far left; file navigation opens when needed.
@@ -200,7 +206,9 @@ Competitor comparisons from earlier descriptions are not requirements and need f
 
 ## Interface conventions
 
-Use a fixed, bounded workspace selector in the title bar. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. A fixed footer controls visibility only; text search belongs in Commands and its shortcut. Global controls do not move into another pane when it is maximized.
+Use a fixed, bounded workspace selector centered in the title bar. Workspace and file visibility controls sit on its left, after native window controls; content-area visibility controls sit on its right. There is no persistent footer. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. Text search belongs in Commands and its shortcut. Global controls remain in the title bar when a pane is maximized. Transient feedback stays visible without reserving a bottom strip.
+
+Maximizing a pane fills the window's working area below the title bar, temporarily hiding navigation and other panes. Restore recovers the previous panel visibility, widths and split arrangement. Explicitly revealing a navigation panel leaves maximized mode. This is an in-window layout action, not operating-system fullscreen.
 
 Use compact One Dark editor conventions: neutral selection and focus, consistent row/tab sizing, content-sized tabs with bounded width and truncation, and no active-tab underline. Keep keyboard focus visible. Native window chrome follows the platform; websites and Bitwarden keep their own appearance. Secondary actions belong in context menus, shortcuts and Commands rather than persistent buttons or explanatory hints.
 
@@ -208,8 +216,16 @@ Pane visibility controls remain discoverable even before the material area is op
 
 Provider session commands expose actual native status, skills, plugins, effective configuration and subagents where supported. Unsupported or unavailable sections say so; opening an inspector never sends an inference prompt. Skills retain their native path identity when names collide.
 
-The composer stays at the bottom of empty and populated chats. Enter inserts a newline and Cmd/Ctrl+Enter sends; there is no permanent Send button. Commands and the composer background context menu provide a mouse path while the text field retains native editing actions. Preserve the next draft during an active turn.
+The composer stays at the bottom of empty and populated chats. Enter inserts a newline and Cmd/Ctrl+Enter sends; there is no permanent Send button. Model and reasoning choices use consistent compact keyboard-accessible menus that stay within the window. Do not show an unexplained working-directory basename in the composer; the full session directory remains discoverable in session details. Commands and the composer background context menu provide a mouse path while the text field retains native editing actions. Preserve the next draft during an active turn.
+
+A completed agent turn presents its final answer once, with routine intermediate commentary and tool activity inside a compact expandable activity row. While the turn is running, show its working or waiting status and elapsed time above a separate expandable row with a short tool label. Keep the latest action visible between tool calls, including after it completes, and replace it only when another action arrives and keep routine intermediate messages and tools collapsed by default, including before the first response arrives. Preserve an explicitly expanded history through updates and completion. Questions and permissions remain outside it. Do not duplicate progress above the composer. Show measured working duration when known rather than repeating the provider name; imported history without timing must not invent a duration. Failed tool calls remain inside completed turn activity; a command failure is not automatically a request for user action. Active progress, questions requiring an answer, permissions and provider failures that block continuation remain visible. Preserve all messages in the expanded activity and keep their order.
 
 Reviews are actions on existing material, not a tab type to create from a generic New menu. Opening a request shows its source alongside its originating conversation without undoing deliberate pane visibility. Comments remain private until one submission; approval without comments is an explicit outcome. Reading a completed reply acknowledges it, but opening a review does not submit it.
 
 Workspace and tab closure is recoverable. Closing a chat view preserves its session; closing a terminal ends its owned shell. Closing active workspace activity requires an explicit stop decision, with Cancel selected by default. Hiding only changes visibility. Saved context can reopen; ended processes never pretend to survive or replay their former commands.
+
+New workspace, browser tab and terminal actions open their working surface immediately without a preliminary form. A new workspace starts as Untitled and can be renamed later. A browser tab starts blank with its address field focused. A terminal uses the first workspace folder, or the home directory when no folder is attached. Navigation panel buttons align to the right edge of the workspace sidebar in the title bar.
+
+Agents discover and control Cod through its CLI and installed skill. Environment variables identify the conversation and socket; `codctl context` reads current membership after moves. A separate agent-facing protocol is not needed for context or help.
+
+Rename edits the object label in place. Workspace rows support Rename from Commands/context menu and double-clicking their label. Enter or leaving the field saves a nonempty name; Escape cancels. Background updates preserve the edit and caret.

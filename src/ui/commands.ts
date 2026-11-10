@@ -1,9 +1,25 @@
+import { showProviderCommands } from "./provider-commands";
+import { conversationRemovalReason } from "../conversation-actions";
+import { createFocusTargets } from "./focus-targets";
+import {
+  commands as commandDefinitions,
+  resolveKeybinding,
+  formatShortcut,
+  type CommandId,
+} from "../keyboard";
+import {
+  keyboardPlatform,
+  keyboardSurface,
+  showKeyboardShortcuts,
+} from "./keyboard-ui";
+import { createKeyboardNavigation } from "./keyboard-navigation";
+import { paneRegions } from "./pane-layout";
 import { createSearchList } from "./search-list";
 import { appearanceDialog, changeTextSize } from "./appearance";
 import { inputDialog, confirmAction } from "./dialogs";
 import { actionButton as paneButton, showActionError } from "./action-feedback";
-import type { MenuAction } from "./controls";
-import type { AppState } from "../types";
+import { menu, type MenuAction } from "./controls";
+import type { AppState, PaneState } from "../types";
 import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 interface CommandFeatures {
@@ -13,9 +29,17 @@ interface CommandFeatures {
     toggle: (key: "filesVisible" | "workspacesVisible") => void;
     split: (direction: "right" | "down") => void;
     zoom: () => void;
+    togglePane: (side: "left" | "right") => Promise<void>;
+    paneToggleReason: (side: "left" | "right") => string | undefined;
   };
   chat: { send: (id: string) => Promise<void>; integration: () => void };
-  navigation: { focusWorkspace: (id: string) => Promise<void> };
+  navigation: {
+    focusWorkspace: (id: string) => Promise<void>;
+    renameWorkspace: (id: string) => Promise<void>;
+  };
+  saveFile: (workspace: string, pane: string) => Promise<void>;
+  focusNativeView: (id: string) => void;
+  find: { open: (pane: import("../types").PaneState) => void };
 }
 export function createCommands(
   getState: () => AppState,
@@ -28,6 +52,15 @@ export function createCommands(
   const { focus, files: projects, layout, chat: chats, navigation } = features;
   const localInvoke: Invoke = (op, values) =>
     invoke(op, values, { reportError: false });
+  const keys = createKeyboardNavigation(
+    getState,
+    invoke,
+    panes,
+    tree,
+    focus.native,
+    features.focusNativeView,
+  );
+  const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const events = new AbortController();
   const listen = (
     type: "keydown",
@@ -82,6 +115,24 @@ export function createCommands(
   function conversationActions(
     conversation: import("../types").ConversationState,
   ): MenuAction[] {
+    const removalReason = conversationRemovalReason(getState(), conversation);
+    const remove: MenuAction = {
+      label: "Remove from workspace",
+      disabled: !!removalReason,
+      title:
+        removalReason ??
+        "Keep the native session history. Undo with Reopen closed tab.",
+      run: () => {
+        void invoke("conversation.remove", { id: conversation.id })
+          .then(() => {
+            requestAnimationFrame(() => {
+              if (tree.getClientRects().length)
+                focus.restore({ workspaceId: conversation.workspaceId });
+            });
+          })
+          .catch(() => undefined);
+      },
+    };
     if (conversation.handoffTerminalId) {
       const terminal = getState().terminals.find(
         (t) => t.id === conversation.handoffTerminalId,
@@ -105,9 +156,16 @@ export function createCommands(
           run: () =>
             void invoke("conversation.reclaim", { id: conversation.id }),
         },
+        null,
+        remove,
       ];
     }
     return [
+      {
+        label: "Session info...",
+        run: () =>
+          showProviderCommands({ id: conversation.id, invoke }, "status"),
+      },
       {
         label: "Move to workspace...",
         disabled: getState().workspaces.length < 2,
@@ -120,6 +178,8 @@ export function createCommands(
         ),
         run: () => void invoke("conversation.handoff", { id: conversation.id }),
       },
+      null,
+      remove,
     ];
   }
   function defaultBrowserDialog(): void {
@@ -210,24 +270,14 @@ export function createCommands(
       );
     else void invoke("workspace.reopen", { id: closed.workspace.id });
   }
-  function sendActiveMessage(): void {
-    const w = activeWorkspace();
-    const pane = w?.panes.find((p) => p.id === w.activePaneId);
+  function sendActiveMessage(pane: PaneState | undefined): void {
     if (pane?.kind === "conversation") void chats.send(pane.conversationId);
     else
       panes
         .querySelector<HTMLTextAreaElement>(
-          '[data-pane-id="' +
-            w?.activePaneId +
-            '"] textarea[aria-label="Message"]',
+          '[data-pane-id="' + pane?.id + '"] textarea[aria-label="Message"]',
         )
-        ?.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Enter",
-            ctrlKey: true,
-            bubbles: true,
-          }),
-        );
+        ?.dispatchEvent(new Event("cod:send-message"));
   }
   function chatWidthDialog(): void {
     const workspace = activeWorkspace();
@@ -251,14 +301,20 @@ export function createCommands(
   function browserDialog(): void {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    inputDialog({
-      title: "New browser",
-      label: "URL",
-      value: "https://",
-      submitLabel: "Open",
-      submit: (url) =>
-        localInvoke("browser.open", { workspace: workspace.id, url }),
-    });
+    void invoke<{ paneId: string }>("browser.open", {
+      workspace: workspace.id,
+      url: "about:blank",
+    })
+      .then((browser) => {
+        requestAnimationFrame(() => {
+          const address = panes.querySelector<HTMLInputElement>(
+            `[data-pane-id="${browser.paneId}"] input[aria-label="Address"]`,
+          );
+          address?.focus();
+          address?.select();
+        });
+      })
+      .catch(() => {});
   }
 
   function resumeConversationDialog(): void {
@@ -372,18 +428,21 @@ export function createCommands(
   function terminalDialog(): void {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    inputDialog({
-      title: "New terminal",
-      label: "Working directory",
-      value: workspace.folders[0] ?? "",
-      submitLabel: "Create",
-      submit: (cwd) =>
-        localInvoke("terminal.open", {
-          workspace: workspace.id,
-          cwd,
-        }),
-    });
+    void invoke<{ paneId: string }>("terminal.open", {
+      workspace: workspace.id,
+    })
+      .then((terminal) =>
+        requestAnimationFrame(() =>
+          panes
+            .querySelector<HTMLTextAreaElement>(
+              `[data-pane-id="${terminal.paneId}"] .xterm-helper-textarea`,
+            )
+            ?.focus(),
+        ),
+      )
+      .catch(() => {});
   }
+
   let choosingFolder = false;
   function folderDialog(workspaceId = activeWorkspace()?.id): void {
     if (!workspaceId || choosingFolder) return;
@@ -404,21 +463,367 @@ export function createCommands(
       });
   }
   function workspaceDialog(mode: "create" | "rename"): void {
+    if (mode === "create") {
+      void invoke("workspace.create", { name: "Untitled" })
+        .then(() => focusActiveComposer())
+        .catch(() => {});
+      return;
+    }
     const workspace = activeWorkspace();
-    if (mode === "rename" && !workspace) return;
-    inputDialog({
-      title: mode === "create" ? "New workspace" : "Rename workspace",
-      label: "Workspace name",
-      value: mode === "rename" ? workspace!.name : "",
-      submitLabel: mode === "create" ? "Create" : "Save",
-      submit: (name) =>
-        mode === "create"
-          ? localInvoke("workspace.create", { name })
-          : localInvoke("workspace.rename", { id: workspace!.id, name }),
-      completed: () => {
-        if (mode === "create") focusActiveComposer();
-      },
-    });
+    if (!workspace) return;
+    void navigation.renameWorkspace(workspace.id);
+  }
+
+  const currentPane = () => {
+    const w = activeWorkspace();
+    return w?.panes.find((p) => p.id === w.activePaneId);
+  };
+  function disabledReason(
+    id: CommandId,
+    w = activeWorkspace(),
+    pane = currentPane(),
+  ): string | undefined {
+    const group = w?.groups?.find((g) =>
+      g.paneIds.includes(pane?.id ?? w.activePaneId),
+    );
+    if (
+      [
+        "palette",
+        "shortcuts",
+        "shortcuts.openFile",
+        "settings",
+        "workspace.new",
+        "chat.new",
+        "integration.install",
+        "browser.default",
+        "workspace.reopen",
+        "text.inc",
+        "text.dec",
+        "text.reset",
+      ].includes(id)
+    )
+      return;
+    if (!w) return "Open a workspace first";
+    if (id === "pane.toggleRight") return focusTargets.chatVisibilityReason();
+    if (id === "pane.toggleLeft") return layout.paneToggleReason("left");
+    if (
+      ["chat.send", "chat.stop"].includes(id) &&
+      !(
+        pane?.kind === "conversation" ||
+        (pane?.kind === "document" && !pane.filePath)
+      )
+    )
+      return "Select a chat first";
+    if (
+      id === "chat.stop" &&
+      !getState().conversations.some(
+        (c) =>
+          c.paneId === pane?.id && ["working", "waiting"].includes(c.status),
+      )
+    )
+      return "No response is running";
+    if (
+      ["files.save", "review.document"].includes(id) &&
+      !(pane?.kind === "document" && pane.filePath)
+    )
+      return "Select an editable file first";
+    if (id === "browser.address" && pane?.kind !== "browser")
+      return "Select a browser tab first";
+    const paneNumber = /^pane\.focus([1-9])$/.exec(id);
+    if (paneNumber && Number(paneNumber[1]) > (w.groups?.length ?? 0))
+      return "That pane is not open";
+    const tabNumber = /^tab\.focus([1-8])$/.exec(id);
+    if (tabNumber && Number(tabNumber[1]) > (group?.paneIds.length ?? 0))
+      return "That tab is not open";
+    if (id === "tab.moveToPane" && (w.groups?.length ?? 0) < 2)
+      return "Open a second pane first";
+    if (
+      id === "tab.reorderLeft" &&
+      (!group || group.paneIds.indexOf(pane?.id ?? w.activePaneId) <= 0)
+    )
+      return "Already the first tab";
+    if (
+      id === "tab.reorderRight" &&
+      (!group ||
+        group.paneIds.indexOf(pane?.id ?? w.activePaneId) >=
+          group.paneIds.length - 1)
+    )
+      return "Already the last tab";
+    if (
+      ["review.addComment", "review.submit"].includes(id) &&
+      pane?.kind !== "review"
+    )
+      return "Select a review first";
+  }
+  async function execute(id: CommandId, browserId?: string): Promise<void> {
+    if (browserId) focus.native(browserId);
+    if (document.querySelector("dialog[open]")) return;
+    const browser = browserId
+      ? getState().browsers.find((b) => b.id === browserId)
+      : undefined;
+    if (browserId && !browser) return;
+    const focusedPaneId =
+      document.activeElement?.closest<HTMLElement>("[data-pane-id]")?.dataset
+        .paneId;
+    const w = browser
+      ? getState().workspaces.find((w) => w.id === browser.workspaceId)
+      : (getState().workspaces.find((w) =>
+          w.panes.some((p) => p.id === focusedPaneId),
+        ) ?? activeWorkspace());
+    const pane = browser
+      ? w?.panes.find((p) => p.id === browser.paneId)
+      : (w?.panes.find((p) => p.id === focusedPaneId) ?? currentPane());
+    const group = w?.groups?.find((g) =>
+      g.paneIds.includes(pane?.id ?? w.activePaneId),
+    );
+    const reason = disabledReason(id, w, pane);
+    if (reason) {
+      setStatus(reason);
+      return;
+    }
+    try {
+      const paneNumber = /^pane\.focus([1-9])$/.exec(id);
+      if (paneNumber) {
+        await keys.spatial(Number(paneNumber[1]) - 1, w?.id);
+        return;
+      }
+      const tabNumber = /^tab\.focus([1-8])$/.exec(id);
+      if (tabNumber) {
+        await keys.selectTab(Number(tabNumber[1]) - 1, w?.id, pane?.id);
+        return;
+      }
+      switch (id) {
+        case "palette":
+          commandPalette();
+          break;
+        case "shortcuts.openFile":
+          await window.cod.openKeymap();
+          break;
+        case "shortcuts":
+          showKeyboardShortcuts(focus);
+          break;
+        case "settings": {
+          const origin = focus.capture();
+          appearanceDialog(() => {
+            focus.restore(origin);
+            showKeyboardShortcuts(focus);
+          });
+          break;
+        }
+        case "workspace.new":
+          workspaceDialog("create");
+          break;
+        case "workspace.rename":
+          workspaceDialog("rename");
+          break;
+        case "workspace.focusTree":
+          await focusTargets.toggle("workspaces");
+          break;
+        case "workspace.reopen":
+          reopenWorkspace();
+          break;
+        case "chat.new":
+          await newConversation();
+          break;
+        case "chat.width":
+          chatWidthDialog();
+          break;
+        case "chat.send":
+          sendActiveMessage(pane);
+          break;
+        case "chat.stop":
+          if (pane?.kind === "conversation")
+            await invoke("conversation.interrupt", { id: pane.conversationId });
+          break;
+        case "terminal.new":
+          terminalDialog();
+          break;
+        case "browser.new":
+          browserDialog();
+          break;
+        case "browser.default":
+          defaultBrowserDialog();
+          break;
+        case "browser.address": {
+          const input = panes.querySelector<HTMLInputElement>(
+            `[data-pane-id="${pane?.id}"] input[aria-label="Address"]`,
+          );
+          input?.focus();
+          input?.select();
+          break;
+        }
+        case "folders.add":
+          folderDialog();
+          break;
+        case "session.resume":
+          resumeConversationDialog();
+          break;
+        case "integration.install":
+          chats.integration();
+          break;
+        case "files.open":
+          projects.quickOpen();
+          break;
+        case "files.search":
+          projects.search();
+          break;
+        case "files.save":
+          if (w && pane) await features.saveFile(w.id, pane.id);
+          break;
+        case "review.document":
+          if (w && pane?.kind === "document" && pane.filePath)
+            await invoke("review.open-document", {
+              workspace: w.id,
+              path: pane.filePath,
+            });
+          break;
+        case "review.addComment":
+        case "review.submit": {
+          const host = panes.querySelector<HTMLElement>(
+            `[data-pane-id="${pane?.id}"]`,
+          );
+          host
+            ?.querySelector(".review-body")
+            ?.dispatchEvent(
+              new CustomEvent(
+                id === "review.addComment"
+                  ? "cod:add-comment"
+                  : "cod:submit-review",
+                { bubbles: false },
+              ),
+            );
+          break;
+        }
+        case "navigation.toggleFiles":
+          layout.toggle("filesVisible");
+          break;
+        case "navigation.toggleWorkspaces":
+          layout.toggle("workspacesVisible");
+          break;
+        case "focus.files":
+          await focusTargets.toggle("files");
+          break;
+        case "focus.composer":
+          await focusTargets.toggle("chat");
+          break;
+        case "focus.terminal":
+          await focusTargets.toggle("terminal");
+          break;
+        case "pane.toggleRight":
+          await focusTargets.toggleChatArea();
+          break;
+        case "pane.toggleLeft": {
+          const focused = document.activeElement;
+          await layout.togglePane("left");
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          if (
+            browserId ||
+            (focused instanceof HTMLElement && !focused.getClientRects().length)
+          ) {
+            const active = activeWorkspace();
+            if (active) await keys.focusPane(active.activePaneId);
+          }
+          break;
+        }
+        case "pane.next":
+          await keys.cyclePane(1, w?.id, pane?.id);
+          break;
+        case "pane.previous":
+          await keys.cyclePane(-1, w?.id, pane?.id);
+          break;
+        case "tab.last":
+          await keys.selectTab(-1, w?.id, pane?.id);
+          break;
+        case "content.find":
+          if (pane) features.find.open(pane);
+          break;
+        case "pane.nextRegion":
+          await keys.cycleRegion(1, browserId);
+          break;
+        case "pane.previousRegion":
+          await keys.cycleRegion(-1, browserId);
+          break;
+        case "pane.zoom":
+          if (w && group)
+            await invoke("group.zoom", { workspace: w.id, id: group.id });
+          break;
+        case "pane.splitRight":
+        case "pane.splitDown":
+          if (w && group && pane)
+            await invoke("group.split", {
+              workspace: w.id,
+              id: group.id,
+              paneId: pane.id,
+              direction: id === "pane.splitRight" ? "right" : "down",
+            });
+          break;
+        case "tab.next":
+          await keys.cycleTab(1, w?.id, pane?.id);
+          break;
+        case "tab.previous":
+          await keys.cycleTab(-1, w?.id, pane?.id);
+          break;
+        case "tab.close":
+          if (w && pane) {
+            await invoke("pane.close", { workspace: w.id, id: pane.id });
+            const next = activeWorkspace();
+            if (next) await keys.focusPane(next.activePaneId);
+          }
+          break;
+        case "tab.reopen":
+          reopenTab();
+          break;
+        case "tab.reorderLeft":
+        case "tab.reorderRight":
+          if (w && group && pane)
+            await invoke("pane.move", {
+              workspace: w.id,
+              id: pane.id,
+              group: group.id,
+              index:
+                group.paneIds.indexOf(pane.id) +
+                (id === "tab.reorderLeft" ? -1 : 1),
+            });
+          break;
+        case "tab.moveToPane":
+          if (w && group && pane) {
+            const targets = paneRegions(w).filter(
+              (r) => r.id !== group.id && !r.id.startsWith("missing-"),
+            );
+            menu(
+              document.querySelector<HTMLElement>(
+                `[data-tab-id="${pane.id}"]`,
+              ) ?? document.querySelector<HTMLElement>("#workspace-selector")!,
+              targets.map((target, index) => ({
+                label: `Move to pane ${index + 1}`,
+                run: () =>
+                  void invoke("pane.move", {
+                    workspace: w.id,
+                    id: pane.id,
+                    group: target.id,
+                  }).then(() => keys.focusPane(pane.id)),
+              })),
+            );
+          }
+          break;
+        case "text.inc":
+          changeTextSize(1);
+          break;
+        case "text.dec":
+          changeTextSize(-1);
+          break;
+        case "text.reset":
+          changeTextSize("reset");
+          break;
+      }
+    } catch (error) {
+      showActionError(
+        error,
+        panes.querySelector(`[data-pane-id="${pane?.id}"]`) ?? panes,
+      );
+    }
   }
   function commandPalette(): void {
     if (document.querySelector("dialog[open]")) return;
@@ -431,88 +836,40 @@ export function createCommands(
     input.placeholder = "Type a command";
     const list = document.createElement("div");
     list.className = "command-list";
-    const commands = [
-      ["Settings...", appearanceDialog],
-      ["Increase text size", () => changeTextSize(1)],
-      ["Decrease text size", () => changeTextSize(-1)],
-      ["Reset text size", () => changeTextSize("reset")],
-      ["New workspace", () => workspaceDialog("create")],
-      ["New chat", () => newConversation()],
-      ["New terminal", terminalDialog],
-      ["New browser", browserDialog],
-      ["Add folder", folderDialog],
-      [
-        "Review active document",
-        () => {
-          const workspace = activeWorkspace();
-          const pane = workspace?.panes.find(
-            (p) => p.id === workspace.activePaneId,
-          );
-          if (workspace && pane?.kind === "document" && pane.filePath)
-            void invoke("review.open-document", {
-              workspace: workspace.id,
-              path: pane.filePath,
-            }).catch(() => undefined);
-        },
-      ],
-      ["Rename workspace", () => workspaceDialog("rename")],
-      ["Open existing native session", resumeConversationDialog],
-      ["Open file", () => projects.quickOpen()],
-      ["Search in files", () => projects.search()],
-      ["Chat maximum width", chatWidthDialog],
-      ["Install agent integration...", () => chats.integration()],
-      ["Default browser...", defaultBrowserDialog],
-      ["Toggle files", () => layout.toggle("filesVisible")],
-      ["Toggle workspaces", () => layout.toggle("workspacesVisible")],
-      ["Send message", sendActiveMessage],
-      ["Split right", () => layout.split("right")],
-      ["Split below", () => layout.split("down")],
-      ["Maximize / restore pane", () => layout.zoom()],
-      ["Reopen closed tab", reopenTab],
-      ["Reopen closed workspace", reopenWorkspace],
-      ["Focus workspace panel", focusPanel],
-    ] as const;
-    const modifier = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
-    const shortcuts: Record<string, string> = {
-      "Settings...": ",",
-      "Increase text size": "+",
-      "Decrease text size": "-",
-      "Reset text size": "0",
-      "New workspace": "Shift+N",
-      "Open file": "P",
-      "Search in files": "Shift+F",
-      "Send message": "Enter",
-      "Maximize / restore pane": "Shift+Escape",
-      "Reopen closed tab": "Shift+T",
-      "Focus workspace panel": "Shift+E",
-    };
-    for (const [name, action] of commands) {
+    const definitions = commandDefinitions.filter(
+      (command) => command.id !== "palette",
+    );
+    for (const definition of definitions) {
+      const name = definition.title;
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = name;
       button.setAttribute("aria-label", name);
-      if (shortcuts[name]) {
+      const shortcut = formatShortcut(definition.id, keyboardPlatform);
+      if (shortcut) {
         const hint = document.createElement("kbd");
-        hint.textContent =
-          modifier +
-          (modifier === "⌘"
-            ? shortcuts[name]
-                .replace("Shift+", "⇧")
-                .replace("Enter", "↵")
-                .replace("Escape", "Esc")
-            : shortcuts[name]);
+        hint.textContent = shortcut;
         hint.setAttribute("aria-hidden", "true");
         button.append(hint);
       }
+      const reason = disabledReason(definition.id);
+      button.disabled = !!reason;
+      if (reason) {
+        button.title = reason;
+        const hint = document.createElement("small");
+        hint.className = "command-disabled-reason";
+        hint.textContent = reason;
+        button.append(hint);
+      }
       button.dataset.command =
-        `${name} ${name === "New chat" ? "new conversation open chat start chat new session open session start session" : ""}`.toLowerCase();
+        `${name} ${definition.aliases.join(" ")}`.toLowerCase();
       button.addEventListener("click", () => {
         performed = true;
         dialog.close();
         // The next dialog must inherit the original invoker, not the palette
         // or a transient native focus restoration while close is dispatched.
         focus.restore(returnFocus);
-        action();
+        void execute(definition.id);
       });
       list.append(button);
     }
@@ -543,33 +900,17 @@ export function createCommands(
       (selected ?? tree.querySelector<HTMLElement>("[role=treeitem]"))?.focus();
     };
     const workspace = activeWorkspace();
-    if (workspace?.settings?.workspacesVisible === false)
+    if (
+      workspace &&
+      (workspace.settings?.workspacesVisible === false ||
+        workspace.zoomedGroupId)
+    )
       void invoke("workspace.settings", {
         id: workspace.id,
         settings: { workspacesVisible: true },
       }).then(() => requestAnimationFrame(focus));
     else focus();
   }
-
-  listen(
-    "keydown",
-    (event) => {
-      if (
-        !(event.ctrlKey || event.metaKey) ||
-        !event.shiftKey ||
-        document.querySelector("dialog[open]")
-      )
-        return;
-      if (event.key.toLowerCase() === "e") {
-        event.preventDefault();
-        focusPanel();
-      } else if (event.key.toLowerCase() === "p") {
-        event.preventDefault();
-        commandPalette();
-      }
-    },
-    true,
-  );
 
   document.querySelector("#workspace-selector")!.addEventListener(
     "click",
@@ -621,81 +962,67 @@ export function createCommands(
     "keydown",
     (event) => {
       if (
-        !(event.ctrlKey || event.metaKey) ||
-        document.querySelector("dialog[open]")
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.getModifierState("AltGraph")
       )
         return;
-      const key = event.key.toLowerCase();
-      if (key === "p" && !event.shiftKey) {
-        event.preventDefault();
-        projects.quickOpen();
-      } else if (key === "f" && event.shiftKey) {
-        event.preventDefault();
-        projects.search();
-      } else if (key === "n" && event.shiftKey) {
-        event.preventDefault();
-        workspaceDialog("create");
-      } else if (key === "t" && event.shiftKey) {
-        event.preventDefault();
-        reopenTab();
-      } else if (key === "w") {
-        event.preventDefault();
-        const w = activeWorkspace();
-        if (w)
-          void invoke("pane.close", { workspace: w.id, id: w.activePaneId });
-      } else if (event.key === "Escape" && event.shiftKey) {
-        event.preventDefault();
-        layout.zoom();
-      } else if (key === "l") {
-        const address = panes.querySelector<HTMLInputElement>(
-          '[data-active="true"] input[aria-label="Address"]',
-        );
-        if (address) {
+      if (
+        event.key === "ContextMenu" ||
+        (event.shiftKey &&
+          event.key === "F10" &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey)
+      ) {
+        const target = document.activeElement;
+        if (target instanceof HTMLElement) {
           event.preventDefault();
-          address.focus();
-          address.select();
+          event.stopPropagation();
+          const rect = target.getBoundingClientRect();
+          target.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: rect.left,
+              clientY: rect.bottom,
+            }),
+          );
         }
+        return;
       }
+      if (document.querySelector("dialog[open]")) return;
+      const match = resolveKeybinding(
+        {
+          ...event,
+          key: event.key,
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          repeat: event.repeat,
+          isComposing: event.isComposing,
+          altGraph: event.getModifierState("AltGraph"),
+        },
+        keyboardPlatform,
+        keyboardSurface(),
+      );
+      if (!match) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (match.dispatch) void execute(match.command);
     },
     true,
   );
-
-  listen("keydown", (event) => {
-    if (event.shiftKey && event.key === "F10") {
-      const element = document.activeElement;
-      if (element instanceof HTMLElement) {
-        event.preventDefault();
-        const rect = element.getBoundingClientRect();
-        element.dispatchEvent(
-          new MouseEvent("contextmenu", {
-            bubbles: true,
-            cancelable: true,
-            clientX: rect.left,
-            clientY: rect.bottom,
-          }),
-        );
-      }
-    }
-  });
-
-  listen("keydown", (event) => {
-    if (
-      !(event.metaKey || event.ctrlKey) ||
-      event.altKey ||
-      document.querySelector("dialog[open]")
-    )
-      return;
-    if (event.key === ",") {
-      event.preventDefault();
-      appearanceDialog();
-    } else if (["+", "=", "-", "0"].includes(event.key)) {
-      event.preventDefault();
-      changeTextSize(event.key === "0" ? "reset" : event.key === "-" ? -1 : 1);
-    }
-  });
   return {
-    settings: appearanceDialog,
-    dispose: () => events.abort(),
+    settings: () => execute("settings"),
+    execute,
+    dispose: () => {
+      events.abort();
+      focusTargets.dispose();
+    },
     palette: commandPalette,
     focusPanel,
     focusComposer: focusActiveComposer,

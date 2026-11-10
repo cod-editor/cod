@@ -1,3 +1,6 @@
+import { terminalTextSize } from "./appearance";
+import { resolveKeybinding } from "../keyboard";
+import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { AppState, TerminalState, TerminalUiEvent } from "../types";
@@ -34,7 +37,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
 
     const terminal = new Terminal({
       screenReaderMode: true,
-      fontSize: 13,
+      fontSize: terminalTextSize(),
       fontFamily: "Menlo, ui-monospace, monospace",
       theme: {
         background: "#282c34",
@@ -51,6 +54,26 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
         white: "#abb2bf",
       },
     });
+    terminal.attachCustomKeyEventHandler(
+      (event) =>
+        !event.defaultPrevented &&
+        !resolveKeybinding(
+          {
+            key: event.key,
+            code: event.code,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            repeat: event.repeat,
+            isComposing: event.isComposing,
+            altGraph: event.getModifierState("AltGraph"),
+            type: event.type,
+          },
+          keyboardPlatform,
+          "terminal",
+        ),
+    );
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(output);
@@ -97,6 +120,8 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       const host =
         session.container.querySelector<HTMLElement>(".terminal-output");
       if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+      if (session.terminal.options.fontSize !== terminalTextSize())
+        session.terminal.options.fontSize = terminalTextSize();
       session.fit.fit();
       const record = getState().terminals.find(
         (terminal) => terminal.id === session.id,
@@ -152,12 +177,95 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
     if (!session.ready) session.pending.push(event);
     else writeTerminalEvent(session, event);
   });
+  const findPositions = new Map<string, { query: string; index: number }>();
+  function find(
+    id: string,
+    query: string,
+    forward = true,
+    next = false,
+  ): { current: number; total: number } {
+    const terminal = terminalSessions.get(id)?.terminal;
+    if (!terminal || !query) {
+      terminal?.clearSelection();
+      findPositions.delete(id);
+      return { current: 0, total: 0 };
+    }
+    const matches: { row: number; col: number; length: number }[] = [];
+    const needle = query.toLocaleLowerCase();
+    let text = "";
+    let positions: { start: number; end: number }[] = [];
+    const collect = () => {
+      for (
+        let offset = text.indexOf(needle);
+        offset >= 0;
+        offset = text.indexOf(needle, offset + Math.max(1, needle.length))
+      ) {
+        const start = positions[offset]?.start;
+        const end = positions[offset + needle.length - 1]?.end;
+        if (start !== undefined && end !== undefined)
+          matches.push({
+            row: Math.floor(start / terminal.cols),
+            col: start % terminal.cols,
+            length: end - start,
+          });
+      }
+      text = "";
+      positions = [];
+    };
+    for (let row = 0; row < terminal.buffer.active.length; row++) {
+      const line = terminal.buffer.active.getLine(row);
+      if (!line) continue;
+      if (!line.isWrapped) collect();
+      const continues = terminal.buffer.active.getLine(row + 1)?.isWrapped;
+      const contentLength = line.translateToString(!continues).length;
+      let originalLength = 0;
+      for (
+        let col = 0;
+        col < line.length && originalLength < contentLength;
+        col++
+      ) {
+        const cell = line.getCell(col);
+        if (!cell || cell.getWidth() === 0) continue;
+        const chars = cell.getChars() || " ";
+        const folded = chars.toLocaleLowerCase();
+        const start = row * terminal.cols + col;
+        for (let i = 0; i < folded.length; i++)
+          positions.push({ start, end: start + cell.getWidth() });
+        text += folded;
+        originalLength += chars.length;
+      }
+    }
+    collect();
+    const previous = findPositions.get(id);
+    const index = matches.length
+      ? next && previous?.query === query
+        ? (previous.index + (forward ? 1 : -1) + matches.length) %
+          matches.length
+        : forward
+          ? 0
+          : matches.length - 1
+      : -1;
+    findPositions.set(id, { query, index });
+    if (index >= 0) {
+      const match = matches[index];
+      terminal.select(match.col, match.row, match.length);
+      terminal.scrollToLine(match.row);
+    } else terminal.clearSelection();
+    return { current: index + 1, total: matches.length };
+  }
+  const resize = () => {
+    for (const session of terminalSessions.values())
+      requestTerminalFit(session);
+  };
+  window.addEventListener("resize", resize);
   return {
     create: createTerminalSession,
     update,
     reconcile,
+    find,
     dispose() {
       disposed = true;
+      window.removeEventListener("resize", resize);
       for (const session of terminalSessions.values()) {
         session.observer.disconnect();
         session.terminal.dispose();

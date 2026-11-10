@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:http";
 import { ChatApp } from "./helpers/chat-fixture/harness";
-import { modifier } from "./helpers/workspace-app";
+import { modifier, tabTo } from "./helpers/workspace-app";
 test.setTimeout(90_000);
 test("First-run controls, menus, pending work and failure recovery remain usable", async ({}, info) => {
   const app = new ChatApp();
@@ -50,11 +50,15 @@ test("First-run controls, menus, pending work and failure recovery remain usable
     await capture("03-provider-menu");
     await app.page.keyboard.press("Escape");
     await app.command("New workspace");
-    await capture("04-new-workspace-dialog");
+    await expect(app.page.getByRole("dialog")).toHaveCount(0);
+    await app.command("Rename workspace");
     await app.page
       .getByRole("textbox", { name: "Workspace name", exact: true })
       .fill("Explore report export");
-    await app.page.getByRole("button", { name: "Create", exact: true }).click();
+    await app.page
+      .getByRole("textbox", { name: "Workspace name", exact: true })
+      .press("Enter");
+
     await app.page
       .getByRole("textbox", { name: "Message", exact: true })
       .fill("[hold] Explain the report export requirements");
@@ -395,7 +399,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       app.page.getByText("STREAM [hold] Update while pressing Stop", {
         exact: true,
       }),
-    ).toBeVisible();
+    ).toBeAttached();
     expect(await pressed!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.screenshot({
       path: info.outputPath("stop-held-through-stream.png"),
@@ -506,7 +510,10 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       "--context",
       "Invented background question",
     );
-    await expect(app.row("Background rename two")).toContainText("?");
+    await expect(app.row("Background rename two")).toHaveAttribute(
+      "data-status",
+      "waiting",
+    );
     expect(await targetNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();
     await expect
@@ -518,22 +525,41 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
   }
 });
 
-test("Keyboard model choice retains focus and the next prompt uses the selected native model", async () => {
+test("Keyboard model choice retains focus and the next prompt uses the selected native model", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
-  await app.configure({ codex: { options: true, multipleModels: true } });
+  await app.configure({
+    codex: { options: true, multipleModels: true, reasoningOptions: true },
+  });
   try {
     await app.start();
     const workspace = await app.create("Choose model");
     const chat = await app.newChat(workspace, "codex");
-    const model = app.page.getByRole("combobox", {
+    const model = app.page.getByRole("button", {
       name: "Model",
       exact: true,
     });
     await expect(model).toBeEnabled();
+    await app.page.screenshot({
+      path: info.outputPath("model-reasoning-closed-controls.png"),
+    });
     await model.focus();
-    await model.press("ArrowDown");
-    await expect(model).toHaveValue("fixture-alternate");
+    await model.press("Enter");
+    const menu = app.page.getByRole("dialog", { name: "Actions" });
+    await expect(
+      menu.getByRole("button", { name: "Fixture model", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const box = await menu.boundingBox();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(
+      await app.page.evaluate(() => innerHeight),
+    );
+    await app.page.screenshot({
+      path: info.outputPath("model-menu-above-composer.png"),
+    });
+    await app.page.keyboard.press("ArrowDown");
+    await app.page.keyboard.press("Enter");
+    await expect(model).toHaveText("Alternate fixture");
     await expect(model).toBeEnabled();
     await expect(model).toBeFocused();
     const composer = app.page.getByRole("textbox", {
@@ -741,6 +767,81 @@ export function exportReport(rows: ReportRow[]): string {
       path: info.outputPath("populated-code-chat-palette.png"),
     });
     await app.page.keyboard.press("Escape");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Model menu preserves caret, fits above the composer and rolls back a rejected native choice", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  await app.configure({
+    kimi: {
+      options: true,
+      multipleModels: true,
+      optionDelayMs: 800,
+      optionError: true,
+    },
+  });
+  try {
+    await app.start();
+    const workspace = await app.create("Native model choice");
+    const chat = await app.newChat(workspace, "kimi");
+    const model = app.page.getByRole("button", { name: "Model", exact: true });
+    const composer = app.page.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill("Keep this draft and caret.");
+    await composer.press("Home");
+    await composer.press("ArrowRight");
+    await tabTo(app.page, model);
+    await app.page.keyboard.press("Enter");
+    const menu = app.page.getByRole("dialog", { name: "Actions" });
+    await expect(
+      menu.getByRole("button", { name: "Fixture model", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await app.page.keyboard.press("Escape");
+    await expect(model).toBeFocused();
+    await tabTo(app.page, composer);
+    expect(
+      await composer.evaluate((n: HTMLTextAreaElement) => n.selectionStart),
+    ).toBe(1);
+    await tabTo(app.page, model);
+    await app.page.keyboard.press("Enter");
+    await app.page.keyboard.press("ArrowDown");
+    await app.page.keyboard.press("Enter");
+    await expect(model).toHaveAttribute("aria-busy", "true");
+    await expect(model).toHaveText("Alternate fixture");
+    await model.click();
+    await expect(menu).toHaveCount(0);
+    await expect(app.page.locator(".composer .action-error")).toContainText(
+      "Native option state unavailable",
+    );
+    await expect(model).toHaveAttribute("aria-busy", "false");
+    await expect(model).toHaveText("Fixture model");
+    expect(
+      (await app.records()).filter(
+        (r) => r.message?.method === "session/set_config_option",
+      ),
+    ).toHaveLength(1);
+    await expect(composer).toHaveValue("Keep this draft and caret.");
+    expect(await app.prompts()).toHaveLength(0);
+    await app.page.screenshot({
+      path: info.outputPath("model-selection-error-rollback.png"),
+    });
+    await app.page.locator(".composer").click({ button: "right" });
+    await app.page
+      .getByRole("dialog", { name: "Actions" })
+      .getByRole("button", { name: "Session info...", exact: true })
+      .click();
+    const details = app.page.getByRole("dialog", { name: "Session status" });
+    await expect(details).toContainText("Working directory");
+    await expect(details).toContainText(app.folders[0]);
+    await app.page.screenshot({
+      path: info.outputPath("session-details-working-directory.png"),
+    });
+    expect((await app.inspect(chat.id)).status).toBe("ready");
   } finally {
     await app.cleanup();
   }

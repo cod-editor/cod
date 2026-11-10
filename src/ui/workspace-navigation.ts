@@ -7,7 +7,6 @@ import type { AppState, ConversationState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 interface NavigationActions {
   newConversation: () => Promise<unknown>;
-  workspaceDialog: (mode: "create" | "rename") => void;
   folderDialog: (workspace?: string) => void;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   paneButton: (
@@ -21,24 +20,32 @@ export function createWorkspaceNavigation(
   invoke: Invoke,
   actions: NavigationActions,
 ) {
-  const {
-    newConversation,
-    workspaceDialog,
-    folderDialog,
-    conversationActions,
-    paneButton,
-  } = actions;
-  function attentionMarker(status: string): string {
-    return (
+  const { newConversation, folderDialog, conversationActions, paneButton } =
+    actions;
+  function describeStatus(status: string, context?: string): string {
+    const text =
       (
         {
-          working: "•",
-          waiting: "?",
-          ready: "○",
-          failed: "!",
+          working: "Working",
+          waiting: "Needs attention",
+          review: "Review requested",
+          ready: "Completed",
+          failed: "Error",
+          starting: "Starting",
         } as Record<string, string>
-      )[status] ?? ""
-    );
+      )[status] ?? "Idle";
+    return context ? `${text}: ${context}` : text;
+  }
+  function applyStatus(
+    row: HTMLElement,
+    label: string,
+    status: string,
+    context?: string,
+  ) {
+    row.dataset.status = status;
+    const description = describeStatus(status, context);
+    row.title = `${label} - ${description}`;
+    row.setAttribute("aria-label", `${label}, ${description}`);
   }
   function attentionStatus(
     conversation: import("../types").ConversationState,
@@ -110,9 +117,81 @@ export function createWorkspaceNavigation(
     dialog.showModal();
     cancel.focus();
   }
+  tree.addEventListener("focusin", (event) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>(
+      '[role="treeitem"]',
+    );
+    if (row)
+      for (const item of tree.querySelectorAll<HTMLElement>(
+        '[role="treeitem"]',
+      ))
+        item.tabIndex = item === row ? 0 : -1;
+  });
   const collapsedWorkspaces = new Set<string>(
     readPreference<string[]>("collapsed-workspaces", []),
   );
+  let editing:
+    | { id: string; value: string; origin: HTMLElement | null; saving: boolean }
+    | undefined;
+  async function renameWorkspace(id: string): Promise<void> {
+    const workspace = getState().workspaces.find((item) => item.id === id);
+    if (!workspace) return;
+    const origin = document.activeElement as HTMLElement | null;
+    const active = getState().workspaces.find(
+      (item) => item.id === getState().activeWorkspaceId,
+    );
+    if (
+      active &&
+      (active.settings?.workspacesVisible === false || active.zoomedGroupId)
+    )
+      await invoke("workspace.settings", {
+        id: active.id,
+        settings: { workspacesVisible: true },
+      });
+    editing = { id, value: workspace.name, origin, saving: false };
+    renderTree();
+    requestAnimationFrame(() => {
+      const input = tree.querySelector<HTMLInputElement>(
+        ".workspace-name-input",
+      );
+      input?.focus();
+      input?.select();
+    });
+  }
+  function endRename(restore: boolean): void {
+    const origin = editing?.origin;
+    const id = editing?.id;
+    editing = undefined;
+    renderTree();
+    if (restore) {
+      if (origin?.isConnected) origin.focus();
+      else
+        tree.querySelector<HTMLElement>(`[data-workspace-id="${id}"]`)?.focus();
+    }
+  }
+  async function saveRename(restore: boolean): Promise<void> {
+    const edit = editing;
+    if (!edit || edit.saving) return;
+    const name = edit.value.trim();
+    if (!name) {
+      endRename(restore);
+      return;
+    }
+    edit.saving = true;
+    try {
+      await invoke("workspace.rename", { id: edit.id, name });
+      if (editing === edit) endRename(restore);
+    } catch {
+      if (editing === edit) {
+        edit.saving = false;
+        const input = tree.querySelector<HTMLInputElement>(
+          ".workspace-name-input",
+        );
+        input?.setAttribute("aria-invalid", "true");
+        input?.focus();
+      }
+    }
+  }
   let renderedSignature = "";
   function renderTree(): void {
     const host = tree;
@@ -120,6 +199,7 @@ export function createWorkspaceNavigation(
     const next = getState();
     const signature = JSON.stringify([
       next.activeWorkspaceId,
+      editing?.id,
       next.workspaces.map((w) => [w.id, w.name, w.activePaneId, w.panes]),
       next.conversations.map((c) => [
         c.id,
@@ -180,6 +260,54 @@ export function createWorkspaceNavigation(
         "Expand or collapse workspace",
       );
       row.append(...parts.nodes);
+      parts.label.ondblclick = (event) => {
+        event.stopPropagation();
+        void renameWorkspace(workspace.id);
+      };
+      if (editing?.id === workspace.id) {
+        const input = document.createElement("input");
+        input.className = "workspace-name-input";
+        input.setAttribute("aria-label", "Workspace name");
+        input.dataset.focusKey = `rename-workspace:${workspace.id}`;
+        input.value = editing.value;
+        input.onclick = (event) => event.stopPropagation();
+        input.ondblclick = (event) => event.stopPropagation();
+        input.oninput = () => {
+          if (editing?.id === workspace.id) editing.value = input.value;
+        };
+        input.onkeydown = (event) => {
+          event.stopPropagation();
+          if (event.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveRename(true);
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            endRename(true);
+          }
+        };
+        input.onblur = () => {
+          if (editing?.id === workspace.id) void saveRename(false);
+        };
+        parts.label.replaceWith(input);
+      }
+      if (collapsedWorkspaces.has(workspace.id)) {
+        const count = getState().conversations.filter(
+          (c) => c.workspaceId === workspace.id,
+        ).length;
+        if (count) {
+          const hiddenCount = document.createElement("span");
+          hiddenCount.className = "workspace-child-count";
+          hiddenCount.textContent = String(count);
+          hiddenCount.setAttribute(
+            "aria-label",
+            `${count} hidden conversation${count === 1 ? "" : "s"}`,
+          );
+          hiddenCount.title = hiddenCount.getAttribute("aria-label")!;
+          row.append(hiddenCount);
+        }
+      }
       const statuses = getState()
         .conversations.filter((c) => c.workspaceId === workspace.id)
         .map(attentionStatus);
@@ -190,14 +318,16 @@ export function createWorkspaceNavigation(
         "ready",
         "working",
       ].find((s) => statuses.includes(s));
-      if (attention) {
-        const badge = document.createElement("span");
-        badge.className = "attention";
-        if (attention === "review") badge.append(icon("review"));
-        else badge.textContent = attentionMarker(attention);
-        badge.title = attention;
-        row.append(badge);
-      }
+      const source = getState().conversations.find(
+        (c) =>
+          c.workspaceId === workspace.id && attentionStatus(c) === attention,
+      );
+      applyStatus(
+        row,
+        workspace.name,
+        attention ?? "",
+        source?.taskStatusContext,
+      );
       row.onclick = () => void focusWorkspace(workspace.id);
       row.onkeydown = (e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -206,7 +336,12 @@ export function createWorkspaceNavigation(
         } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
           e.preventDefault();
           if (e.key === "ArrowLeft") collapsedWorkspaces.add(workspace.id);
-          else collapsedWorkspaces.delete(workspace.id);
+          else if (!collapsedWorkspaces.has(workspace.id)) {
+            row.nextElementSibling instanceof HTMLElement &&
+              row.nextElementSibling.dataset.parentId === workspace.id &&
+              row.nextElementSibling.focus();
+            return;
+          } else collapsedWorkspaces.delete(workspace.id);
           renderTree();
         } else navigateTree(e, row);
       };
@@ -220,10 +355,7 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Rename workspace",
-            run: () =>
-              void focusWorkspace(workspace.id).then(() =>
-                workspaceDialog("rename"),
-              ),
+            run: () => void renameWorkspace(workspace.id),
           },
           {
             label: "Add folder...",
@@ -252,27 +384,14 @@ export function createWorkspaceNavigation(
             workspace.activePaneId === conversation.paneId,
         );
         item.classList.add("conversation-row");
+        item.dataset.parentId = workspace.id;
         const attention = attentionStatus(conversation);
-        item.dataset.status = attention;
-        item.setAttribute("aria-label", label);
-        item.title = label;
+        applyStatus(item, label, attention, conversation.taskStatusContext);
         item.replaceChildren(icon("conversation"));
         const text = document.createElement("span");
         text.className = "tree-label";
         text.textContent = label;
         item.append(text);
-        if (
-          ["working", "waiting", "failed", "review", "ready"].includes(
-            attention,
-          )
-        ) {
-          const badge = document.createElement("span");
-          badge.className = "attention";
-          if (attention === "review") badge.append(icon("review"));
-          else badge.textContent = attentionMarker(attention);
-          badge.title = conversation.taskStatusContext ?? attention;
-          item.append(badge);
-        }
         item.oncontextmenu = (event) => {
           event.preventDefault();
           menu(
@@ -306,8 +425,9 @@ export function createWorkspaceNavigation(
             : `Changes · ${review.target.repoRoot.split("/").pop()}`;
         const item = treeRow(review.id, reviewLabel, false);
         item.setAttribute("aria-label", reviewLabel);
-        item.title = reviewLabel;
+        applyStatus(item, reviewLabel, "review");
         item.classList.add("review-row");
+        item.dataset.parentId = review.originConversationId ?? workspace.id;
         item.replaceChildren(
           icon("review"),
           document.createTextNode(reviewLabel),
@@ -335,6 +455,15 @@ export function createWorkspaceNavigation(
       }
     }
     reconcileView(host, nextTree);
+    const focused =
+      document.activeElement?.closest<HTMLElement>('[role="treeitem"]');
+    const current =
+      focused && host.contains(focused)
+        ? focused
+        : (host.querySelector<HTMLElement>('[aria-selected="true"]') ??
+          host.querySelector<HTMLElement>('[role="treeitem"]'));
+    for (const row of host.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+      row.tabIndex = row === current ? 0 : -1;
   }
 
   function treeRow(key: string, label: string, selected: boolean): HTMLElement {
@@ -349,12 +478,32 @@ export function createWorkspaceNavigation(
   }
 
   function navigateTree(event: KeyboardEvent, row: HTMLElement): void {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (event.isComposing) return;
+    if (event.key === "ArrowLeft" && row.dataset.parentId) {
+      event.preventDefault();
+      tree
+        .querySelector<HTMLElement>(
+          `[data-workspace-id="${row.dataset.parentId}"]`,
+        )
+        ?.focus();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const rows = [...tree.querySelectorAll<HTMLElement>("[role=treeitem]")];
     const index = rows.indexOf(row);
     rows[
-      (index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? rows.length - 1
+          : Math.max(
+              0,
+              Math.min(
+                rows.length - 1,
+                index + (event.key === "ArrowDown" ? 1 : -1),
+              ),
+            )
     ]?.focus();
   }
 
@@ -363,6 +512,7 @@ export function createWorkspaceNavigation(
       (item) => item.id === id,
     );
     if (!conversation) return;
+    if (collapsedWorkspaces.delete(conversation.workspaceId)) renderTree();
     if (conversation.workspaceId !== getState().activeWorkspaceId) {
       await invoke("workspace.focus", { id: conversation.workspaceId });
     }
@@ -375,5 +525,10 @@ export function createWorkspaceNavigation(
       await invoke("workspace.focus", { id });
   }
 
-  return { render: renderTree, activate: activateConversation, focusWorkspace };
+  return {
+    render: renderTree,
+    activate: activateConversation,
+    focusWorkspace,
+    renameWorkspace,
+  };
 }

@@ -1,4 +1,4 @@
-import { treeRowParts } from "./tree-row";
+import { focusReadyEditor } from "./document-views";
 import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
@@ -32,6 +32,27 @@ export class FileTree {
     private addFolder: (workspace: string) => void,
   ) {
     host.tabIndex = 0;
+    host.addEventListener("focusin", (event) => {
+      const row = (event.target as HTMLElement).closest<HTMLElement>(
+        '[role="treeitem"]',
+      );
+      if (!row) return;
+      host.tabIndex = -1;
+      for (const item of host.querySelectorAll<HTMLElement>(
+        '[role="treeitem"]',
+      ))
+        item.tabIndex = item === row ? 0 : -1;
+    });
+    host.addEventListener("keydown", (event) => {
+      if (
+        event.target === host &&
+        !event.isComposing &&
+        ["ArrowDown", "ArrowRight", "Home"].includes(event.key)
+      ) {
+        event.preventDefault();
+        host.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
+      }
+    });
     host.oncontextmenu = (event) => {
       if (event.defaultPrevented || !this.workspace) return;
       event.preventDefault();
@@ -61,6 +82,7 @@ export class FileTree {
     this.generation++;
     this.directories.clear();
     this.host.replaceChildren();
+    this.host.tabIndex = 0;
     void this.refreshChanges();
     this.host.setAttribute("role", "tree");
     this.host.setAttribute("aria-label", "File tree");
@@ -80,7 +102,7 @@ export class FileTree {
       row = document.createElement("div"),
       children = document.createElement("div");
     row.className = "file-row";
-    row.tabIndex = 0;
+    row.tabIndex = -1;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-label", name);
     row.setAttribute("aria-expanded", "false");
@@ -89,13 +111,14 @@ export class FileTree {
     group.dataset.entryPath = path;
     group.dataset.entryKind = "directory";
     row.style.paddingLeft = `${8 + depth * 16}px`;
-    const parts = treeRowParts(
-      "folder",
-      name,
-      () => void toggle(),
-      "Expand or collapse folder",
-    );
-    row.append(...parts.nodes);
+    const folderIcon = icon("folder");
+    folderIcon.classList.add("folder-state");
+    const label = document.createElement("span");
+    label.className = "tree-label";
+    label.textContent = name;
+    row.append(folderIcon, label);
+    children.className = "file-children";
+    children.style.setProperty("--guide-offset", `${16 + depth * 16}px`);
     children.hidden = true;
     children.setAttribute("role", "group");
     children.id = `file-group-${++this.groupSequence}`;
@@ -168,14 +191,20 @@ export class FileTree {
       writePreference("file-expansion", this.expanded);
       children.hidden = !open;
       row.setAttribute("aria-expanded", String(open));
+      const nextIcon = icon(open ? "folder-open" : "folder");
+      nextIcon.classList.add("folder-state");
+      row.querySelector(".folder-state")?.replaceWith(nextIcon);
       if (open) await refresh();
     };
     row.onclick = () => void toggle();
     row.onkeydown = (e) => {
+      if (e.isComposing) return;
       if (e.key === "ArrowRight" || e.key === "Enter") {
         e.preventDefault();
-        void toggle(true);
-      } else if (e.key === "ArrowLeft") {
+        if (e.key === "ArrowRight" && !children.hidden)
+          children.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
+        else void toggle(true);
+      } else if (e.key === "ArrowLeft" && !children.hidden) {
         e.preventDefault();
         void toggle(false);
       } else this.navigate(e, row);
@@ -238,24 +267,20 @@ export class FileTree {
   private file(entry: Entry, depth: number): HTMLElement {
     const row = document.createElement("div");
     row.className = "file-row";
-    row.tabIndex = 0;
+    row.tabIndex = -1;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-label", entry.name);
     row.title = entry.path;
     row.dataset.path = entry.path;
     row.dataset.entryPath = entry.path;
     row.dataset.entryKind = "file";
-    row.style.paddingLeft = `${24 + depth * 16}px`;
+    row.style.paddingLeft = `${8 + depth * 16}px`;
     const label = document.createElement("span");
     label.className = "tree-label";
     label.textContent = entry.name;
     row.append(icon("file"), label);
     this.decorate(row);
-    const open = () =>
-      void this.invoke("file.open", {
-        workspace: this.workspace!.id,
-        path: entry.path,
-      });
+    const open = () => void this.openFile(entry.path);
     row.onclick = open;
     row.onkeydown = (e) => {
       if (e.key === "Enter") {
@@ -343,6 +368,17 @@ export class FileTree {
     }
   }
   private navigate(event: KeyboardEvent, row: HTMLElement): void {
+    if (event.isComposing) return;
+    if (event.key === "ArrowLeft") {
+      const parentGroup =
+        row.parentElement?.closest<HTMLElement>('[role="group"]');
+      const parent = parentGroup?.previousElementSibling;
+      if (parent instanceof HTMLElement) {
+        event.preventDefault();
+        parent.focus();
+      }
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const rows = [
@@ -362,6 +398,44 @@ export class FileTree {
               ),
             )
     ]?.focus();
+  }
+  private async openFile(path: string, line?: number): Promise<void> {
+    const workspace = this.workspace;
+    if (!workspace) return;
+    // Native dialog focus restoration is not a new user navigation intent.
+    // A later real key/pointer action is, and must cancel deferred autofocus.
+    const intent = new AbortController();
+    const cancel = (event: Event) => {
+      if (event.isTrusted) intent.abort();
+    };
+    for (const type of ["keydown", "pointerdown"])
+      document.addEventListener(type, cancel, {
+        capture: true,
+        signal: intent.signal,
+      });
+    try {
+      const result = await this.invoke<{ paneId: string }>("file.open", {
+        workspace: workspace.id,
+        path,
+        ...(line ? { line } : {}),
+      });
+      requestAnimationFrame(() => {
+        if (intent.signal.aborted) return;
+        const editor = document.querySelector<HTMLTextAreaElement>(
+          `[data-pane-id="${result.paneId}"] .file-editor`,
+        );
+        if (editor)
+          focusReadyEditor(
+            editor,
+            () => this.workspace?.id === workspace.id,
+            intent,
+          );
+        else intent.abort();
+      });
+    } catch (error) {
+      intent.abort();
+      throw error;
+    }
   }
   search(path?: string): void {
     this.openPicker(false, path);
@@ -413,12 +487,8 @@ export class FileTree {
         }
         button.title = match.path;
         button.onclick = () => {
-          void this.invoke("file.open", {
-            workspace: workspace.id,
-            path: match.path,
-            ...(match.line ? { line: match.line } : {}),
-          });
           dialog.close();
+          void this.openFile(match.path, match.line);
         };
         results.append(button);
       }

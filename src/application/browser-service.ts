@@ -1,3 +1,10 @@
+import { readFileSync } from "node:fs";
+import {
+  findFocusWorld,
+  captureFindFocus,
+  restoreFindFocus,
+} from "../browser/find-focus";
+import { nativeKeyInput, resolveKeybinding } from "../keyboard";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
@@ -23,6 +30,7 @@ export class BrowserApplicationService {
   private browserAddons?: BrowserAddons;
   private selectedBrowserContents?: number;
   private synchronizingBrowserSelection = false;
+  private findRevisions = new Map<string, number>();
   private browserLoads = new Map<string, number>();
   private browserAdmissions = new Map<string, AbortController>();
   private browserInitializations = new Map<string, Promise<unknown>>();
@@ -139,41 +147,8 @@ export class BrowserApplicationService {
     };
     const contents = this.agentPages.getWebContents(record.id);
     contents.on("did-finish-load", syncSubmission);
-    contents.on("before-input-event", (event, input) => {
-      if (
-        input.type !== "keyDown" ||
-        !(process.platform === "darwin" ? input.meta : input.control)
-      )
-        return;
-      const key = input.key.toLowerCase();
-      const action =
-        input.shift && key === "p"
-          ? "palette"
-          : input.shift && key === "e"
-            ? "panel"
-            : !input.shift && key === "w"
-              ? "close"
-              : undefined;
-      if (!action) return;
-      event.preventDefault();
-      this.browserWindow?.webContents.focus();
-      this.browserWindow?.webContents.send("cod:browser-shortcut", {
-        id: record.id,
-        action,
-      });
-    });
-    contents.on("focus", () => {
-      if (record.workspaceId !== this.store.data.activeWorkspaceId) return;
-      const workspace = this.store.data.workspaces.find(
-        (item) => item.id === record.workspaceId,
-      );
-      if (workspace && workspace.activePaneId !== record.paneId)
-        void this.store
-          .change(() => {
-            workspace.activePaneId = record.paneId;
-          })
-          .catch(() => undefined);
-    });
+    this.routeNativeKeys(contents, record.id, "agent-page");
+    contents.on("focus", () => this.syncNativeFocus(contents, record.id));
     syncSubmission();
     this.store.notify();
   }
@@ -297,6 +272,10 @@ export class BrowserApplicationService {
       },
     });
     this.browserService = new BrowserService({
+      scrollbarCSS: readFileSync(
+        path.join(__dirname, "scrollbars.css"),
+        "utf8",
+      ),
       isAllowedExtensionUrl: (url) => this.browserAddons?.allows(url) ?? false,
       window,
       session,
@@ -318,52 +297,16 @@ export class BrowserApplicationService {
         )
           record.nativeTabId = contents.id;
         contents.on("focus", () => {
-          const focused = this.store.data.browsers.find(
-            (item) => item.id === id,
-          );
-          if (
-            !focused ||
-            focused.workspaceId !== this.store.data.activeWorkspaceId
-          )
-            return;
-          this.selectBrowserContents(contents);
+          if (contents.isDestroyed() || !contents.isFocused()) return;
           const browser = this.store.data.browsers.find(
             (item) => item.id === id,
           );
-          const workspace =
-            browser &&
-            this.store.data.workspaces.find(
-              (item) => item.id === browser.workspaceId,
-            );
-          if (browser && workspace && workspace.activePaneId !== browser.paneId)
-            void this.store
-              .change(() => {
-                workspace.activePaneId = browser.paneId;
-              })
-              .catch(() => undefined);
-        });
-        contents.on("before-input-event", (event, input) => {
-          if (
-            input.type !== "keyDown" ||
-            !(process.platform === "darwin" ? input.meta : input.control)
-          )
+          if (browser?.workspaceId !== this.store.data.activeWorkspaceId)
             return;
-          const key = input.key.toLowerCase();
-          const action =
-            input.shift && key === "p"
-              ? "palette"
-              : input.shift && key === "e"
-                ? "panel"
-                : !input.shift && key === "l"
-                  ? "address"
-                  : !input.shift && key === "w"
-                    ? "close"
-                    : undefined;
-          if (!action) return;
-          event.preventDefault();
-          window.webContents.focus();
-          window.webContents.send("cod:browser-shortcut", { id, action });
+          this.selectBrowserContents(contents);
+          this.syncNativeFocus(contents, id);
         });
+        this.routeNativeKeys(contents, id, "browser");
       },
     });
     this.browserService.onEvent((event) => this.browserEvent(event));
@@ -372,6 +315,150 @@ export class BrowserApplicationService {
     ))
       void this.restoreBrowser(browser).catch(() => undefined);
   }
+  private syncNativeFocus(contents: Electron.WebContents, id: string): void {
+    if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
+      return;
+    const current = this.store.data.browsers.find((item) => item.id === id);
+    const owner = this.store.data.workspaces.find(
+      (item) => item.id === current?.workspaceId,
+    );
+    if (
+      !current ||
+      owner?.id !== this.store.data.activeWorkspaceId ||
+      owner.activePaneId === current.paneId
+    )
+      return;
+    void this.store
+      .change(() => {
+        // Focus notifications may wait behind persistence or another operation.
+        // A view that has since blurred must not undo explicit pane navigation.
+        if (
+          contents.isDestroyed() ||
+          !contents.isFocused() ||
+          this.store.closing
+        )
+          return;
+        const browser = this.store.data.browsers.find((item) => item.id === id);
+        const workspace = this.store.data.workspaces.find(
+          (item) =>
+            item.id === browser?.workspaceId &&
+            item.id === this.store.data.activeWorkspaceId,
+        );
+        if (
+          workspace &&
+          browser &&
+          workspace.panes.some((pane) => pane.id === browser.paneId)
+        )
+          workspace.activePaneId = browser.paneId;
+      })
+      .catch(() => undefined);
+  }
+
+  private routeNativeKeys(
+    contents: Electron.WebContents,
+    id: string,
+    surface: "browser" | "agent-page",
+  ): void {
+    contents.on("found-in-page", (_event, result) => {
+      this.browserWindow?.webContents.send("cod:browser-find", {
+        browserId: id,
+        requestId: result.requestId,
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+        finalUpdate: result.finalUpdate,
+      });
+    });
+    contents.on("before-input-event", (event, input) => {
+      const match = resolveKeybinding(
+        nativeKeyInput(input),
+        process.platform === "darwin" ? "darwin" : "linux",
+        surface,
+      );
+      if (!match) return;
+      event.preventDefault();
+      if (!match.dispatch) return;
+      this.browserWindow?.webContents.focus();
+      this.browserWindow?.webContents.send("cod:command", {
+        command: match.command,
+        browserId: id,
+      });
+    });
+  }
+
+  async browserFind(
+    id: string,
+    text: string,
+    options: { forward?: boolean; findNext?: boolean } = {},
+  ): Promise<number> {
+    const browser = this.browser(id);
+    if (browser.workspaceId !== this.store.data.activeWorkspaceId)
+      throw new Error("Search target is not in the active workspace");
+    if (text.length > 10000) throw new Error("Search text is too long");
+    const contents = browser.agentPage
+      ? this.agentPages?.getWebContents(id)
+      : this.browserService?.getWebContents(id);
+    if (!contents || contents.isDestroyed())
+      throw new Error("Search target is closed");
+    if (!text) {
+      contents.stopFindInPage("clearSelection");
+      return 0;
+    }
+    const revision = (this.findRevisions.get(id) ?? 0) + 1;
+    this.findRevisions.set(id, revision);
+    await contents.executeJavaScriptInIsolatedWorld(findFocusWorld, [
+      { code: captureFindFocus },
+    ]);
+    if (
+      this.findRevisions.get(id) !== revision ||
+      contents.isDestroyed() ||
+      this.store.closing
+    )
+      return 0;
+    return contents.findInPage(text, {
+      forward: options.forward ?? true,
+      findNext: options.findNext ?? false,
+    });
+  }
+  browserStopFind(id: string): void {
+    // Renderer teardown may arrive after native resources were disposed. Clearing
+    // transient search selection is best-effort and must never block app exit.
+    this.findRevisions.set(id, (this.findRevisions.get(id) ?? 0) + 1);
+    if (this.store.closing) return;
+    const browser = this.store.data.browsers.find((item) => item.id === id);
+    if (!browser || browser.workspaceId !== this.store.data.activeWorkspaceId)
+      return;
+    try {
+      const contents = browser.agentPage
+        ? this.agentPages?.getWebContents(id)
+        : this.browserService?.getWebContents(id);
+      if (contents && !contents.isDestroyed()) {
+        contents.stopFindInPage("clearSelection");
+        void contents
+          .executeJavaScriptInIsolatedWorld(findFocusWorld, [
+            { code: restoreFindFocus },
+          ])
+          .catch(() => undefined);
+      }
+    } catch {
+      // The tab may have closed between the renderer's dismiss and this IPC.
+    }
+  }
+
+  browserFocus(id: string): void {
+    const browser = this.store.data.browsers.find(
+      (item) =>
+        item.id === id &&
+        item.workspaceId === this.store.data.activeWorkspaceId,
+    );
+    if (!browser) return;
+    try {
+      if (browser.agentPage) this.agentPages?.focus(id);
+      else this.browserService?.focus(id);
+    } catch {
+      /* A hidden or closed native view cannot receive focus. */
+    }
+  }
+
   browserSelect(id: string): void {
     const browser = this.store.data.browsers.find(
       (item) =>

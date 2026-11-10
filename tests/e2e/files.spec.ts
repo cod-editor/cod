@@ -1,6 +1,6 @@
 import { test, expect, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { writeFile, readFile, realpath, rm } from "node:fs/promises";
+import { writeFile, readFile, realpath, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, tabTo, modifier } from "./helpers/workspace-app";
 
@@ -39,6 +39,34 @@ async function open(file: string) {
 function editor(pane: Locator) {
   return pane.getByRole("textbox", { name: "File contents", exact: true });
 }
+async function focusTreeItem(target: Locator) {
+  const alreadyInTree = await app.page.evaluate(() =>
+    Boolean(
+      document.activeElement?.closest('[role="tree"][aria-label="File tree"]'),
+    ),
+  );
+  if (!alreadyInTree) {
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    await expect(
+      app.page.getByRole("textbox", { name: "Filter commands" }),
+    ).toBeFocused();
+    await app.page.keyboard.type("Focus files / return");
+    await expect(
+      app.page.getByRole("button", {
+        name: "Focus files / return",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-current", "true");
+    await app.page.keyboard.press("Enter");
+  }
+  await app.page.keyboard.press("Home");
+  for (let index = 0; index < 100; index++) {
+    if (await target.evaluate((node) => node === document.activeElement))
+      return;
+    await app.page.keyboard.press("ArrowDown");
+  }
+  await expect(target).toBeFocused();
+}
 async function activate(target: Locator) {
   if (
     await target.evaluate((node) => Boolean(node.closest(".searchable-list")))
@@ -54,7 +82,9 @@ async function activate(target: Locator) {
     await query.press("Enter");
     return;
   }
-  await tabTo(app.page, target);
+  if ((await target.getAttribute("role")) === "treeitem")
+    await focusTreeItem(target);
+  else await tabTo(app.page, target);
   await app.page.keyboard.press("Enter");
 }
 
@@ -93,17 +123,22 @@ test.afterEach(async () => {
   await app?.cleanup();
 });
 
-test("S3 keyboard tree, highlighted editing, save and reopening preserve the intended repository", async () => {
+test("S3 keyboard tree, highlighted editing, save and reopening preserve the intended repository", async ({}, info) => {
   const tree = app.page.getByRole("tree", { name: "File tree", exact: true });
   const root = tree.getByRole("treeitem", {
     name: path.basename(app.folders[1]),
     exact: true,
   });
-  await tabTo(app.page, root);
+  await focusTreeItem(root);
   await app.page.keyboard.press("ArrowRight");
   const file = root
     .locator("..")
     .getByRole("treeitem", { name: "same.ts", exact: true });
+  await focusTreeItem(file);
+  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(file).not.toBeFocused();
+  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(file).toBeFocused();
   await activate(file);
   const pane = app.page
     .getByTestId("pane")
@@ -129,6 +164,79 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   await expect(
     editor(await open(path.join(app.folders[1], "same.ts"))),
   ).toHaveValue(changed);
+  // Nested folders exercise the same tree after edits, rather than a separate static mock.
+  const docsPath = path.join(app.folders[1], "docs");
+  for (const directory of ["nested", "z-final"])
+    await mkdir(path.join(docsPath, directory), { recursive: true });
+  await writeFile(
+    path.join(docsPath, "nested", "first.md"),
+    "# First fixture\n",
+  );
+  await writeFile(path.join(docsPath, "nested", "last.md"), "# Last fixture\n");
+  await writeFile(path.join(docsPath, "z-final", "leaf.md"), "# Guide leaf\n");
+  await writeFile(path.join(docsPath, "notes.md"), "# Notes fixture\n");
+  const docs = tree.getByRole("treeitem", { name: "docs", exact: true });
+  await expect(docs).toBeVisible();
+  await docs.locator("svg").click();
+  await expect(docs).toHaveAttribute("aria-expanded", "true");
+  await docs.locator("svg").click();
+  await expect(docs).toHaveAttribute("aria-expanded", "false");
+  await focusTreeItem(docs);
+  await app.page.keyboard.press("ArrowRight");
+  await expect(docs).toHaveAttribute("aria-expanded", "true");
+  await app.page.keyboard.press("ArrowRight");
+  const nested = tree.getByRole("treeitem", { name: "nested", exact: true });
+  await expect(nested).toBeFocused();
+  await app.page.keyboard.press("ArrowRight");
+  await app.page.keyboard.press("ArrowRight");
+  await expect(
+    tree.getByRole("treeitem", { name: "first.md", exact: true }),
+  ).toBeFocused();
+  await app.page.keyboard.press("ArrowDown");
+  await expect(
+    tree.getByRole("treeitem", { name: "last.md", exact: true }),
+  ).toBeFocused();
+  await app.page.keyboard.press("ArrowLeft");
+  await expect(nested).toBeFocused();
+  const finalFolder = tree.getByRole("treeitem", {
+    name: "z-final",
+    exact: true,
+  });
+  await finalFolder.click();
+  await expect(finalFolder).toHaveAttribute("aria-expanded", "true");
+  const leaf = tree.getByRole("treeitem", { name: "leaf.md", exact: true });
+  await leaf.click();
+  await expect(
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toHaveValue("# Guide leaf\n");
+  await focusTreeItem(leaf);
+  await app.page.keyboard.press("Shift+F10");
+  await expect(
+    app.page.getByRole("button", { name: "Markdown preview", exact: true }),
+  ).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await expect(leaf).toBeFocused();
+  await app.page.screenshot({ path: info.outputPath("nested-file-tree.png") });
+  await tree.screenshot({
+    path: info.outputPath("nested-file-tree-detail.png"),
+  });
+  await root.click({ button: "right" });
+  await expect(
+    app.page.getByRole("button", { name: "Add folder...", exact: true }),
+  ).toBeVisible();
+  await expect(
+    app.page.getByRole("button", {
+      name: "Remove from workspace",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await docs.click();
+  await expect(docs).toHaveAttribute("aria-expanded", "false");
+  await expect(leaf).toBeHidden();
+  await app.page.screenshot({
+    path: info.outputPath("collapsed-file-tree.png"),
+  });
 });
 
 test("S3 workspace search uses both explicit roots, shows truncation and opens keyboard-selected result", async () => {
@@ -650,7 +758,7 @@ test("S3 expanded file tree reconciles externally committed files without losing
   const file = root
     .locator("..")
     .getByRole("treeitem", { name: "same.ts", exact: true });
-  await tabTo(app.page, file);
+  await focusTreeItem(file);
   const newPath = path.join(app.folders[0], "committed-after-open.ts");
   await writeFile(newPath, "export const committed = true;\n");
   git(app.folders[0], "add", "committed-after-open.ts");

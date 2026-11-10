@@ -11,6 +11,8 @@ export interface StagedHistory {
   partial: boolean;
   order: number;
   lastRole?: "user" | "assistant";
+  turnId?: string;
+  turnCount?: number;
 }
 
 export function emptyHistory(): StagedHistory {
@@ -54,6 +56,7 @@ export function stageCodexSnapshot(
       const itemId = text(item.id) ?? `item-${staged.order + 1}`;
       const id = `codex/${nativeId}/${turnId}/${itemId}`;
       const order = staged.order++;
+      const historyTurnId = `codex/${nativeId}/${turnId}`;
       if (item.type === "userMessage") {
         const content = Array.isArray(item.content) ? item.content : [];
         const parts = content.map((entryValue) => {
@@ -65,6 +68,7 @@ export function stageCodexSnapshot(
         });
         staged.messages.push({
           id,
+          turnId: historyTurnId,
           role: "user",
           text: parts.join("\n"),
           order,
@@ -72,6 +76,17 @@ export function stageCodexSnapshot(
       } else if (item.type === "agentMessage") {
         staged.messages.push({
           id,
+          turnId: historyTurnId,
+          phase:
+            item.phase === "commentary"
+              ? "commentary"
+              : item.phase === "partial_answer"
+                ? "partial"
+                : item.phase === "final_answer"
+                  ? "final"
+                  : undefined,
+          interactive:
+            Array.isArray(item.questions) && item.questions.length > 0,
           role: "assistant",
           text: text(item.text) ?? "",
           order,
@@ -79,6 +94,7 @@ export function stageCodexSnapshot(
       } else {
         staged.tools.push({
           id,
+          turnId: historyTurnId,
           phase: phase(item.status),
           details: item,
           order,
@@ -105,6 +121,7 @@ function stageKimiTool(staged: StagedHistory, detailsValue: unknown): void {
   const id = `kimi/replay/${nativeId ?? `tool-${staged.tools.length + 1}`}`;
   staged.tools.push({
     id,
+    turnId: staged.turnId,
     phase: phase(details.status),
     details,
     order: staged.order++,
@@ -118,11 +135,16 @@ export function stageKimiEvent(
 ): void {
   if (event.type === "text") {
     const last = staged.messages.at(-1);
+    if (event.role === "user" && staged.lastRole !== "user") {
+      staged.turnCount = (staged.turnCount ?? 0) + 1;
+      staged.turnId = `kimi/replay/turn-${staged.turnCount}`;
+    }
     if (staged.lastRole === event.role && last?.role === event.role) {
       last.text += event.text;
     } else {
       staged.messages.push({
         id: `kimi/replay/message-${staged.messages.length + 1}`,
+        turnId: staged.turnId,
         role: event.role,
         text: event.text,
         order: staged.order++,
@@ -136,6 +158,7 @@ export function stageKimiEvent(
     const kind = text(update.sessionUpdate) ?? "update";
     staged.tools.push({
       id: `kimi/replay/${kind}-${staged.tools.length + 1}`,
+      turnId: staged.turnId,
       phase: "updated",
       details: update,
       order: staged.order++,
@@ -172,6 +195,57 @@ export function commitHistory(
       ).length === 1
     )
       message.images = matches[0]!.images;
+  }
+  const turnLinks = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  const link = (
+    nativeTurn: string | undefined,
+    localTurn: string | undefined,
+  ) => {
+    if (!nativeTurn || !localTurn) return;
+    if (turnLinks.has(nativeTurn) && turnLinks.get(nativeTurn) !== localTurn)
+      ambiguous.add(nativeTurn);
+    else turnLinks.set(nativeTurn, localTurn);
+  };
+  for (const message of native) {
+    const byItem =
+      conversation.provider === "codex"
+        ? conversation.messages.filter(
+            (cached) =>
+              cached.id.split("/").at(-1) === message.id.split("/").at(-1),
+          )
+        : [];
+    const sameText = conversation.messages.filter(
+      (cached) =>
+        cached.role === message.role &&
+        prompt(cached.text) === prompt(message.text),
+    );
+    const cached =
+      byItem.length === 1
+        ? byItem[0]
+        : sameText.length === 1 &&
+            native.filter(
+              (other) =>
+                other.role === message.role &&
+                prompt(other.text) === prompt(message.text),
+            ).length === 1
+          ? sameText[0]
+          : undefined;
+    if (cached) {
+      link(message.turnId, cached.turnId);
+      message.phase ??= cached.phase;
+      message.interactive ||= cached.interactive;
+    }
+  }
+  for (const tool of staged.tools) {
+    const cached = conversation.tools.filter(
+      (item) => item.id.split("/").at(-1) === tool.id.split("/").at(-1),
+    );
+    if (cached.length === 1) link(tool.turnId, cached[0]!.turnId);
+  }
+  for (const item of [...native, ...staged.tools]) {
+    if (item.turnId && !ambiguous.has(item.turnId))
+      item.turnId = turnLinks.get(item.turnId) ?? item.turnId;
   }
   const tools = staged.tools;
   const lastOrder = Math.max(

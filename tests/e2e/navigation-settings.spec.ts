@@ -273,7 +273,7 @@ test("Folder actions use the native chooser from Commands and empty and populate
   }
 });
 
-test("Footer pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
+test("Header pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -408,6 +408,7 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
     await app.page.screenshot({
       path: info.outputPath("palette-keyboard-selection.png"),
     });
+    await input.fill("Rename workspace");
     await input.press("Enter");
     await expect(
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),

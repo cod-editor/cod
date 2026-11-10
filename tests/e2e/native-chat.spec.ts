@@ -1,8 +1,8 @@
 import { test, expect, type Locator } from "@playwright/test";
-import type { ConversationState } from "../../src/types";
+import type { AppState, ConversationState } from "../../src/types";
 import { createServer } from "node:http";
 import path from "node:path";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import {
   ChatApp,
@@ -31,7 +31,7 @@ const transcript = (chat: { paneId: string }) =>
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
 async function expandActivity(pane: Locator) {
-  for (const activity of await pane.locator(".turn-activity").all())
+  for (const activity of await pane.locator("details.turn-activity").all())
     if ((await activity.getAttribute("open")) === null)
       await activity.locator(":scope > summary").click();
 }
@@ -645,7 +645,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(
     shell
       .pane(chat.paneId)
-      .getByText(/history is partial|partial native history/i),
+      .getByText("Earlier messages are not shown", { exact: true }),
   ).toBeVisible();
   // Keeping cached context or showing only authoritative partial history are valid;
   // if cached leading text remains, its original position must remain before the tail.
@@ -653,4 +653,284 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
     expect(rendered.indexOf(`STREAM ${original}`)).toBeLessThan(
       rendered.indexOf(`DONE ${original}`),
     );
+});
+
+async function removalMenu(id: string) {
+  const row = shell.page.locator(
+    `.conversation-row[data-workspace-id="${id}"]`,
+  );
+  if (
+    !(await shell.page
+      .locator("#workspace-tree")
+      .evaluate((node) => node.contains(document.activeElement)))
+  )
+    await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await shell.page.keyboard.press("Home");
+  for (let step = 0; step < 20; step++) {
+    if (await row.evaluate((node) => node === document.activeElement)) break;
+    await shell.page.keyboard.press("ArrowDown");
+  }
+  await expect(row).toBeFocused();
+  await shell.page.keyboard.press("Shift+F10");
+  const menu = shell.page.getByRole("dialog", { name: "Actions", exact: true });
+  await expect(menu).toBeVisible();
+  return menu.getByRole("button", {
+    name: "Remove from workspace",
+    exact: true,
+  });
+}
+
+for (const provider of ["codex", "kimi"] as const) {
+  test(`Chat removal ${provider}: keyboard action removes workspace membership, undo restores draft and native resume keeps history`, async ({}, info) => {
+    const workspace = await shell.create(`Remove ${provider} task`);
+    const chat = await shell.newChat(workspace, provider);
+    await shell.send(chat.id, "Invented retained native history");
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    const nativeFile = path.join(
+      shell.recording + ".sessions",
+      chat.nativeId + ".json",
+    );
+    const nativeBytes = await readFile(nativeFile);
+    const composer = shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("Preserve this unsent local draft");
+    await expect
+      .poll(
+        async () =>
+          (await shell.cli<AppState>("state")).workspaces.find(
+            (w) => w.id === workspace,
+          )?.chatDrafts?.[chat.paneId]?.text,
+      )
+      .toBe("Preserve this unsent local draft");
+    await shell.cli(
+      "conversation",
+      "report-status",
+      "--id",
+      chat.id,
+      "--status",
+      "ready",
+    );
+    const promptCount = (await shell.prompts()).length;
+    let action = await removalMenu(chat.id);
+    await expect(action).toBeEnabled();
+    await shell.page.screenshot({
+      path: info.outputPath(`${provider}-remove-context-menu.png`),
+    });
+    await tabTo(shell.page, action);
+    await shell.page.keyboard.press("Enter");
+    await expect(
+      shell.page.locator(`.conversation-row[data-workspace-id="${chat.id}"]`),
+    ).toHaveCount(0);
+    await expect(shell.pane(chat.paneId)).toHaveCount(0);
+    const parent = shell.page.locator(
+      `#workspace-tree > [data-workspace-id="${workspace}"]`,
+    );
+    await expect(parent).toBeFocused();
+    await expect(parent).toHaveAttribute("data-status", "");
+    expect(
+      (await shell.cli<AppState>("state")).conversations.some(
+        (c) => c.id === chat.id,
+      ),
+    ).toBe(false);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    await shell.stop();
+    await shell.start();
+    expect(
+      (await shell.cli<AppState>("state")).conversations.some(
+        (c) => c.id === chat.id,
+      ),
+    ).toBe(false);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    // Use the existing user-facing undo command; no new archive service.
+    await shell.page.keyboard.press(`${modifier}+Shift+T`);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("Preserve this unsent local draft");
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    expect(await shell.prompts()).toHaveLength(promptCount);
+    action = await removalMenu(chat.id);
+    await tabTo(shell.page, action);
+    await shell.page.keyboard.press("Enter");
+    await expect(shell.pane(chat.paneId)).toHaveCount(0);
+    const resumed = await shell.cli<{
+      id: string;
+      paneId: string;
+      nativeId: string;
+    }>(
+      "conversation",
+      "resume",
+      "--workspace",
+      workspace,
+      "--provider",
+      provider,
+      "--cwd",
+      shell.folders[0],
+      "--native-id",
+      chat.nativeId,
+    );
+    expect(resumed.nativeId).toBe(chat.nativeId);
+    const beforeUndo = (await shell.cli<AppState>("state")).workspaces.find(
+      (w) => w.id === workspace,
+    )!.closedTabs;
+    const duplicateUndo = await shell.raw(
+      "pane",
+      "reopen",
+      "--workspace",
+      workspace,
+    );
+    expect(duplicateUndo.code).not.toBe(0);
+    expect(duplicateUndo.stderr).toContain("already open");
+    expect(
+      (await shell.cli<AppState>("state")).workspaces.find(
+        (w) => w.id === workspace,
+      )!.closedTabs,
+    ).toEqual(beforeUndo);
+    expect(text(await shell.inspect(resumed.id))).toContain(
+      "DONE Invented retained native history",
+    );
+    expect(await shell.prompts()).toHaveLength(promptCount);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    await shell.page.screenshot({
+      path: info.outputPath(`${provider}-removed-session-native-resume.png`),
+    });
+    await shell.send(resumed.id, "Continue the same native history");
+    await expect.poll(() => status(resumed.id)).toBe("ready");
+    expect((await shell.inspect(resumed.id)).nativeId).toBe(chat.nativeId);
+    expect(text(await shell.inspect(resumed.id))).toContain(
+      "DONE Continue the same native history",
+    );
+  });
+}
+
+test("Chat removal refuses working, waiting and handed-off sessions without stopping their native process", async () => {
+  const workspace = await shell.create("Removal guards");
+  const chat = await shell.newChat(workspace, "codex");
+  for (const prompt of [
+    "[hold] Keep running",
+    "[approve] Keep permission pending",
+  ]) {
+    await shell.send(chat.id, prompt);
+    const expected = prompt.includes("[approve]") ? "waiting" : "working";
+    await expect.poll(() => status(chat.id)).toBe(expected);
+    const before = await shell.inspect(chat.id);
+    const action = await removalMenu(chat.id);
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAttribute("title", /Stop the current response/);
+    await shell.page.keyboard.press("Escape");
+    expect(
+      (await shell.raw("conversation", "remove", "--id", chat.id)).code,
+    ).not.toBe(0);
+    expect(await status(chat.id)).toBe(expected);
+    expect((await shell.inspect(chat.id)).pendingPermissions).toEqual(
+      before.pendingPermissions,
+    );
+    await shell
+      .pane(chat.paneId)
+      .getByRole("button", { name: "Stop", exact: true })
+      .click();
+    await expect.poll(() => status(chat.id)).toBe("ready");
+  }
+  const handoff = await shell.cli<{ terminalId: string; paneId: string }>(
+    "conversation",
+    "handoff",
+    "--id",
+    chat.id,
+  );
+  const action = await removalMenu(chat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute("title", /Return this session to chat/);
+  await shell.page.keyboard.press("Escape");
+  expect(
+    (await shell.raw("conversation", "remove", "--id", chat.id)).code,
+  ).not.toBe(0);
+  const state = await shell.cli<AppState>("state");
+  expect(state.terminals.find((t) => t.id === handoff.terminalId)?.status).toBe(
+    "running",
+  );
+  expect(
+    state.conversations.find((c) => c.id === chat.id)?.handoffTerminalId,
+  ).toBe(handoff.terminalId);
+  await shell.cli("terminal", "close", "--id", handoff.terminalId);
+  await shell.cli("conversation", "reclaim", "--id", chat.id);
+  await shell.send(chat.id, "Still usable after rejected removal");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect(text(await shell.inspect(chat.id))).toContain(
+    "DONE Still usable after rejected removal",
+  );
+});
+
+test("Chat removal preserves unresolved review and interactive-page origins", async () => {
+  const workspace = await shell.create("Origin removal guards");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    shell.folders[0],
+  );
+  const reviewChat = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "review",
+    "open-document",
+    "--workspace",
+    workspace,
+    "--path",
+    shell.file,
+    "--conversation",
+    reviewChat.id,
+  );
+  const beforeReview = await shell.cli<AppState>("state");
+  let action = await removalMenu(reviewChat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute("title", /Finish the pending review/);
+  await shell.page.keyboard.press("Escape");
+  const rejectedReview = await shell.raw(
+    "conversation",
+    "remove",
+    "--id",
+    reviewChat.id,
+  );
+  expect(rejectedReview.code).not.toBe(0);
+  expect(rejectedReview.stderr).toContain("pending review");
+  expect((await shell.cli<AppState>("state")).reviews).toEqual(
+    beforeReview.reviews,
+  );
+  expect((await shell.inspect(reviewChat.id)).nativeId).toBe(
+    reviewChat.nativeId,
+  );
+  const pageChat = await shell.newChat(workspace, "codex");
+  const file = path.join(shell.folders[0], "invented-form.html");
+  await writeFile(
+    file,
+    '<!doctype html><title>Invented decision</title><form><label>Choice <input name="choice"></label><button>Submit</button></form>',
+  );
+  const page = await shell.cli<{ id: string }>(
+    "page",
+    "open",
+    "--workspace",
+    workspace,
+    "--conversation",
+    pageChat.id,
+    "--path",
+    file,
+  );
+  action = await removalMenu(pageChat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute(
+    "title",
+    /Finish or close the interactive page/,
+  );
+  await shell.page.keyboard.press("Escape");
+  expect(
+    (await shell.raw("conversation", "remove", "--id", pageChat.id)).code,
+  ).not.toBe(0);
+  expect(
+    (await shell.cli<AppState>("state")).browsers.some((b) => b.id === page.id),
+  ).toBe(true);
+  expect((await shell.inspect(pageChat.id)).nativeId).toBe(pageChat.nativeId);
+  expect(await shell.prompts()).toHaveLength(0);
 });

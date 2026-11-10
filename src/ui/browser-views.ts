@@ -17,22 +17,25 @@ export function createBrowserViews(
     browserLayoutPending = true;
     requestAnimationFrame(() => {
       browserLayoutPending = false;
-      const rectangles = document.querySelector("dialog[open]")
-        ? []
-        : [...panes.querySelectorAll<HTMLElement>(".browser-content")]
-            .filter((element) => !element.hidden)
-            .map((element) => {
-              const rect = element.getBoundingClientRect();
-              return {
-                id: element.dataset.browserId!,
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-              };
-            });
-      window.cod.browserLayout(rectangles);
+      flushBrowserLayout();
     });
+  }
+  function flushBrowserLayout(): void {
+    const rectangles = document.querySelector("dialog[open]")
+      ? []
+      : [...panes.querySelectorAll<HTMLElement>(".browser-content")]
+          .filter((element) => !element.hidden)
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              id: element.dataset.browserId!,
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            };
+          });
+    window.cod.browserLayout(rectangles);
   }
   const resizeObserver = new ResizeObserver(scheduleBrowserLayout);
   resizeObserver.observe(panes);
@@ -351,6 +354,12 @@ export function createBrowserViews(
           browserPanes.delete(id);
     },
     layout: scheduleBrowserLayout,
+    focusNative(id: string) {
+      // These ordered IPC sends apply visibility before focus. A closed dialog
+      // must not depend on a future observer/rAF to restore its native origin.
+      flushBrowserLayout();
+      window.cod.browserFocus(id);
+    },
     dispose() {
       resizeObserver.disconnect();
       mutationObserver.disconnect();

@@ -44,20 +44,19 @@ export type ProviderEvent = {
       details: unknown;
     }
   | { type: "permission-resolved"; requestId: string }
+  | {
+      type: "message-meta";
+      itemId: string;
+      phase?: "commentary" | "partial" | "final";
+      interactive?: boolean;
+      text?: string;
+    }
   | { type: "completed"; outcome: TurnOutcome }
   | { type: "history"; details: unknown }
   | { type: "error"; message: string }
   | { type: "diagnostic"; message: string }
 );
-export interface ContextServer {
-  name: string;
-  command: string;
-  args: string[];
-  /** Explicit server variables only; never pass the full process environment. */
-  env: Record<string, string>;
-}
 export interface AdapterOptions {
-  contextServer?: ContextServer;
   cwd: string;
   executable?: string;
   /** Primarily for installations using a launcher, and subprocess contract tests. */

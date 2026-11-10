@@ -1,7 +1,6 @@
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
 import { NativeSelection } from "./selection.ts";
-import { validateContextServer, contextParams } from "./context-server.ts";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -73,10 +72,7 @@ export class NativeAdapter implements ProviderAdapter {
       throw new Error("Provider cwd must be an absolute path");
     this.provider = provider;
     this.selection = new NativeSelection(provider);
-    this.options = {
-      ...options,
-      contextServer: validateContextServer(options.contextServer),
-    };
+    this.options = { ...options };
     this.cwd = options.cwd;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.capabilities = {
@@ -202,11 +198,10 @@ export class NativeAdapter implements ProviderAdapter {
           ? {
               cwd: this.cwd,
               ...(resumeId ? { threadId: resumeId } : { ephemeral: false }),
-              ...contextParams(this.provider, this.options.contextServer),
             }
           : {
               cwd: this.cwd,
-              ...contextParams(this.provider, this.options.contextServer),
+              mcpServers: [],
               ...(resumeId ? { sessionId: resumeId } : {}),
             },
       );
@@ -580,6 +575,26 @@ export class NativeAdapter implements ProviderAdapter {
         message.method === "item/completed"
       ) {
         const item = object(p.item);
+        if (item.type === "agentMessage" && typeof item.id === "string") {
+          this.emit({
+            type: "message-meta",
+            itemId: item.id,
+            phase:
+              item.phase === "commentary"
+                ? "commentary"
+                : item.phase === "partial_answer"
+                  ? "partial"
+                  : item.phase === "final_answer"
+                    ? "final"
+                    : undefined,
+            interactive:
+              Array.isArray(item.questions) && item.questions.length > 0,
+            ...(message.method === "item/completed" &&
+            typeof item.text === "string"
+              ? { text: item.text }
+              : {}),
+          });
+        }
         if (
           [
             "commandExecution",

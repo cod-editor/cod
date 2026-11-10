@@ -274,7 +274,7 @@ try {
           "package.json",
           "node_modules",
         ],
-        verification: "Packaging only; launch/PTY/CLI/MCP smoke required",
+        verification: "Packaging only; launch/PTY/CLI smoke required",
       },
       null,
       2,

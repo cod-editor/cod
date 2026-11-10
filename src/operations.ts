@@ -70,6 +70,19 @@ export class ApplicationOperations {
   browserLayout(rectangles: BrowserRectangle[]): void {
     this.browsers.browserLayout(rectangles);
   }
+  browserFind(
+    id: string,
+    text: string,
+    options: { forward?: boolean; findNext?: boolean } = {},
+  ): Promise<number> {
+    return this.browsers.browserFind(id, text, options);
+  }
+  browserStopFind(id: string): void {
+    this.browsers.browserStopFind(id);
+  }
+  browserFocus(id: string): void {
+    this.browsers.browserFocus(id);
+  }
   browserSelect(id: string): void {
     this.browsers.browserSelect(id);
   }
@@ -111,7 +124,8 @@ export class ApplicationOperations {
       domain === "group" ||
       request.op === "conversation.draft" ||
       request.op === "conversation.show" ||
-      request.op === "conversation.move"
+      request.op === "conversation.move" ||
+      request.op === "conversation.remove"
     )
       return this.workspaces.handle(request, trustedUi);
     if (domain === "conversation")
@@ -151,6 +165,28 @@ export class ApplicationOperations {
           },
         };
 
+      case "context": {
+        const conversation = this.store.data.conversations.find(
+          (item) => item.id === request.conversation,
+        );
+        if (!conversation) throw new Error("Unknown conversation");
+        const workspace = this.store.workspace(conversation.workspaceId);
+        return {
+          workspace: {
+            id: workspace.id,
+            name: workspace.name,
+            folders: [...workspace.folders],
+            activePaneId: workspace.activePaneId,
+          },
+          conversation: {
+            id: conversation.id,
+            provider: conversation.provider,
+            nativeId: conversation.nativeId,
+            cwd: conversation.cwd,
+            status: conversation.status,
+          },
+        };
+      }
       case "state":
         return this.snapshot();
 

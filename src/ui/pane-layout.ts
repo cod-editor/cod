@@ -1,3 +1,4 @@
+import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
 import { icon, iconButton, menu, type MenuAction } from "./controls";
@@ -18,6 +19,49 @@ interface LayoutActions {
   openFile: () => void;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   nativeLayout: () => void;
+}
+export function paneRegions(workspace: WorkspaceState) {
+  const regions: {
+    id: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }[] = [];
+  const visit = (layout: Layout, x = 0, y = 0, w = 1, h = 1): void => {
+    if (layout.type === "leaf") {
+      regions.push({ id: layout.paneId, x, y, w, h });
+      return;
+    }
+    const r = layout.ratio;
+    if (layout.direction === "right") {
+      visit(layout.first, x, y, w * r, h);
+      visit(layout.second, x + w * r, y, w * (1 - r), h);
+    } else {
+      visit(layout.first, x, y, w, h * r);
+      visit(layout.second, x, y + h * r, w, h * (1 - r));
+    }
+  };
+  if (workspace.groupLayout) visit(workspace.groupLayout);
+  if (regions.length === 1) {
+    const chat = workspace.panes.some(
+      (p) =>
+        p.kind === "conversation" ||
+        p.kind === "terminal" ||
+        (p.kind === "document" && !p.filePath),
+    );
+    regions[0].x = chat ? 0.5 : 0;
+    regions[0].w = 0.5;
+    regions.push({
+      id: chat ? "missing-left" : "missing-right",
+      x: chat ? 0 : 0.5,
+      y: 0,
+      w: 0.5,
+      h: 1,
+    });
+  }
+  regions.sort((a, b) => a.y - b.y || a.x - b.x);
+  return regions;
 }
 export function createPaneLayout(
   getState: () => AppState,
@@ -44,15 +88,55 @@ export function createPaneLayout(
     return workspace.groups?.find((group) => group.paneIds.includes(paneId));
   }
   let settingsSignature = "";
-  function applyWorkspaceSettings(workspace: WorkspaceState): void {
+  function applyWorkspaceSettings(workspace?: WorkspaceState): void {
+    if (!workspace) {
+      navigationWidths.clear();
+      settingsSignature = "";
+      for (const element of document.querySelectorAll<HTMLElement>(
+        ".sidebar, #project-panel, .navigation-handle",
+      ))
+        element.hidden = true;
+      const hasWorkspaces = getState().workspaces.length > 0;
+      if (hasWorkspaces)
+        document.querySelector<HTMLElement>(".sidebar")!.hidden = false;
+      for (const [selector, labels] of [
+        ["#visibility-controls", ["Toggle workspaces", "Toggle files"]],
+        ["#pane-visibility", ["Show left pane", "Show right pane"]],
+      ] as const) {
+        const host = document.querySelector(selector)!;
+        host.replaceChildren(
+          ...labels.map((label) => {
+            const button = iconButton(
+              label.includes("files") ? "folder" : "workspace",
+              label,
+              () => {},
+            );
+            button.disabled = true;
+            button.setAttribute(
+              "aria-pressed",
+              String(hasWorkspaces && label === "Toggle workspaces"),
+            );
+            button.title = "Select a workspace to change panels";
+            return button;
+          }),
+        );
+      }
+      return;
+    }
     navigationWidths.apply(workspace);
     const settings = workspace.settings;
     document
       .querySelector(".sidebar")!
-      .toggleAttribute("hidden", settings?.workspacesVisible === false);
+      .toggleAttribute(
+        "hidden",
+        !!workspace.zoomedGroupId || settings?.workspacesVisible === false,
+      );
     document
       .querySelector("#project-panel")!
-      .toggleAttribute("hidden", settings?.filesVisible !== true);
+      .toggleAttribute(
+        "hidden",
+        !!workspace.zoomedGroupId || settings?.filesVisible !== true,
+      );
     document.documentElement.style.setProperty(
       "--chat-max-width",
       `${settings?.chatMaxWidth ?? 1100}px`,
@@ -77,55 +161,23 @@ export function createPaneLayout(
       button.setAttribute(
         "aria-pressed",
         String(
-          key === "workspacesVisible"
-            ? settings?.[key] !== false
-            : settings?.[key] === true,
+          !workspace.zoomedGroupId &&
+            (key === "workspacesVisible"
+              ? settings?.[key] !== false
+              : settings?.[key] === true),
         ),
+      );
+      button.title = shortcutTitle(
+        key === "filesVisible"
+          ? "navigation.toggleFiles"
+          : "navigation.toggleWorkspaces",
+        label,
       );
       controls.append(button);
     }
     const groupControls = document.querySelector("#pane-visibility")!;
     groupControls.replaceChildren();
-    const regions: {
-      id: string;
-      x: number;
-      y: number;
-      w: number;
-      h: number;
-    }[] = [];
-    const visit = (layout: Layout, x = 0, y = 0, w = 1, h = 1): void => {
-      if (layout.type === "leaf") {
-        regions.push({ id: layout.paneId, x, y, w, h });
-        return;
-      }
-      const r = layout.ratio;
-      if (layout.direction === "right") {
-        visit(layout.first, x, y, w * r, h);
-        visit(layout.second, x + w * r, y, w * (1 - r), h);
-      } else {
-        visit(layout.first, x, y, w, h * r);
-        visit(layout.second, x, y + h * r, w, h * (1 - r));
-      }
-    };
-    if (workspace.groupLayout) visit(workspace.groupLayout);
-    if (regions.length === 1) {
-      const chat = workspace.panes.some(
-        (p) =>
-          p.kind === "conversation" ||
-          p.kind === "terminal" ||
-          (p.kind === "document" && !p.filePath),
-      );
-      regions[0].x = chat ? 0.5 : 0;
-      regions[0].w = 0.5;
-      regions.push({
-        id: chat ? "missing-left" : "missing-right",
-        x: chat ? 0 : 0.5,
-        y: 0,
-        w: 0.5,
-        h: 1,
-      });
-    }
-    regions.sort((a, b) => a.y - b.y || a.x - b.x);
+    const regions = paneRegions(workspace);
     for (const region of regions) {
       const group = workspace.groups?.find((g) => g.id === region.id);
       const visible =
@@ -150,24 +202,10 @@ export function createPaneLayout(
         "workspace",
         `${visible ? "Hide" : "Show"} ${position} pane`,
         () => {
-          if (!group) {
-            void invoke("group.ensure", {
-              workspace: workspace.id,
-              side: region.x < 0.5 ? "left" : "right",
-            });
-          } else if (!visible)
-            void invoke("pane.focus", {
-              workspace: workspace.id,
-              id: group.activePaneId,
-            });
-          else
-            void invoke("group.visibility", {
-              workspace: workspace.id,
-              id: group.id,
-              hidden: true,
-            });
+          void toggleRegion(region.id);
         },
       );
+
       if (group) button.dataset.groupId = group.id;
       button.disabled =
         visible &&
@@ -193,15 +231,69 @@ export function createPaneLayout(
       groupControls.append(button);
     }
   }
+  async function toggleRegion(id: string): Promise<void> {
+    const workspace = activeWorkspace();
+    if (!workspace) return;
+    const region = paneRegions(workspace).find((region) => region.id === id);
+    if (!region) return;
+    const group = workspace.groups?.find((group) => group.id === id);
+    const visible =
+      group &&
+      !group.hidden &&
+      (!workspace.zoomedGroupId || workspace.zoomedGroupId === id);
+    if (!group)
+      await invoke("group.ensure", {
+        workspace: workspace.id,
+        side: region.x < 0.5 ? "left" : "right",
+      });
+    else if (!visible)
+      await invoke("pane.focus", {
+        workspace: workspace.id,
+        id: group.activePaneId,
+      });
+    else if ((workspace.groups?.filter((g) => !g.hidden).length ?? 0) > 1)
+      await invoke("group.visibility", {
+        workspace: workspace.id,
+        id,
+        hidden: true,
+      });
+  }
+  function sideRegion(side: "left" | "right") {
+    const workspace = activeWorkspace();
+    if (!workspace) return undefined;
+    const regions = paneRegions(workspace).sort(
+      (a, b) => a.x - b.x || a.y - b.y,
+    );
+    return side === "left" ? regions[0] : regions.at(-1);
+  }
+  function togglePane(side: "left" | "right"): Promise<void> {
+    const region = sideRegion(side);
+    return region ? toggleRegion(region.id) : Promise.resolve();
+  }
+  function paneToggleReason(side: "left" | "right"): string | undefined {
+    const workspace = activeWorkspace();
+    if (!workspace) return "Open a workspace first";
+    const region = sideRegion(side);
+    const group = workspace.groups?.find((g) => g.id === region?.id);
+    if (
+      group &&
+      !group.hidden &&
+      (!workspace.zoomedGroupId || workspace.zoomedGroupId === group.id) &&
+      (workspace.groups?.filter((g) => !g.hidden).length ?? 0) <= 1
+    )
+      return "At least one pane must remain open";
+  }
   function toggleSetting(key: "workspacesVisible" | "filesVisible"): void {
     const w = activeWorkspace();
     if (w)
       void invoke("workspace.settings", {
         id: w.id,
         settings: {
-          [key]: !(key === "workspacesVisible"
-            ? w.settings?.[key] !== false
-            : w.settings?.[key] === true),
+          [key]:
+            !!w.zoomedGroupId ||
+            !(key === "workspacesVisible"
+              ? w.settings?.[key] !== false
+              : w.settings?.[key] === true),
         },
       });
   }
@@ -378,7 +470,7 @@ export function createPaneLayout(
       close.setAttribute("aria-label", `Close ${paneLabel(pane)}`);
       close.className = "tab-close";
       if (!close.childElementCount) close.append(icon("close"));
-      close.title = "Close tab";
+      close.title = shortcutTitle("tab.close");
       close.onpointerdown = () => {
         // A page title may change while the mouse is held. Keep the close target
         // in place until release rather than moving it under the pointer.
@@ -412,6 +504,7 @@ export function createPaneLayout(
           .catch(() => undefined);
       };
       tab.onkeydown = (e) => {
+        if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           tab.click();
@@ -451,6 +544,20 @@ export function createPaneLayout(
           label: "Close tab",
           run: () => void invoke("pane.close", { workspace: workspace.id, id }),
         },
+        ...([-1, 1] as const).map((delta) => ({
+          label: delta < 0 ? "Move tab left" : "Move tab right",
+          disabled:
+            delta < 0
+              ? group.paneIds.indexOf(id) === 0
+              : group.paneIds.indexOf(id) === group.paneIds.length - 1,
+          run: () =>
+            void invoke("pane.move", {
+              workspace: workspace.id,
+              id,
+              group: group.id,
+              index: group.paneIds.indexOf(id) + delta,
+            }),
+        })),
         {
           label: "Split right",
           run: () =>
@@ -606,7 +713,7 @@ export function createPaneLayout(
       : "Maximize pane";
     if (zoom.getAttribute("aria-label") !== zoomLabel) {
       zoom.setAttribute("aria-label", zoomLabel);
-      zoom.title = zoomLabel;
+      zoom.title = shortcutTitle("pane.zoom", zoomLabel);
       zoom.replaceChildren(
         icon(workspace.zoomedGroupId ? "restore" : "maximize"),
       );
@@ -619,7 +726,12 @@ export function createPaneLayout(
     if (pane) {
       const content = renderPane(workspace, pane);
       for (const child of [...section.children])
-        if (child !== bar && child !== content) child.remove();
+        if (
+          child !== bar &&
+          child !== content &&
+          !child.classList.contains("content-find")
+        )
+          child.remove();
       if (content.parentNode !== section) section.append(content);
     }
     return section;
@@ -673,6 +785,8 @@ export function createPaneLayout(
     render: renderWorkspace,
     applySettings: applyWorkspaceSettings,
     toggle: toggleSetting,
+    togglePane,
+    paneToggleReason,
     split: splitActive,
     zoom: zoomActive,
     reconcile() {

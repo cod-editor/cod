@@ -1,3 +1,11 @@
+import { watchFile, unwatchFile } from "node:fs";
+import {
+  nativeKeyInput,
+  resolveKeybinding,
+  formatShortcut,
+  configureKeymap,
+  type KeymapState,
+} from "./keyboard";
 import { registerAgentPageScheme } from "./agent-pages";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
 import {
@@ -8,8 +16,16 @@ import {
   session,
   protocol,
   dialog,
+  shell,
 } from "electron";
-import { chmod, lstat, unlink, readFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  unlink,
+  readFile,
+  mkdir,
+  writeFile,
+} from "node:fs/promises";
 import { connect, createServer, type Server } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,7 +46,47 @@ registerAgentPageScheme([
 ]);
 
 const dataDirectory = defaultDataDirectory();
-const operations = new ApplicationOperations(dataDirectory);
+let operations: ApplicationOperations;
+let initialized = false;
+const keyboardPlatform = process.platform === "darwin" ? "darwin" : "linux";
+const keymapPath = path.join(dataDirectory, "keymap.json");
+let keymapState: KeymapState = { path: keymapPath, overrides: {} };
+let refreshKeyboardMenu = () => {};
+function settingsAccelerator(): string | undefined {
+  return (
+    formatShortcut("settings", keyboardPlatform)
+      .replaceAll("⌘", "Command+")
+      .replaceAll("⌃", "Ctrl+")
+      .replaceAll("⌥", "Alt+")
+      .replaceAll("⇧", "Shift+")
+      .replace(/^Ctrl(?=[^+])/, "Ctrl+") || undefined
+  );
+}
+async function reloadKeymap(): Promise<void> {
+  try {
+    const raw = await readFile(keymapPath, "utf8");
+    if (raw.length > 65536) throw new Error("Keymap exceeds 64 KiB");
+    keymapState = {
+      path: keymapPath,
+      overrides: configureKeymap(JSON.parse(raw), keyboardPlatform),
+    };
+  } catch (error) {
+    configureKeymap({}, keyboardPlatform);
+    keymapState = {
+      path: keymapPath,
+      overrides: {},
+      ...((error as NodeJS.ErrnoException).code === "ENOENT"
+        ? {}
+        : {
+            error:
+              error instanceof Error ? error.message : "Cannot read keymap",
+          }),
+    };
+  }
+  refreshKeyboardMenu();
+  mainWindow?.webContents.send("cod:keymap", keymapState);
+}
+
 let mainWindow: BrowserWindow | null = null;
 let commandServer: Server | null = null;
 const rendererPath = path.join(__dirname, "index.html");
@@ -83,9 +139,10 @@ app.on("second-instance", (_event, argv) => {
 });
 
 app.setName("Cod");
-if (!process.argv.some((argument) => argument.startsWith("--user-data-dir="))) {
+if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", path.join(dataDirectory, "chromium"));
 }
+const ownsInstance = app.requestSingleInstanceLock();
 
 function createWindow(): void {
   ElectronChromeExtensions.handleCRXProtocol(session.defaultSession);
@@ -110,6 +167,20 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+  // Own the settings accelerator before DOM/menu dispatch so one physical key
+  // produces one command. Menu clicks use the same trusted command event.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const match = resolveKeybinding(
+      nativeKeyInput(input),
+      process.platform === "darwin" ? "darwin" : "linux",
+      "shell",
+    );
+    if (match?.command !== "settings") return;
+    event.preventDefault();
+    if (match.dispatch)
+      mainWindow?.webContents.send("cod:command", { command: "settings" });
+  });
+
   const browserSession = session.fromPartition("persist:cod-browser");
   browserSession.setPermissionRequestHandler(
     (contents, permission, callback) => {
@@ -210,9 +281,39 @@ async function startCommandServer(): Promise<void> {
 
 async function start(): Promise<void> {
   try {
+    operations = new ApplicationOperations(dataDirectory);
     await operations.initialize();
+    initialized = true;
     await startCommandServer();
     await app.whenReady();
+    await reloadKeymap();
+    watchFile(keymapPath, { interval: 500, persistent: false }, () => {
+      void reloadKeymap();
+    });
+    app.once("will-quit", () => unwatchFile(keymapPath));
+    const trustedKeymap = (event: Electron.IpcMainInvokeEvent) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== mainWindow.webContents.mainFrame ||
+        event.senderFrame.url !== rendererUrl
+      )
+        throw new Error("Untrusted keymap request");
+    };
+    ipcMain.handle("cod:keymap", (event) => {
+      trustedKeymap(event);
+      return keymapState;
+    });
+    ipcMain.handle("cod:keymap-open", async (event) => {
+      trustedKeymap(event);
+      await mkdir(dataDirectory, { recursive: true });
+      try {
+        await writeFile(keymapPath, "{}\n", { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const error = await shell.openPath(keymapPath);
+      if (error) throw new Error(error);
+    });
     if (process.platform === "darwin")
       app.dock?.setIcon(path.join(__dirname, "cod-icon.png"));
     protocol.handle("cod-preview", async (request) => {
@@ -244,6 +345,55 @@ async function start(): Promise<void> {
         mainWindow.webContents.send("cod:terminal", event);
       }
     };
+    ipcMain.handle(
+      "cod:browser-find",
+      (event, id: unknown, text: unknown, options: unknown) => {
+        if (
+          event.sender !== mainWindow?.webContents ||
+          event.senderFrame !== event.sender.mainFrame ||
+          event.senderFrame.url !== rendererUrl ||
+          typeof id !== "string" ||
+          typeof text !== "string"
+        )
+          throw new Error("Search rejected from an untrusted renderer");
+        if (options !== undefined && (!options || typeof options !== "object"))
+          throw new Error("Invalid search options");
+        const value = (options ?? {}) as {
+          forward?: unknown;
+          findNext?: unknown;
+        };
+        if (
+          (value.forward !== undefined && typeof value.forward !== "boolean") ||
+          (value.findNext !== undefined && typeof value.findNext !== "boolean")
+        )
+          throw new Error("Invalid search options");
+        return operations.browserFind(
+          id,
+          text,
+          value as { forward?: boolean; findNext?: boolean },
+        );
+      },
+    );
+    ipcMain.on("cod:browser-stop-find", (event, id: unknown) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== rendererUrl ||
+        typeof id !== "string"
+      )
+        return;
+      operations.browserStopFind(id);
+    });
+    ipcMain.on("cod:browser-focus", (event, id: unknown) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== rendererUrl ||
+        typeof id !== "string"
+      )
+        return;
+      operations.browserFocus(id);
+    });
     ipcMain.on("cod:browser-select", (event, id: unknown) => {
       if (
         event.sender !== mainWindow?.webContents ||
@@ -291,12 +441,9 @@ async function start(): Promise<void> {
     const settingsItem: Electron.MenuItemConstructorOptions = {
       id: "settings",
       label: "Settings...",
-      accelerator: "CmdOrCtrl+,",
+      accelerator: settingsAccelerator(),
       click: () =>
-        mainWindow?.webContents.send("cod:browser-shortcut", {
-          id: "",
-          action: "settings",
-        }),
+        mainWindow?.webContents.send("cod:command", { command: "settings" }),
     };
     const template: Electron.MenuItemConstructorOptions[] =
       process.platform === "darwin"
@@ -320,7 +467,11 @@ async function start(): Promise<void> {
               ],
             },
           ];
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    refreshKeyboardMenu = () => {
+      settingsItem.accelerator = settingsAccelerator();
+      Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    };
+    refreshKeyboardMenu();
     createWindow();
     canOpenUrls = true;
     for (const url of [
@@ -337,14 +488,14 @@ async function start(): Promise<void> {
   }
 }
 
-if (app.requestSingleInstanceLock()) void start();
+if (ownsInstance) void start();
 else app.quit();
 app.on("window-all-closed", () => app.quit());
 let quitting = false;
 app.on("before-quit", (event) => {
   commandServer?.close();
   commandServer = null;
-  if (!quitting) {
+  if (initialized && !quitting) {
     event.preventDefault();
     void operations.shutdown().finally(() => {
       quitting = true;

@@ -1,5 +1,10 @@
+import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
-import { groupTurnActivity, toolCaption } from "./turn-activity";
+import {
+  groupTurnActivity,
+  toolCaption,
+  compactToolCaption,
+} from "./turn-activity";
 import {
   routeProviderCommand,
   showProviderCommands,
@@ -9,9 +14,20 @@ import { reconcileView } from "./view-reconcile";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
-import { iconButton, menu } from "./controls";
+import { icon, iconButton, menu } from "./controls";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+function setChoiceCaption(button: HTMLButtonElement, text: string): void {
+  let label = button.querySelector<HTMLSpanElement>(".choice-caption");
+  if (!label) {
+    label = document.createElement("span");
+    label.className = "choice-caption";
+    const arrow = icon("chevron");
+    arrow.classList.add("choice-chevron");
+    button.append(label, arrow);
+  }
+  label.textContent = text;
+}
 interface ChatDependencies {
   getState: () => AppState;
   invoke: Invoke;
@@ -151,12 +167,7 @@ export function createConversationViews({
         invalidate();
       }
     };
-    input.onkeydown = (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        void send();
-      }
-    };
+    input.addEventListener("cod:send-message", () => void send());
     composer.oncontextmenu = (e) => {
       if (e.target === input) return;
       e.preventDefault();
@@ -169,7 +180,9 @@ export function createConversationViews({
     const provider = document.createElement("button");
     provider.type = "button";
     provider.setAttribute("aria-label", "Provider");
-    provider.textContent = providerLabel(selected);
+    provider.className = "composer-choice";
+    provider.setAttribute("aria-haspopup", "dialog");
+    setChoiceCaption(provider, providerLabel(selected));
     provider.onclick = () =>
       menu(
         provider,
@@ -180,20 +193,13 @@ export function createConversationViews({
           run: () => {
             draftProviders.set(pane.id, id);
             void persistComposer(pane.id);
-            provider.textContent = providerLabel(id);
+            setChoiceCaption(provider, providerLabel(id));
             input.placeholder = `Message ${providerLabel(id)}...`;
             invalidate();
           },
         })),
       );
     actions.append(provider);
-    const cwd = document.createElement("span");
-    cwd.className = "composer-context";
-    cwd.textContent = workspace.folders
-      .map((p) => p.split("/").pop())
-      .join(", ");
-    cwd.title = workspace.folders.join("\n");
-    actions.append(cwd);
     composer.append(input, actions);
     bindImages(composer, input, pane.id);
     body.append(composer);
@@ -306,7 +312,11 @@ export function createConversationViews({
       const img = document.createElement("img");
       img.src = `data:${image.mimeType};base64,${image.data}`;
       img.alt = image.name || "Attached image";
-      img.onclick = () => {
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "image-preview";
+      preview.setAttribute("aria-label", `View ${img.alt}`);
+      preview.onclick = () => {
         const dialog = document.createElement("dialog");
         dialog.className = "image-viewer";
         const large = img.cloneNode() as HTMLImageElement;
@@ -315,10 +325,14 @@ export function createConversationViews({
           iconButton("close", "Close image", () => dialog.close()),
         );
         document.body.append(dialog);
-        dialog.onclose = () => dialog.remove();
+        dialog.onclose = () => {
+          dialog.remove();
+          if (preview.isConnected) preview.focus();
+        };
         dialog.showModal();
       };
-      item.append(img);
+      preview.append(img);
+      item.append(preview);
       if (remove)
         item.append(iconButton("close", "Remove image", () => remove(index)));
       strip.append(item);
@@ -438,75 +452,104 @@ export function createConversationViews({
         ["reasoning", options.reasoning],
       ] as const) {
         if (!choices.length) continue;
-        const select = document.createElement("select");
-        select.setAttribute(
-          "aria-label",
-          option === "model" ? "Model" : "Reasoning effort",
-        );
-        select.disabled = conversation.status !== "ready";
-        for (const choice of choices) {
-          const caption =
-            option === "reasoning"
-              ? ((
-                  {
-                    xhigh: "Extra high",
-                    minimal: "Minimal",
-                    low: "Low",
-                    medium: "Medium",
-                    high: "High",
-                    none: "None",
-                    max: "Max",
-                  } as Record<string, string>
-                )[choice.value] ??
-                choice.value
-                  .replace(/[_-]/g, " ")
-                  .replace(/^./, (c) => c.toUpperCase()))
-              : choice.label.split(/\n| — /)[0];
-          const item = new Option(caption, choice.value);
-          item.title = choice.label;
-          select.append(item);
-        }
+        const choiceLabel = (choice: { value: string; label: string }) =>
+          option === "reasoning"
+            ? ((
+                {
+                  xhigh: "Extra high",
+                  minimal: "Minimal",
+                  low: "Low",
+                  medium: "Medium",
+                  high: "High",
+                  none: "None",
+                  max: "Max",
+                } as Record<string, string>
+              )[choice.value] ??
+              choice.value
+                .replace(/[_-]/g, " ")
+                .replace(/^./, (c) => c.toUpperCase()))
+            : choice.label.split(/\n| — /)[0];
         const optionKey = `${conversation.id}:${option}`;
-        if (pendingOptions.has(optionKey))
-          select.setAttribute("aria-busy", "true");
-        select.value =
+        const value =
           pendingOptions.get(optionKey) ??
           options.pending?.[option] ??
           options.current[option] ??
           choices[0].value;
-        select.title =
-          choices.find((choice) => choice.value === select.value)?.label ??
-          select.value;
-        select.onchange = () => {
-          const inFlight = pendingOptions.get(optionKey);
-          if (inFlight !== undefined) {
-            select.value = inFlight;
-            return;
-          }
-          const value = select.value;
-          pendingOptions.set(optionKey, value);
-          select.setAttribute("aria-busy", "true");
-          void invoke<import("../providers/types").ProviderOptions>(
-            "conversation.option",
-            { id: conversation.id, option, value },
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "composer-choice";
+        button.dataset.focusKey = `option:${optionKey}`;
+        button.setAttribute(
+          "aria-label",
+          option === "model" ? "Model" : "Reasoning effort",
+        );
+        button.setAttribute("aria-haspopup", "dialog");
+        setChoiceCaption(
+          button,
+          choiceLabel(
+            choices.find((choice) => choice.value === value) ?? choices[0],
+          ),
+        );
+        button.disabled = conversation.status !== "ready";
+        button.setAttribute("aria-busy", String(pendingOptions.has(optionKey)));
+        button.onclick = () => {
+          if (pendingOptions.has(optionKey)) return;
+          const latest = providerOptions.get(conversation.id);
+          if (
+            !latest ||
+            getState().conversations.find((c) => c.id === conversation.id)
+              ?.status !== "ready"
           )
-            .then((result) => providerOptions.set(conversation.id, result))
-            .catch(() => undefined)
-            .finally(() => {
-              pendingOptions.delete(optionKey);
-              const current = select.closest<HTMLElement>(".model-choices");
-              if (current)
-                reconcileView(
-                  current,
-                  modelChoices(
-                    getState().conversations.find(
-                      (c) => c.id === conversation.id,
-                    ) ?? conversation,
-                  ),
-                );
-            });
+            return;
+          const currentValue =
+            latest.pending?.[option] ?? latest.current[option];
+          const currentChoices =
+            option === "model" ? latest.models : latest.reasoning;
+          menu(
+            button,
+            currentChoices.map((choice) => ({
+              label: choiceLabel(choice),
+              selected: choice.value === currentValue,
+              run: () => {
+                button.focus({ preventScroll: true });
+                if (
+                  choice.value === currentValue ||
+                  pendingOptions.has(optionKey)
+                )
+                  return;
+                pendingOptions.set(optionKey, choice.value);
+                setChoiceCaption(button, choiceLabel(choice));
+                button.setAttribute("aria-busy", "true");
+                void invoke<import("../providers/types").ProviderOptions>(
+                  "conversation.option",
+                  { id: conversation.id, option, value: choice.value },
+                  { reportError: false },
+                )
+                  .then((result) =>
+                    providerOptions.set(conversation.id, result),
+                  )
+                  .catch((error) =>
+                    showActionError(error, button.closest(".composer") ?? host),
+                  )
+                  .finally(() => {
+                    pendingOptions.delete(optionKey);
+                    const current =
+                      button.closest<HTMLElement>(".model-choices");
+                    if (current)
+                      reconcileView(
+                        current,
+                        modelChoices(
+                          getState().conversations.find(
+                            (c) => c.id === conversation.id,
+                          ) ?? conversation,
+                        ),
+                      );
+                  });
+              },
+            })),
+          );
         };
-        host.append(select);
+        host.append(button);
       }
     return host;
   }
@@ -544,6 +587,9 @@ export function createConversationViews({
         const row = document.createElement("div");
         row.className = `chat-message ${entry.message.role}`;
         row.dataset.messageId = entry.message.id;
+        if (entry.message.turnId) row.dataset.turnId = entry.message.turnId;
+        if (entry.message.phase) row.dataset.phase = entry.message.phase;
+        if (entry.message.interactive) row.dataset.actionRequired = "true";
         const role = document.createElement("div");
         role.className = "message-role";
         role.textContent =
@@ -577,7 +623,8 @@ export function createConversationViews({
             entry.message.id,
             conversation.id,
           );
-        row.append(role, text);
+        if (entry.message.role === "system") row.append(role);
+        row.append(text);
         if (entry.message.images?.length)
           row.append(imageStrip(entry.message.images));
         transcript.append(row);
@@ -585,25 +632,25 @@ export function createConversationViews({
         const tool = document.createElement("details");
         tool.className = "tool-activity";
         tool.dataset.toolId = entry.tool.id;
+        if (entry.tool.turnId) tool.dataset.turnId = entry.tool.turnId;
         const label = document.createElement("summary");
         const info = entry.tool.details as Record<string, unknown> | null;
+        tool.dataset.toolPhase = entry.tool.phase;
+        tool.dataset.compactCaption = compactToolCaption(info);
         const failed = !!(
           info?.error ||
           info?.isError ||
           ["failed", "error"].includes(String(info?.status))
         );
         label.textContent =
-          toolCaption(info) + ` · ${failed ? "failed" : entry.tool.phase}`;
+          compactToolCaption(info) + (failed ? " · failed" : "");
         label.title = toolCaption(info);
         const details = document.createElement("pre");
         details.textContent =
           JSON.stringify(entry.tool.details, null, 2) ??
           String(entry.tool.details);
-        const actionable = !!(
-          failed ||
-          /request.?user.?input|ask.?user|question/i.test(
-            String(info?.name ?? info?.toolName ?? ""),
-          )
+        const actionable = /request.?user.?input|ask.?user|question/i.test(
+          String(info?.name ?? info?.toolName ?? ""),
         );
         if (actionable) {
           tool.dataset.actionRequired = "true";
@@ -613,17 +660,16 @@ export function createConversationViews({
         transcript.append(tool);
       }
     }
-    groupTurnActivity(transcript, providerLabel(conversation.provider));
+    groupTurnActivity(transcript, conversation);
     const setup = integration.offer(conversation.provider);
     if (setup && !conversation.messages.length && !conversation.error)
       transcript.append(setup);
     body.append(transcript);
     if (conversation.historyPartial) {
       const warning = document.createElement("div");
-      warning.className = "conversation-status history-warning";
-      warning.textContent =
-        "Native history is partial; older pages have not been loaded.";
-      body.append(warning);
+      warning.className = "history-warning";
+      warning.textContent = "Earlier messages are not shown";
+      transcript.prepend(warning);
     }
     for (const permission of conversation.pendingPermissions) {
       const card = document.createElement("div");
@@ -661,11 +707,7 @@ export function createConversationViews({
         ? `Provider failed: ${conversation.error}`
         : conversation.status === "starting"
           ? `Starting ${providerLabel(conversation.provider)}...`
-          : conversation.status === "working"
-            ? `${providerLabel(conversation.provider)} is working...`
-            : conversation.status === "waiting"
-              ? "Waiting for your response"
-              : "");
+          : "");
     if (conversation.handoffTerminalId)
       currentStatus.textContent =
         "Open in the CLI terminal. Exit the CLI before returning to chat.";
@@ -682,12 +724,6 @@ export function createConversationViews({
       composerDrafts.set(conversation.id, input.value);
       persistComposer(conversation.id);
     });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void sendMessage(conversation.id);
-      }
-    });
     const actions = document.createElement("div");
     actions.className = "composer-actions";
     const provider = document.createElement("span");
@@ -695,11 +731,6 @@ export function createConversationViews({
     actions.append(provider);
     if (!conversation.handoffTerminalId)
       actions.append(modelChoices(conversation));
-    const cwd = document.createElement("span");
-    cwd.className = "composer-context";
-    cwd.textContent = conversation.cwd.split("/").pop() || conversation.cwd;
-    cwd.title = conversation.cwd;
-    actions.append(cwd);
     if (
       !conversation.handoffTerminalId &&
       ["working", "waiting"].includes(conversation.status)
@@ -717,6 +748,11 @@ export function createConversationViews({
       e.preventDefault();
       menu({ x: e.clientX, y: e.clientY }, [
         { label: "Send message", run: () => void sendMessage(conversation.id) },
+        {
+          label: "Session info...",
+          run: () =>
+            showProviderCommands(commandOptions(conversation.id), "status"),
+        },
         {
           label: "Session commands...",
           run: () => showProviderCommands(commandOptions(conversation.id)),

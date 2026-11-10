@@ -106,7 +106,19 @@ export interface FileDraft {
   expectedContent: string;
 }
 
+export interface ConversationTurn {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  /** Observed working intervals, excluding native waiting/permission time. */
+  durationMs?: number;
+  elapsedMs?: number;
+  outcome?: "completed" | "cancelled" | "failed";
+}
 export interface ConversationMessage {
+  turnId?: string;
+  phase?: "commentary" | "partial" | "final";
+  interactive?: boolean;
   images?: import("./providers/types").ImageAttachment[];
   id: string;
   role: "user" | "assistant" | "system";
@@ -116,6 +128,7 @@ export interface ConversationMessage {
 }
 
 export interface ToolActivity {
+  turnId?: string;
   id: string;
   phase: "started" | "updated" | "completed";
   details: unknown;
@@ -143,6 +156,7 @@ export interface ConversationState {
   nativeId: string;
   cwd: string;
   status: ProviderState;
+  turns?: ConversationTurn[];
   messages: ConversationMessage[];
   tools: ToolActivity[];
   pendingPermissions: PendingPermission[];
@@ -203,6 +217,7 @@ export interface WorkspaceState {
     pane: PaneState;
     browser?: BrowserState;
     terminal?: TerminalState;
+    conversation?: ConversationState;
   }>;
   chatDrafts?: Record<
     string,
@@ -249,15 +264,34 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
+  getKeymap(): Promise<import("./keyboard").KeymapState>;
+  onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
+  openKeymap(): Promise<void>;
   chooseDirectory(): Promise<string | null>;
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;
   browserSelect(id: string): void;
-  onBrowserShortcut(
+  browserFind(
+    id: string,
+    text: string,
+    options?: { forward?: boolean; findNext?: boolean },
+  ): Promise<number>;
+  browserStopFind(id: string): void;
+  onBrowserFind(
     callback: (event: {
-      id: string;
-      action: "palette" | "panel" | "address" | "close" | "settings";
+      browserId: string;
+      requestId: number;
+      matches: number;
+      activeMatchOrdinal: number;
+      finalUpdate: boolean;
+    }) => void,
+  ): void;
+  browserFocus(id: string): void;
+  onCommand(
+    callback: (event: {
+      command: import("./keyboard").CommandId;
+      browserId?: string;
     }) => void,
   ): void;
   onTerminal(callback: (event: TerminalUiEvent) => void): void;
