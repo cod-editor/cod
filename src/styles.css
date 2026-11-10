@@ -98,20 +98,28 @@ select:focus-visible {
   color: #d7dae0;
 }
 .app-header {
-  height: 32px;
+  height: 34px;
   flex: none;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
   background: #3b414d;
   border-bottom: 1px solid var(--line);
   padding: 0 8px;
   -webkit-app-region: drag;
 }
+.titlebar-center {
+  min-width: 0;
+  text-align: center;
+}
+.titlebar-center:has(#status:not(:empty)) #workspace-selector {
+  display: none;
+}
 .app-header button {
   -webkit-app-region: no-drag;
 }
 #workspace-selector {
-  max-width: 320px;
+  max-width: 100%;
   height: 27px;
   border: 0;
   background: transparent;
@@ -120,7 +128,7 @@ select:focus-visible {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: #d7dae0;
-  text-align: left;
+  text-align: center;
 }
 #workspace-selector:hover {
   background: var(--control-hover);
@@ -402,28 +410,39 @@ select:focus-visible {
   color: #e5c07b;
   background: #3b3530;
 }
-.status {
-  height: 28px;
-  flex: none;
-  background: #3b414d;
-  display: flex;
-  align-items: center;
-  border-top: 1px solid var(--line);
-  padding: 0 5px;
-  gap: 8px;
-  font-size: calc(var(--ui-font-size) - 2px);
-}
 #visibility-controls,
 #pane-visibility {
   display: flex;
+  min-width: 0;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+#visibility-controls {
+  justify-self: start;
+  max-width: 100%;
+}
+#pane-visibility {
+  height: 28px;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  justify-self: end;
+  max-width: 100%;
+  overflow-x: auto;
+}
+#pane-visibility::-webkit-scrollbar {
+  display: none;
 }
 #status {
-  flex: 1;
-  min-width: 0;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #abb2bf;
+  color: #d7dae0;
+  font-size: calc(var(--ui-font-size) - 2px);
+  -webkit-app-region: no-drag;
+}
+#status:empty {
+  display: none;
 }
 .chat-body {
   overflow: hidden;
@@ -1017,8 +1036,8 @@ hr {
   white-space: nowrap;
   min-width: 0;
 }
-.platform-mac .app-header {
-  padding-left: 78px;
+.platform-mac #visibility-controls {
+  padding-left: 70px;
 }
 .form-field {
   display: flex;

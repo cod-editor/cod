@@ -897,7 +897,11 @@ export function createCommands(
       (selected ?? tree.querySelector<HTMLElement>("[role=treeitem]"))?.focus();
     };
     const workspace = activeWorkspace();
-    if (workspace?.settings?.workspacesVisible === false)
+    if (
+      workspace &&
+      (workspace.settings?.workspacesVisible === false ||
+        workspace.zoomedGroupId)
+    )
       void invoke("workspace.settings", {
         id: workspace.id,
         settings: { workspacesVisible: true },

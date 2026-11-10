@@ -29,6 +29,7 @@ export function createNavigationWidths(invoke: Invoke) {
     for (const panel of panels) {
       panel.handle.hidden =
         !next ||
+        !!next.zoomedGroupId ||
         (panel.visible === "workspacesVisible"
           ? next.settings?.workspacesVisible === false
           : next.settings?.filesVisible !== true);
@@ -115,6 +116,10 @@ export function createNavigationWidths(invoke: Invoke) {
   window.addEventListener("resize", () => apply(), { signal: events.signal });
   return {
     apply,
+    clear() {
+      workspace = undefined;
+      for (const panel of panels) panel.handle.hidden = true;
+    },
     dispose() {
       events.abort();
       for (const panel of panels) panel.handle.remove();

@@ -158,7 +158,10 @@ export function createKeyboardNavigation(
           run: target ?? (() => element.focus({ preventScroll: true })),
         });
     };
-    add(document.querySelector("#workspace-selector"));
+    const header = document.querySelector<HTMLElement>(".app-header");
+    add(header, () =>
+      header?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(),
+    );
     add(tree.closest<HTMLElement>(".sidebar"), () =>
       (
         tree.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]') ??
@@ -191,10 +194,6 @@ export function createKeyboardNavigation(
           ...(pane.kind === "browser" ? { browserId: pane.browserId } : {}),
         });
     }
-    const footer = document.querySelector<HTMLElement>("footer");
-    add(footer, () =>
-      footer?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(),
-    );
     if (!regions.length) return;
     const index = regions.findIndex((r) =>
       browserId

@@ -273,7 +273,7 @@ test("Folder actions use the native chooser from Commands and empty and populate
   }
 });
 
-test("Footer pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
+test("Header pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {

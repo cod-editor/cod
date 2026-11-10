@@ -14,13 +14,18 @@
   </head>
   <body>
     <header class="app-header">
-      <button
-        id="workspace-selector"
-        aria-label="Switch workspace"
-        type="button"
-      >
-        <span id="workspace-name">Cod</span>
-      </button>
+      <div id="visibility-controls" aria-label="Navigation panels"></div>
+      <div class="titlebar-center">
+        <button
+          id="workspace-selector"
+          aria-label="Switch workspace"
+          type="button"
+        >
+          <span id="workspace-name">Cod</span>
+        </button>
+        <span id="status" role="status" aria-live="polite"></span>
+      </div>
+      <div id="pane-visibility" aria-label="Content panes"></div>
     </header>
     <main class="shell">
       <aside class="sidebar" aria-label="Workspace panel">
@@ -40,11 +45,6 @@
         <div id="panes" class="panes"></div>
       </section>
     </main>
-    <footer class="status">
-      <div id="visibility-controls"></div>
-      <span id="status" role="status" aria-live="polite"></span>
-      <div id="pane-visibility"></div>
-    </footer>
     <script src="./renderer.js"></script>
   </body>
 </html>

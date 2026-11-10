@@ -88,15 +88,55 @@ export function createPaneLayout(
     return workspace.groups?.find((group) => group.paneIds.includes(paneId));
   }
   let settingsSignature = "";
-  function applyWorkspaceSettings(workspace: WorkspaceState): void {
+  function applyWorkspaceSettings(workspace?: WorkspaceState): void {
+    if (!workspace) {
+      navigationWidths.clear();
+      settingsSignature = "";
+      for (const element of document.querySelectorAll<HTMLElement>(
+        ".sidebar, #project-panel, .navigation-handle",
+      ))
+        element.hidden = true;
+      const hasWorkspaces = getState().workspaces.length > 0;
+      if (hasWorkspaces)
+        document.querySelector<HTMLElement>(".sidebar")!.hidden = false;
+      for (const [selector, labels] of [
+        ["#visibility-controls", ["Toggle workspaces", "Toggle files"]],
+        ["#pane-visibility", ["Show left pane", "Show right pane"]],
+      ] as const) {
+        const host = document.querySelector(selector)!;
+        host.replaceChildren(
+          ...labels.map((label) => {
+            const button = iconButton(
+              label.includes("files") ? "folder" : "workspace",
+              label,
+              () => {},
+            );
+            button.disabled = true;
+            button.setAttribute(
+              "aria-pressed",
+              String(hasWorkspaces && label === "Toggle workspaces"),
+            );
+            button.title = "Select a workspace to change panels";
+            return button;
+          }),
+        );
+      }
+      return;
+    }
     navigationWidths.apply(workspace);
     const settings = workspace.settings;
     document
       .querySelector(".sidebar")!
-      .toggleAttribute("hidden", settings?.workspacesVisible === false);
+      .toggleAttribute(
+        "hidden",
+        !!workspace.zoomedGroupId || settings?.workspacesVisible === false,
+      );
     document
       .querySelector("#project-panel")!
-      .toggleAttribute("hidden", settings?.filesVisible !== true);
+      .toggleAttribute(
+        "hidden",
+        !!workspace.zoomedGroupId || settings?.filesVisible !== true,
+      );
     document.documentElement.style.setProperty(
       "--chat-max-width",
       `${settings?.chatMaxWidth ?? 1100}px`,
@@ -121,10 +161,17 @@ export function createPaneLayout(
       button.setAttribute(
         "aria-pressed",
         String(
-          key === "workspacesVisible"
-            ? settings?.[key] !== false
-            : settings?.[key] === true,
+          !workspace.zoomedGroupId &&
+            (key === "workspacesVisible"
+              ? settings?.[key] !== false
+              : settings?.[key] === true),
         ),
+      );
+      button.title = shortcutTitle(
+        key === "filesVisible"
+          ? "navigation.toggleFiles"
+          : "navigation.toggleWorkspaces",
+        label,
       );
       controls.append(button);
     }
@@ -242,9 +289,11 @@ export function createPaneLayout(
       void invoke("workspace.settings", {
         id: w.id,
         settings: {
-          [key]: !(key === "workspacesVisible"
-            ? w.settings?.[key] !== false
-            : w.settings?.[key] === true),
+          [key]:
+            !!w.zoomedGroupId ||
+            !(key === "workspacesVisible"
+              ? w.settings?.[key] !== false
+              : w.settings?.[key] === true),
         },
       });
   }

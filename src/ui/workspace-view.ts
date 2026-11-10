@@ -91,6 +91,7 @@ export function createWorkspaceView(
         resourcePanes.delete(id);
     workspaceName.textContent = workspace?.name ?? "No workspace";
     if (!workspace) {
+      layout.applySettings();
       const empty = document.createElement("div");
       empty.className = "empty-workspace";
       const content = document.createElement("div");

@@ -131,9 +131,13 @@ function activeWorkspace(): WorkspaceState | undefined {
 
 function setStatus(message: string): void {
   status.textContent = message;
+  status.title = message;
   const current = message;
   window.setTimeout(() => {
-    if (status.textContent === current) status.textContent = "";
+    if (status.textContent === current) {
+      status.textContent = "";
+      status.title = "";
+    }
   }, 5000);
 }
 

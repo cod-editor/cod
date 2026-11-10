@@ -206,7 +206,9 @@ Competitor comparisons from earlier descriptions are not requirements and need f
 
 ## Interface conventions
 
-Use a fixed, bounded workspace selector in the title bar. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. A fixed footer controls visibility only; text search belongs in Commands and its shortcut. Global controls do not move into another pane when it is maximized.
+Use a fixed, bounded workspace selector centered in the title bar. Workspace and file visibility controls sit on its left, after native window controls; content-area visibility controls sit on its right. There is no persistent footer. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. Text search belongs in Commands and its shortcut. Global controls remain in the title bar when a pane is maximized. Transient feedback stays visible without reserving a bottom strip.
+
+Maximizing a pane fills the window's working area below the title bar, temporarily hiding navigation and other panes. Restore recovers the previous panel visibility, widths and split arrangement. Explicitly revealing a navigation panel leaves maximized mode. This is an in-window layout action, not operating-system fullscreen.
 
 Use compact One Dark editor conventions: neutral selection and focus, consistent row/tab sizing, content-sized tabs with bounded width and truncation, and no active-tab underline. Keep keyboard focus visible. Native window chrome follows the platform; websites and Bitwarden keep their own appearance. Secondary actions belong in context menus, shortcuts and Commands rather than persistent buttons or explanatory hints.
 

@@ -875,6 +875,11 @@ export class WorkspaceApplicationService {
               throw new Error(`${key} must be between 160 and 800`);
           }
           workspace.settings = { ...workspace.settings, ...settings };
+          if (
+            settings.filesVisible === true ||
+            settings.workspacesVisible === true
+          )
+            workspace.zoomedGroupId = null;
           return workspace.settings;
         });
 
