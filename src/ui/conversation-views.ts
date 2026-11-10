@@ -704,11 +704,7 @@ export function createConversationViews({
         ? `Provider failed: ${conversation.error}`
         : conversation.status === "starting"
           ? `Starting ${providerLabel(conversation.provider)}...`
-          : conversation.status === "working"
-            ? `${providerLabel(conversation.provider)} is working...`
-            : conversation.status === "waiting"
-              ? "Waiting for your response"
-              : "");
+          : "");
     if (conversation.handoffTerminalId)
       currentStatus.textContent =
         "Open in the CLI terminal. Exit the CLI before returning to chat.";

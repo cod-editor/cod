@@ -450,7 +450,7 @@ test("Completed turns fold commentary and tools while final answers and decision
     codex: {
       extraTools: 3,
       interactiveQuestion: true,
-      finalDelayMs: 1000,
+      finalDelayMs: 2000,
       options: true,
       reasoningOptions: true,
       narrative:
@@ -467,7 +467,17 @@ test("Completed turns fold commentary and tools while final answers and decision
         exact: true,
       }),
     ).toBeVisible();
-    await expect(app.page.locator(".turn-activity")).toHaveCount(0);
+    const working = app.page.getByRole("status", { name: "Turn activity" });
+    await expect(working).toHaveText("Working...");
+    await expect(app.page.locator(".transcript > .turn-activity")).toHaveCount(
+      1,
+    );
+    await expect(
+      app.page.locator(".chat-body > .conversation-status"),
+    ).toBeHidden();
+    await app.page.screenshot({
+      path: info.outputPath("working-in-turn-activity.png"),
+    });
     const liveState = await app.cli<AppState>("state");
     const conversationId = liveState.conversations[0].id;
     await expect(app.page.locator(".turn-activity")).toHaveCount(1);
@@ -476,6 +486,7 @@ test("Completed turns fold commentary and tools while final answers and decision
       "aria-label",
       /Worked for \d+s/,
     );
+    await expect(working).toHaveCount(0);
     await expect(
       app.page.getByText("DONE Search and inspect the invented files.", {
         exact: true,
@@ -539,6 +550,10 @@ test("Completed turns fold commentary and tools while final answers and decision
     await expect(
       app.page.getByRole("button", { name: /Allow once/ }),
     ).toBeVisible();
+    await expect(working).toHaveText("Waiting for your response");
+    await expect(
+      app.page.locator(".chat-body > .conversation-status"),
+    ).toBeHidden();
     await expect(first).toHaveAttribute("open", "");
     expect(
       await app.page

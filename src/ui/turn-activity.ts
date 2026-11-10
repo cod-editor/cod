@@ -24,6 +24,7 @@ export function groupTurnActivity(
   for (const node of [...transcript.children] as HTMLElement[]) {
     if (node.classList.contains("user")) {
       key = node.dataset.turnId ?? node.dataset.messageId ?? key;
+      if (!turns.has(key)) turns.set(key, []);
       continue;
     }
     const turnKey = node.dataset.turnId ?? key;
@@ -31,13 +32,29 @@ export function groupTurnActivity(
     nodes.push(node);
     turns.set(turnKey, nodes);
   }
+  if (!turns.size && ["working", "waiting"].includes(conversation.status))
+    turns.set("initial", []);
   const last = [...turns.keys()].at(-1);
   for (const [id, nodes] of turns) {
     const recorded = conversation.turns?.find((turn) => turn.id === id);
     const completed =
       !!recorded?.outcome ||
       (!recorded && (id !== last || conversation.status === "ready"));
-    if (!completed) continue;
+    if (!completed) {
+      if (id === last && ["working", "waiting"].includes(conversation.status)) {
+        const header = document.createElement("div");
+        header.className = "turn-activity";
+        header.dataset.focusKey = `turn-duration:${id}`;
+        header.setAttribute("role", "status");
+        header.setAttribute("aria-label", "Turn activity");
+        header.textContent =
+          conversation.status === "waiting"
+            ? "Waiting for your response"
+            : "Working...";
+        transcript.insertBefore(header, nodes[0] ?? null);
+      }
+      continue;
+    }
     let lastTool = -1;
     nodes.forEach((node, index) => {
       if (node.classList.contains("tool-activity")) lastTool = index;
