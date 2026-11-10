@@ -110,6 +110,16 @@ export function createWorkspaceNavigation(
     dialog.showModal();
     cancel.focus();
   }
+  tree.addEventListener("focusin", (event) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>(
+      '[role="treeitem"]',
+    );
+    if (row)
+      for (const item of tree.querySelectorAll<HTMLElement>(
+        '[role="treeitem"]',
+      ))
+        item.tabIndex = item === row ? 0 : -1;
+  });
   const collapsedWorkspaces = new Set<string>(
     readPreference<string[]>("collapsed-workspaces", []),
   );
@@ -206,7 +216,12 @@ export function createWorkspaceNavigation(
         } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
           e.preventDefault();
           if (e.key === "ArrowLeft") collapsedWorkspaces.add(workspace.id);
-          else collapsedWorkspaces.delete(workspace.id);
+          else if (!collapsedWorkspaces.has(workspace.id)) {
+            row.nextElementSibling instanceof HTMLElement &&
+              row.nextElementSibling.dataset.parentId === workspace.id &&
+              row.nextElementSibling.focus();
+            return;
+          } else collapsedWorkspaces.delete(workspace.id);
           renderTree();
         } else navigateTree(e, row);
       };
@@ -252,6 +267,7 @@ export function createWorkspaceNavigation(
             workspace.activePaneId === conversation.paneId,
         );
         item.classList.add("conversation-row");
+        item.dataset.parentId = workspace.id;
         const attention = attentionStatus(conversation);
         item.dataset.status = attention;
         item.setAttribute("aria-label", label);
@@ -308,6 +324,7 @@ export function createWorkspaceNavigation(
         item.setAttribute("aria-label", reviewLabel);
         item.title = reviewLabel;
         item.classList.add("review-row");
+        item.dataset.parentId = review.originConversationId ?? workspace.id;
         item.replaceChildren(
           icon("review"),
           document.createTextNode(reviewLabel),
@@ -335,6 +352,15 @@ export function createWorkspaceNavigation(
       }
     }
     reconcileView(host, nextTree);
+    const focused =
+      document.activeElement?.closest<HTMLElement>('[role="treeitem"]');
+    const current =
+      focused && host.contains(focused)
+        ? focused
+        : (host.querySelector<HTMLElement>('[aria-selected="true"]') ??
+          host.querySelector<HTMLElement>('[role="treeitem"]'));
+    for (const row of host.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+      row.tabIndex = row === current ? 0 : -1;
   }
 
   function treeRow(key: string, label: string, selected: boolean): HTMLElement {
@@ -349,12 +375,32 @@ export function createWorkspaceNavigation(
   }
 
   function navigateTree(event: KeyboardEvent, row: HTMLElement): void {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (event.isComposing) return;
+    if (event.key === "ArrowLeft" && row.dataset.parentId) {
+      event.preventDefault();
+      tree
+        .querySelector<HTMLElement>(
+          `[data-workspace-id="${row.dataset.parentId}"]`,
+        )
+        ?.focus();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const rows = [...tree.querySelectorAll<HTMLElement>("[role=treeitem]")];
     const index = rows.indexOf(row);
     rows[
-      (index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? rows.length - 1
+          : Math.max(
+              0,
+              Math.min(
+                rows.length - 1,
+                index + (event.key === "ArrowDown" ? 1 : -1),
+              ),
+            )
     ]?.focus();
   }
 

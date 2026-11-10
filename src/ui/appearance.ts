@@ -32,7 +32,7 @@ export function changeTextSize(amount: number | "reset"): void {
       : "ui";
   update(key, amount === "reset" ? defaults[key] : sizes[key] + amount);
 }
-export function appearanceDialog(): void {
+export function appearanceDialog(shortcuts?: () => void): void {
   if (document.querySelector("dialog[open]")) return;
   const dialog = document.createElement("dialog");
   dialog.className = "appearance-settings";
@@ -83,6 +83,15 @@ export function appearanceDialog(): void {
   done.textContent = "Done";
   done.className = "primary";
   done.onclick = () => dialog.close();
+  if (shortcuts) {
+    const keys = document.createElement("button");
+    keys.textContent = "Keyboard shortcuts";
+    keys.onclick = () => {
+      dialog.close();
+      shortcuts();
+    };
+    actions.append(keys);
+  }
   actions.append(reset, done);
   dialog.append(note, actions);
   dialog.onclose = () => dialog.remove();

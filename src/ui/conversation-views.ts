@@ -151,12 +151,7 @@ export function createConversationViews({
         invalidate();
       }
     };
-    input.onkeydown = (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        void send();
-      }
-    };
+    input.addEventListener("cod:send-message", () => void send());
     composer.oncontextmenu = (e) => {
       if (e.target === input) return;
       e.preventDefault();
@@ -306,7 +301,11 @@ export function createConversationViews({
       const img = document.createElement("img");
       img.src = `data:${image.mimeType};base64,${image.data}`;
       img.alt = image.name || "Attached image";
-      img.onclick = () => {
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "image-preview";
+      preview.setAttribute("aria-label", `View ${img.alt}`);
+      preview.onclick = () => {
         const dialog = document.createElement("dialog");
         dialog.className = "image-viewer";
         const large = img.cloneNode() as HTMLImageElement;
@@ -315,10 +314,14 @@ export function createConversationViews({
           iconButton("close", "Close image", () => dialog.close()),
         );
         document.body.append(dialog);
-        dialog.onclose = () => dialog.remove();
+        dialog.onclose = () => {
+          dialog.remove();
+          if (preview.isConnected) preview.focus();
+        };
         dialog.showModal();
       };
-      item.append(img);
+      preview.append(img);
+      item.append(preview);
       if (remove)
         item.append(iconButton("close", "Remove image", () => remove(index)));
       strip.append(item);
@@ -681,12 +684,6 @@ export function createConversationViews({
     input.addEventListener("input", () => {
       composerDrafts.set(conversation.id, input.value);
       persistComposer(conversation.id);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void sendMessage(conversation.id);
-      }
     });
     const actions = document.createElement("div");
     actions.className = "composer-actions";

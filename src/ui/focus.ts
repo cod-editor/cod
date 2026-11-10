@@ -1,4 +1,5 @@
 interface FocusLocation {
+  browserId?: string;
   tabId?: string;
   workspaceId?: string;
   paneId?: string;
@@ -36,6 +37,12 @@ export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
   }
 
   function restoreFocus(location: FocusLocation): void {
+    if (location.browserId) {
+      remembered = location;
+      nativeOrigin = true;
+      void window.cod.browserFocus(location.browserId);
+      return;
+    }
     let target: HTMLElement | null = null;
     if (location.tabId) {
       target =
@@ -89,13 +96,17 @@ export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
   }
 
   let remembered: FocusLocation = {};
+  let nativeOrigin = false;
   const remember = () => {
-    if (!document.activeElement?.closest("dialog"))
+    if (!document.activeElement?.closest("dialog")) {
+      nativeOrigin = false;
       remembered = focusLocation();
+    }
   };
   const rememberBeforeLeaving = (event: FocusEvent) => {
     const element = event.target;
     if (
+      !nativeOrigin &&
       element instanceof HTMLElement &&
       element !== document.body &&
       !element.closest("dialog")
@@ -103,6 +114,7 @@ export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
       remembered = focusLocation(element);
   };
   const capture = (): FocusLocation => {
+    if (nativeOrigin) return remembered;
     const location = focusLocation();
     if (
       document.activeElement !== document.body &&
@@ -124,6 +136,10 @@ export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
   document.addEventListener("close", restoreAfterClose, true);
   return {
     capture,
+    native(id: string) {
+      remembered = { browserId: id };
+      nativeOrigin = true;
+    },
     restore: restoreFocus,
     dispose() {
       document.removeEventListener("focusin", remember, true);

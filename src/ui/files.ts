@@ -32,6 +32,27 @@ export class FileTree {
     private addFolder: (workspace: string) => void,
   ) {
     host.tabIndex = 0;
+    host.addEventListener("focusin", (event) => {
+      const row = (event.target as HTMLElement).closest<HTMLElement>(
+        '[role="treeitem"]',
+      );
+      if (!row) return;
+      host.tabIndex = -1;
+      for (const item of host.querySelectorAll<HTMLElement>(
+        '[role="treeitem"]',
+      ))
+        item.tabIndex = item === row ? 0 : -1;
+    });
+    host.addEventListener("keydown", (event) => {
+      if (
+        event.target === host &&
+        !event.isComposing &&
+        ["ArrowDown", "ArrowRight", "Home"].includes(event.key)
+      ) {
+        event.preventDefault();
+        host.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
+      }
+    });
     host.oncontextmenu = (event) => {
       if (event.defaultPrevented || !this.workspace) return;
       event.preventDefault();
@@ -61,6 +82,7 @@ export class FileTree {
     this.generation++;
     this.directories.clear();
     this.host.replaceChildren();
+    this.host.tabIndex = 0;
     void this.refreshChanges();
     this.host.setAttribute("role", "tree");
     this.host.setAttribute("aria-label", "File tree");
@@ -80,7 +102,7 @@ export class FileTree {
       row = document.createElement("div"),
       children = document.createElement("div");
     row.className = "file-row";
-    row.tabIndex = 0;
+    row.tabIndex = -1;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-label", name);
     row.setAttribute("aria-expanded", "false");
@@ -172,10 +194,13 @@ export class FileTree {
     };
     row.onclick = () => void toggle();
     row.onkeydown = (e) => {
+      if (e.isComposing) return;
       if (e.key === "ArrowRight" || e.key === "Enter") {
         e.preventDefault();
-        void toggle(true);
-      } else if (e.key === "ArrowLeft") {
+        if (e.key === "ArrowRight" && !children.hidden)
+          children.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
+        else void toggle(true);
+      } else if (e.key === "ArrowLeft" && !children.hidden) {
         e.preventDefault();
         void toggle(false);
       } else this.navigate(e, row);
@@ -238,7 +263,7 @@ export class FileTree {
   private file(entry: Entry, depth: number): HTMLElement {
     const row = document.createElement("div");
     row.className = "file-row";
-    row.tabIndex = 0;
+    row.tabIndex = -1;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-label", entry.name);
     row.title = entry.path;
@@ -251,11 +276,7 @@ export class FileTree {
     label.textContent = entry.name;
     row.append(icon("file"), label);
     this.decorate(row);
-    const open = () =>
-      void this.invoke("file.open", {
-        workspace: this.workspace!.id,
-        path: entry.path,
-      });
+    const open = () => void this.openFile(entry.path);
     row.onclick = open;
     row.onkeydown = (e) => {
       if (e.key === "Enter") {
@@ -343,6 +364,17 @@ export class FileTree {
     }
   }
   private navigate(event: KeyboardEvent, row: HTMLElement): void {
+    if (event.isComposing) return;
+    if (event.key === "ArrowLeft") {
+      const parentGroup =
+        row.parentElement?.closest<HTMLElement>('[role="group"]');
+      const parent = parentGroup?.previousElementSibling;
+      if (parent instanceof HTMLElement) {
+        event.preventDefault();
+        parent.focus();
+      }
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const rows = [
@@ -362,6 +394,26 @@ export class FileTree {
               ),
             )
     ]?.focus();
+  }
+  private async openFile(path: string, line?: number): Promise<void> {
+    const workspace = this.workspace;
+    if (!workspace) return;
+    const result = await this.invoke<{ paneId: string }>("file.open", {
+      workspace: workspace.id,
+      path,
+      ...(line ? { line } : {}),
+    });
+    requestAnimationFrame(() => {
+      if (
+        this.workspace?.id === workspace.id &&
+        !document.querySelector("dialog[open]")
+      )
+        document
+          .querySelector<HTMLElement>(
+            `[data-pane-id="${result.paneId}"] .file-editor`,
+          )
+          ?.focus({ preventScroll: true });
+    });
   }
   search(path?: string): void {
     this.openPicker(false, path);
@@ -413,12 +465,8 @@ export class FileTree {
         }
         button.title = match.path;
         button.onclick = () => {
-          void this.invoke("file.open", {
-            workspace: workspace.id,
-            path: match.path,
-            ...(match.line ? { line: match.line } : {}),
-          });
           dialog.close();
+          void this.openFile(match.path, match.line);
         };
         results.append(button);
       }

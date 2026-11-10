@@ -1546,3 +1546,40 @@ browser-action-list::part(action):focus-visible {
 .browser-protection details {
   color: var(--muted);
 }
+
+.shortcut-list {
+  max-height: min(60vh, 480px);
+  overflow: auto;
+}
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 16px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.shortcut-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.shortcut-row kbd {
+  font: inherit;
+  color: #d7dae0;
+}
+.command-disabled-reason {
+  display: block;
+  color: var(--muted);
+  font-size: calc(var(--ui-font-size) - 2px);
+  margin-left: 10px;
+}
+
+.image-preview {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 3px;
+  cursor: zoom-in;
+}
+.image-preview img {
+  display: block;
+}

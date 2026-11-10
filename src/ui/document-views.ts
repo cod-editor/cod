@@ -189,15 +189,6 @@ export function createDocumentViews(
             expectedContent,
           }).catch(() => undefined);
       });
-      editor.addEventListener("keydown", (event) => {
-        if (
-          event.key.toLowerCase() === "s" &&
-          (event.ctrlKey || event.metaKey)
-        ) {
-          event.preventDefault();
-          void saveFile(workspace.id, pane.id);
-        }
-      });
       const highlighted = highlightedEditor(editor, pane.filePath);
       if (lineCache.has(pane.id))
         setChangedLines(highlighted, lineCache.get(pane.id)!);

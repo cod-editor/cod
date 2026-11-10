@@ -1,3 +1,5 @@
+import { resolveKeybinding } from "../keyboard";
+import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { AppState, TerminalState, TerminalUiEvent } from "../types";
@@ -51,6 +53,26 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
         white: "#abb2bf",
       },
     });
+    terminal.attachCustomKeyEventHandler(
+      (event) =>
+        !event.defaultPrevented &&
+        !resolveKeybinding(
+          {
+            key: event.key,
+            code: event.code,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            repeat: event.repeat,
+            isComposing: event.isComposing,
+            altGraph: event.getModifierState("AltGraph"),
+            type: event.type,
+          },
+          keyboardPlatform,
+          "terminal",
+        ),
+    );
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(output);

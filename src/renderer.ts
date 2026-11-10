@@ -86,6 +86,7 @@ const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   layout,
   chat: chats,
   navigation,
+  saveFile: documents.save,
 });
 
 const workspaceView = createWorkspaceView(
@@ -148,20 +149,8 @@ async function invoke<T>(
   }
 }
 
-window.cod.onBrowserShortcut(({ id, action }) => {
-  if (action === "settings") commands.settings();
-  else if (action === "palette") commands.palette();
-  else if (action === "panel") commands.focusPanel();
-  else if (action === "close") {
-    const browser = state.browsers.find((browser) => browser.id === id);
-    if (browser)
-      void invoke("pane.close", {
-        workspace: browser.workspaceId,
-        id: browser.paneId,
-      }).catch(() => undefined);
-  } else {
-    browsers.focusAddress(id);
-  }
+window.cod.onCommand(({ command, browserId }) => {
+  void commands.execute(command, browserId);
 });
 
 window.cod.onState((next) => {
