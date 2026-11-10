@@ -29,7 +29,7 @@ const panes = document.querySelector<HTMLDivElement>("#panes")!;
 const workspaceName =
   document.querySelector<HTMLHeadingElement>("#workspace-name")!;
 const status = document.querySelector<HTMLElement>("#status")!;
-const focus = createFocusManager(panes, tree);
+const focus = createFocusManager(panes, tree, (id) => browsers.focusNative(id));
 let state: AppState = {
   workspaces: [],
   activeWorkspaceId: null,
@@ -87,6 +87,7 @@ const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   chat: chats,
   navigation,
   saveFile: documents.save,
+  focusNativeView: browsers.focusNative,
 });
 
 const workspaceView = createWorkspaceView(

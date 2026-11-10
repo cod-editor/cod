@@ -12,7 +12,11 @@ interface FocusLocation {
   scrollLeft?: number;
 }
 
-export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
+export function createFocusManager(
+  panes: HTMLElement,
+  tree: HTMLElement,
+  focusNative: (id: string) => void,
+) {
   function focusLocation(
     element = document.activeElement as HTMLElement | null,
   ): FocusLocation {
@@ -40,7 +44,7 @@ export function createFocusManager(panes: HTMLElement, tree: HTMLElement) {
     if (location.browserId) {
       remembered = location;
       nativeOrigin = true;
-      void window.cod.browserFocus(location.browserId);
+      focusNative(location.browserId);
       return;
     }
     let target: HTMLElement | null = null;

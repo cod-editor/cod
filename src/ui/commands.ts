@@ -32,6 +32,7 @@ interface CommandFeatures {
   chat: { send: (id: string) => Promise<void>; integration: () => void };
   navigation: { focusWorkspace: (id: string) => Promise<void> };
   saveFile: (workspace: string, pane: string) => Promise<void>;
+  focusNativeView: (id: string) => void;
 }
 export function createCommands(
   getState: () => AppState,
@@ -50,6 +51,7 @@ export function createCommands(
     panes,
     tree,
     focus.native,
+    features.focusNativeView,
   );
   const events = new AbortController();
   const listen = (

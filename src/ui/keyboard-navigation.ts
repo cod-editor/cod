@@ -10,6 +10,7 @@ export function createKeyboardNavigation(
   panes: HTMLElement,
   tree: HTMLElement,
   nativeFocus: (id: string) => void,
+  focusNativeView: (id: string) => void,
 ) {
   const workspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
@@ -27,7 +28,7 @@ export function createKeyboardNavigation(
       !getState().browsers.find((b) => b.id === pane.browserId)?.error
     ) {
       nativeFocus(pane.browserId);
-      await window.cod.browserFocus(pane.browserId);
+      focusNativeView(pane.browserId);
       return;
     }
     const primary =
