@@ -31,7 +31,7 @@ const transcript = (chat: { paneId: string }) =>
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
 async function expandActivity(pane: Locator) {
-  for (const activity of await pane.locator(".turn-activity").all())
+  for (const activity of await pane.locator("details.turn-activity").all())
     if ((await activity.getAttribute("open")) === null)
       await activity.locator(":scope > summary").click();
 }
@@ -645,7 +645,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(
     shell
       .pane(chat.paneId)
-      .getByText(/history is partial|partial native history/i),
+      .getByText("Earlier messages are not shown", { exact: true }),
   ).toBeVisible();
   // Keeping cached context or showing only authoritative partial history are valid;
   // if cached leading text remains, its original position must remain before the tail.

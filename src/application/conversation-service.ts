@@ -43,6 +43,10 @@ export class ConversationApplicationService {
   >();
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
+  private turnClocks = new Map<
+    string,
+    { id: string; start: number; workingStart?: number; worked: number }
+  >();
   private resumeContexts = new Map<string, StagedHistory>();
   private readonly replays = new Set<ProviderAdapter>();
   constructor(
@@ -53,6 +57,43 @@ export class ConversationApplicationService {
     >,
     private readonly views: ConversationViewPort,
   ) {}
+  private beginTurn(conversation: ConversationState): string {
+    const id = randomUUID();
+    (conversation.turns ??= []).push({
+      id,
+      startedAt: new Date().toISOString(),
+    });
+    this.turnClocks.set(conversation.id, {
+      id,
+      start: performance.now(),
+      worked: 0,
+    });
+    return id;
+  }
+  private finishTurn(
+    conversation: ConversationState,
+    outcome: "completed" | "cancelled" | "failed",
+  ): void {
+    const clock = this.turnClocks.get(conversation.id);
+    const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
+    if (!turn || !clock || turn.finishedAt) return;
+    turn.finishedAt = new Date().toISOString();
+    const now = performance.now();
+    turn.elapsedMs = Math.max(0, Math.round(now - clock.start));
+    turn.durationMs = Math.max(
+      0,
+      Math.round(
+        clock.worked +
+          (clock.workingStart === undefined ? 0 : now - clock.workingStart),
+      ),
+    );
+    turn.outcome = outcome;
+  }
+  private currentTurn(conversation: ConversationState): string | undefined {
+    return this.activeTurns.has(conversation.id)
+      ? this.turnClocks.get(conversation.id)?.id
+      : undefined;
+  }
   isActive(id: string): boolean {
     return this.activeTurns.has(id);
   }
@@ -79,12 +120,21 @@ export class ConversationApplicationService {
     if (!adapter) throw new Error("Conversation controller unavailable");
     conversation.messages.push({
       id: messageId,
+      turnId: this.beginTurn(conversation),
       role: "user",
       text,
       order: this.nextOrder(conversation),
     });
     this.store.notify();
-    await adapter.send(text);
+    try {
+      const outcome = await adapter.send(text);
+      this.finishTurn(conversation, outcome.status);
+    } catch (error) {
+      this.finishTurn(conversation, "failed");
+      throw error;
+    } finally {
+      this.store.schedulePersist(true);
+    }
   }
   async freshHistory(conversation: ConversationState): Promise<StagedHistory> {
     const existing = this.controllers.get(conversation.id);
@@ -122,6 +172,7 @@ export class ConversationApplicationService {
         (item) => item.id === id,
       );
       if (conversation) {
+        this.finishTurn(conversation, "cancelled");
         conversation.status = "failed";
         conversation.pendingPermissions = [];
         conversation.error =
@@ -593,6 +644,7 @@ export class ConversationApplicationService {
       this.assertCurrent(conversation);
       conversation.messages.push({
         id: randomUUID(),
+        turnId: this.beginTurn(conversation),
         role: "user",
         text,
         ...(images.length ? { images } : {}),
@@ -610,12 +662,14 @@ export class ConversationApplicationService {
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
-        () => {
+        (outcome) => {
+          this.finishTurn(conversation, outcome.status);
           finishPage("completed");
           this.activeTurns.delete(conversation.id);
           this.store.schedulePersist(true);
         },
         (error) => {
+          this.finishTurn(conversation, "failed");
           finishPage("uncertain");
           this.activeTurns.delete(conversation.id);
           conversation.status = "failed";
@@ -689,9 +743,24 @@ export class ConversationApplicationService {
       return;
     }
     switch (event.type) {
-      case "state":
+      case "state": {
+        const clock = this.turnClocks.get(id);
+        const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
+        if (clock && turn && !turn.finishedAt) {
+          const now = performance.now();
+          if (event.state === "working" && clock.workingStart === undefined)
+            clock.workingStart = now;
+          else if (
+            event.state !== "working" &&
+            clock.workingStart !== undefined
+          ) {
+            clock.worked += now - clock.workingStart;
+            clock.workingStart = undefined;
+          }
+        }
         conversation.status = event.state;
         break;
+      }
       case "text":
         if (!event.replay && event.role === "assistant") {
           const id = event.itemId
@@ -705,11 +774,12 @@ export class ConversationApplicationService {
             0,
             ...conversation.tools.map((tool) => tool.order),
           );
-          if (existing && existing.order >= lastToolOrder) {
+          if (existing) {
             existing.text += event.text;
           } else if (
             !event.itemId &&
             last?.role === "assistant" &&
+            last.turnId === this.currentTurn(conversation) &&
             !last.origin &&
             last.order >= lastToolOrder
           ) {
@@ -718,12 +788,33 @@ export class ConversationApplicationService {
             conversation.messages.push({
               id,
               role: "assistant",
+              turnId: this.currentTurn(conversation),
               text: event.text,
               order: this.nextOrder(conversation),
             });
           }
         }
         break;
+      case "message-meta": {
+        const messageId = `codex/live/${conversation.nativeId}/${event.itemId}`;
+        let message = conversation.messages.find(
+          (message) => message.id === messageId,
+        );
+        if (!message) {
+          message = {
+            id: messageId,
+            role: "assistant",
+            text: "",
+            order: this.nextOrder(conversation),
+            turnId: this.currentTurn(conversation),
+          };
+          conversation.messages.push(message);
+        }
+        if (event.phase) message.phase = event.phase;
+        if (event.interactive) message.interactive = true;
+        if (!message.text && event.text) message.text = event.text;
+        break;
+      }
       case "tool":
         if (!event.replay) this.mergeLiveTool(conversation, event);
         break;
@@ -741,6 +832,7 @@ export class ConversationApplicationService {
           );
         break;
       case "completed":
+        this.finishTurn(conversation, event.outcome.status);
         if (event.outcome.status === "completed") {
           conversation.completionRevision =
             (conversation.completionRevision ?? 0) + 1;
@@ -750,6 +842,7 @@ export class ConversationApplicationService {
         }
         break;
       case "error":
+        this.finishTurn(conversation, "failed");
         conversation.status = "failed";
         conversation.error = event.message;
         this.addApplicationMessage(
@@ -792,6 +885,7 @@ export class ConversationApplicationService {
     } else {
       conversation.tools.push({
         id: `live/${conversation.nativeId}/${nativeId ?? randomUUID()}`,
+        turnId: this.currentTurn(conversation),
         phase: completed ? "completed" : event.phase,
         details: event.details,
         order: this.nextOrder(conversation),
@@ -813,6 +907,7 @@ export class ConversationApplicationService {
     conversation.messages.push({
       id: randomUUID(),
       role: "system",
+      turnId: this.currentTurn(conversation),
       text,
       order: this.nextOrder(conversation),
       origin: "application",

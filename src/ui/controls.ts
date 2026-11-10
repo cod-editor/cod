@@ -5,6 +5,8 @@ export const icons: Record<string, string> = {
     '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18M8 8v13"/>',
   folder:
     '<path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  "folder-open":
+    '<path d="M3 17V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 11h18l-2 8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 12h8M8 16h8"/>',
   conversation: '<path d="M4 4h16v12H8l-4 4z"/>',
   review: '<path d="M4 4h16v12H8l-4 4zM8 10h8M12 6v8"/>',
@@ -138,5 +140,9 @@ export function menu(
             buttons.length
     ]?.focus();
   };
-  dialog.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  (
+    dialog.querySelector<HTMLButtonElement>(
+      'button[aria-pressed="true"]:not(:disabled)',
+    ) ?? dialog.querySelector<HTMLButtonElement>("button:not(:disabled)")
+  )?.focus();
 }

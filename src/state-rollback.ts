@@ -9,6 +9,7 @@ export function rollbackState(
     "nativeId",
     "status",
     "messages",
+    "turns",
     "tools",
     "pendingPermissions",
     "metadata",

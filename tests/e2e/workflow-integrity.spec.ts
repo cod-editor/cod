@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
@@ -443,12 +443,14 @@ test("Fresh workspace exposes both pane controls and opens material without dupl
   }
 });
 
-test("Routine tools group by turn while assistant messages and permission choices remain visible", async ({}, info) => {
+test("Completed turns fold commentary and tools while final answers and decisions remain visible", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   await app.configure({
     codex: {
       extraTools: 3,
+      interactiveQuestion: true,
+      finalDelayMs: 1000,
       options: true,
       reasoningOptions: true,
       narrative:
@@ -460,11 +462,19 @@ test("Routine tools group by turn while assistant messages and permission choice
     const composer = app.page.locator(".composer textarea");
     await composer.fill("Search and inspect the invented files.");
     await composer.press(`${modifier}+Enter`);
+    await expect(
+      app.page.getByText("STREAM Search and inspect the invented files.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(app.page.locator(".turn-activity")).toHaveCount(0);
+    const liveState = await app.cli<AppState>("state");
+    const conversationId = liveState.conversations[0].id;
     await expect(app.page.locator(".turn-activity")).toHaveCount(1);
     const first = app.page.locator(".turn-activity").first();
     await expect(first.locator(":scope > summary")).toHaveAttribute(
       "aria-label",
-      "Codex activity: 4 steps",
+      /Worked for \d+s/,
     );
     await expect(
       app.page.getByText("DONE Search and inspect the invented files.", {
@@ -472,16 +482,36 @@ test("Routine tools group by turn while assistant messages and permission choice
       }),
     ).toBeVisible();
     expect(await first.getAttribute("open")).toBeNull();
+    const question = app.page.getByText(
+      "Should the report include archived rows?",
+      { exact: true },
+    );
+    await expect(question).toBeVisible();
+    expect(
+      await question.evaluate((node) => !!node.closest(".turn-activity")),
+    ).toBe(false);
     await app.page.screenshot({
       path: info.outputPath("populated-collapsed-turn.png"),
     });
-    const reasoning = app.page.getByRole("combobox", {
+    await expect(first.locator(".assistant").first()).toContainText(
+      "I checked how report exports are assembled",
+    );
+    await expect(
+      app.page.getByText("STREAM Search and inspect the invented files.", {
+        exact: true,
+      }),
+    ).toBeHidden();
+    const reasoning = app.page.getByRole("button", {
       name: "Reasoning effort",
       exact: true,
     });
-    await expect(reasoning).toBeVisible();
-    await reasoning.selectOption("medium");
-    await expect(reasoning.locator("option:checked")).toHaveText("Medium");
+    await reasoning.click();
+    const choices = app.page.getByRole("dialog", { name: "Actions" });
+    await expect(
+      choices.getByRole("button", { name: "Medium", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await choices.getByRole("button", { name: "Low", exact: true }).click();
+    await expect(reasoning).toHaveText("Low");
     await expect(composer).toHaveCSS("resize", "none");
     await app.app!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(900, 800),
@@ -501,6 +531,9 @@ test("Routine tools group by turn while assistant messages and permission choice
       .locator("summary")
       .click();
     await expect(first).toContainText("Fixture detail 0");
+    await app.page.screenshot({
+      path: info.outputPath("completed-expanded-commentary-tools.png"),
+    });
     await composer.fill("Ask before the next command. [approve]");
     await composer.press(`${modifier}+Enter`);
     await expect(
@@ -515,10 +548,23 @@ test("Routine tools group by turn while assistant messages and permission choice
     await app.page.screenshot({
       path: info.outputPath("grouped-tools-visible-permission.png"),
     });
+    // An actual waiting interval must not become agent working time.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     await app.page.getByRole("button", { name: /Allow once/ }).click();
     await expect(
       app.page.getByText(/ALLOWED Ask before the next command/),
     ).toBeVisible();
+    await expect
+      .poll(async () => (await app.inspect(conversationId)).status)
+      .toBe("ready");
+    const afterApproval = await app.cli<
+      import("../../src/types").ConversationState
+    >("conversation", "inspect", "--id", conversationId);
+    const approvalTurn = afterApproval.turns!.at(-1)!;
+    expect(approvalTurn.outcome).toBe("completed");
+    expect(
+      approvalTurn.elapsedMs! - approvalTurn.durationMs!,
+    ).toBeGreaterThanOrEqual(150);
     await app.configure({ codex: { extraTools: 1, failExtraTool: true } });
     await composer.fill("Show a recoverable tool failure.");
     await composer.press(`${modifier}+Enter`);
@@ -536,6 +582,67 @@ test("Routine tools group by turn while assistant messages and permission choice
     await app.page.screenshot({
       path: info.outputPath("tool-error-remains-visible.png"),
     });
+    await expect
+      .poll(async () => (await app.inspect(conversationId)).status)
+      .toBe("ready");
+    await expect(failure).toBeVisible();
+    expect(
+      await failure.evaluate(
+        (node) => !!node.parentElement?.closest(".turn-activity"),
+      ),
+    ).toBe(false);
+    await failure.scrollIntoViewIfNeeded();
+    await app.page.screenshot({
+      path: info.outputPath("completed-tool-error-remains-visible.png"),
+    });
+    await app.send(conversationId, "[hold] Cancel this observed turn");
+    await expect
+      .poll(async () => (await app.inspect(conversationId)).status)
+      .toBe("working");
+    await app.page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect
+      .poll(async () => (await app.inspect(conversationId)).status)
+      .toBe("ready");
+    let observed = await app.cli<import("../../src/types").ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      conversationId,
+    );
+    expect(observed.turns!.at(-1)!.outcome).toBe("cancelled");
+    const stopped = app.page
+      .locator(".turn-activity")
+      .filter({ hasText: /Stopped after/ })
+      .last();
+    await expect(stopped).toBeVisible();
+    await stopped.scrollIntoViewIfNeeded();
+    await app.page.screenshot({
+      path: info.outputPath("cancelled-turn-duration.png"),
+    });
+    await app.send(conversationId, "[crash]");
+    await expect
+      .poll(async () => (await app.inspect(conversationId)).status)
+      .toBe("failed");
+    observed = await app.cli<import("../../src/types").ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      conversationId,
+    );
+    expect(observed.turns!.at(-1)!.outcome).toBe("failed");
+    const knownTurns = observed.turns;
+    await app.stop();
+    await app.start();
+    expect(
+      (
+        await app.cli<import("../../src/types").ConversationState>(
+          "conversation",
+          "inspect",
+          "--id",
+          conversationId,
+        )
+      ).turns,
+    ).toEqual(knownTurns);
   } finally {
     await app.cleanup();
   }
@@ -669,6 +776,101 @@ test("Skills are discoverable from the first empty composer without a model turn
     await app.page.keyboard.press("Escape");
     await expect(composer).toBeFocused();
     expect(await app.prompts()).toHaveLength(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Imported native history does not invent duration and final-only live replies need no disclosure", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  const nativeId = "codex-invented-import";
+  await mkdir(app.recording + ".sessions", { recursive: true });
+  await writeFile(
+    path.join(app.recording + ".sessions", nativeId + ".json"),
+    JSON.stringify([
+      {
+        id: "old-native-turn",
+        status: "completed",
+        items: [
+          {
+            id: "old-user",
+            type: "userMessage",
+            content: [{ type: "text", text: "Imported task" }],
+          },
+          {
+            id: "old-comment",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "I inspected the old fixture files.",
+          },
+          {
+            id: "old-tool",
+            type: "commandExecution",
+            command: "echo old-fixture",
+            status: "completed",
+            aggregatedOutput: "Old fixture output",
+          },
+          {
+            id: "old-final",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Imported final answer.",
+          },
+        ],
+      },
+    ]),
+  );
+  try {
+    await app.start();
+    const workspace = await app.create("Imported history");
+    const chat = await app.cli<{ id: string; paneId: string }>(
+      "conversation",
+      "resume",
+      "--workspace",
+      workspace,
+      "--provider",
+      "codex",
+      "--cwd",
+      app.folders[0],
+      "--native-id",
+      nativeId,
+    );
+    const pane = app.pane(chat.paneId),
+      activity = pane.locator("details.turn-activity");
+    await expect(activity.locator(":scope > summary")).toHaveText("Activity");
+    await expect(
+      pane.getByText("Imported final answer.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      pane.getByText("I inspected the old fixture files.", { exact: true }),
+    ).toBeHidden();
+    expect(
+      (
+        await app.cli<import("../../src/types").ConversationState>(
+          "conversation",
+          "inspect",
+          "--id",
+          chat.id,
+        )
+      ).turns ?? [],
+    ).toHaveLength(0);
+    await app.page.screenshot({
+      path: info.outputPath("imported-history-unknown-duration.png"),
+    });
+    await app.configure({ codex: { finalOnly: true } });
+    await app.send(chat.id, "A brief final-only answer");
+    await expect(
+      pane.getByText("DONE A brief final-only answer", { exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(async () => (await app.inspect(chat.id)).status)
+      .toBe("ready");
+    await expect(pane.locator("div.turn-activity")).toHaveText(/Worked for/);
+    await expect(pane.locator("details.turn-activity")).toHaveCount(1);
+    await app.page.screenshot({
+      path: info.outputPath("final-only-turn-duration.png"),
+    });
   } finally {
     await app.cleanup();
   }

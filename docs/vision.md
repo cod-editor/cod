@@ -57,6 +57,7 @@ Cod owns status storage, display and CLI updates, plus technical process and con
 Agents and scripts use the same status and context CLI, including requesting a review. Verify that provider hooks run through the chat adapter as well as the native CLI; if they do not, prove an alternative event delivery path to the plugin before claiming compatibility.
 Updating a background session must not steal focus.
 Completion acknowledgment and status precedence are defined in the [implementation contracts](specs/implementation.md).
+Workspace and conversation rows show status through the color of their existing object icon: neutral, working, needs attention, completed and failed. Do not add a separate status dot, embedded status symbols or user-defined status glyphs. The workspace icon reflects the highest-priority status among its conversations using the existing precedence. Hover text and accessible labels name the state and available context; actionable reasons remain visible in the conversation. Review requests use the needs-attention color while retaining their object identity.
 
 ### Agent conversations and CLI
 
@@ -132,6 +133,7 @@ Agent screenshots and agent browser control are outside v1; opening a URL throug
 | P4  | Clear modules, few dependencies, quick builds and modest development disk use.                                                                          |
 
 The visible workspace panel is the starting navigation model. It lists expandable workspaces with summarized attention status, conversation children and pending review requests beneath their originating conversations. Selecting a conversation or request jumps directly to it, including across workspaces. Tabs still arrange open content within each workspace. Browser notifications may later join this navigation model; notification infrastructure is deferred. Workspace-row context menus provide Rename, Add folder and Close workspace. Repository-root context menus provide removal from the workspace without deleting files. File browsing, quick-open by filename and workspace text search are separate interactions.
+Workspace rows have no separate disclosure arrow. Clicking the workspace icon toggles its children; clicking its label selects the workspace. A collapsed row shows a muted conversation count. Preserve manual collapse across restart and ordinary selection/status updates; explicitly navigating to a hidden conversation reveals it.
 There is no separate overview dashboard requirement.
 A new workspace opens with chat as its main view, with a provider selector in the chat rather than a separate provider-selection step. Existing workspaces reopen as left.
 Chat content and input use the available pane width up to a configurable pixel maximum. Keep input at the bottom in both empty and populated chats, without moving it after the first message.
@@ -210,7 +212,9 @@ Pane visibility controls remain discoverable even before the material area is op
 
 Provider session commands expose actual native status, skills, plugins, effective configuration and subagents where supported. Unsupported or unavailable sections say so; opening an inspector never sends an inference prompt. Skills retain their native path identity when names collide.
 
-The composer stays at the bottom of empty and populated chats. Enter inserts a newline and Cmd/Ctrl+Enter sends; there is no permanent Send button. Commands and the composer background context menu provide a mouse path while the text field retains native editing actions. Preserve the next draft during an active turn.
+The composer stays at the bottom of empty and populated chats. Enter inserts a newline and Cmd/Ctrl+Enter sends; there is no permanent Send button. Model and reasoning choices use consistent compact keyboard-accessible menus that stay within the window. Do not show an unexplained working-directory basename in the composer; the full session directory remains discoverable in session details. Commands and the composer background context menu provide a mouse path while the text field retains native editing actions. Preserve the next draft during an active turn.
+
+A completed agent turn presents its final answer once, with routine intermediate commentary and tool activity inside a compact expandable activity row. Show measured working duration when known rather than repeating the provider name; imported history without timing must not invent a duration. Active progress, questions requiring an answer, permissions and actionable failures remain visible. Preserve all messages in the expanded activity and keep their order.
 
 Reviews are actions on existing material, not a tab type to create from a generic New menu. Opening a request shows its source alongside its originating conversation without undoing deliberate pane visibility. Comments remain private until one submission; approval without comments is an explicit outcome. Reading a completed reply acknowledges it, but opening a review does not submit it.
 

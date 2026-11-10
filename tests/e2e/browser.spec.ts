@@ -99,6 +99,20 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     requests.push(request.url!);
     const route = new URL(request.url!, "http://fixture").pathname;
+    if (route === "/scrollbars") {
+      response.setHeader("Content-Type", "text/html");
+      response.end(`<!doctype html><title>Invented scrollbar fixture</title><style>
+        body{margin:16px;background:#282c34;color:#abb2bf;font:14px sans-serif;min-height:1800px}
+        .box{height:140px;width:220px;overflow:auto;border:1px solid #454b57;margin-bottom:18px}
+        .content{height:650px;width:320px;padding:8px;box-sizing:border-box}
+        #hidden{scrollbar-width:none}#hidden::-webkit-scrollbar{display:none}
+        #custom::-webkit-scrollbar{width:18px;height:18px}#custom::-webkit-scrollbar-thumb{background:rgb(180,80,70);border-radius:0}
+      </style><h3>Ordinary page scrollbar</h3><p>Nested scrolling stays independent of the page.</p>
+      <div id="ordinary" class="box"><div class="content">Ordinary nested content</div></div>
+      <div id="custom" class="box"><div class="content">Page-authored custom scrollbar</div></div>
+      <div id="hidden" class="box"><div class="content">Page-authored hidden scrollbar</div></div><iframe id="frame" title="Invented frame" style="width:220px;height:100px" srcdoc='<style>body{min-height:600px}</style>Frame scrollbar fixture'></iframe>`);
+      return;
+    }
     if (route.startsWith("/oauth-loop/") && brokenPage) {
       response.writeHead(302, { Location: request.url! });
       response.end();
@@ -661,4 +675,119 @@ test("Browser OAuth loop error stays compact and redacts parameters while retry 
   expect(await remote(pathname + query + fragment, "location.href")).toBe(
     destination,
   );
+});
+
+test("Browser default scrollbars match Cod while authored nested scrolling survives reload", async ({}, info) => {
+  const workspace = await shell.create("Scrollbar fixture");
+  const browser = await open(workspace, "/scrollbars");
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  const styles = () =>
+    remote(
+      "/scrollbars",
+      `(() => {
+    const ordinary=document.querySelector('#ordinary'), custom=document.querySelector('#custom'), hidden=document.querySelector('#hidden');
+    return {width:getComputedStyle(ordinary,'::-webkit-scrollbar').width, thumb:getComputedStyle(ordinary,'::-webkit-scrollbar-thumb').backgroundColor,
+      customWidth:getComputedStyle(custom,'::-webkit-scrollbar').width,customThumb:getComputedStyle(custom,'::-webkit-scrollbar-thumb').backgroundColor,
+      hidden:getComputedStyle(hidden).scrollbarWidth,hiddenDisplay:getComputedStyle(hidden,'::-webkit-scrollbar').display};
+  })()`,
+    );
+  const shellStyle = await shell.page
+    .locator("#workspace-tree")
+    .evaluate((node) => ({
+      width: getComputedStyle(node, "::-webkit-scrollbar").width,
+      thumb: getComputedStyle(node, "::-webkit-scrollbar-thumb")
+        .backgroundColor,
+    }));
+  await expect.poll(styles).toMatchObject({
+    ...shellStyle,
+    customWidth: "18px",
+    customThumb: "rgb(180, 80, 70)",
+    hidden: "none",
+    hiddenDisplay: "none",
+  });
+  async function capture(name: string) {
+    const png = await shell.app!.evaluate(
+      async ({ webContents }, url) =>
+        (
+          await webContents
+            .getAllWebContents()
+            .find((w) => w.getURL() === url)!
+            .capturePage()
+        )
+          .toPNG()
+          .toString("base64"),
+      origin + "/scrollbars",
+    );
+    await writeFile(info.outputPath(name), Buffer.from(png, "base64"));
+  }
+  await expect
+    .poll(() =>
+      remote(
+        "/scrollbars",
+        `(() => {const frame=document.querySelector('#frame');return frame.contentWindow.getComputedStyle(frame.contentDocument.documentElement,'::-webkit-scrollbar').width})()`,
+      ),
+    )
+    .toBe(shellStyle.width);
+  await capture("native-scrollbar-defaults.png");
+  const point = await remote(
+    "/scrollbars",
+    `(() => {const r=document.querySelector('#ordinary').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
+  );
+  await shell.app!.evaluate(
+    ({ webContents }, args) => {
+      const wc = webContents
+        .getAllWebContents()
+        .find((w) => w.getURL() === args.url)!;
+      wc.sendInputEvent({ type: "mouseMove", ...args.point });
+      wc.sendInputEvent({
+        type: "mouseWheel",
+        ...args.point,
+        deltaY: -100,
+        canScroll: true,
+        deltaX: 0,
+      });
+    },
+    { url: origin + "/scrollbars", point },
+  );
+  await expect
+    .poll(() =>
+      remote("/scrollbars", "document.querySelector('#ordinary').scrollTop"),
+    )
+    .toBeGreaterThan(0);
+  expect(
+    await remote("/scrollbars", "document.scrollingElement.scrollTop"),
+  ).toBe(0);
+  await capture("native-scrollbar-nested-scrolled.png");
+  await pageKey("/scrollbars", "PageDown");
+  await expect
+    .poll(() => remote("/scrollbars", "document.scrollingElement.scrollTop"))
+    .toBeGreaterThan(0);
+  await capture("native-scrollbar-page-scrolled.png");
+
+  const requestsBefore = requests.filter(
+    (route) => route === "/scrollbars",
+  ).length;
+  await shell
+    .pane(browser.paneId)
+    .getByRole("button", { name: "Reload", exact: true })
+    .click();
+  await expect
+    .poll(() => requests.filter((route) => route === "/scrollbars").length)
+    .toBeGreaterThan(requestsBefore);
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  await expect.poll(styles).toMatchObject({
+    ...shellStyle,
+    customWidth: "18px",
+    customThumb: "rgb(180, 80, 70)",
+    hidden: "none",
+    hiddenDisplay: "none",
+  });
+  await capture("native-scrollbar-reloaded.png");
+  await shell.page.screenshot({
+    path: info.outputPath("scrollbar-shell-and-page.png"),
+  });
 });

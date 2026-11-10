@@ -441,3 +441,29 @@ for (const provider of ["codex", "kimi"] as const) {
     }
   });
 }
+
+test("Codex exposes explicit native commentary/partial/final metadata without duplicating deltas", async () => {
+  const { adapter, events } = setup("codex", "phases");
+  try {
+    await adapter.create();
+    await adapter.send("fixture phases");
+    const metadata = events.filter((event) => event.type === "message-meta");
+    assert.deepEqual(
+      metadata.map((event) => event.phase),
+      ["commentary", "commentary", "partial", "partial", "final", "final"],
+    );
+    assert.equal(
+      metadata.find((event) => event.itemId === "partial" && event.text)
+        ?.interactive,
+      true,
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text),
+      ["Checking files", "Progress so far", "Finished"],
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});

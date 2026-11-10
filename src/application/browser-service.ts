@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   findFocusWorld,
   captureFindFocus,
@@ -271,6 +272,10 @@ export class BrowserApplicationService {
       },
     });
     this.browserService = new BrowserService({
+      scrollbarCSS: readFileSync(
+        path.join(__dirname, "scrollbars.css"),
+        "utf8",
+      ),
       isAllowedExtensionUrl: (url) => this.browserAddons?.allows(url) ?? false,
       window,
       session,

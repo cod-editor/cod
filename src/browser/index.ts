@@ -1,3 +1,4 @@
+import { installScrollbarStyle } from "./scrollbars";
 import {
   WebContentsView,
   type BrowserWindow,
@@ -55,6 +56,7 @@ interface Options {
   window: BrowserWindow;
   session: Session;
   downloadDirectory: string;
+  scrollbarCSS?: string;
   isAllowedExtensionUrl?: (url: string) => boolean;
   onViewCreated?: (contents: WebContents, id: string) => void;
 }
@@ -223,6 +225,8 @@ export class BrowserService {
         height: Math.max(1, size[1]),
       });
       this.secure(view.webContents, resource);
+      if (this.options.scrollbarCSS)
+        installScrollbarStyle(view.webContents, this.options.scrollbarCSS);
       const changed = () => this.changed(resource);
       view.webContents.on(
         "did-start-navigation",

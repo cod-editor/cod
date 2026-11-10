@@ -1,3 +1,4 @@
+import { showProviderCommands } from "./provider-commands";
 import { createFocusTargets } from "./focus-targets";
 import {
   commands as commandDefinitions,
@@ -136,6 +137,11 @@ export function createCommands(
       ];
     }
     return [
+      {
+        label: "Session info...",
+        run: () =>
+          showProviderCommands({ id: conversation.id, invoke }, "status"),
+      },
       {
         label: "Move to workspace...",
         disabled: getState().workspaces.length < 2,

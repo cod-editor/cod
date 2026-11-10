@@ -1,5 +1,4 @@
 import { focusReadyEditor } from "./document-views";
-import { treeRowParts } from "./tree-row";
 import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
@@ -112,13 +111,14 @@ export class FileTree {
     group.dataset.entryPath = path;
     group.dataset.entryKind = "directory";
     row.style.paddingLeft = `${8 + depth * 16}px`;
-    const parts = treeRowParts(
-      "folder",
-      name,
-      () => void toggle(),
-      "Expand or collapse folder",
-    );
-    row.append(...parts.nodes);
+    const folderIcon = icon("folder");
+    folderIcon.classList.add("folder-state");
+    const label = document.createElement("span");
+    label.className = "tree-label";
+    label.textContent = name;
+    row.append(folderIcon, label);
+    children.className = "file-children";
+    children.style.setProperty("--guide-offset", `${16 + depth * 16}px`);
     children.hidden = true;
     children.setAttribute("role", "group");
     children.id = `file-group-${++this.groupSequence}`;
@@ -191,6 +191,9 @@ export class FileTree {
       writePreference("file-expansion", this.expanded);
       children.hidden = !open;
       row.setAttribute("aria-expanded", String(open));
+      const nextIcon = icon(open ? "folder-open" : "folder");
+      nextIcon.classList.add("folder-state");
+      row.querySelector(".folder-state")?.replaceWith(nextIcon);
       if (open) await refresh();
     };
     row.onclick = () => void toggle();
@@ -271,7 +274,7 @@ export class FileTree {
     row.dataset.path = entry.path;
     row.dataset.entryPath = entry.path;
     row.dataset.entryKind = "file";
-    row.style.paddingLeft = `${24 + depth * 16}px`;
+    row.style.paddingLeft = `${8 + depth * 16}px`;
     const label = document.createElement("span");
     label.className = "tree-label";
     label.textContent = entry.name;

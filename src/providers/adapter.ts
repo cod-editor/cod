@@ -580,6 +580,26 @@ export class NativeAdapter implements ProviderAdapter {
         message.method === "item/completed"
       ) {
         const item = object(p.item);
+        if (item.type === "agentMessage" && typeof item.id === "string") {
+          this.emit({
+            type: "message-meta",
+            itemId: item.id,
+            phase:
+              item.phase === "commentary"
+                ? "commentary"
+                : item.phase === "partial_answer"
+                  ? "partial"
+                  : item.phase === "final_answer"
+                    ? "final"
+                    : undefined,
+            interactive:
+              Array.isArray(item.questions) && item.questions.length > 0,
+            ...(message.method === "item/completed" &&
+            typeof item.text === "string"
+              ? { text: item.text }
+              : {}),
+          });
+        }
         if (
           [
             "commandExecution",

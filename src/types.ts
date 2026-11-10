@@ -106,7 +106,19 @@ export interface FileDraft {
   expectedContent: string;
 }
 
+export interface ConversationTurn {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  /** Observed working intervals, excluding native waiting/permission time. */
+  durationMs?: number;
+  elapsedMs?: number;
+  outcome?: "completed" | "cancelled" | "failed";
+}
 export interface ConversationMessage {
+  turnId?: string;
+  phase?: "commentary" | "partial" | "final";
+  interactive?: boolean;
   images?: import("./providers/types").ImageAttachment[];
   id: string;
   role: "user" | "assistant" | "system";
@@ -116,6 +128,7 @@ export interface ConversationMessage {
 }
 
 export interface ToolActivity {
+  turnId?: string;
   id: string;
   phase: "started" | "updated" | "completed";
   details: unknown;
@@ -143,6 +156,7 @@ export interface ConversationState {
   nativeId: string;
   cwd: string;
   status: ProviderState;
+  turns?: ConversationTurn[];
   messages: ConversationMessage[];
   tools: ToolActivity[];
   pendingPermissions: PendingPermission[];

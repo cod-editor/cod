@@ -167,6 +167,39 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (provider === "codex") {
+    if (mode === "phases") {
+      for (const [id, phase, text] of [
+        ["commentary", "commentary", "Checking files"],
+        ["partial", "partial_answer", "Progress so far"],
+        ["final", "final_answer", "Finished"],
+      ]) {
+        notify("item/started", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          item: { type: "agentMessage", id, phase, text: "" },
+        });
+        notify("item/agentMessage/delta", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          itemId: id,
+          delta: text,
+        });
+        notify("item/completed", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id,
+            phase,
+            text,
+            questions: id === "partial" ? [{ id: "question" }] : [],
+          },
+        });
+      }
+      reply(m, { turn: { id: "turn-1" } });
+      complete();
+      return;
+    }
     // Deliberately send early notifications before the turn/start response.
     notify("item/agentMessage/delta", {
       threadId: "another-session",

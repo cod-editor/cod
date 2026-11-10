@@ -1,53 +1,83 @@
 import { icon } from "./controls";
 
-/** Aggregate routine steps per user/assistant turn, leaving all messages visible. */
+function workedDuration(ms: number, outcome?: string): string {
+  const prefix =
+    outcome === "cancelled"
+      ? "Stopped after"
+      : outcome === "failed"
+        ? "Failed after"
+        : "Worked for";
+  if (ms < 1000) return `${prefix} <1s`;
+  const seconds = Math.floor(ms / 1000);
+  return seconds < 60
+    ? `${prefix} ${seconds}s`
+    : `${prefix} ${Math.floor(seconds / 60)}m${seconds % 60 ? ` ${seconds % 60}s` : ""}`;
+}
+
+/** Fold completed routine activity without hiding final answers or decisions. */
 export function groupTurnActivity(
   transcript: HTMLElement,
-  provider: string,
+  conversation: import("../types").ConversationState,
 ): void {
   let key = "initial";
-  const turns = new Map<
-    string,
-    { first: HTMLElement; messages: HTMLElement[]; tools: HTMLElement[] }
-  >();
+  const turns = new Map<string, HTMLElement[]>();
   for (const node of [...transcript.children] as HTMLElement[]) {
     if (node.classList.contains("user")) {
-      key = node.dataset.messageId ?? key;
+      key = node.dataset.turnId ?? node.dataset.messageId ?? key;
       continue;
     }
-    const message = node.classList.contains("assistant");
-    const tool =
-      node.classList.contains("tool-activity") &&
-      !node.hasAttribute("data-action-required");
-    if (!message && !tool) continue;
-    let turn = turns.get(key);
-    if (!turn) {
-      turn = { first: node, messages: [], tools: [] };
-      turns.set(key, turn);
-    }
-    if (message) turn.messages.push(node);
-    if (tool) turn.tools.push(node);
+    const turnKey = node.dataset.turnId ?? key;
+    const nodes = turns.get(turnKey) ?? [];
+    nodes.push(node);
+    turns.set(turnKey, nodes);
   }
-  for (const [id, turn] of turns) {
-    if (!turn.tools.length) continue;
+  const last = [...turns.keys()].at(-1);
+  for (const [id, nodes] of turns) {
+    const recorded = conversation.turns?.find((turn) => turn.id === id);
+    const completed =
+      !!recorded?.outcome ||
+      (!recorded && (id !== last || conversation.status === "ready"));
+    if (!completed) continue;
+    let lastTool = -1;
+    nodes.forEach((node, index) => {
+      if (node.classList.contains("tool-activity")) lastTool = index;
+    });
+    const activity = nodes.filter((node, index) => {
+      if (node.hasAttribute("data-action-required")) return false;
+      if (node.classList.contains("tool-activity")) return true;
+      if (!node.classList.contains("assistant")) return false;
+      if (node.dataset.phase === "commentary") return true;
+      // Unknown imported history: preserve the complete final assistant block
+      // after the last tool; never classify a sole answer by its wording.
+      return !node.dataset.phase && lastTool >= 0 && index < lastTool;
+    });
+    const duration = recorded?.durationMs;
+    const text =
+      duration !== undefined && Number.isFinite(duration)
+        ? workedDuration(duration, recorded?.outcome)
+        : "Activity";
+    if (!activity.length) {
+      if (text !== "Activity" && nodes.length) {
+        const header = document.createElement("div");
+        header.className = "turn-activity";
+        header.dataset.focusKey = `turn-duration:${id}`;
+        header.textContent = text;
+        transcript.insertBefore(header, nodes[0]);
+      }
+      continue;
+    }
     const details = document.createElement("details");
     details.className = "turn-activity";
     details.dataset.focusKey = `turn-activity:${id}`;
     const summary = document.createElement("summary");
     summary.dataset.focusKey = `turn-summary:${id}`;
-    summary.setAttribute(
-      "aria-label",
-      `${provider} activity: ${turn.tools.length} steps`,
-    );
-    summary.title = `${turn.tools.length} steps`;
+    summary.setAttribute("aria-label", text);
     const label = document.createElement("span");
-    label.textContent = provider;
+    label.textContent = text;
     summary.append(icon("chevron"), label);
     details.append(summary);
-    transcript.insertBefore(details, turn.first);
-    details.append(...turn.tools);
-    for (const message of turn.messages)
-      message.querySelector(".message-role")?.remove();
+    transcript.insertBefore(details, activity[0]);
+    details.append(...activity);
   }
 }
 

@@ -44,6 +44,13 @@ export type ProviderEvent = {
       details: unknown;
     }
   | { type: "permission-resolved"; requestId: string }
+  | {
+      type: "message-meta";
+      itemId: string;
+      phase?: "commentary" | "partial" | "final";
+      interactive?: boolean;
+      text?: string;
+    }
   | { type: "completed"; outcome: TurnOutcome }
   | { type: "history"; details: unknown }
   | { type: "error"; message: string }

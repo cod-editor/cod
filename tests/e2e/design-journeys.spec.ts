@@ -583,7 +583,7 @@ test("First conversation initialization failure restores the same draft beside o
   ).toHaveValue(draftText);
 });
 
-test("Workspace attention uses the same ready marker as its chat and prioritizes actual failures", async () => {
+test("Workspace status icons match their chats and prioritize actual failures", async ({}, info) => {
   const workspace = await shell.create("Attention fixture");
   const ready = await shell.newChat(workspace, "codex");
   await shell.cli(
@@ -594,13 +594,16 @@ test("Workspace attention uses the same ready marker as its chat and prioritizes
     "--status",
     "ready",
   );
-  const workspaceBadge = shell.row("Attention fixture").locator(".attention");
-  const readyBadge = shell.page.locator(
-    `[data-workspace-id="${ready.id}"] .attention`,
-  );
-  await expect(readyBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveAttribute("title", "ready");
+  let workspaceRow = shell.row("Attention fixture");
+  let readyRow = shell.page.locator(`[data-workspace-id="${ready.id}"]`);
+  const color = (row: import("@playwright/test").Locator) =>
+    row
+      .locator(":scope > .icon, :scope > .tree-disclosure > .icon")
+      .evaluate((node) => getComputedStyle(node).color);
+  await expect(readyRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("aria-label", /Completed/);
+  expect(await color(workspaceRow)).toBe(await color(readyRow));
 
   const failed = await shell.newChat(workspace, "kimi");
   await shell.send(failed.id, "[crash]");
@@ -616,11 +619,95 @@ test("Workspace attention uses the same ready marker as its chat and prioritizes
     "--status",
     "ready",
   );
-  const failedBadge = shell.page.locator(
-    `[data-workspace-id="${failed.id}"] .attention`,
+  let failedRow = shell.page.locator(`[data-workspace-id="${failed.id}"]`);
+  await expect(failedRow).toHaveAttribute("data-status", "failed");
+  await expect(readyRow).toHaveAttribute("data-status", "ready");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await expect(workspaceRow).toHaveAttribute("aria-label", /Error/);
+  expect(await color(workspaceRow)).toBe(await color(failedRow));
+  expect(await color(readyRow)).not.toBe(await color(failedRow));
+  const review = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    review.id,
+    "--status",
+    "review",
   );
-  await expect(failedBadge).toHaveText("!");
-  await expect(readyBadge).toHaveText("○");
-  await expect(workspaceBadge).toHaveText("!");
-  await expect(workspaceBadge).toHaveAttribute("title", "failed");
+  const waiting = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    waiting.id,
+    "--status",
+    "waiting",
+  );
+  const working = await shell.newChat(workspace, "codex");
+  await shell.send(working.id, "[hold] Implement export");
+  const workingRow = shell.page.locator(`[data-workspace-id="${working.id}"]`);
+  await expect(workingRow).toHaveAttribute("data-status", "working");
+  await expect(workingRow).toHaveAttribute("aria-label", /Working/);
+  const reviewRow = shell.page.locator(`[data-workspace-id="${review.id}"]`);
+  await expect(reviewRow).toHaveAttribute("data-status", "review");
+  await expect(reviewRow).toHaveAttribute("aria-label", /Review requested/);
+  expect(await color(workingRow)).not.toBe(await color(readyRow));
+  expect(await color(reviewRow)).not.toBe(await color(workingRow));
+  await expect(shell.page.locator("#workspace-tree .attention")).toHaveCount(0);
+  await failedRow.click();
+  await expect(failedRow).toHaveAttribute("aria-selected", "true");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await shell.page.screenshot({
+    path: info.outputPath("status-icons-mixed-selected.png"),
+  });
+  const failedColor = await color(failedRow);
+  await workspaceRow
+    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
+    .click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workingRow).toHaveCount(0);
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  expect(await color(workspaceRow)).toBe(failedColor);
+  await shell.page.screenshot({
+    path: info.outputPath("status-icons-collapsed-aggregate.png"),
+  });
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveAttribute(
+    "aria-label",
+    "5 hidden conversations",
+  );
+  await workspaceRow.locator(".tree-label").click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await shell.stop();
+  await shell.start();
+  workspaceRow = shell.row("Attention fixture");
+  readyRow = shell.page.locator(`[data-workspace-id="${ready.id}"]`);
+  failedRow = shell.page.locator(`[data-workspace-id="${failed.id}"]`);
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveText("5");
+  await expect(workspaceRow).toHaveAttribute("data-status", "failed");
+  await shell.page.screenshot({
+    path: info.outputPath("workspace-collapsed-count-restored.png"),
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(workspaceRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowRight");
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "true");
+  await expect(workspaceRow.locator(".workspace-child-count")).toHaveCount(0);
+  await shell.page.keyboard.press("ArrowRight");
+  await expect(readyRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowLeft");
+  await expect(workspaceRow).toBeFocused();
+  await shell.page.keyboard.press("ArrowLeft");
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "false");
+  await workspaceRow
+    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
+    .click();
+  await expect(workspaceRow).toHaveAttribute("aria-expanded", "true");
+  await expect(failedRow).toHaveAttribute("aria-selected", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("workspace-icon-expanded.png"),
+  });
 });
