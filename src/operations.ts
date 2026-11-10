@@ -124,7 +124,8 @@ export class ApplicationOperations {
       domain === "group" ||
       request.op === "conversation.draft" ||
       request.op === "conversation.show" ||
-      request.op === "conversation.move"
+      request.op === "conversation.move" ||
+      request.op === "conversation.remove"
     )
       return this.workspaces.handle(request, trustedUi);
     if (domain === "conversation")

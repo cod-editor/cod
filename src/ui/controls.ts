@@ -59,6 +59,7 @@ export type MenuAction = {
   label: string;
   run: () => void;
   disabled?: boolean;
+  title?: string;
   selected?: boolean;
 } | null;
 export function menu(
@@ -87,6 +88,7 @@ export function menu(
       button.prepend(check);
     }
     button.disabled = !!item.disabled;
+    if (item.title) button.title = item.title;
     button.onpointermove = () => button.focus({ preventScroll: true });
     button.onclick = () => {
       performed = true;

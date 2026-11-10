@@ -217,6 +217,7 @@ export interface WorkspaceState {
     pane: PaneState;
     browser?: BrowserState;
     terminal?: TerminalState;
+    conversation?: ConversationState;
   }>;
   chatDrafts?: Record<
     string,

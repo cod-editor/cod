@@ -48,6 +48,7 @@ export const commands = {
   "conversation.draft": ["workspace?"],
   "conversation.start": ["workspace", "pane-id", "provider", "cwd?"],
   "conversation.show": ["id"],
+  "conversation.remove": ["id"],
   "conversation.composer": [
     "workspace",
     "pane-id",
@@ -130,7 +131,7 @@ ${Object.entries(commands)
   .join("\n")}
 
 Flags in brackets are optional. provider: codex|kimi; direction: right|down; ratio: greater than 0 and less than 1; cols/rows: integers 1..1000. Content/data values may be empty; conversation send requires text or at least one image. terminal write sends exact input without an implicit newline. file save requires expected-content for conflict detection.
-Commands print one JSON result and return nonzero on errors. conversation send returns after starting the turn; inspect or state reports progress. Review wait returns durable submitted feedback, not model completion (timeout exits 2). Only humans submit draft reviews unless explicitly delegated. Uncertain delivery requires native-history reconciliation, never blind resending. Native model/reasoning selection is available through conversation options/option. Claude and mode selection are unavailable. workspace create is background by default; use --focus true or workspace focus explicitly. Closing a conversation tab preserves its session; conversation show restores it. Review feedback is bound to its origin conversation at creation. settings and images flags accept JSON.
+Commands print one JSON result and return nonzero on errors. conversation send returns after starting the turn; inspect or state reports progress. Review wait returns durable submitted feedback, not model completion (timeout exits 2). Only humans submit draft reviews unless explicitly delegated. Uncertain delivery requires native-history reconciliation, never blind resending. Native model/reasoning selection is available through conversation options/option. Claude and mode selection are unavailable. workspace create is background by default; use --focus true or workspace focus explicitly. Closing a conversation tab preserves its session; conversation show restores it. conversation remove detaches an idle chat from its workspace without deleting native provider history; pane reopen restores its local snapshot. Review feedback is bound to its origin conversation at creation. settings and images flags accept JSON.
 `;
 const camel = (flag: string) =>
   flag.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());

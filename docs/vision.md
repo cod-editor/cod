@@ -36,6 +36,8 @@ Cod should also serve as the user's main browser and the place they spend most o
 
 A conversation can move to another workspace without becoming a new native session or interrupting its active turn. Its history, composer draft and originating reviews follow it. Workspace membership and the native process working directory are distinct and must be presented honestly.
 
+Users can remove an idle conversation from a workspace without deleting its native provider session or history. Removal clears its workspace row and open chat view; the existing reopen-closed-tab action restores an accidentally removed conversation and its draft. Closing a tab alone keeps the conversation in the workspace. Active work and pending review or form submissions must not be silently abandoned.
+
 A task often corresponds to one workspace, but this is a workflow convention, not a built-in dependency on a tracker.
 The expected daily use includes 2-4 parallel tasks plus temporary conversations and browsing.
 

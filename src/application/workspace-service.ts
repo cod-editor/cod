@@ -1,3 +1,4 @@
+import { conversationRemovalReason } from "../conversation-actions";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -24,7 +25,7 @@ export class WorkspaceApplicationService {
     private readonly store: ApplicationStateStore,
     private readonly conversations: Pick<
       ConversationApplicationService,
-      "disposeController"
+      "disposeController" | "isActive" | "reserve" | "release"
     >,
     private readonly browsers: Pick<
       BrowserApplicationService,
@@ -379,6 +380,80 @@ export class WorkspaceApplicationService {
     return { paneId: pane.id };
   }
 
+  async removeConversation(
+    request: OperationRequest,
+  ): Promise<{ id: string; nativeId: string }> {
+    const id = requiredString(request, "id");
+    const result = await this.store.change(async () => {
+      const conversation = this.store.conversation(id);
+      const reviews = await this.reviews.list();
+      const reason = conversationRemovalReason(
+        { ...this.store.data, reviews },
+        conversation,
+      );
+      if (reason) throw new Error(reason);
+      if (this.conversations.isActive(id))
+        throw new Error("Stop the current response before removing this chat.");
+      this.conversations.reserve(id);
+      try {
+        const workspace = this.store.workspace(conversation.workspaceId);
+        const saved = structuredClone(conversation);
+        workspace.closedTabs = workspace.closedTabs?.filter(
+          (record) =>
+            record.pane.kind !== "conversation" ||
+            record.pane.conversationId !== id,
+        );
+        const panes = workspace.panes.filter(
+          (pane) => pane.kind === "conversation" && pane.conversationId === id,
+        );
+        for (const pane of panes)
+          await this.closePane({
+            op: "pane.close",
+            workspace: workspace.id,
+            id: pane.id,
+          });
+        const closed = [...(workspace.closedTabs ?? [])]
+          .reverse()
+          .find(
+            (record) =>
+              record.pane.kind === "conversation" &&
+              record.pane.conversationId === id,
+          );
+        workspace.closedTabs = workspace.closedTabs?.filter(
+          (record) =>
+            record === closed ||
+            record.pane.kind !== "conversation" ||
+            record.pane.conversationId !== id,
+        );
+        if (closed) closed.conversation = saved;
+        else
+          (workspace.closedTabs ??= []).push({
+            pane: {
+              id: saved.paneId,
+              kind: "conversation",
+              conversationId: id,
+            },
+            conversation: saved,
+          });
+        if (workspace.closedTabs && workspace.closedTabs.length > 50)
+          workspace.closedTabs.shift();
+        this.store.data.conversations = this.store.data.conversations.filter(
+          (item) => item.id !== id,
+        );
+        if (workspace.lastConversationId === id)
+          workspace.lastConversationId = [...this.store.data.conversations]
+            .reverse()
+            .find((item) => item.workspaceId === workspace.id)?.id;
+        normalizeGroups(workspace);
+        await this.conversations.disposeController(id);
+        return { id, nativeId: saved.nativeId };
+      } finally {
+        this.conversations.release(id);
+      }
+    });
+    return result;
+  }
+
   async reopenPane(request: OperationRequest): Promise<{ paneId: string }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
@@ -414,7 +489,31 @@ export class WorkspaceApplicationService {
       }
     }
     return this.store.change(() => {
+      if (workspace.closedTabs?.at(-1) !== closed)
+        throw new Error("The closed tab list changed. Try reopening again.");
+      if (
+        closed.conversation &&
+        this.store.data.conversations.some(
+          (active) =>
+            active.id !== closed.conversation!.id &&
+            active.provider === closed.conversation!.provider &&
+            active.nativeId === closed.conversation!.nativeId,
+        )
+      )
+        throw new Error(
+          "This native session is already open. Use its existing chat.",
+        );
       workspace.closedTabs!.pop();
+      if (
+        closed.conversation &&
+        !this.store.data.conversations.some(
+          (item) => item.id === closed.conversation!.id,
+        )
+      ) {
+        closed.conversation.paneId = closed.pane.id;
+        this.store.data.conversations.push(closed.conversation);
+        workspace.lastConversationId = closed.conversation.id;
+      }
       if (!workspace.panes.some((pane) => pane.id === closed.pane.id))
         workspace.panes.push(closed.pane);
       if (closed.browser?.agentPage)
@@ -832,6 +931,9 @@ export class WorkspaceApplicationService {
           workspace.zoomedGroupId = null;
           return { workspaceId: workspace.id, paneId: id };
         });
+
+      case "conversation.remove":
+        return this.removeConversation(request);
 
       case "conversation.show":
         return this.store.change(() => {

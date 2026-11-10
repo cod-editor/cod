@@ -1,4 +1,5 @@
 import { showProviderCommands } from "./provider-commands";
+import { conversationRemovalReason } from "../conversation-actions";
 import { createFocusTargets } from "./focus-targets";
 import {
   commands as commandDefinitions,
@@ -111,6 +112,24 @@ export function createCommands(
   function conversationActions(
     conversation: import("../types").ConversationState,
   ): MenuAction[] {
+    const removalReason = conversationRemovalReason(getState(), conversation);
+    const remove: MenuAction = {
+      label: "Remove from workspace",
+      disabled: !!removalReason,
+      title:
+        removalReason ??
+        "Keep the native session history. Undo with Reopen closed tab.",
+      run: () => {
+        void invoke("conversation.remove", { id: conversation.id })
+          .then(() => {
+            requestAnimationFrame(() => {
+              if (tree.getClientRects().length)
+                focus.restore({ workspaceId: conversation.workspaceId });
+            });
+          })
+          .catch(() => undefined);
+      },
+    };
     if (conversation.handoffTerminalId) {
       const terminal = getState().terminals.find(
         (t) => t.id === conversation.handoffTerminalId,
@@ -134,6 +153,8 @@ export function createCommands(
           run: () =>
             void invoke("conversation.reclaim", { id: conversation.id }),
         },
+        null,
+        remove,
       ];
     }
     return [
@@ -154,6 +175,8 @@ export function createCommands(
         ),
         run: () => void invoke("conversation.handoff", { id: conversation.id }),
       },
+      null,
+      remove,
     ];
   }
   function defaultBrowserDialog(): void {
