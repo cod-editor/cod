@@ -19,6 +19,11 @@ export function createNavigationWidths(invoke: Invoke) {
   const clamp = (width: number) => Math.max(160, Math.min(maximum(), width));
   function paint(panel: NavigationPanel, width: number) {
     const actual = clamp(width);
+    if (panel.setting === "workspacesWidth")
+      document.documentElement.style.setProperty(
+        "--workspaces-width",
+        `${actual}px`,
+      );
     panel.host.style.width = `${actual}px`;
     panel.handle.setAttribute("aria-valuenow", String(actual));
     panel.handle.setAttribute("aria-valuemin", "160");

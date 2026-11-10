@@ -302,14 +302,20 @@ export function createCommands(
   function browserDialog(): void {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    inputDialog({
-      title: "New browser",
-      label: "URL",
-      value: "https://",
-      submitLabel: "Open",
-      submit: (url) =>
-        localInvoke("browser.open", { workspace: workspace.id, url }),
-    });
+    void invoke<{ paneId: string }>("browser.open", {
+      workspace: workspace.id,
+      url: "about:blank",
+    })
+      .then((browser) => {
+        requestAnimationFrame(() => {
+          const address = panes.querySelector<HTMLInputElement>(
+            `[data-pane-id="${browser.paneId}"] input[aria-label="Address"]`,
+          );
+          address?.focus();
+          address?.select();
+        });
+      })
+      .catch(() => {});
   }
 
   function resumeConversationDialog(): void {
@@ -423,18 +429,21 @@ export function createCommands(
   function terminalDialog(): void {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    inputDialog({
-      title: "New terminal",
-      label: "Working directory",
-      value: workspace.folders[0] ?? "",
-      submitLabel: "Create",
-      submit: (cwd) =>
-        localInvoke("terminal.open", {
-          workspace: workspace.id,
-          cwd,
-        }),
-    });
+    void invoke<{ paneId: string }>("terminal.open", {
+      workspace: workspace.id,
+    })
+      .then((terminal) =>
+        requestAnimationFrame(() =>
+          panes
+            .querySelector<HTMLTextAreaElement>(
+              `[data-pane-id="${terminal.paneId}"] .xterm-helper-textarea`,
+            )
+            ?.focus(),
+        ),
+      )
+      .catch(() => {});
   }
+
   let choosingFolder = false;
   function folderDialog(workspaceId = activeWorkspace()?.id): void {
     if (!workspaceId || choosingFolder) return;
@@ -455,22 +464,24 @@ export function createCommands(
       });
   }
   function workspaceDialog(mode: "create" | "rename"): void {
+    if (mode === "create") {
+      void invoke("workspace.create", { name: "Untitled" })
+        .then(() => focusActiveComposer())
+        .catch(() => {});
+      return;
+    }
     const workspace = activeWorkspace();
-    if (mode === "rename" && !workspace) return;
+    if (!workspace) return;
     inputDialog({
-      title: mode === "create" ? "New workspace" : "Rename workspace",
+      title: "Rename workspace",
       label: "Workspace name",
-      value: mode === "rename" ? workspace!.name : "",
-      submitLabel: mode === "create" ? "Create" : "Save",
+      value: workspace.name,
+      submitLabel: "Save",
       submit: (name) =>
-        mode === "create"
-          ? localInvoke("workspace.create", { name })
-          : localInvoke("workspace.rename", { id: workspace!.id, name }),
-      completed: () => {
-        if (mode === "create") focusActiveComposer();
-      },
+        localInvoke("workspace.rename", { id: workspace.id, name }),
     });
   }
+
   const currentPane = () => {
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);

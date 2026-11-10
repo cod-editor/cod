@@ -204,10 +204,8 @@ test("An agent moves its existing conversation during a turn without losing the 
         .getByLabel("Draft comment", { exact: true }),
     ).toContainText("Keep this private note through relocation.");
     await app.command("New workspace");
-    await app.page
-      .getByRole("textbox", { name: "Workspace name", exact: true })
-      .fill("Unrelated reading");
-    await app.page.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(app.page.getByRole("dialog")).toHaveCount(0);
+
     const unrelated = (await state()).activeWorkspaceId;
     const otherComposer = app.page.locator(".composer textarea");
     await otherComposer.fill("Do not disturb this other task.");

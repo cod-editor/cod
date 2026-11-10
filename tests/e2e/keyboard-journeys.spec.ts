@@ -196,7 +196,7 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     await app.page.keyboard.type("next draft remains intact");
     await app.page.keyboard.press("Home");
     await app.page.keyboard.press("ArrowRight");
-    await command(app.page, "New workspace");
+    await command(app.page, "Rename workspace");
     await expect(
       app.page.getByRole("textbox", { name: "Workspace name" }),
     ).toBeFocused();
@@ -756,12 +756,7 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
   try {
     await app.start();
     await command(app.page, "New workspace");
-    await app.page.keyboard.type("Keyboard workspace");
-    await reach(
-      app.page,
-      app.page.getByRole("button", { name: "Create", exact: true }),
-    );
-    await app.page.keyboard.press("Enter");
+    await expect(app.page.getByRole("dialog")).toHaveCount(0);
     const workspace = (await state(app)).activeWorkspaceId!;
     await app.cli(
       "workspace",

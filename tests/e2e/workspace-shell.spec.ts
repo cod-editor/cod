@@ -18,12 +18,16 @@ test.afterEach(async () => {
 
 async function createFromUI(name: string) {
   await shell.command("New workspace");
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    shell.page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeFocused();
+  await shell.command("Rename workspace");
   const dialog = shell.page.getByRole("dialog");
-  await expect(dialog).toHaveAccessibleName(/workspace/i);
   await dialog
     .getByRole("textbox", { name: "Workspace name", exact: true })
     .fill(name);
-  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(shell.row(name)).toBeVisible();
   await expect(
     shell.page.getByRole("textbox", { name: "Message", exact: true }),
@@ -49,6 +53,13 @@ async function assertActive(workspaceId: string, paneId?: string) {
 
 test("AC1 creates and renames through UI, tracks two repositories, and switches workspaces", async () => {
   const first = await createFromUI("Draft task");
+  const controls = (await shell.page
+    .locator("#visibility-controls")
+    .boundingBox())!;
+  const sidebar = (await shell.page.locator(".sidebar").boundingBox())!;
+  expect(
+    Math.abs(controls.x + controls.width - (sidebar.x + sidebar.width - 8)),
+  ).toBeLessThan(2);
   expect((await shell.workspace(first)).folders).toEqual([]);
   expect((await shell.workspace(first)).panes).toHaveLength(1);
   await shell.command("Rename workspace");

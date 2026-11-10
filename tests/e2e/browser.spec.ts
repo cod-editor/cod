@@ -181,15 +181,14 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
   await shell.page
     .getByRole("button", { name: "New browser tab", exact: true })
     .click();
-  const dialog = shell.page.getByRole("dialog", {
-    name: "New browser",
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  const newAddress = shell.page.getByRole("textbox", {
+    name: "Address",
     exact: true,
   });
-  await dialog
-    .getByRole("textbox", { name: "URL", exact: true })
-    .fill(origin + "/one");
-  await dialog.getByRole("button", { name: "Open", exact: true }).click();
-  await expect(dialog).toBeHidden();
+  await expect(newAddress).toBeFocused();
+  await newAddress.fill(origin + "/one");
+  await newAddress.press("Enter");
   const record = (
     await shell.cli<{ browsers: BrowserRecord[] }>("state")
   ).browsers.find((row) => row.workspaceId === workspace)!;
@@ -198,7 +197,9 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
     .pane(record.paneId)
     .getByRole("textbox", { name: "Address", exact: true });
   await expect(address).toHaveValue(origin + "/one");
-  expect(await remote("/one", "document.title")).toBe("Fixture /one");
+  await expect
+    .poll(() => remote("/one", "document.title").catch(() => ""))
+    .toBe("Fixture /one");
   await address.fill(origin + "/two");
   await address.press("Enter");
   await expect
@@ -293,7 +294,7 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
     "shift",
   ]);
   await expect(shell.row("Browser layout")).toBeFocused();
-  await shell.command("New workspace");
+  await shell.command("Rename workspace");
   await expect
     .poll(async () => (await nativeView("/one"))?.visible)
     .toBe(false);

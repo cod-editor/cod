@@ -419,7 +419,10 @@ select:focus-visible {
 }
 #visibility-controls {
   justify-self: start;
+  justify-content: flex-end;
+  width: calc(var(--workspaces-width, 210px) - 16px);
   max-width: 100%;
+  -webkit-app-region: drag;
 }
 #pane-visibility {
   height: 28px;
