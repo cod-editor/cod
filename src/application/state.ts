@@ -23,6 +23,7 @@ export class ApplicationStateStore {
   };
   private queue: Promise<unknown> = Promise.resolve();
   private timer?: NodeJS.Timeout;
+  private notificationTimer?: NodeJS.Timeout;
   closing = false;
   onDidChange?: (state: AppState) => void;
   beforeNotify?: () => void;
@@ -103,9 +104,22 @@ export class ApplicationStateStore {
       }
     });
   }
-  notify(): void {
+  notify(coalesce = false): void {
     this.beforeNotify?.();
-    this.onDidChange?.(this.snapshot());
+    if (!coalesce) {
+      if (this.notificationTimer) clearTimeout(this.notificationTimer);
+      this.notificationTimer = undefined;
+      this.onDidChange?.(this.snapshot());
+      return;
+    }
+    if (this.notificationTimer || this.closing) return;
+    // Streaming events can arrive faster than the UI can consume full snapshots.
+    // Snapshot the latest state once per batch, not once per token/tool event.
+    this.notificationTimer = setTimeout(() => {
+      this.notificationTimer = undefined;
+      if (!this.closing) this.onDidChange?.(this.snapshot());
+    }, 50);
+    this.notificationTimer.unref();
   }
   schedulePersist(immediate = false): void {
     if (this.closing) return;

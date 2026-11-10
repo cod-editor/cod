@@ -39,6 +39,60 @@ const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
 const text = (chat: Chat) =>
   chat.messages.map((message) => message.text).join("\n");
 
+test("Collapsed tool history does not materialize output until expanded", async () => {
+  await shell.configure({ codex: { reasoningOptions: true } });
+  const workspace = await shell.create("Long tool history");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const stateFile = path.join(shell.data, "state.json");
+  const saved = JSON.parse(await readFile(stateFile, "utf8")) as AppState;
+  const importedId = "codex-fixture-large-import";
+  saved.conversations.find((c) => c.id === chat.id)!.nativeId = importedId;
+  await writeFile(stateFile, JSON.stringify(saved));
+  await writeFile(
+    path.join(shell.recording + ".sessions", importedId + ".json"),
+    JSON.stringify([
+      {
+        id: "large-turn",
+        status: "completed",
+        items: Array.from({ length: 400 }, (_, index) => ({
+          id: `large-tool-${index}`,
+          type: "commandExecution",
+          command: "echo invented",
+          status: "completed",
+          aggregatedOutput: "invented-output ".repeat(100),
+        })),
+      },
+    ]),
+  );
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect
+    .poll(() =>
+      shell.page.evaluate(
+        async (id) =>
+          (
+            await window.cod.invoke<ConversationState>({
+              op: "conversation.inspect",
+              id,
+            })
+          ).tools.length,
+        chat.id,
+      ),
+    )
+    .toBe(400);
+  const pane = shell.pane(chat.paneId);
+  await expect(pane.locator(".tool-activity")).toHaveCount(400);
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
+  await expandActivity(pane);
+  const tool = pane.locator(".tool-activity").first();
+  await tool.locator("summary").click();
+  await expect(tool.locator("pre")).toContainText("invented-output");
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(1);
+  await tool.locator("summary").click();
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
+});
+
 test("Failed opening cannot leave stale composer handlers when a pane is reused", async () => {
   const workspace = await shell.create("Composer recovery");
   const paneId = (await shell.workspace(workspace)).activePaneId;
@@ -171,12 +225,7 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     await expect(transcript(chat)).not.toContainText("FOREIGN_OUTPUT");
     expect((await shell.inspect(chat.id)).tools.length).toBeGreaterThan(0);
     await expandActivity(pane);
-    await pane
-      .locator(".tool-activity")
-      .filter({ hasText: /invented-tool/ })
-      .first()
-      .locator("summary")
-      .click();
+    await pane.locator(".tool-activity").first().locator("summary").click();
     await expect(pane.getByText(/invented-tool/).first()).toBeVisible();
   });
 }
@@ -502,7 +551,6 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     const historyTool = shell
       .pane(attached.paneId)
       .locator(".tool-activity")
-      .filter({ hasText: "invented-tool" })
       .first();
     if (await historyTool.count()) await historyTool.locator("summary").click();
     await expect(
@@ -686,11 +734,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
     live.messages.filter((message) => message.role === "assistant"),
   ).toHaveLength(2);
   await expandActivity(shell.pane(chat.paneId));
-  const liveTool = shell
-    .pane(chat.paneId)
-    .locator(".tool-activity")
-    .filter({ hasText: "invented-tool" })
-    .first();
+  const liveTool = shell.pane(chat.paneId).locator(".tool-activity").first();
   if (await liveTool.count()) await liveTool.locator("summary").click();
   const ordered = await shell.cli<ConversationState>(
     "conversation",

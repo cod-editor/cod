@@ -63,6 +63,7 @@ export function createConversationViews({
   }
   const pendingStarts = new Set<string>();
   const sendErrors = new Map<string, string>();
+  const expandedTools = new Set<string>();
   const integration = createIntegrationSetup(invoke, invalidate);
   function providerLabel(provider: string): string {
     return provider === "codex"
@@ -645,18 +646,30 @@ export function createConversationViews({
         label.textContent =
           compactToolCaption(info) + (failed ? " · failed" : "");
         label.title = toolCaption(info);
-        const details = document.createElement("pre");
-        details.textContent =
-          JSON.stringify(entry.tool.details, null, 2) ??
-          String(entry.tool.details);
         const actionable = /request.?user.?input|ask.?user|question/i.test(
           String(info?.name ?? info?.toolName ?? ""),
         );
         if (actionable) {
           tool.dataset.actionRequired = "true";
-          tool.open = true;
         }
-        tool.append(label, details);
+        const expansionKey = `${conversation.id}:${entry.tool.id}`;
+        tool.open = actionable || expandedTools.has(expansionKey);
+        tool.append(label);
+        if (tool.open) {
+          const details = document.createElement("pre");
+          details.textContent =
+            JSON.stringify(entry.tool.details, null, 2) ??
+            String(entry.tool.details);
+          tool.append(details);
+        }
+        tool.ontoggle = (event) => {
+          const current = event.currentTarget as HTMLDetailsElement;
+          if (!current.isConnected || actionable) return;
+          if (current.open === expandedTools.has(expansionKey)) return;
+          if (current.open) expandedTools.add(expansionKey);
+          else expandedTools.delete(expansionKey);
+          invalidate();
+        };
         transcript.append(tool);
       }
     }

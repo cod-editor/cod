@@ -169,6 +169,9 @@ export class WorkspaceApp {
           cwd: this.root,
           env: this.environment,
           timeout: 10000,
+          // State includes retained native history and can legitimately exceed
+          // Node's 1 MB stdout default even when each protocol item is small.
+          maxBuffer: 32 * 1024 * 1024,
         },
       );
       return { code: 0, stdout: result.stdout, stderr: result.stderr };

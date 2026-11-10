@@ -722,7 +722,7 @@ export class ConversationApplicationService {
       } else if (conversation.provider === "kimi") {
         stageKimiEvent(resume, event);
       }
-      this.store.notify();
+      this.store.notify(true);
       return;
     }
     switch (event.type) {
@@ -837,7 +837,7 @@ export class ConversationApplicationService {
       case "diagnostic":
         break;
     }
-    this.store.notify();
+    this.store.notify(true);
     this.store.schedulePersist(
       event.type === "completed" ||
         event.type === "error" ||

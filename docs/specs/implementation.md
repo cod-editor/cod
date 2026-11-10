@@ -31,6 +31,8 @@ Persist layout, resource IDs, open views, composer text/images/provider/selected
 
 Composer ownership follows the conversation identity, not a reusable pane. After a failed create or resume, opening another conversation in the same pane must bind typing, attachment and send actions to the new conversation. Its unsent text and images must survive switching chats and restarting the app.
 
+Streaming updates may be batched for display; user actions still publish immediately. Collapsed tool rows retain their summaries without constructing full output blocks until expanded, and closing a row releases its rendered output. Background streaming must not require renderer copies or full JSON comparisons of all conversations merely to detect a focus change.
+
 Closing a chat tab removes the view, not its conversation or active turn. Closing a terminal stops its owned shell; reopening requires an explicit fresh-shell action. Closing a busy workspace identifies the work that will stop and defaults to Cancel; CLI callers must explicitly request forced closure. Failed stop or mutation retains usable context. Externally owned CLI sessions are not silently seized or killed.
 
 Native handoff releases Cod's controller before starting the provider CLI. Reclaim checks ownership and resumes the same identity/history without an implicit prompt. Transaction rollback must not resurrect stale process, completion or terminal state.

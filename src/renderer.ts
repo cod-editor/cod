@@ -169,28 +169,15 @@ window.cod.onCommand(({ command, browserId }) => {
   void commands.execute(command, browserId);
 });
 
+let pendingStateRender = false;
 window.cod.onState((next) => {
-  const previous = state;
   state = next;
-  const focusedPane = document.activeElement?.closest("[data-pane-id]");
-  const comparable = structuredClone(next);
-  for (const workspace of comparable.workspaces) {
-    workspace.activePaneId =
-      previous.workspaces.find((item) => item.id === workspace.id)
-        ?.activePaneId ?? workspace.activePaneId;
-  }
-  if (focusedPane && JSON.stringify(comparable) === JSON.stringify(previous)) {
-    const workspace = activeWorkspace();
-    for (const element of panes.querySelectorAll<HTMLElement>(
-      "[data-pane-id]",
-    )) {
-      element.dataset.active = String(
-        element.dataset.paneId === workspace?.activePaneId,
-      );
-    }
-  } else {
+  if (pendingStateRender) return;
+  pendingStateRender = true;
+  requestAnimationFrame(() => {
+    pendingStateRender = false;
     render();
-  }
+  });
 });
 const keymapReady = window.cod.getKeymap().then((keymap) => {
   configureKeymap(keymap.overrides, keyboardPlatform);
