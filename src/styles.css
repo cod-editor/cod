@@ -1647,10 +1647,29 @@ browser-action-list::part(action):focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.turn-activity .current-tool::before {
-  content: "· ";
-}
 .turn-activity > summary > .icon,
 .turn-activity > summary > span:first-of-type {
   flex: none;
+}
+
+.turn-progress {
+  color: var(--muted);
+  font-size: calc(var(--ui-font-size) - 1px);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.live-activity > summary {
+  font-size: var(--ui-font-size);
+  color: #abb2bf;
+  padding: 4px 0;
+}
+.live-activity > summary .current-tool {
+  flex: 0 1 auto;
+}
+.live-activity > .tool-activity,
+.live-activity > .chat-message {
+  border-left: 1px solid var(--line);
+  padding-left: 14px;
+  margin-left: 8px;
 }

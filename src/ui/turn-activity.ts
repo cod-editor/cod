@@ -91,21 +91,24 @@ export function groupTurnActivity(
       if (conversation.status === "working" && recorded?.startedAt)
         label.dataset.activityStarted = recorded.startedAt;
     }
-    summary.append(icon("chevron"), label);
-    if (live && conversation.status === "working") {
+    if (live) {
+      const progress = document.createElement("div");
+      progress.className = "turn-progress";
+      progress.dataset.focusKey = `turn-progress:${id}`;
+      progress.append(label);
+      transcript.insertBefore(progress, nodes[0] ?? null);
+      updateLiveActivity(progress);
       const current = [...activity]
         .reverse()
-        .find(
-          (node) =>
-            node.classList.contains("tool-activity") &&
-            node.dataset.toolPhase !== "completed",
-        );
-      if (current) {
-        const action = document.createElement("span");
-        action.className = "current-tool";
-        action.textContent = current.dataset.compactCaption ?? "Using tool";
-        summary.append(action);
-      }
+        .find((node) => node.classList.contains("tool-activity"));
+      const action = document.createElement("span");
+      action.className = "current-tool";
+      action.textContent =
+        current?.dataset.compactCaption ?? "Preparing response";
+      summary.append(action, icon("chevron"));
+      details.classList.add("live-activity");
+    } else {
+      summary.append(icon("chevron"), label);
     }
     details.append(summary);
     transcript.insertBefore(details, nodes[0] ?? null);
@@ -158,14 +161,33 @@ export function updateLiveActivity(root: ParentNode = document): void {
 export function compactToolCaption(
   info: Record<string, unknown> | null,
 ): string {
-  if (typeof info?.command === "string") return "Running command";
-  if (Array.isArray(info?.changes)) return "Editing files";
-  if (typeof info?.query === "string") return "Searching";
+  if (typeof info?.title === "string" && info.title.trim())
+    return info.title.trim().slice(0, 100);
+  if (Array.isArray(info?.commandActions)) {
+    const action = info.commandActions[0] as
+      Record<string, unknown> | undefined;
+    if (action?.type === "read")
+      return `Read ${String(action.name ?? "file")
+        .split("/")
+        .pop()}`;
+    if (action?.type === "listFiles") return "List files";
+    if (action?.type === "search") return "Search files";
+  }
+  if (typeof info?.command === "string") {
+    // Identify the executable only; command arguments and output stay in details.
+    const command = info.command
+      .trim()
+      .replace(/^(?:\S*\/)?(?:ba|z|fi|da)?sh\s+-[a-z]*c\s+['"]?/, "");
+    const executable = command.match(/^(?:[\w./-]+\/)?([\w.+-]+)/)?.[1];
+    return executable ? `Run ${executable}` : "Run command";
+  }
+  if (Array.isArray(info?.changes)) return "Edit files";
+  if (typeof info?.query === "string") return "Search";
   const name = String(info?.name ?? info?.toolName ?? info?.type ?? "");
   return (
     name
       .replace(/([a-z])([A-Z])/g, "$1 $2")
       .replace(/[_-]/g, " ")
-      .slice(0, 80) || "Using tool"
+      .slice(0, 80) || "Use tool"
   );
 }

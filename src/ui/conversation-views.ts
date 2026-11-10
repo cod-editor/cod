@@ -643,7 +643,7 @@ export function createConversationViews({
           ["failed", "error"].includes(String(info?.status))
         );
         label.textContent =
-          toolCaption(info) + ` · ${failed ? "failed" : entry.tool.phase}`;
+          compactToolCaption(info) + (failed ? " · failed" : "");
         label.title = toolCaption(info);
         const details = document.createElement("pre");
         details.textContent =

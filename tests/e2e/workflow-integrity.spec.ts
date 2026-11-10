@@ -468,6 +468,15 @@ test("Completed turns fold commentary and tools while final answers and decision
     const working = app.page.getByRole("status", { name: "Turn activity" });
     await expect(working).toHaveText(/Working · \d+s/);
     const liveActivity = app.page.locator("details.turn-activity").first();
+    await expect(liveActivity.locator(".current-tool")).toHaveText("Run echo");
+    await expect(liveActivity.locator(".tool-activity")).toHaveCount(4);
+    await expect(liveActivity.locator(".tool-activity").last()).toHaveAttribute(
+      "data-tool-phase",
+      "completed",
+    );
+    expect(await working.evaluate((node) => !!node.closest("summary"))).toBe(
+      false,
+    );
     await expect(liveActivity.locator(".assistant").first()).toBeHidden();
     await liveActivity.locator(":scope > summary").click();
     await expect(liveActivity.locator(".assistant").first()).toBeVisible();
@@ -617,12 +626,18 @@ test("Completed turns fold commentary and tools while final answers and decision
       .poll(async () => (await app.inspect(conversationId)).status)
       .toBe("working");
     const runningTurn = app.page.locator("details.turn-activity").last();
-    await expect(runningTurn.locator(".current-tool")).toHaveText(
-      "Running command",
-    );
+    await expect(runningTurn.locator(".current-tool")).toHaveText("Run echo");
     await expect(runningTurn.locator(".tool-activity").first()).toBeHidden();
+    await runningTurn.scrollIntoViewIfNeeded();
+    await app.page.screenshot({
+      path: info.outputPath("live-current-action.png"),
+    });
     await runningTurn.locator(":scope > summary").click();
     await expect(runningTurn.locator(".tool-activity").first()).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("live-expanded-actions.png"),
+    });
+
     await app.page.getByRole("button", { name: "Stop", exact: true }).click();
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)
