@@ -5,18 +5,24 @@ import type { Invoke } from "./contracts";
 export function focusReadyEditor(
   editor: HTMLTextAreaElement,
   stillWanted: () => boolean,
+  intent?: AbortController,
 ): void {
   const focus = () => {
     if (
       editor.isConnected &&
       !editor.disabled &&
       stillWanted() &&
+      !intent?.signal.aborted &&
       !document.querySelector("dialog[open]")
     )
       editor.focus({ preventScroll: true });
+    intent?.abort();
   };
   if (editor.disabled)
-    editor.addEventListener("cod:file-ready", focus, { once: true });
+    editor.addEventListener("cod:file-ready", focus, {
+      once: true,
+      signal: intent?.signal,
+    });
   else focus();
 }
 export function createDocumentViews(

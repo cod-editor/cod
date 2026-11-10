@@ -399,23 +399,40 @@ export class FileTree {
   private async openFile(path: string, line?: number): Promise<void> {
     const workspace = this.workspace;
     if (!workspace) return;
-    const result = await this.invoke<{ paneId: string }>("file.open", {
-      workspace: workspace.id,
-      path,
-      ...(line ? { line } : {}),
-    });
-    requestAnimationFrame(() => {
-      const editor = document.querySelector<HTMLTextAreaElement>(
-        `[data-pane-id="${result.paneId}"] .file-editor`,
-      );
-      if (editor)
-        focusReadyEditor(
-          editor,
-          () =>
-            this.workspace?.id === workspace.id &&
-            this.workspace?.activePaneId === result.paneId,
+    // Native dialog focus restoration is not a new user navigation intent.
+    // A later real key/pointer action is, and must cancel deferred autofocus.
+    const intent = new AbortController();
+    const cancel = (event: Event) => {
+      if (event.isTrusted) intent.abort();
+    };
+    for (const type of ["keydown", "pointerdown"])
+      document.addEventListener(type, cancel, {
+        capture: true,
+        signal: intent.signal,
+      });
+    try {
+      const result = await this.invoke<{ paneId: string }>("file.open", {
+        workspace: workspace.id,
+        path,
+        ...(line ? { line } : {}),
+      });
+      requestAnimationFrame(() => {
+        if (intent.signal.aborted) return;
+        const editor = document.querySelector<HTMLTextAreaElement>(
+          `[data-pane-id="${result.paneId}"] .file-editor`,
         );
-    });
+        if (editor)
+          focusReadyEditor(
+            editor,
+            () => this.workspace?.id === workspace.id,
+            intent,
+          );
+        else intent.abort();
+      });
+    } catch (error) {
+      intent.abort();
+      throw error;
+    }
   }
   search(path?: string): void {
     this.openPicker(false, path);
