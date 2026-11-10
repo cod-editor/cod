@@ -1,0 +1,31 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+artifacts/
+reports/
+cod-reports/
+cod-report-*/
+docs/meetings/
+.agent-chat/
+.env
+.env.*
+LICENSE
+package-lock.json
+
+# Generated experiment data and isolated test credentials
+experiments/**/dist/
+experiments/**/artifacts/
+experiments/**/profiles/
+experiments/**/fixtures/bitwarden/
+experiments/**/playwright-report/
+experiments/**/test-results/
+experiments/**/.fixture-certs/
+experiments/**/.fixture-account.json
+
+# Local design mock
+output/

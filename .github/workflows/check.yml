@@ -1,0 +1,29 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - name: Install graphical test dependencies
+        run: |
+          npx playwright install-deps chromium
+          sudo apt-get install -y --no-install-recommends xvfb xdotool
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      - run: npm run check
+      - run: npm run build
+      - run: node --test tests/providers/adapters.test.ts tests/projects/service.test.ts tests/git-lines.test.ts tests/reviews/service.test.ts tests/runtime-context/runtime-context.test.mjs tests/runtime-integration/cli-protocol.test.mjs tests/browser/diagnostics.test.ts tests/browser/extension-install.test.ts tests/packaging/retention.test.mjs
+      - run: xvfb-run -a node tests/support/electron/check-sandbox.mjs
+      - run: xvfb-run -a node tests/support/electron/run-services.mjs
+      - run: xvfb-run -a npm run test:e2e

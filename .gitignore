@@ -1,0 +1,29 @@
+# Private notes and artifacts
+docs/meetings/
+.agent-chat/
+reports/
+cod-reports/
+cod-report-*/
+artifacts/
+
+# Dependencies and generated output
+node_modules/
+dist/
+out/
+/output/
+release/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo
+
+# Secrets and machine-local files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.log
+.claude/settings.local.json
+CLAUDE.local.md

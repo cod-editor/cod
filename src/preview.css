@@ -1,0 +1,41 @@
+body {
+  background: #282c34;
+  color: #abb2bf;
+  font: 14px/1.6 system-ui;
+  margin: 20px;
+  overflow-wrap: anywhere;
+}
+pre {
+  overflow: auto;
+  padding: 12px;
+  background: #242830;
+}
+code {
+  font-family: ui-monospace, monospace;
+}
+svg {
+  max-width: 100%;
+  height: auto;
+}
+a {
+  color: #a6bad4;
+}
+.hljs-keyword,
+.hljs-selector-tag {
+  color: #c678dd;
+}
+.hljs-string,
+.hljs-title {
+  color: #98c379;
+}
+.hljs-number,
+.hljs-literal {
+  color: #d19a66;
+}
+.hljs-comment {
+  color: #7f848e;
+}
+.hljs-attr,
+.hljs-type {
+  color: #61afef;
+}
