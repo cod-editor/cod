@@ -1,86 +1,67 @@
-> [!IMPORTANT]
-> Remove this line to confirm you've reviewed this PR before submitting.
-
 # Cod
 
-Cod is a desktop workspace for agent-driven development. It is the Zed editor plus a small set of its own: agent chats, web pages in panes, review, a command-line tool and workspaces. It is a personal tool built in the open by one person and a team of agents. It should look and feel like Zed: fast, quiet, keyboard first, very few settings.
+A local desktop workspace for coding agents: conversations, repositories, files, reviews, terminals and browser tabs in one window. Workspaces restore their layout and saved work; the CLI exposes the same operations as the interface.
 
-Cod is a fork of [Zed](https://github.com/zed-industries/zed) at tag [v1.23.2](https://github.com/zed-industries/zed/tree/v1.23.2). It stays frozen at that version and does not merge from upstream. Zed is licensed primarily under GPL-3.0-or-later, with Apache-2.0 components where marked, and so is this fork (see the `LICENSE-*` files).
+This is an **alpha** Electron-based replacement for the previous Zed-based Cod, not a stable release. The previous implementation is preserved at [legacy-zed-2026-11-10](https://github.com/cod-editor/cod/tree/legacy-zed-2026-11-10).
 
-The earlier Electron prototype lives at [butvinm/cod-electron](https://github.com/butvinm/cod-electron).
+## Run
 
-Cod is in an early preview. On top of stock Zed 1.23.2 (default settings and keymap) the 0.0.1 preview adds:
-
-- Workspaces in one window: `workspace: new workspace`, `rename` and `add folder` from the command palette. Each workspace is a quiet tab in the title bar, with a status dot only when something happens (blue working, yellow waiting for you, red error, green done). Workspaces come back after a restart.
-- The workspace overview on `ctrl-alt-o`: a picker of workspaces and their chats and pages, most urgent first. Type to filter, Left/Right move between workspaces, Up/Down between rows, Enter opens the row.
-- Agent chats belong to the workspace they were started in and feed its status dot. File mentions and links in a reply are reachable by keyboard: `alt-up` moves into the reply, `tab` and `shift-tab` move between links, `enter` opens one.
-- Web pages as tabs: `web: open url` from the command palette. Links in chats and files (`editor: open url`) open as page tabs, and open pages come back after a restart.
-- `codctl`, a command-line tool for scripts and agents, included in the tarball. It controls workspaces, panes, opening files and URLs, diffs and agent sessions (`new`, `list`, `send`, `wait`, `status`). Run `codctl --help` and `codctl <command> --help`.
-- Agent-made pages: `codctl open --html FILE --wait` shows an HTML file as a page tab and waits for the user's answer. The page's own scripts do not run unless `--js` is given. Elements talk to Cod through `data-cod` attributes: `data-cod="submit"` with `data-cod-value-from="<css selector>"` answers the waiting `codctl` with that field's value (a plain HTML form submit does nothing), `data-cod="open-file" data-cod-path="src/main.rs:18"` opens a file of the workspace, and `data-cod="focus-session" data-cod-session="<session id>"` focuses an agent chat. Closing the tab without an answer makes `codctl` exit with code 2.
-
-The preview does not yet include terminal session handoff, inline review comments, `codctl review`, an event stream or the agent-chat relay skill.
-`codctl session new --pane` currently opens the chat in the agent panel; placing chats in editor panes is still tracked in [#39](https://github.com/cod-editor/cod/issues/39).
-Page tabs support navigation shortcuts and `codctl page` commands, but the visible page controls are still tracked in [#31](https://github.com/cod-editor/cod/issues/31).
-
-## Set up coding agents
-
-Cod shows a quiet notification on first launch with the plugin commands for Claude Code and Codex.
-Open **Help > Set Up Coding Agents**, or run `cod: set up coding agents` from the command palette, to see them again and copy the commands for your tool.
-Run the commands in a terminal, then start a new agent session from your Cod workspace.
-Cod leaves installation to the agent's plugin manager and does not write agent skills or settings itself.
+Requires Node.js 24+, npm and the native coding-agent CLIs you want to use. Linux needs Electron's system libraries and a graphical display.
 
 ```sh
-# Claude Code
-claude plugin marketplace add cod-editor/cod
-claude plugin install cod-control@cod
-
-# Codex
-codex plugin marketplace add cod-editor/cod
-codex plugin add cod-control@cod
+npm ci --ignore-scripts
+node node_modules/electron/install.js
+npm run prepare:bitwarden
+npm start
 ```
 
-Choose **Help > Install codctl**, or run `cod: install codctl` from the command palette, to put the bundled editor command on PATH.
-If you installed an earlier copy of the skill manually, remove it before using the plugin so agents find one copy.
+Dependency install scripts are disabled because the PTY package ships native prebuilds. Electron's explicit installer downloads its prebuilt runtime. Provider authentication stays in the provider's own tools; Cod does not replace it.
 
-## Try it on Linux
+A new workspace starts with a chat. Cmd/Ctrl+Enter sends; Enter inserts a newline. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses workspaces, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
-The preview runs on x86_64 Linux. It is built on Ubuntu 24.04, so it needs glibc 2.39 or newer (for example Ubuntu 24.04, Debian 13, Fedora 40 or a current Arch).
+While Cod runs:
 
-On a Wayland desktop, use `cod-wayland.sh` (recommended). Cod runs as a native Wayland client and web pages are drawn by an off-screen browser (Chromium Embedded Framework and the `cod-browser` helper). The browser runtime is about 100 MB, so it is not in the tarball: the first `cod-wayland.sh` start downloads it once into `~/.local/share/cod-preview/cef-<version>/`, checks it by checksum, and later starts (and later previews with the same browser version) need no download. Old `cef-<version>` folders are never deleted automatically (about 300 MB each unpacked): when Cod is not running, delete the ones you no longer need with `rm -r ~/.local/share/cod-preview/cef-<old version>`. The download needs `curl` or `wget`, `xz`, `sha256sum` and `flock` (util-linux).
+```sh
+npm run codctl -- --help
+npm run codctl -- workspace create --name "Documentation"
+npm run codctl -- workspace add-folder --id WORKSPACE_ID --path /path/to/repository
+npm run codctl -- file open --workspace WORKSPACE_ID --path /path/to/spec.md
+npm run codctl -- state
+```
 
-1. Install the libraries the browser needs. On Arch: `sudo pacman -S nss nspr alsa-lib at-spi2-core cups libdrm mesa libxkbcommon pango libxcomposite libxdamage libxrandr`. The `cod` binary is still linked against WebKitGTK, so it also needs `webkit2gtk-4.1` on Arch (`libwebkit2gtk-4.1-0` on Ubuntu 24.04 or Debian 13).
-2. Download `cod-linux-x86_64.tar.xz` (about 85 MB) from the latest `preview-*` prerelease on the [Releases](https://github.com/cod-editor/cod/releases) page. The `cef-*` prereleases only hold the browser runtime for the start script.
-3. Unpack it: `tar -xJf cod-linux-x86_64.tar.xz`.
-4. Start it: `./cod/cod-wayland.sh`. The first time it downloads the browser runtime. It opens a Wikipedia page in a pane.
+CLI creation stays in the background unless focus is explicitly requested. Set `COD_DATA_DIR` and `COD_SOCKET_PATH` for a separate application instance. Runtime operating instructions are in [runtime-skills/cod/SKILL.md](runtime-skills/cod/SKILL.md).
 
-To open another page and a folder: `./cod/cod-wayland.sh <url> <folder>`.
+## Current limits
 
-To start Cod from your desktop's app launcher with the Cod icon, run `./cod/install-launcher.sh` once. It copies the icons and the launcher into `~/.local/share` (or `$XDG_DATA_HOME`) and points the launcher at `cod-wayland.sh` in the unpacked folder, so run it again if you move that folder. Stock Zed's launcher uses the same file name, so if `~/.local/share/applications/dev.zed.Zed.desktop` exists and Cod did not install it, the script changes nothing and stops with an error; move that file away first if you want Cod's launcher instead. To remove the launcher, delete `~/.local/share/applications/dev.zed.Zed.desktop` and `~/.local/share/icons/hicolor/*/apps/cod.png`.
+- Chats support Codex and Kimi, including images and native-session handoff. Claude remains a product requirement but is not available in the selector.
+- Session commands (`/help`, `/status`, `/skills`, `/plugins`, `/config`, `/agents`) inspect native data without sending a prompt. Codex skill selection attaches the native skill to the next prompt. Configuration and plugin changes, and direct child-agent control, remain in the native client. Token usage appears only after provider telemetry; account limits are available only when Codex supplies them.
+- Bitwarden is pinned and bundled in packages. Its installed path stays within the Cod profile across package updates. Upgrading from older releases that loaded it directly from a timestamped package may require one final sign-in; their old extension storage is preserved without attempting a partial authentication migration. After the first vault login, reload an already-open page once before autofill. The verified save path is the extension's vault UI; automatic capture of a submitted login is not established. Arbitrary extensions are unsupported.
+- Ad blocking uses an existing engine with a per-site toggle. Fixture tests do not establish equivalence to AdGuard on every site. Camera, microphone, location and other page permissions are currently denied with an explanation.
+- The optional [status integration](runtime-plugins/cod/README.md) installs hooks only after a profile preview. Native trust and authentication requirements still apply; successful installation is not proof that the provider executed its hooks.
+- Terminal processes do not survive quitting Cod. Restored terminals use fresh shells and never replay old commands. Disowned or HUP-resistant jobs are outside ordinary foreground cleanup guarantees.
+- Registered HTML artifacts may submit to their originating conversation. General agent browser control, a mailbox and cloud execution are out of scope.
+- Recent graphical acceptance used isolated Linux Electron. The current macOS bundle has CLI/PTY checks and a local ad-hoc signature; it is not notarized, and its final GUI and system default-browser action have not been verified on macOS.
 
-Without a Wayland session (X11), or if the off-screen browser does not work for you, use `./cod/cod-xwayland.sh [url] [folder]` instead. It makes Cod use X11 (through XWayland on a Wayland desktop) with the older WebKitGTK web view.
+## Development
 
-Both start scripts keep its settings and data in `~/.local/share/cod-preview`, so it never touches your own Zed settings. Zed's log and the program's error output go to `~/.local/share/cod-preview/logs/`, and panics with a backtrace go to `cod-stderr.log` there. If Cod quits unexpectedly, attach the end of `cod-stderr.log` to your report. For a native crash (the window vanishes with no panic in that log), a core dump is available if systemd-coredump is installed and enabled: run `coredumpctl list cod` and `coredumpctl info cod` and attach the `info` output, not the core file. To remove Cod, delete the unpacked `cod` folder and `~/.local/share/cod-preview`.
+Read [AGENTS.md](AGENTS.md), [the requirements](docs/vision.md) and [implementation contracts](docs/specs/implementation.md).
 
-## macOS (Apple Silicon) preview
+- `npm run build`: bundle the application and CLI.
+- `npm run check`: formatting and TypeScript checks.
+- `npm run test:providers`: provider subprocess tests, without live accounts.
+- `npm run test:integration`: status-plugin tests using temporary profiles.
+- `npm run test:isolated`: real Electron acceptance in Docker/Xvfb. It requires the configured Linux test image; see [test environments](tests/README.md).
+- `npm run test:e2e`: the same selected application tests on the current graphical display. Do not run these on somebody's active desktop.
+- `npm run format`: format supported source files.
 
-The macOS preview is unsigned (ad-hoc signature only, no Apple Developer certificate: code signing and notarization cost money and are a separate decision) and built for Apple Silicon only (no Intel build). It includes web page tabs and agent-made pages (`codctl open --html`) through the same off-screen browser backend as Linux.
+On macOS, prefix long jobs with `caffeinate -dimsu`. Native provider and official extension compatibility checks are separate from deterministic fixture tests.
 
-1. Download `cod-macos-aarch64.zip` next to `cod-linux-x86_64.tar.xz` in the latest `preview-*` prerelease on the [Releases](https://github.com/cod-editor/cod/releases) page.
-2. Unzip it and move `Cod.app` to `/Applications`.
-3. Because it is unsigned, the first open needs one extra step: right-click `Cod.app` in Finder, choose Open, then confirm in the dialog. (After that, opening it normally works.) Instead of the right-click, you can also run `xattr -dr com.apple.quarantine /Applications/Cod.app` once in Terminal.
+## Package locally
 
-Cod's data lives in `~/Library/Application Support/Cod-preview`, separate from stock Zed's `~/Library/Application Support/Zed`, so installing Cod never touches a stock Zed also on the machine. Zed's log and the app's error output go to `~/Library/Application Support/Cod-preview/logs/cod-stderr.log`.
+Run `npm run build`, then `node scripts/package.mjs`. The package is written to `release/cod-PLATFORM-ARCH-TIMESTAMP/`, with the application, a `codctl` launcher and input hashes. It includes the pinned Bitwarden extension and runtime instructions, but no provider credentials or development dependencies. Packaging uses the host platform's Electron and PTY prebuilds; cross-copying dependencies between macOS and Linux is unsupported.
 
-`codctl` is bundled inside the app, at `/Applications/Cod.app/Contents/MacOS/codctl`. To use it from a terminal, put it on your `PATH`, for example `ln -s /Applications/Cod.app/Contents/MacOS/codctl /usr/local/bin/codctl` (or any folder already on your `PATH`).
+On macOS the script signs the bundle ad hoc. `node tests/support/electron/check-package.mjs release/PACKAGE_DIRECTORY` checks its signature, CLI, native PTY and included assets without opening a window. This does not replace isolated graphical release testing or notarization.
 
-Every merge to `master` publishes a preview with both platforms built from the same commit.
-Bundled Apple Silicon macOS builds check GitHub releases automatically, verify the archive checksum and install newer builds in place.
-Click the restart button when the update is ready, or run `auto update: check` from the command palette.
-Existing builds from before the updater was added need one manual download.
-Linux updates still require a manual download.
+## License
 
-Each preview builds both platforms from the same commit. `.github/workflows/linux-release.yml` calls `.github/workflows/macos-release.yml` on a free GitHub-hosted Apple Silicon runner, then attaches the tested macOS archive to the same release. macOS builds also run by hand, never on pull requests.
-
-## Building
-
-Cod builds like Zed: see [Building Zed for Linux](./docs/src/development/linux.md) and [Building Zed for macOS](./docs/src/development/macos.md). On Linux the web view also needs `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libxdo-dev`. The Linux preview is built by `.github/workflows/linux-release.yml`.
+Copyright (C) 2026 Mikhail Butvin. GNU GPL version 3 or later; see [LICENSE](LICENSE). Versions preceding the license change were released under the MIT License.

@@ -1,0 +1,31 @@
+name: cod-verification
+services:
+  vault:
+    image: vaultwarden/server:1.37.5@sha256:4fe17f415f90087377d37c755e0ea3cf189dcc6794e49cdd2a9adbb4937d9e1f
+    ports:
+      - "127.0.0.1:18781:80"
+    environment:
+      DOMAIN: https://localhost:18781
+      ROCKET_TLS: '{certs="/fixture-certs/localhost.crt",key="/fixture-certs/localhost.key"}'
+      SIGNUPS_ALLOWED: "true"
+      SIGNUPS_VERIFY: "false"
+      INVITATIONS_ALLOWED: "false"
+      DISABLE_ICON_DOWNLOAD: "true"
+      SHOW_PASSWORD_HINT: "false"
+      LOG_LEVEL: warn
+    volumes:
+      - fixture-vault:/data
+      - ${COD_TEST_VAULT_DIRECTORY:-../../../artifacts/bitwarden-fixture}/certs:/fixture-certs:ro
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    cpus: 1
+    mem_limit: 512m
+    labels:
+      cod.purpose: disposable-verification-fixture
+volumes:
+  fixture-vault:
+    labels:
+      cod.purpose: disposable-verification-fixture
