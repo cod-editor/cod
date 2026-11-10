@@ -55,6 +55,7 @@ export class WorkspaceApp {
   page!: Page;
   environment: Record<string, string> = {};
   launchArguments: string[] = [];
+  profileUserData = false;
   private filterServer?: Server;
 
   async prepare() {
@@ -117,7 +118,9 @@ export class WorkspaceApp {
       args: [
         path.join(this.root, "dist/main.cjs"),
         ...this.launchArguments,
-        `--user-data-dir=${path.join(this.temporary, "chromium")}`,
+        ...(this.profileUserData
+          ? []
+          : [`--user-data-dir=${path.join(this.temporary, "chromium")}`]),
       ],
       cwd: this.root,
       env: this.environment,

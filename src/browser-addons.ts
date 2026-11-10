@@ -29,6 +29,7 @@ export interface AddonStatus {
 }
 interface Options {
   directory: string;
+  extensionDirectory?: string;
   session: Session;
   window: BrowserWindow;
   changed: () => void;
@@ -157,7 +158,7 @@ export class BrowserAddons {
         throw new Error("Expected pinned official Bitwarden 2026.10.2");
       extensionPath = await prepareExtension(
         extensionPath,
-        this.options.directory,
+        this.options.extensionDirectory ?? this.options.directory,
       );
       let expired = false;
       const load = this.options.session.extensions.loadExtension(extensionPath);

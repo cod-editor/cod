@@ -14,7 +14,7 @@ chown root:root node_modules/electron/dist/chrome-sandbox
 chmod 4755 node_modules/electron/dist/chrome-sandbox
 runuser -u node -- npm run typecheck
 runuser -u node -- npm run build
-runuser -u node -- node --test tests/browser/diagnostics.test.ts tests/keyboard/bindings.test.ts
+runuser -u node -- node --test tests/browser/diagnostics.test.ts tests/keyboard/bindings.test.ts tests/profile/migration.test.ts
 runuser -u node -- xvfb-run -a node check-sandbox.mjs
 if [ "${1:-}" = "--services" ]; then
   shift
