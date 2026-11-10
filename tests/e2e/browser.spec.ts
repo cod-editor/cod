@@ -165,7 +165,7 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
   const workspace = await shell.create("Browser navigation");
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   await shell.page
-    .getByRole("button", { name: "New browser", exact: true })
+    .getByRole("button", { name: "New browser tab", exact: true })
     .click();
   const dialog = shell.page.getByRole("dialog", {
     name: "New browser",

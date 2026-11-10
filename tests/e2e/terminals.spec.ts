@@ -221,7 +221,16 @@ test("T1 AC5 pane and workspace close stop owned foreground jobs while another t
   const survivor = await open(second);
   await shell.cli("workspace", "focus", "--id", first);
   await tabTo(shell.page, input(one.paneId));
-  await shell.page.keyboard.press(`${modifier}+W`);
+  // Linux Ctrl+W belongs to readline; Cod closure remains keyboard-accessible.
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await expect(
+    shell.page.getByRole("textbox", { name: "Filter commands" }),
+  ).toBeFocused();
+  await shell.page.keyboard.type("Close tab");
+  await expect(
+    shell.page.getByRole("button", { name: "Close tab", exact: true }),
+  ).toHaveAttribute("aria-current", "true");
+  await shell.page.keyboard.press("Enter");
   await expect.poll(() => alive(job) || alive(firstPid)).toBe(false);
   const closing = await open(first);
   const closingPid = (await inspect(closing.id)).pid;

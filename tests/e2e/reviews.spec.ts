@@ -88,7 +88,18 @@ async function comment(
   body: string,
   target: Locator = line(review, 2),
 ) {
-  await tabTo(shell.page, target);
+  // Review source is one roving Tab stop; arrows reach an anchored line.
+  const index = await target.evaluate((node) =>
+    [...node.parentElement!.querySelectorAll(".review-line")].indexOf(node),
+  );
+  await tabTo(
+    shell.page,
+    target.locator("..").locator('.review-line[tabindex="0"]'),
+  );
+  await shell.page.keyboard.press("Home");
+  for (let step = 0; step < index; step++)
+    await shell.page.keyboard.press("ArrowDown");
+  await expect(target).toBeFocused();
   await shell.page.keyboard.press("Alt+Enter");
   await expect(
     pane(review).getByRole("textbox", { name: "Comment", exact: true }),

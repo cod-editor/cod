@@ -39,6 +39,24 @@ async function open(file: string) {
 function editor(pane: Locator) {
   return pane.getByRole("textbox", { name: "File contents", exact: true });
 }
+async function focusTreeItem(target: Locator) {
+  await app.page.keyboard.press(`${modifier}+Shift+P`);
+  await expect(
+    app.page.getByRole("textbox", { name: "Filter commands" }),
+  ).toBeFocused();
+  await app.page.keyboard.type("Focus files");
+  await expect(
+    app.page.getByRole("button", { name: "Focus files", exact: true }),
+  ).toHaveAttribute("aria-current", "true");
+  await app.page.keyboard.press("Enter");
+  await app.page.keyboard.press("Home");
+  for (let index = 0; index < 100; index++) {
+    if (await target.evaluate((node) => node === document.activeElement))
+      return;
+    await app.page.keyboard.press("ArrowDown");
+  }
+  await expect(target).toBeFocused();
+}
 async function activate(target: Locator) {
   if (
     await target.evaluate((node) => Boolean(node.closest(".searchable-list")))
@@ -54,7 +72,9 @@ async function activate(target: Locator) {
     await query.press("Enter");
     return;
   }
-  await tabTo(app.page, target);
+  if ((await target.getAttribute("role")) === "treeitem")
+    await focusTreeItem(target);
+  else await tabTo(app.page, target);
   await app.page.keyboard.press("Enter");
 }
 
@@ -99,7 +119,7 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
     name: path.basename(app.folders[1]),
     exact: true,
   });
-  await tabTo(app.page, root);
+  await focusTreeItem(root);
   await app.page.keyboard.press("ArrowRight");
   const file = root
     .locator("..")
@@ -650,7 +670,7 @@ test("S3 expanded file tree reconciles externally committed files without losing
   const file = root
     .locator("..")
     .getByRole("treeitem", { name: "same.ts", exact: true });
-  await tabTo(app.page, file);
+  await focusTreeItem(file);
   const newPath = path.join(app.folders[0], "committed-after-open.ts");
   await writeFile(newPath, "export const committed = true;\n");
   git(app.folders[0], "add", "committed-after-open.ts");
