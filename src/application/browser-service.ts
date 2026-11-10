@@ -1,3 +1,8 @@
+import {
+  findFocusWorld,
+  captureFindFocus,
+  restoreFindFocus,
+} from "../browser/find-focus";
 import { nativeKeyInput, resolveKeybinding } from "../keyboard";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -24,6 +29,7 @@ export class BrowserApplicationService {
   private browserAddons?: BrowserAddons;
   private selectedBrowserContents?: number;
   private synchronizingBrowserSelection = false;
+  private findRevisions = new Map<string, number>();
   private browserLoads = new Map<string, number>();
   private browserAdmissions = new Map<string, AbortController>();
   private browserInitializations = new Map<string, Promise<unknown>>();
@@ -348,6 +354,15 @@ export class BrowserApplicationService {
     id: string,
     surface: "browser" | "agent-page",
   ): void {
+    contents.on("found-in-page", (_event, result) => {
+      this.browserWindow?.webContents.send("cod:browser-find", {
+        browserId: id,
+        requestId: result.requestId,
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+        finalUpdate: result.finalUpdate,
+      });
+    });
     contents.on("before-input-event", (event, input) => {
       const match = resolveKeybinding(
         nativeKeyInput(input),
@@ -363,6 +378,65 @@ export class BrowserApplicationService {
         browserId: id,
       });
     });
+  }
+
+  async browserFind(
+    id: string,
+    text: string,
+    options: { forward?: boolean; findNext?: boolean } = {},
+  ): Promise<number> {
+    const browser = this.browser(id);
+    if (browser.workspaceId !== this.store.data.activeWorkspaceId)
+      throw new Error("Search target is not in the active workspace");
+    if (text.length > 10000) throw new Error("Search text is too long");
+    const contents = browser.agentPage
+      ? this.agentPages?.getWebContents(id)
+      : this.browserService?.getWebContents(id);
+    if (!contents || contents.isDestroyed())
+      throw new Error("Search target is closed");
+    if (!text) {
+      contents.stopFindInPage("clearSelection");
+      return 0;
+    }
+    const revision = (this.findRevisions.get(id) ?? 0) + 1;
+    this.findRevisions.set(id, revision);
+    await contents.executeJavaScriptInIsolatedWorld(findFocusWorld, [
+      { code: captureFindFocus },
+    ]);
+    if (
+      this.findRevisions.get(id) !== revision ||
+      contents.isDestroyed() ||
+      this.store.closing
+    )
+      return 0;
+    return contents.findInPage(text, {
+      forward: options.forward ?? true,
+      findNext: options.findNext ?? false,
+    });
+  }
+  browserStopFind(id: string): void {
+    // Renderer teardown may arrive after native resources were disposed. Clearing
+    // transient search selection is best-effort and must never block app exit.
+    this.findRevisions.set(id, (this.findRevisions.get(id) ?? 0) + 1);
+    if (this.store.closing) return;
+    const browser = this.store.data.browsers.find((item) => item.id === id);
+    if (!browser || browser.workspaceId !== this.store.data.activeWorkspaceId)
+      return;
+    try {
+      const contents = browser.agentPage
+        ? this.agentPages?.getWebContents(id)
+        : this.browserService?.getWebContents(id);
+      if (contents && !contents.isDestroyed()) {
+        contents.stopFindInPage("clearSelection");
+        void contents
+          .executeJavaScriptInIsolatedWorld(findFocusWorld, [
+            { code: restoreFindFocus },
+          ])
+          .catch(() => undefined);
+      }
+    } catch {
+      // The tab may have closed between the renderer's dismiss and this IPC.
+    }
   }
 
   browserFocus(id: string): void {

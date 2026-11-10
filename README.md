@@ -17,9 +17,9 @@ npm start
 
 Dependency install scripts are disabled because the PTY package ships native prebuilds. Electron's explicit installer downloads its prebuilt runtime. Provider authentication stays in the provider's own tools; Cod does not replace it.
 
-A new workspace starts with a chat. Cmd/Ctrl+Enter sends; Enter inserts a newline. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses workspaces, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
+A new workspace starts with a chat. Cmd/Ctrl+Enter sends; Enter inserts a newline. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses files, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
-Keyboard shortcuts is searchable from Commands, Settings and the Help menu. F6 and Shift+F6 move between visible areas; Tab moves through controls within them. Trees and tab bars use arrow keys, and Shift+F10 opens context actions. The reference shows platform defaults and their contexts: web editing and terminal control keys stay with the page or shell.
+Keyboard shortcuts is searchable from Commands, Settings and the Help menu. Focus commands reveal files, workspaces, chat or terminal and return to the previous control on a second press; Tab moves through local controls. Trees and tab bars use arrow keys, and Shift+F10 opens context actions. The reference shows platform defaults and their contexts: web editing and terminal control keys stay with the page or shell, while Find in current content searches the active editor, conversation, terminal or embedded page. Open keyboard shortcuts file from Commands or the reference to edit `keymap.json` in Cod's data directory. Map command IDs to shortcut arrays (for example, `"focus.composer": ["Alt+J"]`) or `null` to disable a binding. `Mod` means Command on macOS and Control elsewhere. Changes reload automatically; an invalid file falls back to defaults and shows its error in the reference.
 
 While Cod runs:
 

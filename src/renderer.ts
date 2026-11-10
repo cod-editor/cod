@@ -1,3 +1,6 @@
+import { configureKeymap } from "./keyboard";
+import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
+import { createContentFind } from "./ui/content-find";
 import { applyAppearance } from "./ui/appearance";
 import type { OperationName } from "./command-catalog";
 import { createWorkspaceView } from "./ui/workspace-view";
@@ -80,6 +83,12 @@ const projects = new FileTree(
   (workspace) => commands.folder(workspace),
 );
 
+const finder = createContentFind(
+  () => state,
+  focus,
+  terminals.find,
+  browsers.layout,
+);
 const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   focus,
   files: projects,
@@ -88,6 +97,7 @@ const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   navigation,
   saveFile: documents.save,
   focusNativeView: browsers.focusNative,
+  find: finder,
 });
 
 const workspaceView = createWorkspaceView(
@@ -110,6 +120,7 @@ const workspaceView = createWorkspaceView(
 );
 function render() {
   workspaceView.render();
+  finder.reconcile();
 }
 
 function activeWorkspace(): WorkspaceState | undefined {
@@ -177,7 +188,17 @@ window.cod.onState((next) => {
     render();
   }
 });
-void invoke<AppState>("state")
+const keymapReady = window.cod.getKeymap().then((keymap) => {
+  configureKeymap(keymap.overrides, keyboardPlatform);
+  updateKeymapStatus(keymap);
+});
+window.cod.onKeymap((keymap) => {
+  configureKeymap(keymap.overrides, keyboardPlatform);
+  updateKeymapStatus(keymap);
+  render();
+});
+void keymapReady
+  .then(() => invoke<AppState>("state"))
   .then(async (next) => {
     state = next;
     if (!next.workspaces.length && !next.closedWorkspaces?.length) {
@@ -196,6 +217,7 @@ window.addEventListener(
   "beforeunload",
   () => {
     commands.dispose();
+    finder.dispose();
     layout.dispose();
     workspaceView.dispose();
     projects.dispose();

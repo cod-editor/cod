@@ -158,11 +158,7 @@ export function createPaneLayout(
           void toggleRegion(region.id);
         },
       );
-      if (region.h >= 0.99)
-        button.title = shortcutTitle(
-          region.x < 0.5 ? "pane.toggleLeft" : "pane.toggleRight",
-          button.title,
-        );
+
       if (group) button.dataset.groupId = group.id;
       button.disabled =
         visible &&
@@ -681,7 +677,12 @@ export function createPaneLayout(
     if (pane) {
       const content = renderPane(workspace, pane);
       for (const child of [...section.children])
-        if (child !== bar && child !== content) child.remove();
+        if (
+          child !== bar &&
+          child !== content &&
+          !child.classList.contains("content-find")
+        )
+          child.remove();
       if (content.parentNode !== section) section.append(content);
     }
     return section;

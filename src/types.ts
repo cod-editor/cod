@@ -249,11 +249,29 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
+  getKeymap(): Promise<import("./keyboard").KeymapState>;
+  onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
+  openKeymap(): Promise<void>;
   chooseDirectory(): Promise<string | null>;
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;
   browserSelect(id: string): void;
+  browserFind(
+    id: string,
+    text: string,
+    options?: { forward?: boolean; findNext?: boolean },
+  ): Promise<number>;
+  browserStopFind(id: string): void;
+  onBrowserFind(
+    callback: (event: {
+      browserId: string;
+      requestId: number;
+      matches: number;
+      activeMatchOrdinal: number;
+      finalUpdate: boolean;
+    }) => void,
+  ): void;
   browserFocus(id: string): void;
   onCommand(
     callback: (event: {

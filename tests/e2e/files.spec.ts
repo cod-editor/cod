@@ -40,15 +40,25 @@ function editor(pane: Locator) {
   return pane.getByRole("textbox", { name: "File contents", exact: true });
 }
 async function focusTreeItem(target: Locator) {
-  await app.page.keyboard.press(`${modifier}+Shift+P`);
-  await expect(
-    app.page.getByRole("textbox", { name: "Filter commands" }),
-  ).toBeFocused();
-  await app.page.keyboard.type("Focus files");
-  await expect(
-    app.page.getByRole("button", { name: "Focus files", exact: true }),
-  ).toHaveAttribute("aria-current", "true");
-  await app.page.keyboard.press("Enter");
+  const alreadyInTree = await app.page.evaluate(() =>
+    Boolean(
+      document.activeElement?.closest('[role="tree"][aria-label="File tree"]'),
+    ),
+  );
+  if (!alreadyInTree) {
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    await expect(
+      app.page.getByRole("textbox", { name: "Filter commands" }),
+    ).toBeFocused();
+    await app.page.keyboard.type("Focus files / return");
+    await expect(
+      app.page.getByRole("button", {
+        name: "Focus files / return",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-current", "true");
+    await app.page.keyboard.press("Enter");
+  }
   await app.page.keyboard.press("Home");
   for (let index = 0; index < 100; index++) {
     if (await target.evaluate((node) => node === document.activeElement))
@@ -124,6 +134,11 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   const file = root
     .locator("..")
     .getByRole("treeitem", { name: "same.ts", exact: true });
+  await focusTreeItem(file);
+  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(file).not.toBeFocused();
+  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(file).toBeFocused();
   await activate(file);
   const pane = app.page
     .getByTestId("pane")

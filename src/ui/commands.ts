@@ -1,3 +1,4 @@
+import { createFocusTargets } from "./focus-targets";
 import {
   commands as commandDefinitions,
   resolveKeybinding,
@@ -33,6 +34,7 @@ interface CommandFeatures {
   navigation: { focusWorkspace: (id: string) => Promise<void> };
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
+  find: { open: (pane: import("../types").PaneState) => void };
 }
 export function createCommands(
   getState: () => AppState,
@@ -53,6 +55,7 @@ export function createCommands(
     focus.native,
     features.focusNativeView,
   );
+  const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const events = new AbortController();
   const listen = (
     type: "keydown",
@@ -448,11 +451,14 @@ export function createCommands(
     w = activeWorkspace(),
     pane = currentPane(),
   ): string | undefined {
-    const group = w?.groups?.find((g) => g.paneIds.includes(w.activePaneId));
+    const group = w?.groups?.find((g) =>
+      g.paneIds.includes(pane?.id ?? w.activePaneId),
+    );
     if (
       [
         "palette",
         "shortcuts",
+        "shortcuts.openFile",
         "settings",
         "workspace.new",
         "chat.new",
@@ -466,12 +472,10 @@ export function createCommands(
     )
       return;
     if (!w) return "Open a workspace first";
-    if (id === "pane.toggleLeft" || id === "pane.toggleRight")
-      return layout.paneToggleReason(
-        id === "pane.toggleLeft" ? "left" : "right",
-      );
+    if (id === "pane.toggleRight") return focusTargets.chatVisibilityReason();
+    if (id === "pane.toggleLeft") return layout.paneToggleReason("left");
     if (
-      ["chat.send", "chat.stop", "focus.composer"].includes(id) &&
+      ["chat.send", "chat.stop"].includes(id) &&
       !(
         pane?.kind === "conversation" ||
         (pane?.kind === "document" && !pane.filePath)
@@ -493,19 +497,24 @@ export function createCommands(
       return "Select an editable file first";
     if (id === "browser.address" && pane?.kind !== "browser")
       return "Select a browser tab first";
-    if (id === "pane.focus2" && (w.groups?.length ?? 0) < 2)
-      return "Open a second pane first";
+    const paneNumber = /^pane\.focus([1-9])$/.exec(id);
+    if (paneNumber && Number(paneNumber[1]) > (w.groups?.length ?? 0))
+      return "That pane is not open";
+    const tabNumber = /^tab\.focus([1-8])$/.exec(id);
+    if (tabNumber && Number(tabNumber[1]) > (group?.paneIds.length ?? 0))
+      return "That tab is not open";
     if (id === "tab.moveToPane" && (w.groups?.length ?? 0) < 2)
       return "Open a second pane first";
     if (
       id === "tab.reorderLeft" &&
-      (!group || group.paneIds.indexOf(w.activePaneId) <= 0)
+      (!group || group.paneIds.indexOf(pane?.id ?? w.activePaneId) <= 0)
     )
       return "Already the first tab";
     if (
       id === "tab.reorderRight" &&
       (!group ||
-        group.paneIds.indexOf(w.activePaneId) >= group.paneIds.length - 1)
+        group.paneIds.indexOf(pane?.id ?? w.activePaneId) >=
+          group.paneIds.length - 1)
     )
       return "Already the last tab";
     if (
@@ -541,9 +550,22 @@ export function createCommands(
       return;
     }
     try {
+      const paneNumber = /^pane\.focus([1-9])$/.exec(id);
+      if (paneNumber) {
+        await keys.spatial(Number(paneNumber[1]) - 1, w?.id);
+        return;
+      }
+      const tabNumber = /^tab\.focus([1-8])$/.exec(id);
+      if (tabNumber) {
+        await keys.selectTab(Number(tabNumber[1]) - 1, w?.id, pane?.id);
+        return;
+      }
       switch (id) {
         case "palette":
           commandPalette();
+          break;
+        case "shortcuts.openFile":
+          await window.cod.openKeymap();
           break;
         case "shortcuts":
           showKeyboardShortcuts(focus);
@@ -563,7 +585,7 @@ export function createCommands(
           workspaceDialog("rename");
           break;
         case "workspace.focusTree":
-          focusPanel();
+          await focusTargets.toggle("workspaces");
           break;
         case "workspace.reopen":
           reopenWorkspace();
@@ -647,29 +669,20 @@ export function createCommands(
           layout.toggle("workspacesVisible");
           break;
         case "focus.files":
-          if (w?.settings?.filesVisible !== true)
-            await invoke("workspace.settings", {
-              id: w!.id,
-              settings: { filesVisible: true },
-            });
-          requestAnimationFrame(() => {
-            const files = document.querySelector<HTMLElement>("#project-panel");
-            (
-              files?.querySelector<HTMLElement>(
-                '[role="treeitem"][tabindex="0"]',
-              ) ??
-              files?.querySelector<HTMLElement>('[role="treeitem"]') ??
-              files
-            )?.focus();
-          });
+          await focusTargets.toggle("files");
           break;
         case "focus.composer":
-          focusActiveComposer();
+          await focusTargets.toggle("chat");
           break;
-        case "pane.toggleLeft":
-        case "pane.toggleRight": {
+        case "focus.terminal":
+          await focusTargets.toggle("terminal");
+          break;
+        case "pane.toggleRight":
+          await focusTargets.toggleChatArea();
+          break;
+        case "pane.toggleLeft": {
           const focused = document.activeElement;
-          await layout.togglePane(id === "pane.toggleLeft" ? "left" : "right");
+          await layout.togglePane("left");
           await new Promise<void>((resolve) =>
             requestAnimationFrame(() => resolve()),
           );
@@ -682,11 +695,17 @@ export function createCommands(
           }
           break;
         }
-        case "pane.focus1":
-          await keys.spatial(0, w?.id);
+        case "pane.next":
+          await keys.cyclePane(1, w?.id, pane?.id);
           break;
-        case "pane.focus2":
-          await keys.spatial(1, w?.id);
+        case "pane.previous":
+          await keys.cyclePane(-1, w?.id, pane?.id);
+          break;
+        case "tab.last":
+          await keys.selectTab(-1, w?.id, pane?.id);
+          break;
+        case "content.find":
+          if (pane) features.find.open(pane);
           break;
         case "pane.nextRegion":
           await keys.cycleRegion(1, browserId);
@@ -699,10 +718,14 @@ export function createCommands(
             await invoke("group.zoom", { workspace: w.id, id: group.id });
           break;
         case "pane.splitRight":
-          layout.split("right");
-          break;
         case "pane.splitDown":
-          layout.split("down");
+          if (w && group && pane)
+            await invoke("group.split", {
+              workspace: w.id,
+              id: group.id,
+              paneId: pane.id,
+              direction: id === "pane.splitRight" ? "right" : "down",
+            });
           break;
         case "tab.next":
           await keys.cycleTab(1, w?.id, pane?.id);
@@ -722,33 +745,33 @@ export function createCommands(
           break;
         case "tab.reorderLeft":
         case "tab.reorderRight":
-          if (w && group)
+          if (w && group && pane)
             await invoke("pane.move", {
               workspace: w.id,
-              id: w.activePaneId,
+              id: pane.id,
               group: group.id,
               index:
-                group.paneIds.indexOf(w.activePaneId) +
+                group.paneIds.indexOf(pane.id) +
                 (id === "tab.reorderLeft" ? -1 : 1),
             });
           break;
         case "tab.moveToPane":
-          if (w && group) {
+          if (w && group && pane) {
             const targets = paneRegions(w).filter(
               (r) => r.id !== group.id && !r.id.startsWith("missing-"),
             );
             menu(
               document.querySelector<HTMLElement>(
-                `[data-tab-id="${w.activePaneId}"]`,
+                `[data-tab-id="${pane.id}"]`,
               ) ?? document.querySelector<HTMLElement>("#workspace-selector")!,
               targets.map((target, index) => ({
                 label: `Move to pane ${index + 1}`,
                 run: () =>
                   void invoke("pane.move", {
                     workspace: w.id,
-                    id: w.activePaneId,
+                    id: pane.id,
                     group: target.id,
-                  }).then(() => keys.focusPane(w.activePaneId)),
+                  }).then(() => keys.focusPane(pane.id)),
               })),
             );
           }
@@ -960,7 +983,10 @@ export function createCommands(
   return {
     settings: () => execute("settings"),
     execute,
-    dispose: () => events.abort(),
+    dispose: () => {
+      events.abort();
+      focusTargets.dispose();
+    },
     palette: commandPalette,
     focusPanel,
     focusComposer: focusActiveComposer,

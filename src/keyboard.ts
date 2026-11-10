@@ -64,6 +64,7 @@ const entry = <T extends string>(
   aliases: readonly string[] = [],
 ) => ({ id, title, category, bindings, aliases });
 export const commands = [
+  entry("shortcuts.openFile", "Open keyboard shortcuts file", "Application"),
   entry(
     "palette",
     "Commands",
@@ -92,8 +93,8 @@ export const commands = [
     "open session",
     "start session",
   ]),
-  entry("workspace.focusTree", "Focus workspace panel", "Navigation", [
-    key("KeyE", { mod: true, shift: true }),
+  entry("workspace.focusTree", "Focus workspaces / return", "Navigation", [
+    key("KeyW", { mod: true, shift: true }),
   ]),
   entry("files.open", "Open file", "Files", [
     key("KeyP", { mod: true, platform: "darwin" }, host),
@@ -102,34 +103,55 @@ export const commands = [
   entry("files.search", "Search in files", "Files", [
     key("KeyF", { mod: true, shift: true }, host),
   ]),
+  entry("content.find", "Find in current content", "Search", [
+    key("KeyF", { mod: true, platform: "darwin" }),
+    key("KeyF", { mod: true, platform: "linux" }, [
+      ...cod,
+      "browser",
+      "agent-page",
+    ]),
+  ]),
   entry("files.save", "Save file", "Files", [
     key("KeyS", { mod: true }, ["editor"]),
   ]),
-  entry("pane.toggleLeft", "Toggle left pane", "Layout", [
-    key("KeyB", { mod: true, platform: "darwin" }, host),
-    key("KeyB", { mod: true, shift: true, platform: "linux" }, host),
-  ]),
-  entry("pane.toggleRight", "Toggle right pane", "Layout", [
-    key("KeyB", { mod: true, alt: true, platform: "darwin" }, host),
-    key("KeyB", { mod: true, shift: true, alt: true, platform: "linux" }, host),
+  entry("pane.toggleLeft", "Toggle material area", "Layout"),
+  entry("pane.toggleRight", "Toggle chat area", "Layout", [
+    key("KeyJ", { mod: true, platform: "darwin" }),
+    key("KeyJ", { mod: true, platform: "linux" }, [
+      ...cod,
+      "browser",
+      "agent-page",
+    ]),
   ]),
   entry("pane.zoom", "Maximize / restore pane", "Layout", [
-    key("Escape", { mod: true, shift: true }),
+    key("Enter", { mod: true, shift: true }, all),
   ]),
-  entry("pane.focus1", "Focus left pane", "Navigation", [
-    key("Digit1", { mod: true }),
+  ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map((number) =>
+    entry(
+      `pane.focus${number}` as const,
+      `Focus pane ${number}`,
+      "Navigation",
+      [key(`Digit${number}`, { mod: true, alt: true })],
+    ),
+  ),
+  entry("pane.next", "Focus next pane", "Navigation", [
+    key("ArrowRight", { mod: true, alt: true }),
   ]),
-  entry("pane.focus2", "Focus right pane", "Navigation", [
-    key("Digit2", { mod: true }),
+  entry("pane.previous", "Focus previous pane", "Navigation", [
+    key("ArrowLeft", { mod: true, alt: true }),
   ]),
-  entry("pane.nextRegion", "Focus next area", "Navigation", [key("F6")]),
-  entry("pane.previousRegion", "Focus previous area", "Navigation", [
-    key("F6", { shift: true }),
-  ]),
+  entry("pane.nextRegion", "Focus next area", "Navigation"),
+  entry("pane.previousRegion", "Focus previous area", "Navigation"),
   entry("tab.next", "Next tab", "Navigation", [key("Tab", { ctrl: true })]),
   entry("tab.previous", "Previous tab", "Navigation", [
     key("Tab", { ctrl: true, shift: true }),
   ]),
+  ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map((number) =>
+    entry(`tab.focus${number}` as const, `Select tab ${number}`, "Tabs", [
+      key(`Digit${number}`, { mod: true }),
+    ]),
+  ),
+  entry("tab.last", "Select last tab", "Tabs", [key("Digit9", { mod: true })]),
   entry("tab.close", "Close tab", "Tabs", [
     key("KeyW", { mod: true, platform: "darwin" }),
     key("KeyW", { mod: true, platform: "linux" }, [
@@ -157,20 +179,32 @@ export const commands = [
   entry("text.reset", "Reset text size", "Appearance", [
     key("Digit0", { mod: true }, host),
   ]),
-  entry("focus.files", "Focus files", "Navigation"),
-  entry("focus.composer", "Focus chat input", "Navigation"),
+  entry("focus.files", "Focus files / return", "Navigation", [
+    key("KeyE", { mod: true, shift: true }),
+  ]),
+  entry("focus.composer", "Focus chat / return", "Navigation", [
+    key("KeyJ", { mod: true, shift: true }),
+  ]),
+  entry("focus.terminal", "Focus terminal / return", "Navigation", [
+    key("Backquote", { ctrl: true }),
+  ]),
   entry("tab.reorderLeft", "Move tab left", "Tabs"),
   entry("tab.reorderRight", "Move tab right", "Tabs"),
   entry("tab.moveToPane", "Move tab to another pane", "Tabs"),
-  entry("pane.splitRight", "Split right", "Layout"),
-  entry("pane.splitDown", "Split below", "Layout"),
-  entry("terminal.new", "New terminal", "Terminal"),
+  entry("pane.splitRight", "Split right", "Layout", [
+    key("Backslash", { mod: true }),
+  ]),
+  entry("pane.splitDown", "Split below", "Layout", [
+    key("Backslash", { mod: true, shift: true }),
+  ]),
+  entry("terminal.new", "New terminal", "Terminal", [
+    key("Backquote", { ctrl: true, shift: true }),
+  ]),
   entry("browser.new", "New browser tab", "Browser"),
   entry("folders.add", "Add folder", "Workspace"),
   entry("review.document", "Review active document", "Review"),
   entry("chat.stop", "Stop response", "Conversation"),
   entry("review.addComment", "Add review comment", "Review", [
-    key("Enter", { alt: true }, ["review"]),
     key("KeyM", { mod: true, shift: true }, ["review"]),
   ]),
   entry("review.submit", "Send review feedback", "Review"),
@@ -179,13 +213,21 @@ export const commands = [
   entry("chat.width", "Chat maximum width", "Appearance"),
   entry("integration.install", "Install agent integration...", "Conversation"),
   entry("browser.default", "Default browser...", "Browser"),
-  entry("navigation.toggleFiles", "Toggle files", "Navigation"),
-  entry("navigation.toggleWorkspaces", "Toggle workspaces", "Navigation"),
+  entry("navigation.toggleFiles", "Toggle files", "Navigation", [
+    key("KeyB", { mod: true, platform: "darwin" }, host),
+    key("KeyB", { mod: true, platform: "linux" }, cod),
+  ]),
+  entry("navigation.toggleWorkspaces", "Toggle workspaces", "Navigation", [
+    key("KeyB", { mod: true, shift: true }),
+  ]),
   entry("workspace.reopen", "Reopen closed workspace", "Workspace"),
 ] as const;
 export type CommandId = (typeof commands)[number]["id"];
 
 function normalizedCode(input: KeyInput): string | undefined {
+  // Option changes the produced character (and may begin a dead key). Only
+  // declared exact-modifier bindings consume its physical-key identity.
+  if (input.altKey && input.code) return input.code;
   if (/^[a-z]$/i.test(input.key)) return `Key${input.key.toUpperCase()}`;
   if (/^[0-9]$/.test(input.key)) return `Digit${input.key}`;
   const punctuation: Record<string, string> = {
@@ -193,9 +235,26 @@ function normalizedCode(input: KeyInput): string | undefined {
     "+": "Equal",
     "=": "Equal",
     "-": "Minus",
+    "`": "Backquote",
+    "~": "Backquote",
+    "\\": "Backslash",
+    "|": "Backslash",
   };
   if (punctuation[input.key]) return punctuation[input.key];
-  if (["Enter", "Escape", "Tab", "F6"].includes(input.key)) return input.key;
+  if (
+    [
+      "Enter",
+      "Escape",
+      "Tab",
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "Space",
+    ].includes(input.key) ||
+    /^F(?:[1-9]|1[0-2])$/.test(input.key)
+  )
+    return input.key;
   // Physical letter position keeps shortcuts reachable on non-Latin layouts,
   // while Latin layouts (including Dvorak/AZERTY) retain their logical letters.
   if (
@@ -216,7 +275,8 @@ export function resolveKeybinding(
     input.isComposing ||
     input.keyCode === 229 ||
     input.altGraph ||
-    ["Dead", "Process", "Unidentified", "AltGraph"].includes(input.key)
+    ["Process", "Unidentified", "AltGraph"].includes(input.key) ||
+    (input.key === "Dead" && !input.altKey)
   )
     return;
   const code = normalizedCode(input);
@@ -254,6 +314,8 @@ export function formatBinding(
     Minus: "-",
     Escape: "Esc",
     Enter: "Enter",
+    Backquote: "`",
+    Backslash: "\\",
   };
   const parts = [
     binding.mod
@@ -261,7 +323,9 @@ export function formatBinding(
         ? "⌘"
         : "Ctrl"
       : binding.ctrl
-        ? "Ctrl"
+        ? platform === "darwin"
+          ? "⌃"
+          : "Ctrl"
         : "",
     binding.alt ? (platform === "darwin" ? "⌥" : "Alt") : "",
     binding.shift ? (platform === "darwin" ? "⇧" : "Shift") : "",
@@ -370,3 +434,156 @@ export const localGestures: readonly {
     aliases: ["arrow"],
   },
 ];
+
+export type KeymapOverrides = Partial<Record<CommandId, string[] | null>>;
+export interface KeymapState {
+  path: string;
+  overrides: KeymapOverrides;
+  error?: string;
+}
+const defaultBindings = new Map(
+  commands.map((command) => [
+    command.id,
+    command.bindings.map((binding) => ({ ...binding })),
+  ]),
+);
+
+/** Parse portable shortcuts: Mod, Cmd/Meta, Ctrl, Alt/Option, Shift plus one key. */
+function parseShortcut(
+  shortcut: string,
+  platform: KeyboardPlatform,
+): KeyBinding {
+  const parts = shortcut.split("+").map((part) => part.trim());
+  const value = parts.pop() ?? "";
+  const binding: KeyBinding = { code: "", surfaces: [], platform };
+  for (const modifier of parts) {
+    switch (modifier.toLowerCase()) {
+      case "mod":
+        binding.mod = true;
+        break;
+      case "cmd":
+      case "meta":
+        if (platform !== "darwin")
+          throw new Error("Cmd/Meta shortcuts require macOS");
+        binding.mod = true;
+        break;
+      case "ctrl":
+      case "control":
+        binding.ctrl = true;
+        break;
+      case "alt":
+      case "option":
+        binding.alt = true;
+        break;
+      case "shift":
+        binding.shift = true;
+        break;
+      default:
+        throw new Error(`Unknown modifier: ${modifier}`);
+    }
+  }
+  const names: Record<string, string> = {
+    enter: "Enter",
+    tab: "Tab",
+    escape: "Escape",
+    comma: "Comma",
+    backquote: "Backquote",
+    backslash: "Backslash",
+    minus: "Minus",
+    equal: "Equal",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+    up: "ArrowUp",
+    down: "ArrowDown",
+    space: "Space",
+  };
+  binding.code =
+    names[value.toLowerCase()] ??
+    normalizedCode({
+      key: value,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+    }) ??
+    (/^(Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-2]))$/.test(value) ? value : "");
+  if (!binding.code || (!binding.mod && !binding.ctrl && !binding.alt))
+    throw new Error(`Invalid shortcut: ${shortcut}`);
+  return binding;
+}
+
+/** Atomic validation: invalid files never install a partial or privileged keymap. */
+export function configureKeymap(
+  value: unknown,
+  platform: KeyboardPlatform,
+): KeymapOverrides {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(
+      "Keymap must be an object of command IDs and shortcut arrays or null",
+    );
+  const overrides: KeymapOverrides = {};
+  const effective = new Map(defaultBindings);
+  for (const [id, shortcuts] of Object.entries(value)) {
+    const command = commands.find((command) => command.id === id);
+    if (!command) throw new Error(`Unknown command: ${id}`);
+    if (
+      shortcuts !== null &&
+      (!Array.isArray(shortcuts) ||
+        shortcuts.some((item) => typeof item !== "string") ||
+        shortcuts.length > 8)
+    )
+      throw new Error(`Invalid shortcuts for ${id}`);
+    const inherited = (defaultBindings.get(command.id) ?? []).filter(
+      (binding) => !binding.platform || binding.platform === platform,
+    );
+    const surfaces = [
+      ...new Set(inherited.flatMap((binding) => binding.surfaces)),
+    ];
+    // Palette-only commands stay within Cod; overrides cannot grant page authority.
+    const scope = surfaces.length ? surfaces : cod;
+    const bindings = (shortcuts ?? []).map((shortcut: string) => {
+      const parsed = parseShortcut(shortcut, platform);
+      const terminalConflict =
+        platform === "linux" &&
+        (parsed.ctrl || parsed.mod) &&
+        !parsed.alt &&
+        !parsed.shift &&
+        /^Key[A-Z]$/.test(parsed.code);
+      return {
+        ...parsed,
+        surfaces: terminalConflict
+          ? scope.filter((surface) => surface !== "terminal")
+          : scope,
+        repeat: inherited.some((binding) => binding.repeat),
+      };
+    });
+    effective.set(command.id, bindings);
+    overrides[command.id] = shortcuts;
+  }
+  const occupied = new Map<string, string>();
+  for (const [id, bindings] of effective)
+    for (const binding of bindings) {
+      if (binding.platform && binding.platform !== platform) continue;
+      for (const surface of binding.surfaces) {
+        const signature = [
+          surface,
+          binding.code,
+          !!binding.mod && platform === "darwin",
+          !!binding.ctrl || (!!binding.mod && platform === "linux"),
+          !!binding.alt,
+          !!binding.shift,
+        ].join(":");
+        const owner = occupied.get(signature);
+        if (owner && owner !== id)
+          throw new Error(`Shortcut conflict: ${owner} and ${id}`);
+        occupied.set(signature, id);
+      }
+    }
+  for (const command of commands)
+    command.bindings.splice(
+      0,
+      command.bindings.length,
+      ...(effective.get(command.id) ?? []),
+    );
+  return overrides;
+}

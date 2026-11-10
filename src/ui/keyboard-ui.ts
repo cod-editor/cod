@@ -1,3 +1,4 @@
+import type { KeymapState } from "../keyboard";
 import {
   commands,
   localGestures,
@@ -25,6 +26,11 @@ export function shortcutTitle(id: CommandId, label?: string): string {
   const hint = formatShortcut(id, keyboardPlatform);
   return hint ? `${title} (${hint})` : title;
 }
+let keymapStatus: KeymapState | undefined;
+export function updateKeymapStatus(state: KeymapState) {
+  keymapStatus = state;
+  document.dispatchEvent(new Event("cod:keymap-changed"));
+}
 export function showKeyboardShortcuts(
   focus: ReturnType<typeof createFocusManager>,
 ): void {
@@ -41,7 +47,32 @@ export function showKeyboardShortcuts(
   list.tabIndex = 0;
   list.setAttribute("role", "region");
   list.setAttribute("aria-label", "Keyboard shortcut reference");
+  const note = document.createElement("p");
+  note.className = "dialog-error";
+  note.setAttribute("role", "status");
+  note.setAttribute("aria-label", "Keyboard shortcuts configuration");
+  const openFile = document.createElement("button");
+  openFile.type = "button";
+  openFile.textContent = "Open keyboard shortcuts file";
+  openFile.onclick = () => {
+    openFile.disabled = true;
+    void window.cod
+      .openKeymap()
+      .catch((error: unknown) => {
+        note.textContent =
+          error instanceof Error ? error.message : String(error);
+        note.hidden = false;
+      })
+      .finally(() => {
+        openFile.disabled = false;
+      });
+  };
   const fill = () => {
+    note.textContent = keymapStatus?.error
+      ? `Custom shortcuts could not load. Defaults are active. ${keymapStatus.error}`
+      : "";
+    note.hidden = !note.textContent;
+    openFile.title = keymapStatus?.path ?? "";
     list.replaceChildren();
     const row = (
       title: string,
@@ -110,9 +141,11 @@ export function showKeyboardShortcuts(
     if (!list.childElementCount) list.textContent = "No matching commands";
   };
   input.oninput = fill;
-  dialog.append(input, list);
+  dialog.append(input, note, list, openFile);
+  document.addEventListener("cod:keymap-changed", fill);
   document.body.append(dialog);
   dialog.onclose = () => {
+    document.removeEventListener("cod:keymap-changed", fill);
     dialog.remove();
     focus.restore(origin);
   };

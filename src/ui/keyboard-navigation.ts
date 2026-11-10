@@ -81,6 +81,44 @@ export function createKeyboardNavigation(
     const group = w.groups?.find((g) => g.id === region?.id);
     if (group) await focusPane(group.activePaneId);
   }
+  async function cyclePane(
+    delta: number,
+    workspaceId?: string,
+    paneId?: string,
+  ): Promise<void> {
+    const w = workspaceId
+      ? getState().workspaces.find((w) => w.id === workspaceId)
+      : workspace();
+    if (!w) return;
+    const groups = paneRegions(w)
+      .filter((r) => w.groups?.some((g) => g.id === r.id && !g.hidden))
+      .map((r) => w.groups!.find((g) => g.id === r.id)!);
+    if (!groups.length) return;
+    const index = groups.findIndex((g) =>
+      g.paneIds.includes(paneId ?? w.activePaneId),
+    );
+    await focusPane(
+      groups[(index + delta + groups.length) % groups.length].activePaneId,
+    );
+  }
+  async function selectTab(
+    index: number,
+    workspaceId?: string,
+    paneId?: string,
+  ): Promise<void> {
+    const w = workspaceId
+      ? getState().workspaces.find((w) => w.id === workspaceId)
+      : workspace();
+    const group = w?.groups?.find((g) =>
+      g.paneIds.includes(paneId ?? w.activePaneId),
+    );
+    const ids =
+      group?.paneIds.filter(
+        (id) => w?.panes.find((p) => p.id === id)?.kind !== "empty",
+      ) ?? [];
+    const id = index < 0 ? ids.at(-1) : ids[index];
+    if (id) await focusPane(id);
+  }
   async function cycleTab(
     delta: number,
     workspaceId?: string,
@@ -165,5 +203,13 @@ export function createKeyboardNavigation(
     );
     await regions[(index + delta + regions.length) % regions.length].run();
   }
-  return { focusPane, spatial, cycleTab, cycleRegion, content };
+  return {
+    focusPane,
+    spatial,
+    cyclePane,
+    selectTab,
+    cycleTab,
+    cycleRegion,
+    content,
+  };
 }

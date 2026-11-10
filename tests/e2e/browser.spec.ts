@@ -274,7 +274,7 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
       .pane(browser.paneId)
       .getByRole("textbox", { name: "Address", exact: true }),
   ).toBeFocused();
-  await pageKey("/one", "E", [
+  await pageKey("/one", "W", [
     process.platform === "darwin" ? "meta" : "control",
     "shift",
   ]);

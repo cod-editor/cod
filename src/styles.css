@@ -1583,3 +1583,28 @@ browser-action-list::part(action):focus-visible {
 .image-preview img {
   display: block;
 }
+
+.content-find {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.content-find input {
+  min-width: 40px;
+  flex: 1;
+  height: 28px;
+  padding: 3px 6px;
+}
+.content-find [role="status"] {
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+::highlight(cod-find-match) {
+  background-color: #85b7ff55;
+  color: inherit;
+}

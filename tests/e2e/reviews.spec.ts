@@ -5,7 +5,7 @@ import { writeFile, realpath, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
-import { tabTo } from "./helpers/workspace-app";
+import { tabTo, modifier } from "./helpers/workspace-app";
 interface Opened {
   reviewId: string;
   roundId: string;
@@ -100,7 +100,7 @@ async function comment(
   for (let step = 0; step < index; step++)
     await shell.page.keyboard.press("ArrowDown");
   await expect(target).toBeFocused();
-  await shell.page.keyboard.press("Alt+Enter");
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await expect(
     pane(review).getByRole("textbox", { name: "Comment", exact: true }),
   ).toBeFocused();
@@ -745,7 +745,7 @@ test("Review keyboard ranges and comment edits keep immutable quotes and show di
   const review = await open(workspace);
   await tabTo(shell.page, line(review, 1));
   await shell.page.keyboard.press("Shift+ArrowDown");
-  await shell.page.keyboard.press("Alt+Enter");
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await shell.page.keyboard.type("Range comment");
   await pane(review)
     .getByRole("button", { name: "Save comment", exact: true })
@@ -778,7 +778,7 @@ test("Review unfinished comment editor survives immediate restart without publis
   const workspace = await shell.create("Unfinished private review");
   const review = await open(workspace);
   await line(review, 2).focus();
-  await shell.page.keyboard.press("Alt+Enter");
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await pane(review)
     .getByRole("textbox", { name: "Comment", exact: true })
     .fill("Unfinished private observation");

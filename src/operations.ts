@@ -70,6 +70,16 @@ export class ApplicationOperations {
   browserLayout(rectangles: BrowserRectangle[]): void {
     this.browsers.browserLayout(rectangles);
   }
+  browserFind(
+    id: string,
+    text: string,
+    options: { forward?: boolean; findNext?: boolean } = {},
+  ): Promise<number> {
+    return this.browsers.browserFind(id, text, options);
+  }
+  browserStopFind(id: string): void {
+    this.browsers.browserStopFind(id);
+  }
   browserFocus(id: string): void {
     this.browsers.browserFocus(id);
   }

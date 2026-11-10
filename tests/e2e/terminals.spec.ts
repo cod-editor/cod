@@ -208,7 +208,7 @@ test("T1 AC4 keyboard Ctrl-C interrupts foreground work and global shortcuts wor
   await expect(shell.page.getByRole("dialog")).toBeVisible();
   await shell.page.keyboard.press("Escape");
   await tabTo(shell.page, input(terminal.paneId));
-  await shell.page.keyboard.press(`${modifier}+Shift+E`);
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
   await expect(shell.row("Keyboard terminal")).toBeFocused();
 });
 

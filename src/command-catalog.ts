@@ -100,7 +100,7 @@ export const commands = {
   "browser.recover": ["id"],
   "browser.inspect": ["id"],
   "browser.close": ["id"],
-  "terminal.open": ["workspace", "cwd"],
+  "terminal.open": ["workspace", "cwd?"],
   "terminal.write": ["id", "data"],
   "terminal.resize": ["id", "cols", "rows"],
   "terminal.inspect": ["id"],
