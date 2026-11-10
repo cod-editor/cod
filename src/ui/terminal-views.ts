@@ -1,3 +1,4 @@
+import { terminalTextSize } from "./appearance";
 import { resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
@@ -36,7 +37,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
 
     const terminal = new Terminal({
       screenReaderMode: true,
-      fontSize: 13,
+      fontSize: terminalTextSize(),
       fontFamily: "Menlo, ui-monospace, monospace",
       theme: {
         background: "#282c34",
@@ -119,6 +120,8 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       const host =
         session.container.querySelector<HTMLElement>(".terminal-output");
       if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+      if (session.terminal.options.fontSize !== terminalTextSize())
+        session.terminal.options.fontSize = terminalTextSize();
       session.fit.fit();
       const record = getState().terminals.find(
         (terminal) => terminal.id === session.id,
@@ -174,12 +177,18 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
     if (!session.ready) session.pending.push(event);
     else writeTerminalEvent(session, event);
   });
+  const resize = () => {
+    for (const session of terminalSessions.values())
+      requestTerminalFit(session);
+  };
+  window.addEventListener("resize", resize);
   return {
     create: createTerminalSession,
     update,
     reconcile,
     dispose() {
       disposed = true;
+      window.removeEventListener("resize", resize);
       for (const session of terminalSessions.values()) {
         session.observer.disconnect();
         session.terminal.dispose();

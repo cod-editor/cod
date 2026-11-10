@@ -135,7 +135,7 @@ The visible workspace panel is the starting navigation model. It lists expandabl
 There is no separate overview dashboard requirement.
 A new workspace opens with chat as its main view, with a provider selector in the chat rather than a separate provider-selection step. Existing workspaces reopen as left.
 Chat content and input use the available pane width up to a configurable pixel maximum. Keep input at the bottom in both empty and populated chats, without moving it after the first message.
-Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor and chat text sizes persist independently without zooming web pages.
+Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor, chat and terminal text sizes persist independently without zooming web pages.
 
 Keyboard navigation uses a shared command catalog for bindings, Commands, tooltips and a searchable Keyboard Shortcuts reference in Commands, Settings and Help. F6 cycles visible areas, Tab reaches local controls, and arrows navigate trees, tabs and review ranges. Pane visibility and tab management remain keyboard-accessible; context-specific bindings preserve website editing, terminal control keys and input-method composition.
 
