@@ -307,3 +307,66 @@ export function nativeKeyInput(input: {
       ) ?? false,
   };
 }
+
+/** Local control gestures are reference text, never executable app commands. */
+export const localGestures: readonly {
+  title: string;
+  keys: readonly string[];
+  context: string;
+  aliases?: readonly string[];
+}[] = [
+  {
+    title: "Move through controls",
+    keys: ["Tab", "Shift+Tab"],
+    context: "Within the focused area or dialog",
+    aliases: ["focus", "next", "previous"],
+  },
+  {
+    title: "Dismiss dialog",
+    keys: ["Escape"],
+    context: "Open dialog; returns to its previous focus",
+    aliases: ["cancel", "close"],
+  },
+  {
+    title: "Navigate tree",
+    keys: ["Up", "Down", "Home", "End"],
+    context: "Workspace and file trees",
+    aliases: ["arrow", "row", "first", "last"],
+  },
+  {
+    title: "Expand or enter folder",
+    keys: ["Right"],
+    context: "File tree; expands workspace rows in the workspace tree",
+    aliases: ["arrow", "expand"],
+  },
+  {
+    title: "Collapse or go to parent",
+    keys: ["Left"],
+    context: "Workspace and file trees",
+    aliases: ["arrow", "collapse"],
+  },
+  {
+    title: "Open selected item",
+    keys: ["Enter"],
+    context: "Trees and search results",
+    aliases: ["activate", "select"],
+  },
+  {
+    title: "Open context menu",
+    keys: ["Shift+F10", "Menu"],
+    context: "Focused Cod control with a context menu",
+    aliases: ["actions", "right click"],
+  },
+  {
+    title: "Select review lines",
+    keys: ["Shift+Up", "Shift+Down", "Shift+Home", "Shift+End"],
+    context: "Review source lines",
+    aliases: ["range", "comment"],
+  },
+  {
+    title: "Navigate tabs",
+    keys: ["Left", "Right"],
+    context: "Focused tab strip",
+    aliases: ["arrow"],
+  },
+];
