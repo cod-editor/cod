@@ -70,6 +70,9 @@ export class ApplicationOperations {
   browserLayout(rectangles: BrowserRectangle[]): void {
     this.browsers.browserLayout(rectangles);
   }
+  browserFocus(id: string): void {
+    this.browsers.browserFocus(id);
+  }
   browserSelect(id: string): void {
     this.browsers.browserSelect(id);
   }

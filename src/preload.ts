@@ -24,8 +24,11 @@ const bridge: CodBridge = {
   browserLayout(rectangles) {
     ipcRenderer.send("cod:browser-layout", rectangles);
   },
-  onBrowserShortcut(callback) {
-    ipcRenderer.on("cod:browser-shortcut", (_event, value) => callback(value));
+  browserFocus(id) {
+    ipcRenderer.send("cod:browser-focus", id);
+  },
+  onCommand(callback) {
+    ipcRenderer.on("cod:command", (_event, value) => callback(value));
   },
   onTerminal(callback: (event: TerminalUiEvent) => void): void {
     ipcRenderer.on("cod:terminal", (_event, event: TerminalUiEvent) =>

@@ -1,3 +1,4 @@
+import { nativeKeyInput, resolveKeybinding, formatShortcut } from "./keyboard";
 import { registerAgentPageScheme } from "./agent-pages";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
 import {
@@ -110,6 +111,20 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+  // Own the settings accelerator before DOM/menu dispatch so one physical key
+  // produces one command. Menu clicks use the same trusted command event.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const match = resolveKeybinding(
+      nativeKeyInput(input),
+      process.platform === "darwin" ? "darwin" : "linux",
+      "shell",
+    );
+    if (match?.command !== "settings") return;
+    event.preventDefault();
+    if (match.dispatch)
+      mainWindow?.webContents.send("cod:command", { command: "settings" });
+  });
+
   const browserSession = session.fromPartition("persist:cod-browser");
   browserSession.setPermissionRequestHandler(
     (contents, permission, callback) => {
@@ -244,6 +259,16 @@ async function start(): Promise<void> {
         mainWindow.webContents.send("cod:terminal", event);
       }
     };
+    ipcMain.on("cod:browser-focus", (event, id: unknown) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== rendererUrl ||
+        typeof id !== "string"
+      )
+        return;
+      operations.browserFocus(id);
+    });
     ipcMain.on("cod:browser-select", (event, id: unknown) => {
       if (
         event.sender !== mainWindow?.webContents ||
@@ -291,12 +316,12 @@ async function start(): Promise<void> {
     const settingsItem: Electron.MenuItemConstructorOptions = {
       id: "settings",
       label: "Settings...",
-      accelerator: "CmdOrCtrl+,",
+      accelerator: formatShortcut("settings", "linux").replace(
+        "Ctrl",
+        "CmdOrCtrl",
+      ),
       click: () =>
-        mainWindow?.webContents.send("cod:browser-shortcut", {
-          id: "",
-          action: "settings",
-        }),
+        mainWindow?.webContents.send("cod:command", { command: "settings" }),
     };
     const template: Electron.MenuItemConstructorOptions[] =
       process.platform === "darwin"

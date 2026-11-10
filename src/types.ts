@@ -254,10 +254,11 @@ export interface CodBridge {
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;
   browserSelect(id: string): void;
-  onBrowserShortcut(
+  browserFocus(id: string): void;
+  onCommand(
     callback: (event: {
-      id: string;
-      action: "palette" | "panel" | "address" | "close" | "settings";
+      command: import("./keyboard").CommandId;
+      browserId?: string;
     }) => void,
   ): void;
   onTerminal(callback: (event: TerminalUiEvent) => void): void;

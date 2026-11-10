@@ -33,6 +33,8 @@ Closing a chat tab removes the view, not its conversation or active turn. Closin
 
 Native handoff releases Cod's controller before starting the provider CLI. Reclaim checks ownership and resumes the same identity/history without an implicit prompt. Transaction rollback must not resurrect stale process, completion or terminal state.
 
+Command names, shortcuts and surface scopes come from one shared registry used by the renderer and native views. A physical key dispatches once; repeated destructive commands are consumed without repetition. IME and AltGraph input stay with the focused control. Non-Latin letter layouts use physical key fallback while Latin layouts retain logical shortcuts. Websites keep their editing/printing/search keys, and terminals retain shell control keys; the command palette and F6 still reach Cod navigation. Restoring focus to a native page must restore actual input focus, not only active styling.
+
 Use shared desktop field, menu, tree and tab conventions. Collapse historical tool activity per turn without hiding pending approvals or actionable failures.
 
 ## Attention and plugin ownership

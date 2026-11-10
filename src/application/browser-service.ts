@@ -1,3 +1,4 @@
+import { nativeKeyInput, resolveKeybinding } from "../keyboard";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
@@ -139,29 +140,7 @@ export class BrowserApplicationService {
     };
     const contents = this.agentPages.getWebContents(record.id);
     contents.on("did-finish-load", syncSubmission);
-    contents.on("before-input-event", (event, input) => {
-      if (
-        input.type !== "keyDown" ||
-        !(process.platform === "darwin" ? input.meta : input.control)
-      )
-        return;
-      const key = input.key.toLowerCase();
-      const action =
-        input.shift && key === "p"
-          ? "palette"
-          : input.shift && key === "e"
-            ? "panel"
-            : !input.shift && key === "w"
-              ? "close"
-              : undefined;
-      if (!action) return;
-      event.preventDefault();
-      this.browserWindow?.webContents.focus();
-      this.browserWindow?.webContents.send("cod:browser-shortcut", {
-        id: record.id,
-        action,
-      });
-    });
+    this.routeNativeKeys(contents, record.id, "agent-page");
     contents.on("focus", () => {
       if (record.workspaceId !== this.store.data.activeWorkspaceId) return;
       const workspace = this.store.data.workspaces.find(
@@ -342,28 +321,7 @@ export class BrowserApplicationService {
               })
               .catch(() => undefined);
         });
-        contents.on("before-input-event", (event, input) => {
-          if (
-            input.type !== "keyDown" ||
-            !(process.platform === "darwin" ? input.meta : input.control)
-          )
-            return;
-          const key = input.key.toLowerCase();
-          const action =
-            input.shift && key === "p"
-              ? "palette"
-              : input.shift && key === "e"
-                ? "panel"
-                : !input.shift && key === "l"
-                  ? "address"
-                  : !input.shift && key === "w"
-                    ? "close"
-                    : undefined;
-          if (!action) return;
-          event.preventDefault();
-          window.webContents.focus();
-          window.webContents.send("cod:browser-shortcut", { id, action });
-        });
+        this.routeNativeKeys(contents, id, "browser");
       },
     });
     this.browserService.onEvent((event) => this.browserEvent(event));
@@ -372,6 +330,43 @@ export class BrowserApplicationService {
     ))
       void this.restoreBrowser(browser).catch(() => undefined);
   }
+  private routeNativeKeys(
+    contents: Electron.WebContents,
+    id: string,
+    surface: "browser" | "agent-page",
+  ): void {
+    contents.on("before-input-event", (event, input) => {
+      const match = resolveKeybinding(
+        nativeKeyInput(input),
+        process.platform === "darwin" ? "darwin" : "linux",
+        surface,
+      );
+      if (!match) return;
+      event.preventDefault();
+      if (!match.dispatch) return;
+      this.browserWindow?.webContents.focus();
+      this.browserWindow?.webContents.send("cod:command", {
+        command: match.command,
+        browserId: id,
+      });
+    });
+  }
+
+  browserFocus(id: string): void {
+    const browser = this.store.data.browsers.find(
+      (item) =>
+        item.id === id &&
+        item.workspaceId === this.store.data.activeWorkspaceId,
+    );
+    if (!browser) return;
+    try {
+      if (browser.agentPage) this.agentPages?.focus(id);
+      else this.browserService?.focus(id);
+    } catch {
+      /* A hidden or closed native view cannot receive focus. */
+    }
+  }
+
   browserSelect(id: string): void {
     const browser = this.store.data.browsers.find(
       (item) =>
