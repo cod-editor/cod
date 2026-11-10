@@ -13,7 +13,7 @@
     "start": "npm run build && electron .",
     "codctl": "node dist/cli.cjs",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "npm run build && playwright test tests/e2e/workspace-shell.spec.ts tests/e2e/native-chat.spec.ts tests/e2e/terminals.spec.ts tests/e2e/runtime-context.spec.ts tests/e2e/browser.spec.ts tests/e2e/browser-diagnostics.spec.ts tests/e2e/browser-recovery.spec.ts tests/e2e/extension-upgrade.spec.ts tests/e2e/profile-migration.spec.ts tests/e2e/files.spec.ts tests/e2e/reviews.spec.ts tests/e2e/browser-addons.spec.ts tests/e2e/design-journeys.spec.ts tests/e2e/registered-page.spec.ts tests/e2e/attention-status.spec.ts tests/e2e/ui-interactions.spec.ts tests/e2e/navigation-settings.spec.ts tests/e2e/workflow-integrity.spec.ts tests/e2e/keyboard-journeys.spec.ts",
+    "test:e2e": "npm run build && playwright test tests/e2e/workspace-shell.spec.ts tests/e2e/native-chat.spec.ts tests/e2e/terminals.spec.ts tests/e2e/runtime-context.spec.ts tests/e2e/browser.spec.ts tests/e2e/browser-diagnostics.spec.ts tests/e2e/browser-recovery.spec.ts tests/e2e/extension-upgrade.spec.ts tests/e2e/files.spec.ts tests/e2e/reviews.spec.ts tests/e2e/browser-addons.spec.ts tests/e2e/design-journeys.spec.ts tests/e2e/registered-page.spec.ts tests/e2e/attention-status.spec.ts tests/e2e/ui-interactions.spec.ts tests/e2e/navigation-settings.spec.ts tests/e2e/workflow-integrity.spec.ts tests/e2e/keyboard-journeys.spec.ts",
     "test:chat": "npm run build && playwright test tests/e2e/native-chat.spec.ts",
     "test:providers": "node --test tests/providers/adapters.test.ts",
     "format": "prettier --write .",

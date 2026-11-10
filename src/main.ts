@@ -1,4 +1,3 @@
-import { migrateProfile, profileIsLive } from "./profile-migration";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -31,12 +30,7 @@ import { connect, createServer, type Server } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ApplicationOperations } from "./operations";
-import {
-  defaultDataDirectory,
-  defaultSocketPath,
-  legacyDataDirectory,
-  ownershipLockDirectory,
-} from "./paths";
+import { defaultDataDirectory, defaultSocketPath } from "./paths";
 import type { OperationRequest } from "./types";
 
 registerAgentPageScheme([
@@ -145,37 +139,10 @@ app.on("second-instance", (_event, argv) => {
 });
 
 app.setName("Cod");
-const defaultProfile =
-  !process.env.COD_DATA_DIR &&
-  !process.env.COD_SOCKET_PATH &&
-  !app.commandLine.hasSwitch("user-data-dir");
-// One canonical data-directory lock for both default and explicit-profile starts.
-// Keep it for the whole lifetime; Chromium uses its own actual profile below.
-const browserDataDirectory = app.commandLine.hasSwitch("user-data-dir")
-  ? app.commandLine.getSwitchValue("user-data-dir")
-  : path.join(dataDirectory, "chromium");
-app.setPath("userData", ownershipLockDirectory(dataDirectory));
-const ownsInstance = app.requestSingleInstanceLock();
-if (ownsInstance) {
-  try {
-    if (defaultProfile)
-      migrateProfile({
-        directory: dataDirectory,
-        legacyDirectory: legacyDataDirectory(),
-      });
-    if (profileIsLive(dataDirectory))
-      throw new Error(
-        "This Cod profile is already in use. Close its running Cod window before starting this version.",
-      );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(message);
-    dialog.showErrorBox("Could not open Cod", message);
-    app.exit(1);
-    throw error;
-  }
-  app.setPath("userData", browserDataDirectory);
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", path.join(dataDirectory, "chromium"));
 }
+const ownsInstance = app.requestSingleInstanceLock();
 
 function createWindow(): void {
   ElectronChromeExtensions.handleCRXProtocol(session.defaultSession);

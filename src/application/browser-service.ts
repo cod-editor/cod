@@ -1,4 +1,3 @@
-import { extensionInstallDirectory } from "../profile-migration";
 import { readFileSync } from "node:fs";
 import {
   findFocusWorld,
@@ -231,7 +230,6 @@ export class BrowserApplicationService {
       );
     this.browserAddons = new BrowserAddons({
       directory: path.join(this.store.directory, "browser-addons"),
-      extensionDirectory: extensionInstallDirectory(this.store.directory),
       session,
       window,
       changed: () => {
