@@ -464,9 +464,19 @@ test("Completed turns fold commentary and tools while final answers and decision
       app.page.getByText("STREAM Search and inspect the invented files.", {
         exact: true,
       }),
-    ).toBeVisible();
+    ).toBeAttached();
     const working = app.page.getByRole("status", { name: "Turn activity" });
-    await expect(working).toHaveText("Working...");
+    await expect(working).toHaveText(/Working · \d+s/);
+    const liveActivity = app.page.locator("details.turn-activity").first();
+    await expect(liveActivity.locator(".assistant").first()).toBeHidden();
+    await liveActivity.locator(":scope > summary").click();
+    await expect(liveActivity.locator(".assistant").first()).toBeVisible();
+    await expect(working).toHaveText(/Working · [1-9]\d*s/);
+    await expect(liveActivity).toHaveAttribute("open", "");
+    await liveActivity.locator(":scope > summary").click();
+    await expect(app.page.locator(".transcript > .tool-activity")).toHaveCount(
+      0,
+    );
     await expect(app.page.locator(".transcript > .turn-activity")).toHaveCount(
       1,
     );
@@ -606,6 +616,13 @@ test("Completed turns fold commentary and tools while final answers and decision
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)
       .toBe("working");
+    const runningTurn = app.page.locator("details.turn-activity").last();
+    await expect(runningTurn.locator(".current-tool")).toHaveText(
+      "Running command",
+    );
+    await expect(runningTurn.locator(".tool-activity").first()).toBeHidden();
+    await runningTurn.locator(":scope > summary").click();
+    await expect(runningTurn.locator(".tool-activity").first()).toBeVisible();
     await app.page.getByRole("button", { name: "Stop", exact: true }).click();
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)
@@ -622,6 +639,7 @@ test("Completed turns fold commentary and tools while final answers and decision
       .filter({ hasText: /Stopped after/ })
       .last();
     await expect(stopped).toBeVisible();
+    await expect(stopped).toHaveAttribute("open", "");
     await stopped.scrollIntoViewIfNeeded();
     await app.page.screenshot({
       path: info.outputPath("cancelled-turn-duration.png"),

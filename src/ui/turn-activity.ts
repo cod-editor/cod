@@ -14,7 +14,7 @@ function workedDuration(ms: number, outcome?: string): string {
     : `${prefix} ${Math.floor(seconds / 60)}m${seconds % 60 ? ` ${seconds % 60}s` : ""}`;
 }
 
-/** Fold completed routine activity without hiding final answers or decisions. */
+/** Keep routine activity in one expandable row without hiding answers or decisions. */
 export function groupTurnActivity(
   transcript: HTMLElement,
   conversation: import("../types").ConversationState,
@@ -40,21 +40,11 @@ export function groupTurnActivity(
     const completed =
       !!recorded?.outcome ||
       (!recorded && (id !== last || conversation.status === "ready"));
-    if (!completed) {
-      if (id === last && ["working", "waiting"].includes(conversation.status)) {
-        const header = document.createElement("div");
-        header.className = "turn-activity";
-        header.dataset.focusKey = `turn-duration:${id}`;
-        header.setAttribute("role", "status");
-        header.setAttribute("aria-label", "Turn activity");
-        header.textContent =
-          conversation.status === "waiting"
-            ? "Waiting for your response"
-            : "Working...";
-        transcript.insertBefore(header, nodes[0] ?? null);
-      }
-      continue;
-    }
+    const live =
+      !completed &&
+      id === last &&
+      ["working", "waiting"].includes(conversation.status);
+    if (!completed && !live) continue;
     let lastTool = -1;
     nodes.forEach((node, index) => {
       if (node.classList.contains("tool-activity")) lastTool = index;
@@ -64,16 +54,20 @@ export function groupTurnActivity(
       if (node.classList.contains("tool-activity")) return true;
       if (!node.classList.contains("assistant")) return false;
       if (node.dataset.phase === "commentary") return true;
+      if (live && node.dataset.phase !== "final") return true;
       // Unknown imported history: preserve the complete final assistant block
       // after the last tool; never classify a sole answer by its wording.
       return !node.dataset.phase && lastTool >= 0 && index < lastTool;
     });
     const duration = recorded?.durationMs;
-    const text =
-      duration !== undefined && Number.isFinite(duration)
+    const text = live
+      ? conversation.status === "waiting"
+        ? "Waiting for your response"
+        : "Working"
+      : duration !== undefined && Number.isFinite(duration)
         ? workedDuration(duration, recorded?.outcome)
         : "Activity";
-    if (!activity.length) {
+    if (!activity.length && !live) {
       if (text !== "Activity" && nodes.length) {
         const header = document.createElement("div");
         header.className = "turn-activity";
@@ -88,13 +82,35 @@ export function groupTurnActivity(
     details.dataset.focusKey = `turn-activity:${id}`;
     const summary = document.createElement("summary");
     summary.dataset.focusKey = `turn-summary:${id}`;
-    summary.setAttribute("aria-label", text);
+    if (!live) summary.setAttribute("aria-label", text);
     const label = document.createElement("span");
     label.textContent = text;
+    if (live) {
+      label.setAttribute("role", "status");
+      label.setAttribute("aria-label", "Turn activity");
+      if (conversation.status === "working" && recorded?.startedAt)
+        label.dataset.activityStarted = recorded.startedAt;
+    }
     summary.append(icon("chevron"), label);
+    if (live && conversation.status === "working") {
+      const current = [...activity]
+        .reverse()
+        .find(
+          (node) =>
+            node.classList.contains("tool-activity") &&
+            node.dataset.toolPhase !== "completed",
+        );
+      if (current) {
+        const action = document.createElement("span");
+        action.className = "current-tool";
+        action.textContent = current.dataset.compactCaption ?? "Using tool";
+        summary.append(action);
+      }
+    }
     details.append(summary);
-    transcript.insertBefore(details, activity[0]);
+    transcript.insertBefore(details, nodes[0] ?? null);
     details.append(...activity);
+    updateLiveActivity(details);
   }
 }
 
@@ -121,4 +137,35 @@ export function toolCaption(info: Record<string, unknown> | null): string {
       .replace(/[_-]/g, " ")
       .replace(/^./, (value) => value.toUpperCase());
   return "Tool";
+}
+
+// Update only the clock text, without rebuilding the transcript or moving focus.
+export function updateLiveActivity(root: ParentNode = document): void {
+  for (const label of root.querySelectorAll<HTMLElement>(
+    "[data-activity-started]",
+  )) {
+    const start = Date.parse(label.dataset.activityStarted!);
+    if (!Number.isFinite(start)) continue;
+    const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    const elapsed =
+      seconds < 60
+        ? `${seconds}s`
+        : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    label.textContent = `Working · ${elapsed}`;
+  }
+}
+
+export function compactToolCaption(
+  info: Record<string, unknown> | null,
+): string {
+  if (typeof info?.command === "string") return "Running command";
+  if (Array.isArray(info?.changes)) return "Editing files";
+  if (typeof info?.query === "string") return "Searching";
+  const name = String(info?.name ?? info?.toolName ?? info?.type ?? "");
+  return (
+    name
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/[_-]/g, " ")
+      .slice(0, 80) || "Using tool"
+  );
 }

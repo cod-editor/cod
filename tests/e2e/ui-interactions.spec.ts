@@ -397,7 +397,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       app.page.getByText("STREAM [hold] Update while pressing Stop", {
         exact: true,
       }),
-    ).toBeVisible();
+    ).toBeAttached();
     expect(await pressed!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.screenshot({
       path: info.outputPath("stop-held-through-stream.png"),

@@ -1,3 +1,4 @@
+import { updateLiveActivity } from "./ui/turn-activity";
 import { configureKeymap } from "./keyboard";
 import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
 import { createContentFind } from "./ui/content-find";
@@ -217,9 +218,12 @@ void keymapReady
 if (navigator.userAgent.includes("Mac"))
   document.body.classList.add("platform-mac");
 
+const activityClock = setInterval(() => updateLiveActivity(), 1000);
+
 window.addEventListener(
   "beforeunload",
   () => {
+    clearInterval(activityClock);
     commands.dispose();
     finder.dispose();
     layout.dispose();

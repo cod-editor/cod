@@ -1,6 +1,10 @@
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
-import { groupTurnActivity, toolCaption } from "./turn-activity";
+import {
+  groupTurnActivity,
+  toolCaption,
+  compactToolCaption,
+} from "./turn-activity";
 import {
   routeProviderCommand,
   showProviderCommands,
@@ -631,6 +635,8 @@ export function createConversationViews({
         if (entry.tool.turnId) tool.dataset.turnId = entry.tool.turnId;
         const label = document.createElement("summary");
         const info = entry.tool.details as Record<string, unknown> | null;
+        tool.dataset.toolPhase = entry.tool.phase;
+        tool.dataset.compactCaption = compactToolCaption(info);
         const failed = !!(
           info?.error ||
           info?.isError ||

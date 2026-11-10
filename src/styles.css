@@ -1638,3 +1638,19 @@ browser-action-list::part(action):focus-visible {
   color: var(--muted);
   transform: rotate(90deg);
 }
+
+.turn-activity > summary {
+  max-width: 100%;
+  white-space: nowrap;
+}
+.turn-activity .current-tool {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-activity .current-tool::before {
+  content: "· ";
+}
+.turn-activity > summary > .icon,
+.turn-activity > summary > span:first-of-type {
+  flex: none;
+}
