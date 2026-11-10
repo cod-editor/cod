@@ -39,6 +39,8 @@ CLI creation stays in the background unless focus is explicitly requested. Set `
 
 ## Current limits
 
+New browser tabs show pinned sites shared across workspaces. Use the `+` tile to add a site, its context menu to rename or unpin it, or Commands > Pin current site to home. The address field accepts website addresses without a scheme and searches ordinary text with Google. There is no recent-sites section or bookmarks bar. Search suggestions, browsing-history search and a selectable search engine are not yet implemented.
+
 - Chats support Codex and Kimi, including images and native-session handoff. Claude remains a product requirement but is not available in the selector.
 - Session commands (`/help`, `/status`, `/skills`, `/plugins`, `/config`, `/agents`) inspect native data without sending a prompt. Codex skill selection attaches the native skill to the next prompt. Configuration and plugin changes, and direct child-agent control, remain in the native client. Token usage appears only after provider telemetry; account limits are available only when Codex supplies them.
 - Bitwarden is pinned and bundled in packages. Its installed path stays within the Cod profile across package updates. Upgrading from older releases that loaded it directly from a timestamped package may require one final sign-in; their old extension storage is preserved without attempting a partial authentication migration. After the first vault login, reload an already-open page once before autofill. The verified save path is the extension's vault UI; automatic capture of a submitted login is not established. Arbitrary extensions are unsupported.

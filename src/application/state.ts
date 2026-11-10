@@ -18,6 +18,7 @@ export class ApplicationStateStore {
     conversations: [],
     terminals: [],
     browsers: [],
+    pinnedSites: [],
     drafts: {},
   };
   private queue: Promise<unknown> = Promise.resolve();
@@ -40,6 +41,7 @@ export class ApplicationStateStore {
       Object.assign(this.data, saved, {
         conversations: saved.conversations ?? [],
         drafts: saved.drafts ?? {},
+        pinnedSites: saved.pinnedSites ?? [],
         terminals: saved.terminals ?? [],
         browsers: (saved.browsers ?? []).map((browser) => ({
           ...browser,

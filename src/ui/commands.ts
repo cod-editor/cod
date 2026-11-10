@@ -641,6 +641,18 @@ export function createCommands(
         case "browser.new":
           browserDialog();
           break;
+        case "browser.pin": {
+          if (pane?.kind !== "browser")
+            throw new Error("Focus a browser tab first");
+          const browser = getState().browsers.find(
+            (item) => item.id === pane.browserId,
+          )!;
+          await invoke("browser.pin", {
+            url: browser.url,
+            title: browser.title,
+          });
+          break;
+        }
         case "browser.default":
           defaultBrowserDialog();
           break;

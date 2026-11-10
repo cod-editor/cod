@@ -96,6 +96,8 @@ export const commands = {
   "browser.blocking": ["id", "enabled"],
   "browser.open": ["workspace", "url"],
   "browser.navigate": ["id", "url"],
+  "browser.pin": ["url", "title?"],
+  "browser.unpin": ["url"],
   "browser.back": ["id"],
   "browser.forward": ["id"],
   "browser.reload": ["id"],

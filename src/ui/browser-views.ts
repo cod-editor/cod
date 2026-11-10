@@ -1,6 +1,7 @@
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
 import { icon } from "./controls";
+import { createBrowserHome } from "./browser-home";
 export function createBrowserViews(
   panes: HTMLElement,
   getState: () => AppState,
@@ -11,6 +12,7 @@ export function createBrowserViews(
   ) => HTMLButtonElement,
 ) {
   const browserPanes = new Map<string, HTMLElement>();
+  const homes = new Map<string, ReturnType<typeof createBrowserHome>>();
   let browserLayoutPending = false;
   function scheduleBrowserLayout(): void {
     if (browserLayoutPending) return;
@@ -56,7 +58,8 @@ export function createBrowserViews(
     const address = container.querySelector<HTMLInputElement>(
       'input[aria-label="Address"]',
     )!;
-    if (document.activeElement !== address) address.value = record.url;
+    if (document.activeElement !== address)
+      address.value = record.url === "about:blank" ? "" : record.url;
     container.querySelector<HTMLButtonElement>(
       'button[aria-label="Back"]',
     )!.disabled = !record.canGoBack;
@@ -84,7 +87,12 @@ export function createBrowserViews(
       ),
     );
     const failed = !!record.error && !record.agentPage;
-    container.querySelector<HTMLElement>(".browser-content")!.hidden = failed;
+    const atHome = record.url === "about:blank" && !record.agentPage && !failed;
+    const home = homes.get(record.id)!;
+    home.element.hidden = !atHome;
+    if (atHome) home.update();
+    container.querySelector<HTMLElement>(".browser-content")!.hidden =
+      failed || atHome;
     const failure = container.querySelector<HTMLElement>(".browser-failure")!;
     failure.hidden = !failed;
     failure.querySelector<HTMLButtonElement>("[data-browser-recover]")!.hidden =
@@ -167,7 +175,8 @@ export function createBrowserViews(
     }
     const address = document.createElement("input");
     address.setAttribute("aria-label", "Address");
-    address.value = record.url;
+    address.value = record.url === "about:blank" ? "" : record.url;
+    address.placeholder = "Search or enter address";
     address.spellcheck = false;
     navigation.append(address);
     const blocking = paneButton("Ad blocking", async () => {
@@ -325,7 +334,11 @@ export function createBrowserViews(
     );
     recover.dataset.browserRecover = "";
     failure.append(failureTitle, error, url, retry, " ", recover);
-    body.append(navigation, content, failure, message);
+    const home = createBrowserHome(getState, invoke, (url) => {
+      void invoke("browser.navigate", { id: record.id, url });
+    });
+    homes.set(record.id, home);
+    body.append(navigation, home.element, content, failure, message);
     container.append(body);
     browserPanes.set(record.id, container);
     updateBrowserPane(container, record);
@@ -350,8 +363,10 @@ export function createBrowserViews(
     },
     reconcile() {
       for (const id of browserPanes.keys())
-        if (!getState().browsers.some((b) => b.id === id))
+        if (!getState().browsers.some((b) => b.id === id)) {
           browserPanes.delete(id);
+          homes.delete(id);
+        }
     },
     layout: scheduleBrowserLayout,
     focusNative(id: string) {
@@ -366,6 +381,7 @@ export function createBrowserViews(
       window.removeEventListener("resize", scheduleBrowserLayout);
       document.removeEventListener("scroll", scheduleBrowserLayout, true);
       browserPanes.clear();
+      homes.clear();
       window.cod.browserLayout([]);
     },
   };

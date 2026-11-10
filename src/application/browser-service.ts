@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolveAddress } from "../browser/address";
 import {
   findFocusWorld,
   captureFindFocus,
@@ -654,7 +655,7 @@ export class BrowserApplicationService {
     const record = this.browser(id);
     if (record.agentPage)
       throw new Error("Registered agent pages cannot navigate to other sites");
-    await this.loadBrowser(record, this.browserUrl(url));
+    await this.loadBrowser(record, this.browserUrl(resolveAddress(url)));
     return structuredClone(this.browser(id));
   }
   async loadBrowser(record: BrowserState, url: string): Promise<void> {
@@ -853,6 +854,27 @@ export class BrowserApplicationService {
 
       case "browser.open":
         return this.openBrowser(request);
+
+      case "browser.pin":
+      case "browser.unpin":
+        return this.store.change(() => {
+          const url = this.browserUrl(requiredString(request, "url"));
+          if (url === "about:blank") throw new Error("Choose a website to pin");
+          const sites = (this.store.data.pinnedSites ??= []);
+          const index = sites.findIndex((site) => site.url === url);
+          if (request.op === "browser.unpin") {
+            if (index >= 0) sites.splice(index, 1);
+          } else {
+            const title =
+              typeof request.title === "string" && request.title.trim()
+                ? request.title.trim()
+                : new URL(url).hostname;
+            const site = { url, title };
+            if (index >= 0) sites[index] = site;
+            else sites.push(site);
+          }
+          return structuredClone(sites);
+        });
 
       case "browser.navigate":
         return this.navigateBrowser(

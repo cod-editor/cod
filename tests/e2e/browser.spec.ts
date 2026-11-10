@@ -175,6 +175,157 @@ test.afterEach(async () => {
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 
+test("Address bar searches text and opens bare addresses without sending addresses to search", async () => {
+  const workspace = await shell.create("Address input");
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await shell.page
+    .getByRole("button", { name: "New browser tab", exact: true })
+    .click();
+  const address = shell.page.getByRole("textbox", {
+    name: "Address",
+    exact: true,
+  });
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue("");
+  await expect(address).toHaveAttribute(
+    "placeholder",
+    "Search or enter address",
+  );
+  await expect
+    .poll(async () => {
+      const state = await shell.cli<{
+        browsers: Array<{ addons?: { adblock: { status: string } } }>;
+      }>("state");
+      return state.browsers[0]?.addons?.adblock.status;
+    })
+    .toBe("ready");
+  await shell.app!.evaluate(({ session }, origin) => {
+    session
+      .fromPartition("persist:cod-browser")
+      .webRequest.onBeforeRequest(
+        { urls: ["https://www.google.com/search*"] },
+        (details, callback) =>
+          callback({
+            redirectURL: origin + "/search" + new URL(details.url).search,
+          }),
+      );
+  }, origin);
+  await address.fill("invented search & example");
+  await address.press("Enter");
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) =>
+          new URL(url, origin).searchParams.get("q") ===
+          "invented search & example",
+      ),
+    )
+    .toBe(true);
+  const record = (
+    await shell.cli<{ browsers: BrowserRecord[] }>("state")
+  ).browsers.find((b) => b.workspaceId === workspace)!;
+  await address.fill(origin.replace("http://", "") + "/bare-address");
+  await address.press("Enter");
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/bare-address");
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    "site:example.com invented",
+  );
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) =>
+          new URL(url, origin).searchParams.get("q") ===
+          "site:example.com invented",
+      ),
+    )
+    .toBe(true);
+});
+
+test("Browser home keeps shared pinned sites through editing and restart", async ({}, info) => {
+  const workspace = await shell.create("Home sites");
+  const record = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    "about:blank",
+  );
+  const home = shell.page.getByRole("region", { name: "Browser home" });
+  await expect(home).toBeVisible();
+  await expect(
+    shell.page.getByRole("region", { name: "Browser content", exact: true }),
+  ).toBeHidden();
+  await home.getByRole("button", { name: "Pin a site" }).click();
+  await home
+    .getByRole("textbox", { name: "Pinned site address" })
+    .fill(origin + "/one");
+  await home
+    .getByRole("textbox", { name: "Pinned site name" })
+    .fill("Example workspace");
+  await home.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    home.getByRole("button", { name: "Example workspace", exact: true }),
+  ).toBeVisible();
+  await home
+    .getByRole("button", { name: "Example workspace", exact: true })
+    .click({ button: "right" });
+  await shell.page.getByRole("button", { name: "Rename", exact: true }).click();
+  await home
+    .getByRole("textbox", { name: "Pinned site name" })
+    .fill("Example docs");
+  await home.getByRole("textbox", { name: "Pinned site name" }).press("Enter");
+  await expect(
+    home.getByRole("button", { name: "Example docs", exact: true }),
+  ).toBeVisible();
+  await shell.cli(
+    "browser",
+    "pin",
+    "--url",
+    origin + "/two",
+    "--title",
+    "Example mail",
+  );
+  await home.screenshot({ path: info.outputPath("browser-home.png") });
+  await home.getByRole("button", { name: "Example docs", exact: true }).click();
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/one");
+  await expect(home).toBeHidden();
+  await shell.stop();
+  await shell.start();
+  const other = await shell.create("Another workspace");
+  await shell.cli(
+    "browser",
+    "open",
+    "--workspace",
+    other,
+    "--url",
+    "about:blank",
+  );
+  const restored = shell.page.getByRole("region", { name: "Browser home" });
+  await expect(
+    restored.getByRole("button", { name: "Example docs", exact: true }),
+  ).toBeVisible();
+  await restored
+    .getByRole("button", { name: "Example docs", exact: true })
+    .click({ button: "right" });
+  await shell.page.getByRole("button", { name: "Unpin", exact: true }).click();
+  await expect(
+    restored.getByRole("button", { name: "Example docs", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    restored.getByRole("button", { name: "Example mail", exact: true }),
+  ).toBeVisible();
+});
+
 test("Browser AC1 UI and CLI navigation, history and address keyboard use real workspace views", async () => {
   const workspace = await shell.create("Browser navigation");
   await shell.page.keyboard.press(`${modifier}+Shift+P`);

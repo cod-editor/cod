@@ -1686,3 +1686,63 @@ browser-action-list::part(action):focus-visible {
   border-radius: 3px;
   background: var(--panel);
 }
+
+.browser-home {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(24px, 8vh, 96px) 24px 24px;
+}
+.browser-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 24px 12px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.browser-home-site {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 4px;
+  border: 0;
+  background: transparent;
+}
+.browser-home-site > span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-home-monogram {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 15px;
+  font-size: 32px;
+  color: #fff;
+}
+.browser-home-add {
+  justify-content: center;
+  color: var(--muted);
+  font-size: 24px;
+  min-height: 96px;
+}
+.browser-home-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 600px;
+  margin: 24px auto;
+}
+.browser-home-editor input {
+  flex: 1;
+  min-width: 140px;
+}
+.browser-home-editor [role="alert"] {
+  width: 100%;
+  color: var(--muted);
+}

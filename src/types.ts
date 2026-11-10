@@ -243,6 +243,7 @@ export interface WorkspaceState {
 }
 
 export interface AppState {
+  pinnedSites?: Array<{ url: string; title: string }>;
   closedWorkspaces?: Array<{
     workspace: WorkspaceState;
     conversations: ConversationState[];

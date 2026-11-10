@@ -201,6 +201,7 @@ export const commands = [
     key("Backquote", { ctrl: true, shift: true }),
   ]),
   entry("browser.new", "New browser tab", "Browser"),
+  entry("browser.pin", "Pin current site to home", "Browser"),
   entry("folders.add", "Add folder", "Workspace"),
   entry("review.document", "Review active document", "Review"),
   entry("chat.stop", "Stop response", "Conversation"),

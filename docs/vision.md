@@ -120,6 +120,7 @@ LSP features, blame, hunk reversion and other advanced editing features from the
 | W8  | Built-in ad blocking using an existing engine, with a per-site toggle. It must be comparable to AdGuard on representative daily-use sites, including ads, leftover clutter and page breakage. |
 
 The goal is to replace the user's primary browser, not to promise every Chrome feature.
+New tabs provide an address/search field and a quiet grid of user-pinned sites shared across workspaces. Do not show recent sites, a Favorites heading or a persistent bookmarks bar. Bookmark controls, if added, stay out of the default layout. Bitwarden and ad blocking are the required extension use cases.
 Bitwarden compatibility does not imply support for arbitrary extensions or an extension store.
 Apple Passwords is not a v1 requirement. Cookie importing is not needed.
 Agent screenshots and agent browser control are outside v1; opening a URL through codctl remains in scope.
