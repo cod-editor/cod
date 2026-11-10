@@ -141,18 +141,7 @@ export class BrowserApplicationService {
     const contents = this.agentPages.getWebContents(record.id);
     contents.on("did-finish-load", syncSubmission);
     this.routeNativeKeys(contents, record.id, "agent-page");
-    contents.on("focus", () => {
-      if (record.workspaceId !== this.store.data.activeWorkspaceId) return;
-      const workspace = this.store.data.workspaces.find(
-        (item) => item.id === record.workspaceId,
-      );
-      if (workspace && workspace.activePaneId !== record.paneId)
-        void this.store
-          .change(() => {
-            workspace.activePaneId = record.paneId;
-          })
-          .catch(() => undefined);
-    });
+    contents.on("focus", () => this.syncNativeFocus(contents, record.id));
     syncSubmission();
     this.store.notify();
   }
@@ -297,29 +286,14 @@ export class BrowserApplicationService {
         )
           record.nativeTabId = contents.id;
         contents.on("focus", () => {
-          const focused = this.store.data.browsers.find(
-            (item) => item.id === id,
-          );
-          if (
-            !focused ||
-            focused.workspaceId !== this.store.data.activeWorkspaceId
-          )
-            return;
-          this.selectBrowserContents(contents);
+          if (contents.isDestroyed() || !contents.isFocused()) return;
           const browser = this.store.data.browsers.find(
             (item) => item.id === id,
           );
-          const workspace =
-            browser &&
-            this.store.data.workspaces.find(
-              (item) => item.id === browser.workspaceId,
-            );
-          if (browser && workspace && workspace.activePaneId !== browser.paneId)
-            void this.store
-              .change(() => {
-                workspace.activePaneId = browser.paneId;
-              })
-              .catch(() => undefined);
+          if (browser?.workspaceId !== this.store.data.activeWorkspaceId)
+            return;
+          this.selectBrowserContents(contents);
+          this.syncNativeFocus(contents, id);
         });
         this.routeNativeKeys(contents, id, "browser");
       },
@@ -330,6 +304,45 @@ export class BrowserApplicationService {
     ))
       void this.restoreBrowser(browser).catch(() => undefined);
   }
+  private syncNativeFocus(contents: Electron.WebContents, id: string): void {
+    if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
+      return;
+    const current = this.store.data.browsers.find((item) => item.id === id);
+    const owner = this.store.data.workspaces.find(
+      (item) => item.id === current?.workspaceId,
+    );
+    if (
+      !current ||
+      owner?.id !== this.store.data.activeWorkspaceId ||
+      owner.activePaneId === current.paneId
+    )
+      return;
+    void this.store
+      .change(() => {
+        // Focus notifications may wait behind persistence or another operation.
+        // A view that has since blurred must not undo explicit pane navigation.
+        if (
+          contents.isDestroyed() ||
+          !contents.isFocused() ||
+          this.store.closing
+        )
+          return;
+        const browser = this.store.data.browsers.find((item) => item.id === id);
+        const workspace = this.store.data.workspaces.find(
+          (item) =>
+            item.id === browser?.workspaceId &&
+            item.id === this.store.data.activeWorkspaceId,
+        );
+        if (
+          workspace &&
+          browser &&
+          workspace.panes.some((pane) => pane.id === browser.paneId)
+        )
+          workspace.activePaneId = browser.paneId;
+      })
+      .catch(() => undefined);
+  }
+
   private routeNativeKeys(
     contents: Electron.WebContents,
     id: string,
