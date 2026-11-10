@@ -27,7 +27,8 @@ export function createFocusManager(
     const file = element.closest<HTMLElement>("#project-panel [data-path]");
     if (file) return { element, filePath: file.dataset.path };
     const row = element.closest<HTMLElement>("[data-workspace-id]");
-    if (row) return { element, workspaceId: row.dataset.workspaceId };
+    if (row && !(element instanceof HTMLInputElement))
+      return { element, workspaceId: row.dataset.workspaceId };
     const tab = element.closest<HTMLElement>("[data-tab-id]");
     if (tab) return { element, tabId: tab.dataset.tabId };
     const pane = element.closest<HTMLElement>("[data-pane-id]");

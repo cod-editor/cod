@@ -227,3 +227,5 @@ Workspace and tab closure is recoverable. Closing a chat view preserves its sess
 New workspace, browser tab and terminal actions open their working surface immediately without a preliminary form. A new workspace starts as Untitled and can be renamed later. A browser tab starts blank with its address field focused. A terminal uses the first workspace folder, or the home directory when no folder is attached. Navigation panel buttons align to the right edge of the workspace sidebar in the title bar.
 
 Agents discover and control Cod through its CLI and installed skill. Environment variables identify the conversation and socket; `codctl context` reads current membership after moves. A separate agent-facing protocol is not needed for context or help.
+
+Rename edits the object label in place. Workspace rows support Rename from Commands/context menu and double-clicking their label. Enter or leaving the field saves a nonempty name; Escape cancels. Background updates preserve the edit and caret.

@@ -1673,3 +1673,16 @@ browser-action-list::part(action):focus-visible {
   padding-left: 14px;
   margin-left: 8px;
 }
+
+.workspace-name-input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  height: 22px;
+  padding: 0 3px;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--focus);
+  border-radius: 3px;
+  background: var(--panel);
+}

@@ -294,7 +294,7 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
     "shift",
   ]);
   await expect(shell.row("Browser layout")).toBeFocused();
-  await shell.command("Rename workspace");
+  await shell.command("Settings...");
   await expect
     .poll(async () => (await nativeView("/one"))?.visible)
     .toBe(false);

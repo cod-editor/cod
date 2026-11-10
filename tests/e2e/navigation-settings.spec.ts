@@ -408,6 +408,7 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
     await app.page.screenshot({
       path: info.outputPath("palette-keyboard-selection.png"),
     });
+    await input.fill("Rename workspace");
     await input.press("Enter");
     await expect(
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),

@@ -55,7 +55,9 @@ test("First-run controls, menus, pending work and failure recovery remain usable
     await app.page
       .getByRole("textbox", { name: "Workspace name", exact: true })
       .fill("Explore report export");
-    await app.page.getByRole("button", { name: "Save", exact: true }).click();
+    await app.page
+      .getByRole("textbox", { name: "Workspace name", exact: true })
+      .press("Enter");
 
     await app.page
       .getByRole("textbox", { name: "Message", exact: true })

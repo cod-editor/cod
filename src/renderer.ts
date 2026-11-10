@@ -73,7 +73,6 @@ const layout = createPaneLayout(() => state, invoke, {
 });
 const navigation = createWorkspaceNavigation(tree, () => state, invoke, {
   newConversation: () => commands.newConversation(),
-  workspaceDialog: (mode) => commands.workspace(mode),
   folderDialog: (workspace) => commands.folder(workspace),
   conversationActions: (c) => commands.conversationActions(c),
   paneButton,

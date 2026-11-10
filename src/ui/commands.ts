@@ -33,7 +33,10 @@ interface CommandFeatures {
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
   chat: { send: (id: string) => Promise<void>; integration: () => void };
-  navigation: { focusWorkspace: (id: string) => Promise<void> };
+  navigation: {
+    focusWorkspace: (id: string) => Promise<void>;
+    renameWorkspace: (id: string) => Promise<void>;
+  };
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
   find: { open: (pane: import("../types").PaneState) => void };
@@ -468,14 +471,7 @@ export function createCommands(
     }
     const workspace = activeWorkspace();
     if (!workspace) return;
-    inputDialog({
-      title: "Rename workspace",
-      label: "Workspace name",
-      value: workspace.name,
-      submitLabel: "Save",
-      submit: (name) =>
-        localInvoke("workspace.rename", { id: workspace.id, name }),
-    });
+    void navigation.renameWorkspace(workspace.id);
   }
 
   const currentPane = () => {

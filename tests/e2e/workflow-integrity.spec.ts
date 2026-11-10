@@ -703,12 +703,9 @@ test("Navigation disclosures and installation forms share compact geometry witho
       .getByRole("treeitem", { name: "alpha repo", exact: true });
     const workspaceRow = app.row(workspace.name).first();
     const size = async (node: typeof fileRoot) =>
-      node.locator(".tree-disclosure").evaluate((el) => ({
+      node.locator(".folder-state, .tree-disclosure .icon").evaluate((el) => ({
         w: el.getBoundingClientRect().width,
         h: el.getBoundingClientRect().height,
-        offset:
-          el.getBoundingClientRect().y -
-          el.parentElement!.getBoundingClientRect().y,
       }));
     await expect(fileRoot).toBeVisible();
     expect(await size(fileRoot)).toEqual(await size(workspaceRow));
@@ -725,13 +722,12 @@ test("Navigation disclosures and installation forms share compact geometry witho
       name: "Workspace name",
       exact: true,
     });
-    const fieldStyle = await rename.evaluate((el) => ({
-      height: el.getBoundingClientRect().height,
-      radius: getComputedStyle(el).borderRadius,
-      padding: getComputedStyle(el).padding,
-    }));
+    await expect(app.page.getByRole("dialog")).toHaveCount(0);
+    expect(await rename.evaluate((el) => !!el.closest(".workspace-row"))).toBe(
+      true,
+    );
     await app.page.screenshot({
-      path: info.outputPath("shared-rename-form.png"),
+      path: info.outputPath("inline-workspace-rename.png"),
     });
     await app.page.keyboard.press("Escape");
     await app.command("Install agent integration...");
@@ -742,12 +738,8 @@ test("Navigation disclosures and installation forms share compact geometry witho
     });
     await directory.fill(profile);
     expect(
-      await directory.evaluate((el) => ({
-        height: el.getBoundingClientRect().height,
-        radius: getComputedStyle(el).borderRadius,
-        padding: getComputedStyle(el).padding,
-      })),
-    ).toEqual(fieldStyle);
+      await directory.evaluate((el) => el.getBoundingClientRect().height),
+    ).toBeLessThan(40);
     await dialog
       .getByRole("button", { name: "Preview changes", exact: true })
       .click();

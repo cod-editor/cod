@@ -7,7 +7,6 @@ import type { AppState, ConversationState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 interface NavigationActions {
   newConversation: () => Promise<unknown>;
-  workspaceDialog: (mode: "create" | "rename") => void;
   folderDialog: (workspace?: string) => void;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   paneButton: (
@@ -21,13 +20,8 @@ export function createWorkspaceNavigation(
   invoke: Invoke,
   actions: NavigationActions,
 ) {
-  const {
-    newConversation,
-    workspaceDialog,
-    folderDialog,
-    conversationActions,
-    paneButton,
-  } = actions;
+  const { newConversation, folderDialog, conversationActions, paneButton } =
+    actions;
   function describeStatus(status: string, context?: string): string {
     const text =
       (
@@ -136,6 +130,68 @@ export function createWorkspaceNavigation(
   const collapsedWorkspaces = new Set<string>(
     readPreference<string[]>("collapsed-workspaces", []),
   );
+  let editing:
+    | { id: string; value: string; origin: HTMLElement | null; saving: boolean }
+    | undefined;
+  async function renameWorkspace(id: string): Promise<void> {
+    const workspace = getState().workspaces.find((item) => item.id === id);
+    if (!workspace) return;
+    const origin = document.activeElement as HTMLElement | null;
+    const active = getState().workspaces.find(
+      (item) => item.id === getState().activeWorkspaceId,
+    );
+    if (
+      active &&
+      (active.settings?.workspacesVisible === false || active.zoomedGroupId)
+    )
+      await invoke("workspace.settings", {
+        id: active.id,
+        settings: { workspacesVisible: true },
+      });
+    editing = { id, value: workspace.name, origin, saving: false };
+    renderTree();
+    requestAnimationFrame(() => {
+      const input = tree.querySelector<HTMLInputElement>(
+        ".workspace-name-input",
+      );
+      input?.focus();
+      input?.select();
+    });
+  }
+  function endRename(restore: boolean): void {
+    const origin = editing?.origin;
+    const id = editing?.id;
+    editing = undefined;
+    renderTree();
+    if (restore) {
+      if (origin?.isConnected) origin.focus();
+      else
+        tree.querySelector<HTMLElement>(`[data-workspace-id="${id}"]`)?.focus();
+    }
+  }
+  async function saveRename(restore: boolean): Promise<void> {
+    const edit = editing;
+    if (!edit || edit.saving) return;
+    const name = edit.value.trim();
+    if (!name) {
+      endRename(restore);
+      return;
+    }
+    edit.saving = true;
+    try {
+      await invoke("workspace.rename", { id: edit.id, name });
+      if (editing === edit) endRename(restore);
+    } catch {
+      if (editing === edit) {
+        edit.saving = false;
+        const input = tree.querySelector<HTMLInputElement>(
+          ".workspace-name-input",
+        );
+        input?.setAttribute("aria-invalid", "true");
+        input?.focus();
+      }
+    }
+  }
   let renderedSignature = "";
   function renderTree(): void {
     const host = tree;
@@ -143,6 +199,7 @@ export function createWorkspaceNavigation(
     const next = getState();
     const signature = JSON.stringify([
       next.activeWorkspaceId,
+      editing?.id,
       next.workspaces.map((w) => [w.id, w.name, w.activePaneId, w.panes]),
       next.conversations.map((c) => [
         c.id,
@@ -203,6 +260,38 @@ export function createWorkspaceNavigation(
         "Expand or collapse workspace",
       );
       row.append(...parts.nodes);
+      parts.label.ondblclick = (event) => {
+        event.stopPropagation();
+        void renameWorkspace(workspace.id);
+      };
+      if (editing?.id === workspace.id) {
+        const input = document.createElement("input");
+        input.className = "workspace-name-input";
+        input.setAttribute("aria-label", "Workspace name");
+        input.dataset.focusKey = `rename-workspace:${workspace.id}`;
+        input.value = editing.value;
+        input.onclick = (event) => event.stopPropagation();
+        input.ondblclick = (event) => event.stopPropagation();
+        input.oninput = () => {
+          if (editing?.id === workspace.id) editing.value = input.value;
+        };
+        input.onkeydown = (event) => {
+          event.stopPropagation();
+          if (event.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveRename(true);
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            endRename(true);
+          }
+        };
+        input.onblur = () => {
+          if (editing?.id === workspace.id) void saveRename(false);
+        };
+        parts.label.replaceWith(input);
+      }
       if (collapsedWorkspaces.has(workspace.id)) {
         const count = getState().conversations.filter(
           (c) => c.workspaceId === workspace.id,
@@ -266,10 +355,7 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Rename workspace",
-            run: () =>
-              void focusWorkspace(workspace.id).then(() =>
-                workspaceDialog("rename"),
-              ),
+            run: () => void renameWorkspace(workspace.id),
           },
           {
             label: "Add folder...",
@@ -439,5 +525,10 @@ export function createWorkspaceNavigation(
       await invoke("workspace.focus", { id });
   }
 
-  return { render: renderTree, activate: activateConversation, focusWorkspace };
+  return {
+    render: renderTree,
+    activate: activateConversation,
+    focusWorkspace,
+    renameWorkspace,
+  };
 }

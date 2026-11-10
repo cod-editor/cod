@@ -23,11 +23,13 @@ async function createFromUI(name: string) {
     shell.page.getByRole("textbox", { name: "Message", exact: true }),
   ).toBeFocused();
   await shell.command("Rename workspace");
-  const dialog = shell.page.getByRole("dialog");
-  await dialog
-    .getByRole("textbox", { name: "Workspace name", exact: true })
-    .fill(name);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  const rename = shell.page.getByRole("textbox", {
+    name: "Workspace name",
+    exact: true,
+  });
+  await rename.fill(name);
+  await rename.press("Enter");
   await expect(shell.row(name)).toBeVisible();
   await expect(
     shell.page.getByRole("textbox", { name: "Message", exact: true }),
@@ -63,11 +65,13 @@ test("AC1 creates and renames through UI, tracks two repositories, and switches 
   expect((await shell.workspace(first)).folders).toEqual([]);
   expect((await shell.workspace(first)).panes).toHaveLength(1);
   await shell.command("Rename workspace");
-  const dialog = shell.page.getByRole("dialog");
-  await dialog
-    .getByRole("textbox", { name: "Workspace name", exact: true })
-    .fill("Specification task");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  const rename = shell.page.getByRole("textbox", {
+    name: "Workspace name",
+    exact: true,
+  });
+  await rename.fill("Specification task");
+  await rename.press("Enter");
   await expect(shell.row("Specification task")).toBeVisible();
   await expect(shell.row("Draft task")).toHaveCount(0);
   for (const folder of shell.folders)
@@ -734,4 +738,55 @@ test("S1 metadata updates preserve editor focus, draft and keyboard selection", 
       })),
     ).toEqual(selection);
   }
+});
+
+test("Workspace rename stays inline through updates, saves on blur and cancels with Escape", async ({}, info) => {
+  const first = await shell.create("Inline first");
+  const second = await shell.create("Inline second");
+  await shell.row("Inline first").click({ button: "right" });
+  await shell.page
+    .getByRole("button", { name: "Rename workspace", exact: true })
+    .click();
+  const input = shell.page.getByRole("textbox", {
+    name: "Workspace name",
+    exact: true,
+  });
+  await expect(input).toBeFocused();
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  await input.fill("Edited first");
+  await input.press("ArrowLeft");
+  const caret = await input.evaluate(
+    (node: HTMLInputElement) => node.selectionStart,
+  );
+  await shell.cli(
+    "workspace",
+    "rename",
+    "--id",
+    second,
+    "--name",
+    "Background update",
+  );
+  await expect(input).toHaveValue("Edited first");
+  await expect(input).toBeFocused();
+  expect(
+    await input.evaluate((node: HTMLInputElement) => node.selectionStart),
+  ).toBe(caret);
+  expect((await shell.state()).activeWorkspaceId).toBe(second);
+  await shell.page.screenshot({ path: info.outputPath("inline-rename.png") });
+  await input.press("Escape");
+  await expect(input).toHaveCount(0);
+  expect((await shell.workspace(first)).name).toBe("Inline first");
+  await shell.row("Inline first").locator(".tree-label").dblclick();
+  await expect(input).toBeFocused();
+  await input.fill("Saved on blur");
+  await shell.row("Background update").click();
+  await expect(shell.row("Saved on blur")).toBeVisible();
+  await shell.row("Saved on blur").locator(".tree-label").dblclick();
+  await input.fill("   ");
+  await input.press("Enter");
+  await expect(input).toHaveCount(0);
+  expect((await shell.workspace(first)).name).toBe("Saved on blur");
+  await shell.stop();
+  await shell.start();
+  await expect(shell.row("Saved on blur")).toBeVisible();
 });
