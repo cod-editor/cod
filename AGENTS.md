@@ -14,6 +14,8 @@ Read [the vision](docs/vision.md) and, for implementation, [the contracts](docs/
 
 ## Design
 
+Before adding a protocol, service, abstraction or compatibility layer, inspect the existing mechanisms and relevant reference products. Prefer solving the problem through an existing interface. Justify any additional mechanism with a concrete unmet requirement and account for its lifecycle, failure modes, maintenance and verification cost; do not add layers merely because they are available.
+
 Validate the design as a whole rather than patching each stakeholder comment in isolation:
 
 1. Walk realistic tasks, context switches, interruptions, returning later and recovery.

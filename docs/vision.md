@@ -225,3 +225,5 @@ Reviews are actions on existing material, not a tab type to create from a generi
 Workspace and tab closure is recoverable. Closing a chat view preserves its session; closing a terminal ends its owned shell. Closing active workspace activity requires an explicit stop decision, with Cancel selected by default. Hiding only changes visibility. Saved context can reopen; ended processes never pretend to survive or replay their former commands.
 
 New workspace, browser tab and terminal actions open their working surface immediately without a preliminary form. A new workspace starts as Untitled and can be renamed later. A browser tab starts blank with its address field focused. A terminal uses the first workspace folder, or the home directory when no folder is attached. Navigation panel buttons align to the right edge of the workspace sidebar in the title bar.
+
+Agents discover and control Cod through its CLI and installed skill. Environment variables identify the conversation and socket; `codctl context` reads current membership after moves. A separate agent-facing protocol is not needed for context or help.

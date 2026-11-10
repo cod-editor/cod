@@ -165,6 +165,28 @@ export class ApplicationOperations {
           },
         };
 
+      case "context": {
+        const conversation = this.store.data.conversations.find(
+          (item) => item.id === request.conversation,
+        );
+        if (!conversation) throw new Error("Unknown conversation");
+        const workspace = this.store.workspace(conversation.workspaceId);
+        return {
+          workspace: {
+            id: workspace.id,
+            name: workspace.name,
+            folders: [...workspace.folders],
+            activePaneId: workspace.activePaneId,
+          },
+          conversation: {
+            id: conversation.id,
+            provider: conversation.provider,
+            nativeId: conversation.nativeId,
+            cwd: conversation.cwd,
+            status: conversation.status,
+          },
+        };
+      }
       case "state":
         return this.snapshot();
 

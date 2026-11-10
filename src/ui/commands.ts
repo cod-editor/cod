@@ -19,7 +19,7 @@ import { appearanceDialog, changeTextSize } from "./appearance";
 import { inputDialog, confirmAction } from "./dialogs";
 import { actionButton as paneButton, showActionError } from "./action-feedback";
 import { menu, type MenuAction } from "./controls";
-import type { AppState } from "../types";
+import type { AppState, PaneState } from "../types";
 import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 interface CommandFeatures {
@@ -267,16 +267,12 @@ export function createCommands(
       );
     else void invoke("workspace.reopen", { id: closed.workspace.id });
   }
-  function sendActiveMessage(): void {
-    const w = activeWorkspace();
-    const pane = w?.panes.find((p) => p.id === w.activePaneId);
+  function sendActiveMessage(pane: PaneState | undefined): void {
     if (pane?.kind === "conversation") void chats.send(pane.conversationId);
     else
       panes
         .querySelector<HTMLTextAreaElement>(
-          '[data-pane-id="' +
-            w?.activePaneId +
-            '"] textarea[aria-label="Message"]',
+          '[data-pane-id="' + pane?.id + '"] textarea[aria-label="Message"]',
         )
         ?.dispatchEvent(new Event("cod:send-message"));
   }
@@ -637,7 +633,7 @@ export function createCommands(
           chatWidthDialog();
           break;
         case "chat.send":
-          sendActiveMessage();
+          sendActiveMessage(pane);
           break;
         case "chat.stop":
           if (pane?.kind === "conversation")

@@ -4,7 +4,7 @@
 
 ## Architecture and trust
 
-Electron main owns application operations, persistence, files/Git, native provider controllers, PTYs and browser lifecycle. The renderer calls a typed, narrow bridge. `codctl` uses the same operations over a user-local socket; it has no separate business rules. The command catalog supplies CLI help and capability discovery.
+Electron main owns application operations, persistence, files/Git, native provider controllers, PTYs and browser lifecycle. The renderer calls a typed, narrow bridge. `codctl` uses the same operations over a user-local socket; it has no separate business rules. The command catalog supplies CLI help and capability discovery. Agent integration uses the same CLI, without a separate Cod MCP server. `codctl context` resolves COD_CONVERSATION_ID (or explicit --conversation ID) to the current owning workspace and conversation metadata, excluding transcript and private drafts. It never falls back to the focused workspace.
 
 External websites never receive Node.js or privileged Cod APIs. Markdown previews and registered agent pages have separate restricted protocols. The registered page bridge validates its server-bound origin, frame and payload; a page cannot choose another conversation. Downloaded files never execute automatically.
 

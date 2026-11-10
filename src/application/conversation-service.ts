@@ -367,23 +367,6 @@ export class ConversationApplicationService {
     const resolved = await resolveProviderExecutable(conversation.provider);
     const options = {
       cwd: conversation.cwd,
-      contextServer: {
-        name: `cod_context_${randomUUID().replaceAll("-", "")}`,
-        command: process.execPath,
-        args: [
-          path.join(__dirname, "cli.cjs"),
-          "context-server",
-          "--workspace",
-          conversation.workspaceId,
-          "--conversation",
-          conversation.id,
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: "1",
-          COD_SOCKET_PATH: defaultSocketPath(),
-          COD_DATA_DIR: this.store.directory,
-        },
-      },
       executable: resolved.executable,
       args: resolved.args,
       env: {

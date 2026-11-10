@@ -24,6 +24,7 @@ export const commands = {
     "profile-path",
     "expected-preview-hash",
   ],
+  context: ["conversation?"],
   state: [],
   capabilities: [],
   "workspace.create": ["name", "focus?"],
@@ -141,14 +142,11 @@ export function parseArguments(argv: string[]): OperationRequest | undefined {
     (argv.length === 1 && ["--help", "help"].includes(argv[0]))
   )
     return undefined;
-  const internal = argv[0] === "context-server";
-  const single = internal || ["state", "capabilities"].includes(argv[0]);
+  const single = ["context", "state", "capabilities"].includes(argv[0]);
   const op = single ? argv[0] : `${argv[0]}.${argv[1]}`;
-  const allowed = internal
-    ? ["workspace", "conversation"]
-    : Object.hasOwn(commands, op)
-      ? commands[op as keyof typeof commands]
-      : undefined;
+  const allowed = Object.hasOwn(commands, op)
+    ? commands[op as keyof typeof commands]
+    : undefined;
   if (!allowed) throw new Error("Unknown operation; use codctl --help");
   const values: Record<string, unknown> = {};
   const flags = argv.slice(single ? 1 : 2);

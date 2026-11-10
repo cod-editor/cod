@@ -1,7 +1,6 @@
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
 import { NativeSelection } from "./selection.ts";
-import { validateContextServer, contextParams } from "./context-server.ts";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -73,10 +72,7 @@ export class NativeAdapter implements ProviderAdapter {
       throw new Error("Provider cwd must be an absolute path");
     this.provider = provider;
     this.selection = new NativeSelection(provider);
-    this.options = {
-      ...options,
-      contextServer: validateContextServer(options.contextServer),
-    };
+    this.options = { ...options };
     this.cwd = options.cwd;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.capabilities = {
@@ -202,11 +198,10 @@ export class NativeAdapter implements ProviderAdapter {
           ? {
               cwd: this.cwd,
               ...(resumeId ? { threadId: resumeId } : { ephemeral: false }),
-              ...contextParams(this.provider, this.options.contextServer),
             }
           : {
               cwd: this.cwd,
-              ...contextParams(this.provider, this.options.contextServer),
+              mcpServers: [],
               ...(resumeId ? { sessionId: resumeId } : {}),
             },
       );

@@ -3,7 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
-import { ContextClient, toolPayload } from "../runtime-integration/harness";
 import type { AppState } from "../../src/types";
 
 async function pasteFixtureImage(app: ChatApp) {
@@ -26,7 +25,6 @@ async function pasteFixtureImage(app: ChatApp) {
 test("An agent moves its existing conversation during a turn without losing the user's draft or review", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
-  let context: ContextClient | undefined;
   const config = {
     moveFolder: app.folders[0],
     moveFile: app.file,
@@ -63,13 +61,10 @@ test("An agent moves its existing conversation during a turn without losing the 
     )!;
     expect(conversation.paneId).toBe(firstView);
     const nativeId = conversation.nativeId;
-    context = new ContextClient(app, source, conversation.id);
-    await context.initialize();
-    const before = toolPayload(
-      await context.request("tools/call", {
-        name: "cod_context",
-        arguments: {},
-      }),
+    const before = await app.cli<{ workspace: unknown }>(
+      "context",
+      "--conversation",
+      conversation.id,
     );
     expect(before.workspace).toMatchObject({ id: source });
     const review = app.pane(prepared.review.paneId);
@@ -148,11 +143,10 @@ test("An agent moves its existing conversation during a turn without losing the 
     await expect(
       app.pane(firstView).locator(".composer-images img"),
     ).toHaveCount(1);
-    const after = toolPayload(
-      await context.request("tools/call", {
-        name: "cod_context",
-        arguments: {},
-      }),
+    const after = await app.cli<{ workspace: unknown; conversation: unknown }>(
+      "context",
+      "--conversation",
+      conversation.id,
     );
     expect(after.workspace).toMatchObject({
       id: moved.target,
@@ -187,8 +181,6 @@ test("An agent moves its existing conversation during a turn without losing the 
     await app.page.screenshot({
       path: info.outputPath("same-session-after-move.png"),
     });
-    await context.cleanup();
-    context = undefined;
     await app.stop();
     await app.start();
     expect((await state()).conversations).toHaveLength(1);
@@ -228,7 +220,6 @@ test("An agent moves its existing conversation during a turn without losing the 
       workspaceId: source,
     });
   } finally {
-    await context?.cleanup();
     await app.cleanup();
   }
 });
