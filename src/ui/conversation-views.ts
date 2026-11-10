@@ -879,16 +879,18 @@ export function createConversationViews({
     draft: (workspace: WorkspaceState, pane: PaneState) =>
       stable("draft:" + pane.id, renderDraftChat(workspace, pane)),
     conversation: (conversation: import("../types").ConversationState) =>
-      stable("chat:" + conversation.paneId, renderConversation(conversation)),
+      stable("chat:" + conversation.id, renderConversation(conversation)),
     integration: integration.open,
     send: sendMessage,
     reconcile() {
       reconcile();
       for (const id of views.keys())
         if (
-          !getState().workspaces.some((w) =>
-            w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
-          )
+          id.startsWith("chat:")
+            ? !getState().conversations.some((c) => c.id === id.slice(5))
+            : !getState().workspaces.some((w) =>
+                w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
+              )
         )
           views.delete(id);
     },

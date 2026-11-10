@@ -39,6 +39,87 @@ const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
 const text = (chat: Chat) =>
   chat.messages.map((message) => message.text).join("\n");
 
+test("Failed opening cannot leave stale composer handlers when a pane is reused", async () => {
+  const workspace = await shell.create("Composer recovery");
+  const paneId = (await shell.workspace(workspace)).activePaneId;
+  await shell.configure({
+    codex: { initializeDelayMs: 600, initializeError: true },
+  });
+  const failed = shell.raw(
+    "conversation",
+    "resume",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--native-id",
+    "fixture-failed-resume",
+    "--cwd",
+    shell.folders[0],
+  );
+  await expect(
+    shell
+      .pane(paneId)
+      .getByRole("status", { name: "Conversation status", exact: true }),
+  ).toContainText("Starting");
+  expect((await failed).code).not.toBe(0);
+  await shell.configure({});
+  const chat = await shell.newChat(workspace, "codex");
+  expect(chat.paneId).toBe(paneId);
+  const composer = shell
+    .pane(paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  const prompt = "A long invented draft with attachments. ".repeat(80);
+  await composer.fill(prompt);
+  await composer.evaluate((input) => {
+    const data = new DataTransfer();
+    const png = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    data.items.add(new File([png], "invented.png", { type: "image/png" }));
+    input.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true }),
+    );
+  });
+  await expect
+    .poll(async () => {
+      const state = await shell.cli<AppState>("state");
+      const draft = state.workspaces.find((w) => w.id === workspace)
+        ?.chatDrafts?.[paneId];
+      return { text: draft?.text, images: draft?.images?.length };
+    })
+    .toEqual({ text: prompt, images: 1 });
+  const other = await shell.newChat(workspace, "codex");
+  await shell.send(other.id, "Unrelated conversation");
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(composer).toHaveValue(prompt);
+  await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
+    1,
+  );
+  await shell.stop();
+  await shell.start();
+  await expect(
+    shell.pane(paneId).getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue(prompt);
+  await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
+    1,
+  );
+  await shell
+    .pane(paneId)
+    .getByRole("textbox", { name: "Message", exact: true })
+    .press(`${modifier}+Enter`);
+  await expect
+    .poll(async () =>
+      (await shell.inspect(chat.id)).messages.some(
+        (m) => m.role === "user" && m.text === prompt,
+      ),
+    )
+    .toBe(true);
+});
+
 for (const provider of ["codex", "kimi"] as Provider[]) {
   test(`Chat AC1 ${provider}: UI creates native conversation and streams assistant/tool activity`, async () => {
     const workspace = await shell.create(`${provider} UI task`);
