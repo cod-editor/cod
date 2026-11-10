@@ -89,6 +89,16 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
   const chat = await shell.newChat(workspace, "codex");
   const row = () => shell.page.locator(`[data-workspace-id="${chat.id}"]`);
   const badge = () => row().locator(".attention");
+  const reviewVisible = async () => {
+    await expect(row()).toHaveAttribute("data-status", "review");
+    await expect(badge()).toHaveAttribute("title", "review");
+    await expect(badge().locator("svg")).toBeVisible();
+    const workspaceBadge = shell.page.locator(
+      `[data-workspace-id="${workspace}"] .attention`,
+    );
+    await expect(workspaceBadge).toHaveAttribute("title", "review");
+    await expect(workspaceBadge.locator("svg")).toBeVisible();
+  };
   await shell.cli(
     "conversation",
     "report-status",
@@ -97,9 +107,9 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
     "--status",
     "review",
   );
-  await expect(badge()).toHaveText("◇");
+  await reviewVisible();
   await row().click();
-  await expect(badge()).toHaveText("◇");
+  await reviewVisible();
   await shell.cli(
     "conversation",
     "report-status",
@@ -118,10 +128,10 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
   await expect
     .poll(async () => (await shell.inspect(chat.id)).status)
     .toBe("ready");
-  await expect(badge()).toHaveText("◇");
+  await reviewVisible();
   await shell.stop();
   await shell.start();
-  await expect(badge()).toHaveText("◇");
+  await reviewVisible();
   expect(
     (
       await shell.cli<{ taskStatus?: string }>(

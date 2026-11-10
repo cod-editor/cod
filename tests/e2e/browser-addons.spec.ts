@@ -284,11 +284,28 @@ test("Add-ons AC4 failed updates retain the verified engine and visibly report c
     .pane(browser.paneId)
     .getByRole("button", { name: "Ad blocking", exact: true })
     .click();
+  const protection = shell.page.getByRole("dialog", {
+    name: "Site protection",
+    exact: true,
+  });
   await expect(
-    shell.page
-      .getByRole("dialog", { name: "Site protection", exact: true })
-      .getByRole("region", { name: "Browser add-on status", exact: true }),
-  ).toContainText(/update failed.*last-known-good/i);
+    protection.getByRole("region", {
+      name: "Browser add-on status",
+      exact: true,
+    }),
+  ).toContainText("Filter update failed. Saved filters remain active.");
+  const blocking = protection.getByRole("checkbox", {
+    name: "Block ads on this site",
+    exact: true,
+  });
+  await expect(blocking).toBeChecked();
+  await expect(blocking).toBeEnabled();
+  await expect(
+    protection.getByRole("button", {
+      name: "Retry filter update",
+      exact: true,
+    }),
+  ).toBeVisible();
   await shell.page.keyboard.press("Escape");
 });
 
