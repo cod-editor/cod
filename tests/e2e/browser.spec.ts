@@ -1033,6 +1033,17 @@ test("Local address suggestions, searchable history and search engine settings s
   expect(await shell.cli("browser", "settings")).toEqual({
     searchEngine: "duckduckgo",
   });
+  await info.attach("restored-address-state", {
+    body: JSON.stringify({
+      url: shell.page.url(),
+      state: await shell.cli("state"),
+      html: await shell.page.locator("body").innerText(),
+    }),
+    contentType: "application/json",
+  });
+  await shell.page.screenshot({
+    path: info.outputPath("restored-address.png"),
+  });
   await shell
     .pane(home.paneId)
     .getByRole("textbox", { name: "Address", exact: true })
@@ -1335,4 +1346,26 @@ test("Optional bookmarks edit in place and stay separate from home pins", async 
   await shell.command("Bookmarks");
   await dialog().getByRole("button", { name: "Remove", exact: true }).click();
   await expect(dialog()).toContainText("No bookmarks");
+});
+
+test("Development builds explain why default browser registration needs a package", async () => {
+  const status = await shell.cli<{ available: boolean; reason: string }>(
+    "browser",
+    "default-status",
+  );
+  expect(status.available).toBe(false);
+  expect(status.reason).toContain("packaged");
+  expect((await shell.raw("browser", "register-default")).code).not.toBe(0);
+  await shell.page
+    .getByRole("button", { name: "Switch workspace", exact: true })
+    .focus();
+  await shell.command("Default browser...");
+  const dialog = shell.page.getByRole("dialog", {
+    name: "Default browser",
+    exact: true,
+  });
+  await expect(dialog).toContainText("packaged");
+  await expect(
+    dialog.getByRole("button", { name: "Make default browser" }),
+  ).toHaveCount(0);
 });

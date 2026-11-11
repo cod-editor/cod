@@ -82,7 +82,7 @@ test.beforeEach(async () => {
     throw new Error("Fixture unavailable");
   origin = `http://127.0.0.1:${address.port}`;
   await app.start();
-  const workspace = (await app.state()).workspaces[0].id;
+  const workspace = await app.create("Recovery fixture");
   browser = await app.cli<Browser>(
     "browser",
     "open",
