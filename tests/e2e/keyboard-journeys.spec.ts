@@ -1111,7 +1111,7 @@ test("A long review supports keyboard range comments and submission without tabb
       ).join("\n"),
     );
     await app.start();
-    const workspace = (await state(app)).activeWorkspaceId!;
+    const workspace = await app.create("Keyboard review");
     await app.cli(
       "workspace",
       "add-folder",
@@ -1132,9 +1132,13 @@ test("A long review supports keyboard range comments and submission without tabb
       chat.id,
     );
     await app.page.keyboard.press("Alt+1");
-    const first = app.pane(review.paneId).locator(".review-line").first();
+    const first = app
+      .pane(review.paneId)
+      .getByRole("textbox", { name: "Review source", exact: true });
     await reach(app.page, first);
+    await app.page.keyboard.press(`${modifier}+Home`);
     await app.page.keyboard.press("Shift+ArrowDown");
+    await app.page.keyboard.press("Shift+End");
     await app.page.keyboard.press(`${modifier}+Shift+M`);
     const comment = app
       .pane(review.paneId)
@@ -1154,8 +1158,11 @@ test("A long review supports keyboard range comments and submission without tabb
     ).toContainText("Clarify these first two lines.");
     expect(await app.prompts()).toHaveLength(0);
     await expect(
-      app.pane(review.paneId).locator('.review-line[aria-pressed="true"]'),
-    ).toHaveCount(2);
+      app
+        .pane(review.paneId)
+        .getByLabel("Draft comment", { exact: true })
+        .locator("blockquote"),
+    ).toHaveText((await first.inputValue()).split("\n").slice(0, 2).join("\n"));
     const submit = app
       .pane(review.paneId)
       .getByRole("button", { name: "Send feedback", exact: true });

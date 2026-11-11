@@ -299,13 +299,8 @@ test("S3 Markdown preview renders highlighted code and Mermaid without executing
   );
   const pane = await open(file);
   await app.page
-    .getByRole("tab", { name: "preview.md", exact: true })
-    .click({ button: "right" });
-  await activate(
-    app.page
-      .getByRole("dialog", { name: "Actions" })
-      .getByRole("button", { name: "Markdown preview", exact: true }),
-  );
+    .getByRole("button", { name: "Preview Markdown", exact: true })
+    .click();
   const preview = app.page.getByRole("region", {
     name: "Markdown preview",
     exact: true,
@@ -347,6 +342,20 @@ test("S3 Markdown preview renders highlighted code and Mermaid without executing
         bridge: typeof (window as any).cod,
       })),
     ).toEqual({ attack: false, bridge: "undefined" });
+  await app.page
+    .getByRole("button", { name: "Show source", exact: true })
+    .click();
+  await expect(editor(pane)).toBeVisible();
+  await editor(pane).fill("# Unsaved preview update\n");
+
+  await app.page
+    .getByRole("button", { name: "Preview Markdown", exact: true })
+    .click();
+  await expect(
+    app.page.getByRole("region", { name: "Markdown preview", exact: true }),
+  ).toHaveCount(1);
+  await expect(body).toContainText("Unsaved preview update");
+  expect(await readFile(file, "utf8")).toContain("# Preview fixture");
 });
 
 test("S3 same-named files keep repo-specific statuses, changed lines and local patches", async () => {
@@ -514,12 +523,12 @@ test("S3 explicit chat file references show both matching roots and open the key
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
   const reference = transcript
-    .locator("button, a")
+    .locator("button:visible, a:visible")
     .filter({ hasText: /^same\.ts:2$/ })
     .nth(1);
   await expect(reference).toBeVisible();
   await tabTo(app.page, reference);
-  // Same-label user and streamed assistant references must retain distinct focus.
+  // Same-label user and visible assistant references must retain distinct focus.
   // A real state update makes focus preservation deterministic, without waiting
   // for streaming to finish or mutating renderer/application state directly.
   await app.cli(

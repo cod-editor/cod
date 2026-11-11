@@ -723,6 +723,30 @@ export function createPaneLayout(
     if (zoom.parentNode !== bar) bar.append(zoom);
     if (bar.parentNode !== section) section.prepend(bar);
     const pane = workspace.panes.find((p) => p.id === group.activePaneId);
+    const previousPreview = bar.querySelector<HTMLButtonElement>(
+      '[data-action="preview"]',
+    );
+    if (
+      pane &&
+      (pane.kind === "preview" ||
+        (pane.kind === "document" &&
+          /\.md(?:own|arkdown)?$/i.test(pane.filePath ?? "")))
+    ) {
+      const label =
+        pane.kind === "preview" ? "Show source" : "Preview Markdown";
+      const preview = previousPreview ?? iconButton("eye", label, () => {});
+      preview.title = label;
+      preview.setAttribute("aria-label", label);
+      preview.onclick = () => {
+        void invoke(pane.kind === "preview" ? "file.open" : "preview.open", {
+          workspace: workspace.id,
+          path: pane.filePath,
+        });
+      };
+      preview.dataset.action = "preview";
+      preview.setAttribute("aria-pressed", String(pane.kind === "preview"));
+      if (preview.nextSibling !== plus) bar.insertBefore(preview, plus);
+    } else previousPreview?.remove();
     if (pane) {
       const content = renderPane(workspace, pane);
       for (const child of [...section.children])

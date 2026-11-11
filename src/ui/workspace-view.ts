@@ -162,7 +162,16 @@ export function createWorkspaceView(
       });
       resourcePanes.set(pane.id, container);
     }
+    const wasActive = container.dataset.active === "true";
     container.dataset.active = String(workspace.activePaneId === pane.id);
+    if (
+      pane.kind === "preview" &&
+      !wasActive &&
+      workspace.activePaneId === pane.id
+    )
+      container
+        .querySelector(".markdown-preview")
+        ?.dispatchEvent(new Event("cod:refresh-preview"));
     let content: HTMLElement | undefined;
     if (pane.kind === "empty") {
       container.setAttribute("aria-label", "Empty pane");

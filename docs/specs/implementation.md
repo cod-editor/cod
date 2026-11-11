@@ -57,6 +57,10 @@ All views of a file share its current draft. Saving during newer input must not 
 
 ## Reviews and registered responses
 
+Document review uses a read-only source editor with syntax highlighting, a caret and native text selection. Markdown also has a formatted view with highlighted code and Mermaid, sharing the normal preview renderer. An eye button exposes preview on Markdown tabs and reviews; Toggle Markdown preview is available in Commands. Ordinary preview opens beside the editable source and reuses an existing preview for the same file, without saving or discarding file drafts. Review switches view within the immutable snapshot.
+
+Document comments can anchor exact text fragments, not just whole lines. Source anchors use UTF-16 offsets in the snapshot; formatted anchors use offsets in the shared rendered text projection and retain the corresponding source block lines. The service validates the range and derives the saved quote itself. Quotes and offsets survive restart, delivery and view changes; refresh retains outdated anchors rather than guessing a new location. Diagram comments select the Mermaid source. Existing line-based document and diff anchors remain supported.
+
 A review binds its source, repository and originating conversation. The user can comment or edit while discussing the document alongside it. Comments remain private until one explicit round submission; an empty round may submit an approval. There is no recipient selector or fallback destination.
 
 Freeze submitted text, anchors, source revision and destination. Sent rounds are immutable. Changed or ambiguous anchors become outdated and require explicit reattachment; refreshing a review never silently attaches feedback to unrelated text. Show changes between review revisions. Persist unfinished comment editors and saved comments separately from delivery.

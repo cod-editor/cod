@@ -16,20 +16,35 @@ export function previewPane(
   const message = document.createElement("div");
   message.setAttribute("role", "status");
   region.append(frame, message);
-  frame.addEventListener("load", () => {
+  let ready = false;
+  let generation = 0;
+  let shown: string | undefined;
+  function refresh() {
+    if (!ready) return;
+    const request = ++generation;
     void invoke<{ content: string }>("preview.read", {
       workspace: workspace.id,
       id: pane.id,
     })
-      .then((result) =>
+      .then((result) => {
+        if (request !== generation) return;
+        message.textContent = "";
+        if (shown === result.content) return;
+        shown = result.content;
         frame.contentWindow?.postMessage(
           { type: "cod-preview", content: result.content },
           "*",
-        ),
-      )
+        );
+      })
       .catch((error) => {
-        message.textContent = String(error);
+        if (request === generation) message.textContent = String(error);
       });
+  }
+  region.addEventListener("cod:refresh-preview", refresh);
+  frame.addEventListener("load", () => {
+    ready = true;
+    shown = undefined;
+    refresh();
   });
   return region;
 }

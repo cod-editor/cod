@@ -104,8 +104,18 @@ export class FileApplicationService {
       };
     }
     return this.store.change(() => {
-      const workspace = this.store.workspace(workspaceId),
-        active = workspace.activePaneId,
+      const workspace = this.store.workspace(workspaceId);
+      const existing =
+        resource.kind === "preview"
+          ? workspace.panes.find(
+              (p) => p.kind === "preview" && p.filePath === resource.filePath,
+            )
+          : undefined;
+      if (existing) {
+        workspace.activePaneId = existing.id;
+        return { paneId: existing.id };
+      }
+      const active = workspace.activePaneId,
         id = randomUUID();
       workspace.panes.push({ id, ...resource });
       workspace.layout = replaceLeaf(workspace.layout, active, {

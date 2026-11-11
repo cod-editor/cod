@@ -1746,3 +1746,53 @@ browser-action-list::part(action):focus-visible {
   width: 100%;
   color: var(--muted);
 }
+
+.review-document {
+  white-space: normal;
+}
+.review-document > .highlighted-editor {
+  height: max(320px, 60vh);
+}
+.review-document .highlighted-editor .review-editor {
+  padding: 20px;
+  border: 0;
+  background: transparent;
+  resize: none;
+}
+.review-markdown {
+  padding: 8px 20px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.review-markdown pre {
+  overflow: auto;
+  padding: 12px;
+  background: #242830;
+}
+.review-markdown table {
+  border-collapse: collapse;
+}
+.review-markdown td,
+.review-markdown th {
+  border: 1px solid #454b57;
+  padding: 6px 10px;
+}
+.review-markdown svg {
+  max-width: 100%;
+  height: auto;
+}
+.hljs-section {
+  color: #e5c07b;
+}
+.hljs-strong,
+.hljs-emphasis {
+  color: #c678dd;
+}
+.hljs-bullet,
+.hljs-code {
+  color: #98c379;
+}
+.hljs-link {
+  color: #61afef;
+}

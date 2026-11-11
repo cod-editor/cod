@@ -203,6 +203,7 @@ export const commands = [
   entry("browser.new", "New browser tab", "Browser"),
   entry("browser.pin", "Pin current site to home", "Browser"),
   entry("folders.add", "Add folder", "Workspace"),
+  entry("files.preview", "Toggle Markdown preview", "Files"),
   entry("review.document", "Review active document", "Review"),
   entry("chat.stop", "Stop response", "Conversation"),
   entry("review.addComment", "Add review comment", "Review", [

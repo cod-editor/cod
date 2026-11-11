@@ -40,7 +40,7 @@ export function createKeyboardNavigation(
           : pane.kind === "terminal"
             ? ".xterm-helper-textarea"
             : pane.kind === "review"
-              ? '.review-line[tabindex="0"]'
+              ? '.review-line[tabindex="0"], .review-document > .highlighted-editor:not([hidden]) textarea, .review-markdown:not([hidden])'
               : ".browser-failure button";
     const target =
       host.querySelector<HTMLElement>(primary) ??

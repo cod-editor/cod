@@ -68,7 +68,9 @@ test("An agent moves its existing conversation during a turn without losing the 
     );
     expect(before.workspace).toMatchObject({ id: source });
     const review = app.pane(prepared.review.paneId);
-    await review.locator(".review-line").first().focus();
+    await review
+      .getByRole("textbox", { name: "Review source", exact: true })
+      .focus();
     await app.page.keyboard.press(`${modifier}+Shift+M`);
     await review
       .getByRole("textbox", { name: "Comment", exact: true })

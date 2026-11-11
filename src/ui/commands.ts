@@ -527,6 +527,20 @@ export function createCommands(
       !(pane?.kind === "document" && pane.filePath)
     )
       return "Select an editable file first";
+    if (id === "files.preview") {
+      const target =
+        pane?.kind === "review"
+          ? getState().reviews?.find((r) => r.id === pane.reviewId)?.target
+          : undefined;
+      const path =
+        pane?.kind === "document" || pane?.kind === "preview"
+          ? pane.filePath
+          : target?.kind === "document"
+            ? target.path
+            : undefined;
+      if (!path || !/\.md(?:own|arkdown)?$/i.test(path))
+        return "Select a Markdown document first";
+    }
     if (id === "browser.address" && pane?.kind !== "browser")
       return "Select a browser tab first";
     const paneNumber = /^pane\.focus([1-9])$/.exec(id);
@@ -679,6 +693,26 @@ export function createCommands(
         case "files.search":
           projects.search();
           break;
+        case "files.preview": {
+          const host = panes.querySelector<HTMLElement>(
+            `[data-pane-id="${pane?.id}"]`,
+          );
+          if (pane?.kind === "review")
+            host
+              ?.querySelector(".review-body")
+              ?.dispatchEvent(new CustomEvent("cod:toggle-preview"));
+          else if (
+            w &&
+            pane &&
+            (pane.kind === "document" || pane.kind === "preview") &&
+            pane.filePath
+          )
+            await invoke(
+              pane.kind === "preview" ? "file.open" : "preview.open",
+              { workspace: w.id, path: pane.filePath },
+            );
+          break;
+        }
         case "files.save":
           if (w && pane) await features.saveFile(w.id, pane.id);
           break;

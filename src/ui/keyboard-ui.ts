@@ -17,8 +17,8 @@ export function keyboardSurface(
 ): KeyboardSurface {
   if (element?.closest(".terminal-body")) return "terminal";
   if (element?.closest(".composer")) return "composer";
+  if (element?.closest(".review-line, .review-document")) return "review";
   if (element?.closest(".file-editor")) return "editor";
-  if (element?.closest(".review-line")) return "review";
   return "shell";
 }
 export function shortcutTitle(id: CommandId, label?: string): string {

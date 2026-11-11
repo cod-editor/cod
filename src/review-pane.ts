@@ -1,3 +1,4 @@
+import { reviewDocument } from "./ui/review-document";
 import { shortcutTitle } from "./ui/keyboard-ui";
 import { conversationLabel } from "./ui/message-label";
 import { readPreference, writePreference } from "./ui/preferences";
@@ -33,6 +34,7 @@ export function reviewPane(
     end: number;
     body: string;
     editing?: string;
+    range?: Range;
   };
   let pending = readPreference<PendingEditor | null>(
       `review-editor.${id}`,
@@ -47,6 +49,7 @@ export function reviewPane(
       snapshotId: detail.rounds.find((r) => r.id === selectedRound)!.snapshotId,
       selection,
       end,
+      range: textRange,
       body: input.value,
       ...(editing ? { editing } : {}),
     };
@@ -57,6 +60,10 @@ export function reviewPane(
     writePreference(`review-editor.${id}`, null);
     staleEditor = false;
   };
+  let textRange: Range | undefined;
+  let documentView: ReturnType<typeof reviewDocument> | undefined;
+  let documentSnapshot = "";
+  let previewMode = readPreference<boolean>(`review-preview.${id}`, false);
   let shownError = false;
   let diskTimer: ReturnType<typeof setTimeout> | undefined;
   let ranges: Range[] = [],
@@ -87,7 +94,7 @@ export function reviewPane(
     };
     document.addEventListener("focusin", movedFocus, true);
     try {
-      const range = selectedRange();
+      const range = editing ? undefined : selectedRange();
       await invoke(editing ? "review.comment-edit" : "review.comment-add", {
         id,
         roundId: selectedRound,
@@ -127,6 +134,13 @@ export function reviewPane(
       status.textContent = "Save or cancel the unfinished comment first.";
       return;
     }
+    if (!commentId && documentView) {
+      textRange = documentView.capture();
+      if (!textRange) {
+        status.textContent = "Select a text fragment first";
+        return;
+      }
+    }
     editing = commentId;
     input.value = body || (!commentId ? (pending?.body ?? "") : "");
     staleEditor = false;
@@ -134,7 +148,8 @@ export function reviewPane(
     restored = true;
     remember();
     form.hidden = false;
-    buttons[end]?.after(form);
+    if (documentView) content.after(form);
+    else buttons[end]?.after(form);
     input.focus();
   }
   input.addEventListener("input", () => {
@@ -142,6 +157,10 @@ export function reviewPane(
     submit.disabled = !!input.value.trim();
   });
   function focusSelection() {
+    if (documentView) {
+      documentView.focus();
+      return;
+    }
     const line = buttons[selection];
     if (!line) return;
     line.dataset.rangeMove = "true";
@@ -149,6 +168,11 @@ export function reviewPane(
     delete line.dataset.rangeMove;
   }
   function selectedRange(): Range {
+    if (documentView) {
+      const range = textRange ?? documentView.capture();
+      if (!range) throw new Error("Select a text fragment first");
+      return range;
+    }
     const a = ranges[Math.min(selection, end)],
       b = ranges[Math.max(selection, end)];
     if (!a || !b || a.path !== b.path || a.side !== b.side)
@@ -218,7 +242,19 @@ export function reviewPane(
       },
     ]),
   );
-  header.append(roundSelect, originLabel, more, submit);
+  const previewButton = iconButton("eye", "Preview Markdown", () => {
+    if (!documentView) return;
+    previewMode = documentView.toggle();
+    writePreference(`review-preview.${id}`, previewMode);
+    previewButton.setAttribute("aria-pressed", String(previewMode));
+    previewButton.title = previewMode ? "Show source" : "Preview Markdown";
+    previewButton.setAttribute("aria-label", previewButton.title);
+  });
+  previewButton.dataset.previewToggle = "";
+  host.addEventListener("cod:toggle-preview", () => {
+    if (!previewButton.hidden) previewButton.click();
+  });
+  header.append(roundSelect, originLabel, more, previewButton, submit);
   host.append(
     header,
     status,
@@ -232,6 +268,7 @@ export function reviewPane(
   roundSelect.addEventListener("change", () => {
     selectedRound = roundSelect.value;
     selection = end = 0;
+    textRange = undefined;
     draw();
   });
   function draw() {
@@ -261,6 +298,7 @@ export function reviewPane(
       editing = pending.editing;
       selection = pending.selection;
       end = pending.end;
+      textRange = pending.range;
       form.hidden = false;
       staleEditor =
         pending.roundId !== round.id || pending.snapshotId !== round.snapshotId;
@@ -353,16 +391,33 @@ export function reviewPane(
       };
       content.append(line);
     }
-    if (snapshot.kind === "document") {
-      const lines = snapshot.text.split("\n");
-      if (lines.at(-1) === "") lines.pop();
-      lines.forEach((text, i) =>
-        add(`${i + 1}  ${text}`, `Line ${i + 1}`, {
-          startLine: i + 1,
-          endLine: i + 1,
-        }),
+    previewButton.hidden =
+      snapshot.kind !== "document" ||
+      detail.target.kind !== "document" ||
+      !/\.md(?:own|arkdown)?$/i.test(detail.target.path);
+    previewButton.setAttribute("aria-pressed", String(previewMode));
+    previewButton.title = previewMode ? "Show source" : "Preview Markdown";
+    previewButton.setAttribute("aria-label", previewButton.title);
+    if (snapshot.kind === "document" && detail.target.kind === "document") {
+      if (documentSnapshot && documentSnapshot !== snapshot.id && !pending)
+        textRange = undefined;
+      documentSnapshot = snapshot.id;
+      documentView = reviewDocument(
+        snapshot.text,
+        detail.target.path,
+        !previewButton.hidden && previewMode,
+        textRange,
+        (range) => {
+          textRange = range;
+        },
+        () => addComment.click(),
+        (message) => {
+          status.textContent = message;
+        },
       );
-    } else
+      content.append(documentView.element);
+    } else {
+      documentView = undefined;
       for (const file of snapshot.files)
         for (const side of ["old", "new"] as const) {
           const sidePath = side === "old" ? file.oldPath : file.newPath;
@@ -386,6 +441,7 @@ export function reviewPane(
               );
           }
         }
+    }
     comments.replaceChildren();
     for (const comment of round.comments) {
       const item = document.createElement("div"),
@@ -406,7 +462,7 @@ export function reviewPane(
         : commentState;
       body.textContent = comment.body;
       item.append(caption, body);
-      if (comment.outdated) {
+      if (comment.quote) {
         const quote = document.createElement("blockquote");
         quote.textContent = comment.quote;
         item.append(quote);
@@ -468,7 +524,7 @@ export function reviewPane(
       else comments.append(item);
     }
     if (!form.hidden) {
-      if (staleEditor) content.after(form);
+      if (staleEditor || documentView) content.after(form);
       else buttons[Math.min(end, buttons.length - 1)]?.after(form);
     }
     compare.disabled =

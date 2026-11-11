@@ -613,3 +613,70 @@ test("review origin persists and rejects alternate delivery destination", () =>
       /originating/,
     );
   }));
+
+test("Exact source and formatted Markdown fragments survive restart and reject forged ranges", () =>
+  fixture(async ({ file, make }) => {
+    await writeFile(file, "# Title\n\nHello **world** & friend 🌍.\n");
+    const service = make();
+    const review = await service.openDocument({
+      workspaceId: "workspace",
+      path: file,
+    });
+    const source = "# Title\n\nHello **world** & friend 🌍.\n";
+    const start = source.indexOf("world");
+    const added = await service.addComment({
+      id: review.id,
+      roundId: review.currentRoundId,
+      expectedVersion: review.version,
+      body: "Exact word",
+      range: {
+        startLine: 3,
+        endLine: 3,
+        fragment: { view: "source", start, end: start + 5 },
+      },
+    });
+    const { markdownDocument } = await import("../../src/markdown-document.ts");
+    const text = markdownDocument(source)
+      .map((b) => b.text)
+      .join("");
+    const formattedStart = text.indexOf("world");
+    const formattedEnd = text.indexOf("🌍") + 2;
+    await assert.rejects(
+      service.addComment({
+        id: review.id,
+        roundId: review.currentRoundId,
+        expectedVersion: added.version,
+        body: "Forged",
+        range: {
+          startLine: 1,
+          endLine: 1,
+          fragment: {
+            view: "markdown",
+            start: formattedStart,
+            end: formattedEnd,
+          },
+        },
+      }),
+    );
+    await service.addComment({
+      id: review.id,
+      roundId: review.currentRoundId,
+      expectedVersion: added.version,
+      body: "Formatted",
+      range: {
+        startLine: 3,
+        endLine: 3,
+        fragment: {
+          view: "markdown",
+          start: formattedStart,
+          end: formattedEnd,
+        },
+      },
+    });
+    const comments = (await make().detail(review.id)).rounds[0].comments;
+    assert.deepEqual(
+      comments.map((c) => c.quote),
+      ["world", "world & friend 🌍"],
+    );
+    assert.equal(comments[1].anchor.fragment?.view, "markdown");
+  }));

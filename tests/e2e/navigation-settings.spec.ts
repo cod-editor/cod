@@ -151,7 +151,9 @@ test("Settings adjust the actual interface, editor and chat text and survive res
       origin.id,
     );
     await expect(
-      app.pane(review.paneId).locator(".review-line").first(),
+      app
+        .pane(review.paneId)
+        .getByRole("textbox", { name: "Review source", exact: true }),
     ).toHaveCSS("font-size", "19px");
     await app.page.screenshot({
       path: info.outputPath("scaled-review-source.png"),
