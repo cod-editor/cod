@@ -214,6 +214,8 @@ export const commands = [
   entry("session.resume", "Open existing native session", "Conversation"),
   entry("chat.width", "Chat maximum width", "Appearance"),
   entry("integration.install", "Install agent integration...", "Conversation"),
+  entry("browser.bookmark", "Bookmark current page", "Browser"),
+  entry("browser.bookmarks", "Bookmarks", "Browser"),
   entry("browser.downloads", "Downloads", "Browser"),
   entry("browser.permissions", "Site permissions", "Browser"),
   entry("browser.settings", "Browser settings", "Browser"),

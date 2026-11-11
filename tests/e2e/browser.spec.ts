@@ -1033,6 +1033,10 @@ test("Local address suggestions, searchable history and search engine settings s
   expect(await shell.cli("browser", "settings")).toEqual({
     searchEngine: "duckduckgo",
   });
+  await shell
+    .pane(home.paneId)
+    .getByRole("textbox", { name: "Address", exact: true })
+    .click();
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   await shell.page
     .getByRole("textbox", { name: "Filter commands" })
@@ -1253,4 +1257,82 @@ test("Interrupted downloads retry explicitly and cancellations retain no partial
     "retry",
   );
   await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
+});
+
+test("Optional bookmarks edit in place and stay separate from home pins", async () => {
+  const workspace = await shell.create("Bookmarks");
+  const record = await open(workspace);
+  await shell
+    .pane(record.paneId)
+    .getByRole("textbox", { name: "Address", exact: true })
+    .click();
+  await shell.command("Bookmark current page");
+  await expect
+    .poll(
+      async () => (await shell.cli<unknown[]>("browser", "bookmarks")).length,
+    )
+    .toBe(1);
+  await shell.command("Bookmarks");
+  const dialog = () =>
+    shell.page.getByRole("dialog", { name: "Bookmarks", exact: true });
+  await dialog().getByRole("button", { name: "Edit", exact: true }).click();
+  await dialog()
+    .getByRole("textbox", { name: "Bookmark name" })
+    .fill("Reading list");
+  await dialog()
+    .getByRole("textbox", { name: "Bookmark address" })
+    .fill(origin + "/reading");
+  await dialog().getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    dialog().getByRole("button", { name: "Reading list", exact: true }),
+  ).toBeVisible();
+  await shell.page.screenshot({
+    path: test.info().outputPath("bookmarks.png"),
+  });
+  await dialog().getByRole("button", { name: "Done", exact: true }).click();
+  await shell.cli("browser", "history-clear");
+  await shell.stop();
+  await shell.start();
+  expect(await shell.cli("browser", "bookmarks", "--query", "reading")).toEqual(
+    [
+      expect.objectContaining({
+        title: "Reading list",
+        url: origin + "/reading",
+      }),
+    ],
+  );
+  const state = await shell.cli<{ pinnedSites: unknown[] }>("state");
+  expect(state.pinnedSites).toEqual([]);
+  const suggestions = await shell.cli<Array<{ title: string }>>(
+    "browser",
+    "suggest",
+    "--query",
+    "reading",
+  );
+  expect(suggestions[0]?.title).toBe("Reading list");
+  await shell
+    .pane(record.paneId)
+    .getByRole("textbox", { name: "Address", exact: true })
+    .click();
+  await shell.command("Bookmarks");
+  await dialog()
+    .getByRole("textbox", { name: "Search bookmarks" })
+    .fill("reading");
+  await dialog()
+    .getByRole("textbox", { name: "Search bookmarks" })
+    .press("ArrowDown");
+  await expect(
+    dialog().getByRole("button", { name: "Reading list", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await shell.cli<{ browsers: BrowserRecord[] }>("state")).browsers.some(
+        (item) => item.url === origin + "/reading",
+      ),
+    )
+    .toBe(true);
+  await shell.command("Bookmarks");
+  await dialog().getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(dialog()).toContainText("No bookmarks");
 });

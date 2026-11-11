@@ -1,3 +1,4 @@
+import { browserBookmarks } from "./browser-bookmarks";
 import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
 import { browserSettings, browserHistory } from "./browser-library";
@@ -547,7 +548,10 @@ export function createCommands(
       if (!path || !/\.md(?:own|arkdown)?$/i.test(path))
         return "Select a Markdown document first";
     }
-    if (id === "browser.address" && pane?.kind !== "browser")
+    if (
+      ["browser.address", "browser.bookmark", "browser.pin"].includes(id) &&
+      pane?.kind !== "browser"
+    )
       return "Select a browser tab first";
     const paneNumber = /^pane\.focus([1-9])$/.exec(id);
     if (paneNumber && Number(paneNumber[1]) > (w.groups?.length ?? 0))
@@ -666,16 +670,25 @@ export function createCommands(
         case "browser.new":
           browserDialog();
           break;
+        case "browser.bookmarks":
+          browserBookmarks(invoke, async (url) => {
+            if (w) await invoke("browser.open", { workspace: w.id, url });
+          });
+          break;
+        case "browser.bookmark":
         case "browser.pin": {
           if (pane?.kind !== "browser")
             throw new Error("Focus a browser tab first");
           const browser = getState().browsers.find(
             (item) => item.id === pane.browserId,
           )!;
-          await invoke("browser.pin", {
-            url: browser.url,
-            title: browser.title,
-          });
+          await invoke(
+            id === "browser.bookmark" ? "browser.bookmark" : "browser.pin",
+            {
+              url: browser.url,
+              title: browser.title,
+            },
+          );
           break;
         }
         case "browser.downloads":

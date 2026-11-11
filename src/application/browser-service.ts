@@ -974,6 +974,18 @@ export class BrowserApplicationService {
           });
         return { saved: true };
       }
+      case "browser.bookmarks":
+        return this.library.bookmarks(
+          typeof request.query === "string" ? request.query : "",
+        );
+      case "browser.bookmark":
+        return this.library.bookmark(
+          requiredString(request, "url"),
+          typeof request.title === "string" ? request.title : "",
+          typeof request.id === "string" ? request.id : undefined,
+        );
+      case "browser.bookmark-delete":
+        return this.library.removeBookmark(requiredString(request, "id"));
       case "browser.settings":
         return typeof request.searchEngine === "string"
           ? this.library.configure(request.searchEngine)
@@ -996,6 +1008,9 @@ export class BrowserApplicationService {
             .toLocaleLowerCase()
             .includes(query.toLocaleLowerCase()),
         );
+        const bookmarks = await this.library.bookmarks(query);
+        for (const item of bookmarks)
+          if (!matches.some((pin) => pin.url === item.url)) matches.push(item);
         const history = await this.library.history(query, 8);
         return [
           ...matches,

@@ -49,3 +49,30 @@ test("Local history, deletion and search settings persist without retaining auth
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Bookmarks remain separate from history and reject conflicting updates", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "cod-bookmarks-"));
+  try {
+    const library = new BrowserLibrary(dir);
+    const bookmark = await library.bookmark(
+      "https://example.invalid/one",
+      "First",
+    );
+    assert.equal(
+      (await library.bookmark("https://example.invalid/one", "Renamed")).id,
+      bookmark.id,
+    );
+    await library.bookmark("https://example.invalid/two", "Second");
+    await assert.rejects(
+      library.bookmark("https://example.invalid/two", "Conflict", bookmark.id),
+    );
+    await library.forget();
+    const restored = new BrowserLibrary(dir);
+    assert.equal((await restored.bookmarks("renamed"))[0].id, bookmark.id);
+    await restored.removeBookmark(bookmark.id);
+    assert.equal((await new BrowserLibrary(dir).bookmarks()).length, 1);
+    assert.throws(() => library.bookmark("javascript:alert(1)", "Unsafe"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

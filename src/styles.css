@@ -1852,3 +1852,28 @@ browser-action-list::part(action):focus-visible {
 .download-row button {
   margin-right: 6px;
 }
+.bookmark-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.bookmark-row > small {
+  display: block;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 4px 0;
+}
+.bookmark-row > button:first-child {
+  background: transparent;
+  border-color: transparent;
+  padding-left: 0;
+}
+.bookmark-row button {
+  margin-right: 6px;
+}
+.bookmark-row form input {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+}

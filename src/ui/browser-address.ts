@@ -82,8 +82,7 @@ export function addressSuggestions(
     }
   }
   input.addEventListener("input", () => {
-    clearTimeout(timer);
-    revision++;
+    close();
     timer = setTimeout(() => void refresh(), 80);
   });
   input.addEventListener("focus", () => void refresh());

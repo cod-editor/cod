@@ -7,7 +7,13 @@ export interface HistoryEntry {
   title: string;
   visitedAt: number;
 }
+export interface Bookmark {
+  id: string;
+  url: string;
+  title: string;
+}
 interface LibraryData {
+  bookmarks?: Bookmark[];
   history: HistoryEntry[];
   searchEngine: SearchEngine;
 }
@@ -120,6 +126,52 @@ export class BrowserLibrary {
       this.data.history = url
         ? this.data.history.filter((item) => item.url !== url)
         : [];
+      return { removed: true };
+    });
+  }
+  async bookmarks(query = "") {
+    await this.queue;
+    await this.load();
+    const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    return (this.data.bookmarks ?? [])
+      .filter((item) =>
+        terms.every((term) =>
+          `${item.title} ${item.url}`.toLocaleLowerCase().includes(term),
+        ),
+      )
+      .map((item) => ({ ...item }));
+  }
+  bookmark(value: string, title: string, id?: string) {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password)
+      throw new Error(
+        "Bookmarks require an HTTP or HTTPS address without credentials",
+      );
+    return this.change(() => {
+      const entries = (this.data.bookmarks ??= []);
+      const existing = id
+        ? entries.find((item) => item.id === id)
+        : entries.find((item) => item.url === url.href);
+      if (id && !existing) throw new Error("Bookmark not found");
+      if (entries.some((item) => item.url === url.href && item !== existing))
+        throw new Error("This address is already bookmarked");
+      const item = {
+        id: existing?.id ?? randomUUID(),
+        url: url.href,
+        title: title.trim() || url.hostname,
+      };
+      if (existing) Object.assign(existing, item);
+      else entries.push(item);
+      return { ...item };
+    });
+  }
+  removeBookmark(id: string) {
+    return this.change(() => {
+      if (!this.data.bookmarks?.some((item) => item.id === id))
+        throw new Error("Bookmark not found");
+      this.data.bookmarks = this.data.bookmarks.filter(
+        (item) => item.id !== id,
+      );
       return { removed: true };
     });
   }
