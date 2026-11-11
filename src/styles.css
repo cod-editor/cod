@@ -1823,3 +1823,21 @@ browser-action-list::part(action):focus-visible {
   white-space: nowrap;
   width: 100%;
 }
+.browser-permission-requests {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid #454b57;
+  max-height: 35vh;
+  overflow: auto;
+}
+.browser-permission-requests p {
+  margin: 4px 0 8px;
+  overflow-wrap: anywhere;
+}
+.site-permissions {
+  max-height: 80vh;
+  overflow: auto;
+}
+.site-permissions h3 {
+  overflow-wrap: anywhere;
+}

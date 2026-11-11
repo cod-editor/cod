@@ -1,3 +1,4 @@
+import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
@@ -126,6 +127,11 @@ export function createBrowserViews(
       /* Never echo an unparsed address containing credentials or tokens. */
     }
     failure.querySelector("code")!.textContent = displayUrl;
+    updateSiteRequests(
+      container.querySelector<HTMLElement>(".browser-permission-requests")!,
+      record.permissionRequests ?? [],
+      invoke,
+    );
     scheduleBrowserLayout();
     container.querySelector<HTMLElement>(".browser-status")!.textContent = [
       record.agentPage ? (record.error ?? "") : "",
@@ -282,7 +288,17 @@ export function createBrowserViews(
       const done = paneButton("Done", async () => dialog.close());
       const actions = document.createElement("div");
       actions.className = "dialog-actions";
-      actions.append(retry, done);
+      actions.append(
+        paneButton("Site permissions", async () => {
+          dialog.close();
+          await sitePermissions(
+            invoke,
+            getState().browsers.find((b) => b.id === record.id)?.url,
+          );
+        }),
+        retry,
+        done,
+      );
       dialog.append(title, label, status, actions);
       refresh();
       document.body.append(dialog);
@@ -348,8 +364,12 @@ export function createBrowserViews(
       void invoke("browser.navigate", { id: record.id, url });
     });
     homes.set(record.id, home);
+    const permissionRequests = document.createElement("div");
+    permissionRequests.className = "browser-permission-requests";
+    permissionRequests.hidden = true;
     body.append(
       navigation,
+      permissionRequests,
       suggestions.element,
       home.element,
       content,

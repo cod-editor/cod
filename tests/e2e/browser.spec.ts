@@ -612,14 +612,23 @@ test("Browser AC5 external pages have no Cod bridge or Node and denied permissio
     .poll(async () => (await inspect(record.id)).url)
     .toBe(origin + "/one");
   expect(await shell.state()).toEqual(state);
-  const permission = await remote(
+  await remote(
     "/one",
-    `new Promise(resolve=>navigator.geolocation.getCurrentPosition(()=>resolve('granted'),error=>resolve(error.code),{timeout:3000}))`,
+    `navigator.geolocation.getCurrentPosition(()=>window.permissionResult='granted',error=>window.permissionResult=error.code,{timeout:10000});void 0`,
   );
-  expect(permission).toBe(1);
-  await expect(shell.pane(record.paneId)).toContainText(
-    /permission.*(denied|disabled|unavailable)|camera.*microphone/i,
-  );
+  const prompt = shell
+    .pane(record.paneId)
+    .getByRole("region", { name: "Site permission request" });
+  await expect(prompt).toContainText(origin);
+  await prompt.getByRole("button", { name: "Block", exact: true }).click();
+  await expect.poll(() => remote("/one", "window.permissionResult")).toBe(1);
+  expect(await shell.cli("browser", "permissions")).toEqual([
+    expect.objectContaining({
+      origin,
+      permission: "geolocation",
+      decision: "block",
+    }),
+  ]);
 });
 
 test("Browser slow navigation does not block other workspaces and close cancels its owned view", async () => {
@@ -1013,4 +1022,107 @@ test("Local address suggestions, searchable history and search engine settings s
     .getByRole("button", { name: "Clear history", exact: true })
     .click();
   expect(await shell.cli("browser", "history")).toEqual([]);
+});
+
+test("Site media permissions require a page-bound decision and retain only remembered grants", async ({}, info) => {
+  await shell.stop();
+  shell.launchArguments.push("--use-fake-device-for-media-stream");
+  await shell.start();
+  const workspace = await shell.create("Media permissions");
+  const record = await open(workspace, "/media-fixture");
+  const request = () =>
+    remote(
+      "/media-fixture",
+      `window.mediaResult='pending';navigator.mediaDevices.getUserMedia({audio:true,video:true}).then(stream=>{window.mediaResult=stream.getTracks().map(track=>track.kind).sort().join(',');stream.getTracks().forEach(track=>track.stop());},error=>window.mediaResult=error.name);void 0`,
+    );
+  await request();
+  const prompt = () =>
+    shell
+      .pane(record.paneId)
+      .getByRole("region", { name: "Site permission request" });
+  await expect(prompt()).toContainText("camera");
+  await expect(prompt()).toContainText("microphone");
+  await shell.page.screenshot({ path: info.outputPath("site-permission.png") });
+  await prompt()
+    .getByRole("button", { name: "Allow once", exact: true })
+    .click();
+  await expect
+    .poll(() => remote("/media-fixture", "window.mediaResult"))
+    .toBe("audio,video");
+  expect(await shell.cli("browser", "permissions")).toEqual([]);
+  await shell.cli("browser", "reload", "--id", record.id);
+  await request();
+  await expect(prompt()).toBeVisible();
+  await prompt()
+    .getByRole("button", { name: "Always allow", exact: true })
+    .click();
+  await expect
+    .poll(() => remote("/media-fixture", "window.mediaResult"))
+    .toBe("audio,video");
+  await shell.stop();
+  await shell.start();
+  await request();
+  await expect
+    .poll(() => remote("/media-fixture", "window.mediaResult"))
+    .toBe("audio,video");
+  await expect(prompt()).toHaveCount(0);
+  await shell.command("Site permissions");
+  await shell.page
+    .getByRole("dialog", { name: "Site permissions" })
+    .getByLabel(`Camera for ${origin}`, { exact: true })
+    .selectOption("ask");
+  await shell.page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect
+    .poll(async () =>
+      (
+        await shell.cli<Array<{ permission: string }>>("browser", "permissions")
+      ).some((item) => item.permission === "camera"),
+    )
+    .toBe(false);
+  await shell.cli("browser", "reload", "--id", record.id);
+  await request();
+  await expect(prompt()).toBeVisible();
+  const stale = (
+    await shell.cli<{ permissionRequests: Array<{ id: string }> }>(
+      "browser",
+      "inspect",
+      "--id",
+      record.id,
+    )
+  ).permissionRequests[0].id;
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    origin + "/other-page",
+  );
+  expect(
+    (
+      await shell.raw(
+        "browser",
+        "permission-answer",
+        "--request-id",
+        stale,
+        "--decision",
+        "allow",
+      )
+    ).code,
+  ).not.toBe(0);
+  await expect(prompt()).toHaveCount(0);
+  await remote(
+    "/other-page",
+    `Notification.requestPermission().then(result=>window.notificationResult=result);void 0`,
+  );
+  await expect(prompt()).toContainText("notifications");
+  await prompt()
+    .getByRole("button", { name: "Allow once", exact: true })
+    .click();
+  await expect
+    .poll(() => remote("/other-page", "window.notificationResult"))
+    .toBe("granted");
+  expect(await remote("/other-page", "Notification.permission")).toBe(
+    "granted",
+  );
 });

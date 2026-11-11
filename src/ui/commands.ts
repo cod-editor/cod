@@ -1,3 +1,4 @@
+import { sitePermissions } from "./browser-permissions";
 import { browserSettings, browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
 import { conversationRemovalReason } from "../conversation-actions";
@@ -498,6 +499,7 @@ export function createCommands(
         "integration.install",
         "browser.default",
         "browser.settings",
+        "browser.permissions",
         "workspace.reopen",
         "text.inc",
         "text.dec",
@@ -674,6 +676,14 @@ export function createCommands(
           });
           break;
         }
+        case "browser.permissions":
+          await sitePermissions(
+            invoke,
+            pane?.kind === "browser"
+              ? getState().browsers.find((b) => b.id === pane.browserId)?.url
+              : undefined,
+          );
+          break;
         case "browser.settings":
           await browserSettings(invoke);
           break;

@@ -182,13 +182,6 @@ function createWindow(): void {
   });
 
   const browserSession = session.fromPartition("persist:cod-browser");
-  browserSession.setPermissionRequestHandler(
-    (contents, permission, callback) => {
-      operations.browserPermissionDenied(contents.id, permission);
-      callback(false);
-    },
-  );
-  browserSession.setPermissionCheckHandler(() => false);
   operations.attachBrowserHost(
     mainWindow,
     browserSession,

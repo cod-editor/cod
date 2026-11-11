@@ -1,3 +1,9 @@
+import { SitePermissions, webOrigin } from "../browser/permissions";
+import {
+  sitePermissionNames,
+  type SitePolicy,
+  type SitePermission,
+} from "../browser/permission-types";
 import { BrowserLibrary } from "../browser/library";
 import { readFileSync } from "node:fs";
 import { resolveAddress } from "../browser/address";
@@ -27,6 +33,7 @@ export interface BrowserConversationPort {
   send(request: OperationRequest): Promise<{ id: string; status: string }>;
 }
 export class BrowserApplicationService {
+  private sitePermissions?: SitePermissions;
   private readonly library: BrowserLibrary;
   private readonly recordedPages = new Map<string, string>();
   private libraryError?: Error;
@@ -55,6 +62,7 @@ export class BrowserApplicationService {
     for (const controller of this.browserAdmissions.values())
       controller.abort();
     this.browserAdmissions.clear();
+    this.sitePermissions?.dispose();
     this.browserAddons?.dispose();
     this.browserService?.dispose();
     this.agentPages?.dispose();
@@ -228,6 +236,20 @@ export class BrowserApplicationService {
     downloadDirectory: string,
   ): void {
     this.browserWindow = window;
+    this.sitePermissions = new SitePermissions({
+      session,
+      owner: (contents) => this.browserService?.owner(contents.id),
+      policies: () => this.store.data.sitePermissions ?? [],
+      save: (policy) => this.saveSitePolicy(policy),
+      changed: (pending) => {
+        for (const browser of this.store.data.browsers)
+          browser.permissionRequests = pending.filter(
+            (item) => item.browserId === browser.id,
+          );
+        this.store.notify();
+      },
+      denied: (id, permission) => this.browserPermissionDenied(id, permission),
+    });
     const browserForContents = (contents: import("electron").WebContents) =>
       this.store.data.browsers.find(
         (item) =>
@@ -841,11 +863,71 @@ export class BrowserApplicationService {
     }
   }
 
+  private async saveSitePolicy(policy: SitePolicy): Promise<void> {
+    await this.store.change(() => {
+      const policies = (this.store.data.sitePermissions ??= []);
+      const index = policies.findIndex(
+        (item) =>
+          item.origin === policy.origin &&
+          item.topOrigin === policy.topOrigin &&
+          item.permission === policy.permission,
+      );
+      if (index >= 0) policies[index] = policy;
+      else policies.push(policy);
+    });
+  }
   async handle(
     request: OperationRequest,
     _trustedUi = false,
   ): Promise<unknown> {
     switch (request.op) {
+      case "browser.permissions":
+        return structuredClone(this.store.data.sitePermissions ?? []);
+      case "browser.permission-answer":
+        if (!this.sitePermissions)
+          throw new Error("Browser permissions unavailable");
+        return this.sitePermissions.answer(
+          requiredString(request, "requestId"),
+          requiredString(request, "decision"),
+        );
+      case "browser.permission-set": {
+        const origin = webOrigin(requiredString(request, "origin")),
+          topOrigin = webOrigin(
+            typeof request.topOrigin === "string" ? request.topOrigin : origin,
+          );
+        const permission = requiredString(
+          request,
+          "permission",
+        ) as SitePermission;
+        const decision = requiredString(request, "decision");
+        if (
+          !Object.hasOwn(sitePermissionNames, permission) ||
+          !["allow", "block", "ask"].includes(decision)
+        )
+          throw new Error("Unsupported site permission or decision");
+        this.sitePermissions?.revoke(origin, topOrigin, permission);
+        if (decision === "ask")
+          await this.store.change(() => {
+            this.store.data.sitePermissions = (
+              this.store.data.sitePermissions ?? []
+            ).filter(
+              (item) =>
+                !(
+                  item.origin === origin &&
+                  item.topOrigin === topOrigin &&
+                  item.permission === permission
+                ),
+            );
+          });
+        else
+          await this.saveSitePolicy({
+            origin,
+            topOrigin,
+            permission,
+            decision: decision as "allow" | "block",
+          });
+        return { saved: true };
+      }
       case "browser.settings":
         return typeof request.searchEngine === "string"
           ? this.library.configure(request.searchEngine)

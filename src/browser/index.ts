@@ -103,6 +103,9 @@ export class BrowserService {
     options.session.on("will-download", this.download);
     options.window.once("closed", this.dispose);
   }
+  owner(contentsId: number): string | undefined {
+    return this.owners.get(contentsId)?.id;
+  }
   onEvent(listener: (event: BrowserEvent) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

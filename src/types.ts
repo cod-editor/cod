@@ -33,6 +33,7 @@ export interface BrowserPane {
   browserId: string;
 }
 export interface BrowserState {
+  permissionRequests?: import("./browser/permission-types").SiteRequest[];
   permissionDenied?: string;
   agentPage?: {
     path: string;
@@ -243,6 +244,7 @@ export interface WorkspaceState {
 }
 
 export interface AppState {
+  sitePermissions?: import("./browser/permission-types").SitePolicy[];
   pinnedSites?: Array<{ url: string; title: string }>;
   closedWorkspaces?: Array<{
     workspace: WorkspaceState;
