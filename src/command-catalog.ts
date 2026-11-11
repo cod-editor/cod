@@ -96,6 +96,8 @@ export const commands = {
   "browser.blocking": ["id", "enabled"],
   "browser.open": ["workspace", "url"],
   "browser.navigate": ["id", "url"],
+  "browser.downloads": [],
+  "browser.download-action": ["id", "action"],
   "browser.permissions": [],
   "browser.permission-answer": ["request-id", "decision"],
   "browser.permission-set": ["origin", "top-origin?", "permission", "decision"],

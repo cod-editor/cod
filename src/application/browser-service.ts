@@ -16,7 +16,7 @@ import { nativeKeyInput, resolveKeybinding } from "../keyboard";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
-import { app, type BrowserWindow, type Session } from "electron";
+import { app, shell, type BrowserWindow, type Session } from "electron";
 import { BrowserService, type BrowserEvent } from "../browser";
 import { AgentPageService } from "../agent-pages";
 import { BrowserAddons } from "../browser-addons";
@@ -780,6 +780,21 @@ export class BrowserApplicationService {
       workspace.activePaneId = firstPane(workspace.layout);
   }
   browserEvent(event: BrowserEvent): void {
+    if (event.type === "download") {
+      if (this.store.closing && event.download.status === "cancelled")
+        event.download.status = "interrupted";
+      const downloads = (this.store.data.browserDownloads ??= []);
+      const previous = downloads.find((item) => item.id === event.download.id);
+      if (previous) Object.assign(previous, event.download);
+      else downloads.unshift(event.download);
+      this.store.data.browserDownloads = downloads.filter(
+        (item, index) =>
+          index < 200 || ["progressing", "paused"].includes(item.status),
+      );
+      this.store.schedulePersist();
+      this.store.notify(true);
+      return;
+    }
     const record = this.store.data.browsers.find(
       (item) => item.id === event.id,
     );
@@ -809,13 +824,6 @@ export class BrowserApplicationService {
         });
       }
       this.store.schedulePersist();
-      this.store.notify();
-    } else if (event.type === "download") {
-      record.download = {
-        basename: event.basename,
-        status: event.status,
-        ...(event.path ? { path: event.path } : {}),
-      };
       this.store.notify();
     }
   }
@@ -881,6 +889,44 @@ export class BrowserApplicationService {
     _trustedUi = false,
   ): Promise<unknown> {
     switch (request.op) {
+      case "browser.downloads":
+        return structuredClone(this.store.data.browserDownloads ?? []);
+      case "browser.download-action": {
+        const id = requiredString(request, "id"),
+          action = requiredString(request, "action");
+        const item = this.store.data.browserDownloads?.find(
+          (item) => item.id === id,
+        );
+        if (!item) throw new Error("Download not found");
+        if (["pause", "resume", "cancel"].includes(action)) {
+          this.requireBrowserService().controlDownload(
+            id,
+            action as "pause" | "resume" | "cancel",
+          );
+        } else if (action === "retry") {
+          if (!["interrupted", "cancelled"].includes(item.status))
+            throw new Error("Download is not interrupted");
+          this.requireBrowserService().retryDownload(item.url);
+        } else if (action === "remove") {
+          if (["progressing", "paused"].includes(item.status))
+            throw new Error("Cancel the active download first");
+          return this.store.change(() => {
+            this.store.data.browserDownloads =
+              this.store.data.browserDownloads?.filter(
+                (item) => item.id !== id,
+              );
+          });
+        } else if (action === "open" || action === "reveal") {
+          if (item.status !== "completed" || !item.path)
+            throw new Error("Download has not completed");
+          if (action === "reveal") shell.showItemInFolder(item.path);
+          else {
+            const error = await shell.openPath(item.path);
+            if (error) throw new Error(error);
+          }
+        } else throw new Error("Unknown download action");
+        return { id, action };
+      }
       case "browser.permissions":
         return structuredClone(this.store.data.sitePermissions ?? []);
       case "browser.permission-answer":

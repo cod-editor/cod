@@ -1,3 +1,4 @@
+import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
@@ -132,13 +133,14 @@ export function createBrowserViews(
       record.permissionRequests ?? [],
       invoke,
     );
+    const downloads = container.querySelector<HTMLButtonElement>(
+      "[aria-label=Downloads]",
+    );
+    if (downloads) downloads.hidden = !getState().browserDownloads?.length;
     scheduleBrowserLayout();
     container.querySelector<HTMLElement>(".browser-status")!.textContent = [
       record.agentPage ? (record.error ?? "") : "",
       record.permissionDenied ?? "",
-      record.download
-        ? `Download ${record.download.status}: ${record.download.path ?? record.download.basename}`
-        : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -316,6 +318,16 @@ export function createBrowserViews(
     blocking.classList.add("icon-button");
     blocking.replaceChildren(icon("shield"));
     navigation.append(blocking);
+    const downloads = paneButton("Downloads", async () => {
+      browserDownloads(invoke);
+    });
+    downloads.type = "button";
+    downloads.classList.add("icon-button");
+    downloads.setAttribute("aria-label", "Downloads");
+    downloads.title = "Downloads";
+    downloads.replaceChildren(icon("download"));
+    downloads.hidden = !getState().browserDownloads?.length;
+    navigation.append(downloads);
     const actions = document.createElement("browser-action-list");
     actions.addEventListener(
       "click",

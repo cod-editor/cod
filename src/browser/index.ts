@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { BrowserDownload } from "./download-types";
 import { installScrollbarStyle } from "./scrollbars";
 import {
   WebContentsView,
@@ -34,9 +36,7 @@ export type BrowserEvent =
       type: "download";
       id: string;
       workspaceId: string;
-      basename: string;
-      status: "progressing" | "completed" | "cancelled" | "interrupted";
-      path?: string;
+      download: BrowserDownload;
     };
 interface Resource {
   id: string;
@@ -50,7 +50,6 @@ interface Resource {
   lastSuccessfulUrl?: string;
   diagnostics?: BrowserDiagnostics;
   popups: Set<BrowserWindow>;
-  downloads: Set<DownloadItem>;
 }
 interface Options {
   window: BrowserWindow;
@@ -95,6 +94,35 @@ export class BrowserService {
   private owners = new Map<number, Resource>();
   private listeners = new Set<(event: BrowserEvent) => void>();
   private disposed = false;
+  private retries = new Map<string, { count: number; expires: number }>();
+  private downloads = new Map<
+    string,
+    { item: DownloadItem; update: () => void }
+  >();
+  controlDownload(id: string, action: "pause" | "resume" | "cancel") {
+    const download = this.downloads.get(id);
+    if (!download) throw new Error("Download is no longer active");
+    if (
+      action === "resume" &&
+      !download.item.canResume() &&
+      !download.item.isPaused()
+    )
+      throw new Error("Download cannot resume; retry it");
+    download.item[action]();
+    if (this.downloads.has(id)) download.update();
+  }
+  retryDownload(url: string) {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol))
+      throw new Error("Only HTTP downloads can be retried");
+    for (const [key, value] of this.retries)
+      if (value.expires < Date.now()) this.retries.delete(key);
+    this.retries.set(parsed.href, {
+      count: (this.retries.get(parsed.href)?.count ?? 0) + 1,
+      expires: Date.now() + 120000,
+    });
+    this.options.session.downloadURL(parsed.href);
+  }
   constructor(private options: Options) {
     if (options.session === options.window.webContents.session)
       throw new Error("Browser session must be separate from the app session");
@@ -215,7 +243,6 @@ export class BrowserService {
       view,
       visible: true,
       popups: new Set(),
-      downloads: new Set(),
     };
     this.resources.set(input.id, resource);
     try {
@@ -425,7 +452,6 @@ export class BrowserService {
     if (!resource) return;
     resource.diagnostics?.dispose();
     this.resources.delete(id);
-    for (const download of resource.downloads) download.cancel();
     for (const popup of resource.popups)
       if (!popup.isDestroyed()) popup.destroy();
     resource.popups.clear();
@@ -437,6 +463,7 @@ export class BrowserService {
   }
   dispose = () => {
     if (this.disposed) return;
+    for (const download of this.downloads.values()) download.item.cancel();
     this.disposed = true;
     this.options.session.removeListener("will-download", this.download);
     this.options.window.removeListener("closed", this.dispose);
@@ -448,9 +475,18 @@ export class BrowserService {
     item: DownloadItem,
     contents: WebContents | null,
   ) => {
-    if (!contents) return;
-    const owner = this.owners.get(contents.id);
-    if (!owner || this.disposed) return;
+    if (!contents) {
+      const pending = this.retries.get(item.getURL());
+      if (!pending || pending.expires < Date.now()) return;
+      if (--pending.count === 0) this.retries.delete(item.getURL());
+    }
+    const owner = contents ? this.owners.get(contents.id) : undefined;
+    if (this.disposed || (contents && !owner)) {
+      item.cancel();
+      return;
+    }
+    const id = randomUUID(),
+      startedAt = Date.now();
     const name = basename(item.getFilename());
     let destination = "";
     try {
@@ -476,28 +512,47 @@ export class BrowserService {
       item.cancel();
       this.emit({
         type: "download",
-        id: owner.id,
-        workspaceId: owner.workspaceId,
-        basename: name,
-        status: "interrupted",
+        id: owner?.id ?? "",
+        workspaceId: owner?.workspaceId ?? "",
+        download: {
+          id,
+          startedAt,
+          url: item.getURL(),
+          basename: name,
+          status: "interrupted",
+          receivedBytes: 0,
+          totalBytes: 0,
+          canResume: false,
+        },
       });
       return;
     }
-    owner.downloads.add(item);
     const send = (
       status: "progressing" | "completed" | "cancelled" | "interrupted",
     ) =>
       this.emit({
         type: "download",
-        id: owner.id,
-        workspaceId: owner.workspaceId,
-        basename: path.basename(destination),
-        status,
-        ...(status === "completed" ? { path: destination } : {}),
+        id: owner?.id ?? "",
+        workspaceId: owner?.workspaceId ?? "",
+        download: {
+          id,
+          startedAt,
+          url: item.getURL(),
+          basename: path.basename(destination),
+          status:
+            status === "progressing" && item.isPaused() ? "paused" : status,
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes(),
+          canResume:
+            this.downloads.has(id) &&
+            (status === "progressing" ||
+              (status === "interrupted" && item.canResume())),
+          ...(status === "completed" ? { path: destination } : {}),
+        },
       });
     item.on("updated", (_event, state) => send(state));
     item.once("done", (_event, state) => {
-      owner.downloads.delete(item);
+      this.downloads.delete(id);
       if (state !== "completed") {
         try {
           unlinkSync(destination);
@@ -507,6 +562,7 @@ export class BrowserService {
       }
       send(state);
     });
+    this.downloads.set(id, { item, update: () => send(item.getState()) });
     send("progressing");
   };
 }

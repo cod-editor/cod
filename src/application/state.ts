@@ -43,6 +43,13 @@ export class ApplicationStateStore {
         conversations: saved.conversations ?? [],
         drafts: saved.drafts ?? {},
         pinnedSites: saved.pinnedSites ?? [],
+        browserDownloads: (saved.browserDownloads ?? []).map((item) => ({
+          ...item,
+          canResume: false,
+          status: ["progressing", "paused"].includes(item.status)
+            ? "interrupted"
+            : item.status,
+        })),
         terminals: saved.terminals ?? [],
         browsers: (saved.browsers ?? []).map((browser) => ({
           ...browser,

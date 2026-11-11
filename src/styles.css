@@ -1841,3 +1841,14 @@ browser-action-list::part(action):focus-visible {
 .site-permissions h3 {
   overflow-wrap: anywhere;
 }
+.download-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.download-row p {
+  margin: 4px 0;
+  color: var(--muted);
+}
+.download-row button {
+  margin-right: 6px;
+}

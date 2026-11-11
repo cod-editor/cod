@@ -1,3 +1,4 @@
+import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
 import { browserSettings, browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
@@ -499,6 +500,7 @@ export function createCommands(
         "integration.install",
         "browser.default",
         "browser.settings",
+        "browser.downloads",
         "browser.permissions",
         "workspace.reopen",
         "text.inc",
@@ -676,6 +678,9 @@ export function createCommands(
           });
           break;
         }
+        case "browser.downloads":
+          browserDownloads(invoke);
+          break;
         case "browser.permissions":
           await sitePermissions(
             invoke,

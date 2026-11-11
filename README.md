@@ -50,6 +50,8 @@ New browser tabs show pinned sites shared across workspaces. Use the `+` tile to
 - Registered HTML artifacts may submit to their originating conversation. General agent browser control, a mailbox and cloud execution are out of scope.
 - Recent graphical acceptance used isolated Linux Electron. The current macOS bundle has CLI/PTY checks and a local ad-hoc signature; it is not notarized, and its final GUI and system default-browser action have not been verified on macOS.
 
+Downloads are available in Commands and from the browser toolbar once a file has been downloaded. Pause, resume, cancel, retry, open and reveal files there. Closing a tab keeps its download running. Download history survives restart; interrupted transfers require an explicit retry. Removing an entry does not delete the file.
+
 ## Development
 
 Read [AGENTS.md](AGENTS.md), [the requirements](docs/vision.md) and [implementation contracts](docs/specs/implementation.md).

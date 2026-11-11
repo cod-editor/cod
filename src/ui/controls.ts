@@ -27,6 +27,7 @@ export const icons: Record<string, string> = {
   forward: '<path d="m12 4 8 8-8 8M4 12h16"/>',
   reload: '<path d="M20 10a8 8 0 1 0-1 8M20 3v7h-7"/>',
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/>',
+  download: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="1"/>',
 };
 export function icon(name: string): SVGSVGElement {

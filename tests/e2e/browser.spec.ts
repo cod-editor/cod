@@ -138,6 +138,24 @@ test.beforeEach(async () => {
       slowResponse = response;
       return;
     }
+    if (route === "/slow-download") {
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="large.bin"',
+        "Content-Length": 1024 * 1024,
+      });
+      let sent = 0;
+      const timer = setInterval(() => {
+        response.write(Buffer.alloc(16384));
+        sent += 16384;
+        if (sent >= 1024 * 1024) {
+          clearInterval(timer);
+          response.end();
+        }
+      }, 50);
+      response.on("close", () => clearInterval(timer));
+      return;
+    }
     if (route === "/download") {
       response.writeHead(200, {
         "Content-Type": "application/octet-stream",
@@ -552,9 +570,17 @@ test("Browser AC4 real uploads, visible downloads and popup opener work through 
       async () => await readFile(path.join(downloads, "fixture.txt"), "utf8"),
     )
     .toBe("INVENTED_BROWSER_DOWNLOAD");
-  await expect(shell.pane(record.paneId)).toContainText(
-    path.join(downloads, "fixture.txt"),
-  );
+  await expect
+    .poll(async () => await shell.cli("browser", "downloads"))
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          basename: "fixture.txt",
+          status: "completed",
+          path: path.join(downloads, "fixture.txt"),
+        }),
+      ]),
+    );
   await remote("/one", `void window.open('/popup')`);
   await expect
     .poll(() => remote("/one", "window.popupResult"))
@@ -1125,4 +1151,106 @@ test("Site media permissions require a page-bound decision and retain only remem
   expect(await remote("/other-page", "Notification.permission")).toBe(
     "granted",
   );
+});
+
+test("Downloads survive tab closure and retain history across restart", async () => {
+  const workspace = await shell.create("Downloads");
+  const record = await open(workspace);
+  await remote(
+    "/one",
+    `const a = document.createElement('a'); a.href='/slow-download'; document.body.append(a); a.click();`,
+  );
+  const entries = () =>
+    shell.cli<Array<{ id: string; status: string; receivedBytes: number }>>(
+      "browser",
+      "downloads",
+    );
+  await expect.poll(async () => (await entries()).length).toBe(1);
+  const id = (await entries())[0]!.id;
+  await shell.cli(
+    "browser",
+    "download-action",
+    "--id",
+    id,
+    "--action",
+    "pause",
+  );
+  await expect.poll(async () => (await entries())[0]?.status).toBe("paused");
+  await shell.cli("browser", "close", "--id", record.id);
+  await shell.cli(
+    "browser",
+    "download-action",
+    "--id",
+    id,
+    "--action",
+    "resume",
+  );
+  await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
+  expect((await readFile(path.join(downloads, "large.bin"))).length).toBe(
+    1024 * 1024,
+  );
+  await shell.stop();
+  await shell.start();
+  await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
+  await shell.page
+    .getByRole("treeitem", { name: "Downloads, Idle", exact: true })
+    .click();
+  await shell.command("Downloads");
+  const dialog = shell.page!.getByRole("dialog", {
+    name: "Downloads",
+    exact: true,
+  });
+  await expect(
+    dialog.getByRole("button", { name: "Show in folder" }),
+  ).toBeVisible();
+  await shell.page!.screenshot({
+    path: test.info().outputPath("downloads.png"),
+  });
+  await dialog.getByRole("button", { name: "Remove from list" }).click();
+  await expect.poll(async () => (await entries()).length).toBe(0);
+  expect((await readFile(path.join(downloads, "large.bin"))).length).toBe(
+    1024 * 1024,
+  );
+});
+
+test("Interrupted downloads retry explicitly and cancellations retain no partial file", async () => {
+  const workspace = await shell.create("Interrupted downloads");
+  await open(workspace);
+  const entries = () =>
+    shell.cli<Array<{ id: string; status: string }>>("browser", "downloads");
+  await remote("/one", `location.href='/slow-download'`);
+  await expect.poll(async () => (await entries()).length).toBe(1);
+  const id = (await entries())[0]!.id;
+  await shell.stop();
+  await shell.start();
+  expect((await entries())[0]?.status).toBe("interrupted");
+  await shell.cli(
+    "browser",
+    "download-action",
+    "--id",
+    id,
+    "--action",
+    "retry",
+  );
+  await expect.poll(async () => (await entries()).length).toBe(2);
+  const retry = (await entries())[0]!.id;
+  await shell.cli(
+    "browser",
+    "download-action",
+    "--id",
+    retry,
+    "--action",
+    "cancel",
+  );
+  await expect.poll(async () => (await entries())[0]?.status).toBe("cancelled");
+  await expect.poll(async () => (await readdir(downloads)).length).toBe(0);
+  await shell.cli(
+    "browser",
+    "download-action",
+    "--id",
+    retry,
+    "--action",
+    "retry",
+  );
+  await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
 });

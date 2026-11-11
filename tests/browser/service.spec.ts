@@ -345,20 +345,23 @@ test("B1 AC4 Chromium file upload and safe collision-preserving download transfe
       application.evaluate(() =>
         (globalThis as any).browserFixture.events.find(
           (event: any) =>
-            event.type === "download" && event.status === "completed",
+            event.type === "download" && event.download.status === "completed",
         ),
       ),
     )
     .toBeTruthy();
   const completed = await application.evaluate(() =>
     (globalThis as any).browserFixture.events.find(
-      (event: any) => event.type === "download" && event.status === "completed",
+      (event: any) =>
+        event.type === "download" && event.download.status === "completed",
     ),
   );
   expect(completed.id).toBe("one");
-  expect(path.basename(completed.basename)).toBe(completed.basename);
-  expect(path.dirname(completed.path)).toBe(downloads);
-  expect(await readFile(completed.path, "utf8")).toBe(bytes);
+  expect(path.basename(completed.download.basename)).toBe(
+    completed.download.basename,
+  );
+  expect(path.dirname(completed.download.path)).toBe(downloads);
+  expect(await readFile(completed.download.path, "utf8")).toBe(bytes);
   expect(await readFile(path.join(downloads, "fixture.txt"), "utf8")).toBe(
     "PREEXISTING_KEEP",
   );

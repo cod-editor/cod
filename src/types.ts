@@ -244,6 +244,7 @@ export interface WorkspaceState {
 }
 
 export interface AppState {
+  browserDownloads?: import("./browser/download-types").BrowserDownload[];
   sitePermissions?: import("./browser/permission-types").SitePolicy[];
   pinnedSites?: Array<{ url: string; title: string }>;
   closedWorkspaces?: Array<{
