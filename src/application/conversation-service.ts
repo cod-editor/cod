@@ -43,6 +43,7 @@ export class ConversationApplicationService {
   >();
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
+  private externalTurns = new Set<string>();
   private turnClocks = new Map<
     string,
     { id: string; start: number; workingStart?: number; worked: number }
@@ -103,7 +104,7 @@ export class ConversationApplicationService {
     this.activeTurns.add(id);
   }
   release(id: string): void {
-    this.activeTurns.delete(id);
+    if (!this.externalTurns.has(id)) this.activeTurns.delete(id);
   }
   async ensureReady(conversation: ConversationState): Promise<void> {
     await this.ensureController(conversation);
@@ -118,9 +119,10 @@ export class ConversationApplicationService {
     if (this.store.closing) throw new Error("Cod is shutting down");
     const adapter = this.controllers.get(conversation.id);
     if (!adapter) throw new Error("Conversation controller unavailable");
+    const turnId = this.beginTurn(conversation);
     conversation.messages.push({
       id: messageId,
-      turnId: this.beginTurn(conversation),
+      turnId,
       role: "user",
       text,
       order: this.nextOrder(conversation),
@@ -128,9 +130,11 @@ export class ConversationApplicationService {
     this.store.notify();
     try {
       const outcome = await adapter.send(text);
-      this.finishTurn(conversation, outcome.status);
+      if (this.turnClocks.get(conversation.id)?.id === turnId)
+        this.finishTurn(conversation, outcome.status);
     } catch (error) {
-      this.finishTurn(conversation, "failed");
+      if (this.turnClocks.get(conversation.id)?.id === turnId)
+        this.finishTurn(conversation, "failed");
       throw error;
     } finally {
       this.store.schedulePersist(true);
@@ -181,6 +185,7 @@ export class ConversationApplicationService {
       }
     }
     this.activeTurns.clear();
+    this.externalTurns.clear();
     await Promise.all(
       [...this.controllers.values(), ...this.replays].map((adapter) =>
         adapter.dispose(),
@@ -637,9 +642,12 @@ export class ConversationApplicationService {
       const adapter = await this.ensureController(conversation);
       await adapter.resolveSkills(text, skills);
       this.assertCurrent(conversation);
+      if (this.externalTurns.has(conversation.id))
+        throw new Error("A turn is already active for this conversation");
+      const turnId = this.beginTurn(conversation);
       conversation.messages.push({
         id: randomUUID(),
-        turnId: this.beginTurn(conversation),
+        turnId,
         role: "user",
         text,
         ...(images.length ? { images } : {}),
@@ -658,14 +666,17 @@ export class ConversationApplicationService {
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
         (outcome) => {
-          this.finishTurn(conversation, outcome.status);
+          if (this.turnClocks.get(conversation.id)?.id === turnId) {
+            this.finishTurn(conversation, outcome.status);
+            this.activeTurns.delete(conversation.id);
+          }
           finishPage("completed");
-          this.activeTurns.delete(conversation.id);
           this.store.schedulePersist(true);
         },
         (error) => {
-          this.finishTurn(conversation, "failed");
           finishPage("uncertain");
+          if (this.turnClocks.get(conversation.id)?.id !== turnId) return;
+          this.finishTurn(conversation, "failed");
           this.activeTurns.delete(conversation.id);
           conversation.status = "failed";
           conversation.error =
@@ -688,7 +699,7 @@ export class ConversationApplicationService {
       );
       return { id: conversation.id, status: conversation.status };
     } catch (error) {
-      this.activeTurns.delete(conversation.id);
+      this.release(conversation.id);
       throw error;
     }
   }
@@ -738,6 +749,12 @@ export class ConversationApplicationService {
       return;
     }
     switch (event.type) {
+      case "turn-started":
+        this.beginTurn(conversation);
+        this.activeTurns.add(id);
+        this.externalTurns.add(id);
+        conversation.error = undefined;
+        break;
       case "state": {
         const clock = this.turnClocks.get(id);
         const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
@@ -757,7 +774,7 @@ export class ConversationApplicationService {
         break;
       }
       case "text":
-        if (!event.replay && event.role === "assistant") {
+        if (!event.replay) {
           const id = event.itemId
             ? `codex/live/${conversation.nativeId}/${event.itemId}`
             : randomUUID();
@@ -770,10 +787,10 @@ export class ConversationApplicationService {
             ...conversation.tools.map((tool) => tool.order),
           );
           if (existing) {
-            existing.text += event.text;
+            if (event.role === "assistant") existing.text += event.text;
           } else if (
             !event.itemId &&
-            last?.role === "assistant" &&
+            last?.role === event.role &&
             last.turnId === this.currentTurn(conversation) &&
             !last.origin &&
             last.order >= lastToolOrder
@@ -782,7 +799,7 @@ export class ConversationApplicationService {
           } else {
             conversation.messages.push({
               id,
-              role: "assistant",
+              role: event.role,
               turnId: this.currentTurn(conversation),
               text: event.text,
               order: this.nextOrder(conversation),
@@ -828,6 +845,7 @@ export class ConversationApplicationService {
         break;
       case "completed":
         this.finishTurn(conversation, event.outcome.status);
+        if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         if (event.outcome.status === "completed") {
           conversation.completionRevision =
             (conversation.completionRevision ?? 0) + 1;
@@ -838,6 +856,7 @@ export class ConversationApplicationService {
         break;
       case "error":
         this.finishTurn(conversation, "failed");
+        if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         conversation.status = "failed";
         conversation.error = event.message;
         this.addApplicationMessage(
@@ -926,6 +945,7 @@ export class ConversationApplicationService {
     const adapter = this.controllers.get(id);
     this.controllers.delete(id);
     this.activeTurns.delete(id);
+    this.externalTurns.delete(id);
     this.resumeContexts.delete(id);
     await adapter?.dispose();
   }

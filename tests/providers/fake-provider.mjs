@@ -19,6 +19,7 @@ if (mode === "owned-child") {
 }
 
 let activeRequest;
+let turnId = "turn-1";
 const write = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const reply = (request, result) => write({ id: request.id, result });
 const notify = (method, params) => write({ method, params });
@@ -26,7 +27,7 @@ function complete(status = "completed") {
   if (provider === "codex")
     notify("turn/completed", {
       threadId: sessionId,
-      turn: { id: "turn-1", status },
+      turn: { id: turnId, status },
     });
   else
     reply(activeRequest, {
@@ -39,6 +40,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     appendFileSync(process.argv[4], JSON.stringify(m) + "\n");
   if (!m.method) {
     if (m.id === "foreign") return;
+    if (m.id === "external-approval") {
+      if (m.result?.decision === "decline") complete();
+      return;
+    }
     if (m.id === "approval") {
       const denied =
         provider === "codex"
@@ -122,6 +127,61 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ? { thread: { id: sessionId, turns: [{ id: "old-turn" }], toolPid } }
         : { sessionId, toolPid },
     );
+    if (provider === "codex" && mode.startsWith("external")) {
+      setTimeout(() => {
+        notify("turn/started", {
+          threadId: "foreign-thread",
+          turn: { id: "foreign-turn" },
+        });
+        turnId = "external-turn";
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        const user = {
+          id: "queued-user",
+          type: "userMessage",
+          content: [{ type: "text", text: "Job finished" }],
+        };
+        notify("item/started", { threadId: sessionId, turnId, item: user });
+        notify("item/completed", { threadId: sessionId, turnId, item: user });
+        notify("item/agentMessage/delta", {
+          threadId: sessionId,
+          turnId,
+          itemId: "queued-answer",
+          delta: "Queue received",
+        });
+        notify("item/started", {
+          threadId: sessionId,
+          turnId,
+          item: {
+            id: "queued-tool",
+            type: "commandExecution",
+            command: "true",
+          },
+        });
+        if (mode === "external-cancel" || mode === "external-timeout") return;
+        if (mode === "external-approval") {
+          write({
+            id: "external-approval",
+            method: "item/commandExecution/requestApproval",
+            params: { threadId: sessionId, turnId, command: "true" },
+          });
+          return;
+        }
+        complete(mode === "external-failed" ? "failed" : "completed");
+        // Duplicate terminal events must not resurrect finished work.
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        complete();
+      }, 30);
+    }
     return;
   }
   if (["thread/list", "session/list"].includes(m.method)) {
@@ -140,6 +200,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (!["turn/start", "session/prompt"].includes(m.method)) return;
   activeRequest = m;
+  turnId = "turn-1";
   if (mode === "images") {
     const content = provider === "codex" ? m.params.input : m.params.prompt;
     const image = content.find((item) => item.type === "image");

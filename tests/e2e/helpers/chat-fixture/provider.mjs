@@ -8,6 +8,7 @@ import {
   readFileSync,
   writeFileSync,
   renameSync,
+  watch,
 } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -16,6 +17,8 @@ const [provider, recording] = process.argv.slice(2);
 if (!["codex", "kimi"].includes(provider) || !recording)
   throw new Error("Expected provider and isolated recording path");
 let nativeId;
+let queueWatcher;
+let lastQueueId;
 let active;
 let sequence = 0;
 let history = [];
@@ -188,10 +191,28 @@ function complete(cancelled = false) {
   else
     reply(active.request, { stopReason: cancelled ? "cancelled" : "end_turn" });
   active = undefined;
+  if (
+    provider === "codex" &&
+    configuration().queueAfterCompletion &&
+    !lastQueueId
+  ) {
+    lastQueueId = "automatic-follow-up";
+    receive(
+      {
+        method: "turn/start",
+        params: {
+          input: [{ type: "text", text: "Queued immediately [hold]" }],
+        },
+      },
+      true,
+    );
+  }
 }
 record("started");
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const message = JSON.parse(line);
+createInterface({ input: process.stdin }).on("line", (line) =>
+  receive(JSON.parse(line)),
+);
+function receive(message, external = false) {
   record("received", { nativeId, message });
   if (!message.method) {
     if (active && message.id === active.permissionId) {
@@ -319,6 +340,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
                 : {}),
             },
       );
+    if (provider === "codex" && !queueWatcher) {
+      queueWatcher = watch(historyDirectory, (_event, filename) => {
+        if (filename !== nativeId + ".queue.json") return;
+        const queued = JSON.parse(
+          readFileSync(path.join(historyDirectory, filename), "utf8"),
+        );
+        if (queued.id === lastQueueId || active) return;
+        lastQueueId = queued.id;
+        receive(
+          {
+            method: "turn/start",
+            params: { input: [{ type: "text", text: queued.text }] },
+          },
+          true,
+        );
+      });
+    }
     return;
   }
   if (["turn/interrupt", "session/cancel"].includes(message.method)) {
@@ -365,7 +403,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   };
   history.push(active.turn);
   persist();
-  if (provider === "codex") reply(message, { turn: { id: active.turnId } });
+  if (provider === "codex") {
+    if (!external) reply(message, { turn: { id: active.turnId } });
+    notify("turn/started", {
+      threadId: nativeId,
+      turn: { id: active.turnId, status: "inProgress" },
+    });
+    notify("item/started", {
+      threadId: nativeId,
+      turnId: active.turnId,
+      item: active.turn.items[0],
+    });
+    notify("item/completed", {
+      threadId: nativeId,
+      turnId: active.turnId,
+      item: active.turn.items[0],
+    });
+  }
   if (configuration().finalOnly) {
     later(() => {
       text(`DONE ${prompt}`);
@@ -498,4 +552,4 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         complete();
       }, configuration().finalDelayMs ?? 500);
   }, configuration().streamDelayMs ?? 200);
-});
+}

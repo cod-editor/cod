@@ -2,7 +2,7 @@ import { test, expect, type Locator } from "@playwright/test";
 import type { AppState, ConversationState } from "../../src/types";
 import { createServer } from "node:http";
 import path from "node:path";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import {
   ChatApp,
@@ -1244,4 +1244,136 @@ test("Close tab shortcut closes a focused source editor", async () => {
   await editor.focus();
   await editor.press(`${modifier}+w`);
   await expect(shell.pane(opened.paneId)).toHaveCount(0);
+});
+
+async function queueFixture(
+  chat: { nativeId: string },
+  id: string,
+  text: string,
+) {
+  const destination = path.join(
+    shell.recording + ".sessions",
+    chat.nativeId + ".queue.json",
+  );
+  await writeFile(destination + ".tmp", JSON.stringify({ id, text }));
+  await rename(destination + ".tmp", destination);
+}
+
+test("Queued Codex turns update the transcript and attention without stealing focus", async () => {
+  const workspace = await shell.create("Queued completions");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Initial turn");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const before = await inspectQueuedChat(chat.id);
+  const other = await shell.newChat(workspace, "codex");
+  await queueFixture(chat, "job-one", "Job finished externally");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Job finished externally");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const after = await inspectQueuedChat(chat.id);
+  expect(after.completionRevision).toBe((before.completionRevision ?? 0) + 1);
+  expect(after.turns).toHaveLength((before.turns?.length ?? 0) + 1);
+  expect(
+    after.messages.filter(
+      (m) => m.role === "user" && m.text === "Job finished externally",
+    ),
+  ).toHaveLength(1);
+  expect(
+    after.messages.filter(
+      (m) => m.role === "user" && m.text === "Initial turn",
+    ),
+  ).toHaveLength(1);
+  expect(after.turns?.at(-1)?.outcome).toBe("completed");
+  expect(after.tools.at(-1)?.turnId).toBe(after.turns?.at(-1)?.id);
+  expect((await shell.workspace(workspace)).activePaneId).toBe(other.paneId);
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(transcript(chat)).toContainText("DONE Job finished externally");
+  await shell.page.screenshot({
+    path: test.info().outputPath("queued-turn-visible.png"),
+  });
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(transcript(chat)).toContainText("DONE Job finished externally");
+});
+
+async function textFromInspection(id: string) {
+  return text(await inspectQueuedChat(id));
+}
+
+test("Queued Codex turns retain permission and interruption controls", async () => {
+  const workspace = await shell.create("Queued permission");
+  const chat = await shell.newChat(workspace, "codex");
+  await queueFixture(chat, "approval", "External approval [approve]");
+  await expect.poll(() => status(chat.id)).toBe("waiting");
+  const pending = await inspectQueuedChat(chat.id);
+  expect(pending.pendingPermissions).toHaveLength(1);
+  const result = await shell.raw(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Must not overlap",
+  );
+  expect(result.code).not.toBe(0);
+  await shell.cli(
+    "conversation",
+    "permission",
+    "--id",
+    chat.id,
+    "--request-id",
+    pending.pendingPermissions[0].id,
+    "--option-id",
+    "deny",
+  );
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(transcript(chat)).toContainText("DENIED External approval");
+  const revision = (await inspectQueuedChat(chat.id)).completionRevision;
+  await queueFixture(chat, "held", "External hold [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect((await inspectQueuedChat(chat.id)).turns?.at(-1)?.outcome).toBe(
+    "cancelled",
+  );
+  expect((await inspectQueuedChat(chat.id)).completionRevision).toBe(revision);
+  await shell.send(chat.id, "Normal follow-up");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Normal follow-up");
+});
+
+function inspectQueuedChat(id: string) {
+  return shell.cli<ConversationState>("conversation", "inspect", "--id", id);
+}
+
+test("Queued turn at completion cannot be cleared by the previous send promise", async () => {
+  await shell.configure({ codex: { queueAfterCompletion: true } });
+  const workspace = await shell.create("Immediate queue");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Initial turn");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("Queued immediately [hold]");
+  expect(await status(chat.id)).toBe("working");
+  const result = await shell.raw(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Overlap",
+  );
+  expect(result.code).not.toBe(0);
+  expect(
+    (await inspectQueuedChat(chat.id)).turns?.at(-1)?.finishedAt,
+  ).toBeUndefined();
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect(
+    (await inspectQueuedChat(chat.id)).turns?.map((t) => t.outcome),
+  ).toEqual(["completed", "cancelled"]);
 });

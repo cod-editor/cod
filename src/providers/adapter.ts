@@ -38,6 +38,7 @@ interface Approval {
 }
 interface ActiveTurn {
   id?: string;
+  external?: boolean;
   cancelRequested?: boolean;
   buffer: RpcMessage[];
   resolve(value: TurnOutcome): void;
@@ -58,6 +59,7 @@ export class NativeAdapter implements ProviderAdapter {
   private failure?: Error;
   private id: string | null = null;
   private active?: ActiveTurn;
+  private finishedTurns = new Set<string>();
   private approvals = new Map<string, Approval>();
   private readonly controllerId = randomUUID();
   private permissionSequence = 0;
@@ -421,15 +423,7 @@ export class NativeAdapter implements ProviderAdapter {
         buffer: [],
         resolve,
         reject,
-        timer: setTimeout(
-          () => {
-            this.fail(
-              new Error("Provider turn timed out; controller must be resumed"),
-            );
-            void this.rpc?.close();
-          },
-          this.options.turnTimeoutMs ?? 60 * 60 * 1000,
-        ),
+        timer: this.turnTimer(),
       };
     });
     this.active = active;
@@ -509,6 +503,17 @@ export class NativeAdapter implements ProviderAdapter {
     })();
     return result;
   }
+  private turnTimer() {
+    return setTimeout(
+      () => {
+        this.fail(
+          new Error("Provider turn timed out; controller must be resumed"),
+        );
+      },
+      this.options.turnTimeoutMs ?? 60 * 60 * 1000,
+    );
+  }
+
   private receive(message: RpcMessage) {
     if (this.closed || this.failure) return;
     const p = message.params;
@@ -556,6 +561,28 @@ export class NativeAdapter implements ProviderAdapter {
     }
     if (this.provider === "codex") {
       const turnId = string(p.turnId) ?? string(object(p.turn).id);
+      // Native queue/goal continuations start without a Cod turn/start request.
+      // Only an explicit start for our bound thread may establish ownership;
+      // arbitrary late item events must never resurrect a finished turn.
+      if (
+        message.method === "turn/started" &&
+        message.id === undefined &&
+        turnId &&
+        !this.active &&
+        !this.binding &&
+        !this.finishedTurns.has(turnId)
+      ) {
+        this.active = {
+          id: turnId,
+          external: true,
+          buffer: [],
+          resolve: () => {},
+          reject: () => {},
+          timer: this.turnTimer(),
+        };
+        this.emit({ type: "turn-started", nativeTurnId: turnId });
+        this.state("working");
+      }
       if (!this.active || turnId !== this.active.id) {
         if (message.id !== undefined)
           this.rpc?.reject(
@@ -587,6 +614,26 @@ export class NativeAdapter implements ProviderAdapter {
         message.method === "item/completed"
       ) {
         const item = object(p.item);
+        if (
+          this.active?.external &&
+          message.method === "item/started" &&
+          item.type === "userMessage" &&
+          typeof item.id === "string"
+        ) {
+          this.emit({
+            type: "text",
+            role: "user",
+            itemId: item.id,
+            text: (Array.isArray(item.content) ? item.content : [])
+              .map(
+                (part) =>
+                  string(object(part).text) ??
+                  `[Native ${string(object(part).type) ?? "non-text"} content]`,
+              )
+              .join("\n"),
+            replay: false,
+          });
+        }
         if (item.type === "agentMessage" && typeof item.id === "string") {
           this.emit({
             type: "message-meta",
@@ -780,6 +827,11 @@ export class NativeAdapter implements ProviderAdapter {
       this.emit({ type: "permission-resolved", requestId });
     this.approvals.clear();
     if (!active) return;
+    if (active.id) {
+      this.finishedTurns.add(active.id);
+      if (this.finishedTurns.size > 128)
+        this.finishedTurns.delete(this.finishedTurns.values().next().value!);
+    }
     clearTimeout(active.timer);
     if (error) active.reject(error);
     else if (outcome) {

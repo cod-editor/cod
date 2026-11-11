@@ -24,6 +24,7 @@ export type ProviderEvent = {
   nativeId: string | null;
 } & (
   | { type: "state"; state: ProviderState }
+  | { type: "turn-started"; nativeTurnId: string }
   | {
       type: "text";
       text: string;

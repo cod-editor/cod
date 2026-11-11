@@ -408,3 +408,66 @@ test("Codex exposes explicit native commentary/partial/final metadata without du
     await adapter.dispose();
   }
 });
+
+test("Codex accepts queued turns while idle, routes their input and output once", async () => {
+  const { adapter, events } = setup("codex", "external");
+  try {
+    await adapter.resume("codex-native");
+    await until(() => events.some((e) => e.type === "completed"));
+    assert.equal(events.filter((e) => e.type === "turn-started").length, 1);
+    assert.deepEqual(
+      events.filter((e) => e.type === "text").map((e) => [e.role, e.text]),
+      [
+        ["user", "Job finished"],
+        ["assistant", "Queue received"],
+      ],
+    );
+    assert.equal(events.filter((e) => e.type === "tool").length, 1);
+    assert.equal(events.filter((e) => e.type === "completed").length, 1);
+    assert.equal(
+      events.filter((e) => e.type === "state").at(-1)?.state,
+      "ready",
+    );
+    assert.equal(
+      (await adapter.send("ordinary follow-up")).status,
+      "completed",
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+for (const mode of [
+  "external-cancel",
+  "external-approval",
+  "external-failed",
+]) {
+  test(`Codex queued turn supports ${mode}`, async () => {
+    const { adapter, events } = setup("codex", mode);
+    try {
+      await adapter.create();
+      await until(() => events.some((e) => e.type === "turn-started"));
+      if (mode === "external-cancel") {
+        await assert.rejects(adapter.send("overlap"), /active/i);
+        await adapter.cancel();
+      } else if (mode === "external-approval") {
+        await until(() => events.some((e) => e.type === "permission"));
+        const permission = events.find((e) => e.type === "permission")!;
+        await adapter.permission(permission.requestId, "deny");
+      }
+      await until(() =>
+        events.some(
+          (e) =>
+            e.type === (mode === "external-failed" ? "error" : "completed"),
+        ),
+      );
+      if (mode === "external-cancel")
+        assert.equal(
+          events.find((e) => e.type === "completed")?.outcome.status,
+          "cancelled",
+        );
+    } finally {
+      await adapter.dispose();
+    }
+  });
+}
