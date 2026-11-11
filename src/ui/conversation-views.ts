@@ -74,7 +74,7 @@ export function createConversationViews({
         : "Claude Code";
   }
   const hydratedComposers = new Set<string>();
-  async function persistComposer(key: string): Promise<void> {
+  async function persistComposer(key: string, textOnly = false): Promise<void> {
     const conversation = getState().conversations.find((c) => c.id === key);
     const paneId = conversation?.paneId ?? key;
     const workspace = getState().workspaces.find((w) =>
@@ -86,7 +86,7 @@ export function createConversationViews({
         workspace: workspace.id,
         paneId,
         text: composerDrafts.get(key) ?? "",
-        images: attachmentDrafts.get(key) ?? [],
+        ...(textOnly ? {} : { images: attachmentDrafts.get(key) ?? [] }),
         skills: selectedSkills(key),
         ...(draftProviders.has(paneId)
           ? { provider: draftProviders.get(paneId) }
@@ -120,7 +120,7 @@ export function createConversationViews({
     input.value = composerDrafts.get(pane.id) ?? "";
     input.oninput = () => {
       composerDrafts.set(pane.id, input.value);
-      persistComposer(pane.id);
+      persistComposer(pane.id, true);
     };
     input.disabled = pendingStarts.has(pane.id);
     const feedback = document.createElement("div");
@@ -794,7 +794,7 @@ export function createConversationViews({
     input.value = composerDrafts.get(conversation.id) ?? "";
     input.addEventListener("input", () => {
       composerDrafts.set(conversation.id, input.value);
-      persistComposer(conversation.id);
+      persistComposer(conversation.id, true);
     });
     const actions = document.createElement("div");
     actions.className = "composer-actions";

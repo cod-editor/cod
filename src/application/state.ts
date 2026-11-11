@@ -91,7 +91,10 @@ export class ApplicationStateStore {
     );
     return result;
   }
-  change<T>(mutation: () => T | Promise<T>): Promise<T> {
+  change<T>(
+    mutation: () => T | Promise<T>,
+    options: { notify?: boolean } = {},
+  ): Promise<T> {
     return this.serialize(async () => {
       const before = this.snapshot();
       const original = {
@@ -104,7 +107,7 @@ export class ApplicationStateStore {
       try {
         const result = await mutation();
         await this.persist();
-        this.notify();
+        if (options.notify !== false) this.notify();
         return result;
       } catch (error) {
         rollbackState(this.data, before, original);

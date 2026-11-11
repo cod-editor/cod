@@ -1121,3 +1121,87 @@ test("Pasted images have stable references at the caret across removal and resta
     transcript(chat).locator(".message-images .image-reference"),
   ).toHaveText(["[Image 2]"]);
 });
+
+test("Repeated Backspace saves the chat draft without echoing full state on every key", async () => {
+  const workspace = await shell.create("Responsive composer");
+  const chat = await shell.newChat(workspace, "codex");
+  const original = "Long invented draft. ".repeat(4000);
+  const image = {
+    reference: 1,
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+  };
+  await shell.page.evaluate(
+    async ({ workspace, paneId, original, image }) => {
+      await window.cod.invoke({
+        op: "conversation.composer",
+        workspace,
+        paneId,
+        text: original,
+        images: [image],
+      });
+    },
+    { workspace, paneId: chat.paneId, original, image },
+  );
+  await shell.stop();
+  await shell.start();
+  const input = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input()).toHaveValue(original);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await input().focus();
+  await input().evaluate((node) => {
+    const textarea = node as HTMLTextAreaElement;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  });
+  await shell.page.evaluate(() => {
+    const counters = { snapshots: 0 };
+    Object.assign(window, { composerCounters: counters });
+    window.cod.onState(() => {
+      counters.snapshots++;
+    });
+  });
+  // Repeated keydown exercises Chromium's native key repeat, not synthetic input.
+  for (let i = 0; i < 80; i++) await shell.page.keyboard.down("Backspace");
+  await shell.page.keyboard.up("Backspace");
+  const expected = original.slice(0, -80);
+  await expect(input()).toHaveValue(expected);
+  await expect(input()).toBeFocused();
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(
+        await readFile(path.join(shell.data, "state.json"), "utf8"),
+      ) as AppState;
+      return saved.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[
+        chat.paneId
+      ]?.text;
+    })
+    .toBe(expected);
+  expect(
+    await shell.page.evaluate(
+      () =>
+        (window as unknown as { composerCounters: { snapshots: number } })
+          .composerCounters.snapshots,
+    ),
+  ).toBeLessThan(5);
+  await shell.stop();
+  await shell.start();
+  await expect(input()).toHaveValue(expected);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await shell
+    .pane(chat.paneId)
+    .getByRole("button", { name: "Remove image", exact: true })
+    .click();
+  await shell.stop();
+  await shell.start();
+  await expect(input()).toHaveValue(expected);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(0);
+});

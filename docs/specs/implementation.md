@@ -29,6 +29,8 @@ Provider inspection is read-only and reports native capabilities rather than inv
 
 Persist layout, resource IDs, open views, composer text/images/provider/selected skills, native-session references, file drafts, review drafts and close/reopen history. Restore records without replaying commands, inference or arbitrary website form submissions.
 
+Composer typing persists each edit without echoing the application snapshot back to its originating UI. Text-only `conversation.composer` updates preserve existing images when `images` is omitted; an explicit empty array removes them. Attachment changes and CLI composer updates still notify the UI.
+
 Pasted images insert stable `[Image N]` references at the current selection. Attachment removal removes its insertion marker without renumbering other images; thumbnail captions and provider content identify the same image. References and image data persist with composer drafts. Sending waits for attachment reading to finish.
 
 Composer ownership follows the conversation identity, not a reusable pane. After a failed create or resume, opening another conversation in the same pane must bind typing, attachment and send actions to the new conversation. Its unsent text and images must survive switching chats and restarting the app.
