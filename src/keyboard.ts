@@ -515,7 +515,11 @@ function parseShortcut(
       altKey: false,
     }) ??
     (/^(Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-2]))$/.test(value) ? value : "");
-  if (!binding.code || (!binding.mod && !binding.ctrl && !binding.alt))
+  const shiftedEscape = binding.shift && binding.code === "Escape";
+  if (
+    !binding.code ||
+    (!binding.mod && !binding.ctrl && !binding.alt && !shiftedEscape)
+  )
     throw new Error(`Invalid shortcut: ${shortcut}`);
   return binding;
 }

@@ -306,3 +306,28 @@ test("keymap overrides disable, reject unknown/conflicts atomically and never wi
   );
   configureKeymap({}, "darwin");
 });
+
+test("Shift+Escape can maximize panes without permitting plain typing shortcuts", () => {
+  try {
+    configureKeymap({ "pane.zoom": ["Shift+Escape"] }, "darwin");
+    for (const surface of ["composer", "browser", "editor"] as const)
+      assert.equal(
+        resolveKeybinding(
+          input("Escape", { code: "Escape", shiftKey: true }),
+          "darwin",
+          surface,
+        )?.command,
+        "pane.zoom",
+      );
+    assert.throws(
+      () => configureKeymap({ "pane.zoom": ["Shift+A"] }, "darwin"),
+      /Invalid shortcut/,
+    );
+    assert.throws(
+      () => configureKeymap({ "pane.zoom": ["Escape"] }, "darwin"),
+      /Invalid shortcut/,
+    );
+  } finally {
+    configureKeymap({}, "darwin");
+  }
+});
