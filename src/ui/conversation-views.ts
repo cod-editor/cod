@@ -62,6 +62,7 @@ export function createConversationViews({
     return skills;
   }
   const pendingStarts = new Set<string>();
+  const loadingImages = new Set<string>();
   const sendErrors = new Map<string, string>();
   const expandedTools = new Set<string>();
   const integration = createIntegrationSetup(invoke, invalidate);
@@ -133,6 +134,10 @@ export function createConversationViews({
     feedback.hidden = !feedback.textContent;
     body.append(feedback);
     const send = async () => {
+      if (loadingImages.has(pane.id)) {
+        setStatus("Wait for the image to finish loading");
+        return;
+      }
       const text = input.value;
       const images = attachmentDrafts.get(pane.id) ?? [];
       if ((!text.trim() && !images.length) || pendingStarts.has(pane.id))
@@ -332,10 +337,16 @@ export function createConversationViews({
         };
         dialog.showModal();
       };
-      preview.append(img);
+      const caption = document.createElement("span");
+      caption.className = "image-reference";
+      caption.textContent = `[Image ${image.reference ?? index + 1}]`;
+      preview.append(img, caption);
       item.append(preview);
-      if (remove)
-        item.append(iconButton("close", "Remove image", () => remove(index)));
+      if (remove) {
+        const close = iconButton("close", "Remove image", () => remove(index));
+        close.classList.add("compact");
+        item.append(close);
+      }
       strip.append(item);
     });
     return strip;
@@ -351,6 +362,16 @@ export function createConversationViews({
       if (images.length)
         composer.prepend(
           imageStrip(images, (index) => {
+            const marker = `[Image ${images[index].reference ?? index + 1}]`;
+            const position = input.value.indexOf(marker);
+            if (position >= 0)
+              input.setRangeText(
+                "",
+                position,
+                position + marker.length,
+                "preserve",
+              );
+            composerDrafts.set(key, input.value);
             images.splice(index, 1);
             attachmentDrafts.set(key, images);
             persistComposer(key);
@@ -359,41 +380,79 @@ export function createConversationViews({
         );
     };
     const add = async (files: File[]) => {
-      const images = attachmentDrafts.get(key) ?? [];
-      for (const file of files) {
-        if (
-          !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-            file.type,
-          )
-        )
-          continue;
-        if (
-          images.length >= 8 ||
-          images.reduce(
-            (total, image) => total + Math.ceil((image.data.length * 3) / 4),
-            0,
-          ) +
-            file.size >
-            20 * 1024 * 1024
-        ) {
-          setStatus("Use at most 8 images, up to 20 MB total");
-          break;
-        }
-        const data = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-        images.push({
-          mimeType: file.type as ChatImage["mimeType"],
-          data,
-          name: file.name,
-        });
+      if (loadingImages.has(key)) {
+        setStatus("Wait for the image to finish loading");
+        return;
       }
-      attachmentDrafts.set(key, images);
-      await persistComposer(key);
-      refresh();
+      loadingImages.add(key);
+      let unfinishedMarker: string | undefined;
+      try {
+        const images = attachmentDrafts.get(key) ?? [];
+        attachmentDrafts.set(key, images);
+        for (const file of files) {
+          if (
+            !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+              file.type,
+            )
+          )
+            continue;
+          if (
+            images.length >= 8 ||
+            images.reduce(
+              (total, image) => total + Math.ceil((image.data.length * 3) / 4),
+              0,
+            ) +
+              file.size >
+              20 * 1024 * 1024
+          ) {
+            setStatus("Use at most 8 images, up to 20 MB total");
+            break;
+          }
+          const reference =
+            Math.max(
+              0,
+              ...images.map((image, index) => image.reference ?? index + 1),
+              ...[...input.value.matchAll(/\[Image (\d+)\]/g)].map((match) =>
+                Number(match[1]),
+              ),
+            ) + 1;
+          const marker = `[Image ${reference}]`;
+          unfinishedMarker = marker;
+          input.setRangeText(
+            marker,
+            input.selectionStart,
+            input.selectionEnd,
+            "end",
+          );
+          composerDrafts.set(key, input.value);
+          const data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          images.push({
+            reference,
+            mimeType: file.type as ChatImage["mimeType"],
+            data,
+            name: file.name,
+          });
+          unfinishedMarker = undefined;
+        }
+        attachmentDrafts.set(key, images);
+        await persistComposer(key);
+        refresh();
+      } catch (error) {
+        if (unfinishedMarker) {
+          input.value = input.value.replace(unfinishedMarker, "");
+          composerDrafts.set(key, input.value);
+        }
+        await persistComposer(key);
+        refresh();
+        setStatus(`Could not attach image: ${String(error)}`);
+      } finally {
+        loadingImages.delete(key);
+      }
     };
     input.addEventListener("paste", (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
@@ -818,6 +877,10 @@ export function createConversationViews({
     };
   }
   async function sendMessage(id: string): Promise<void> {
+    if (loadingImages.has(id)) {
+      setStatus("Wait for the image to finish loading");
+      return;
+    }
     if (getState().conversations.find((c) => c.id === id)?.handoffTerminalId) {
       setStatus("Exit the CLI and use Return to chat before sending.");
       return;

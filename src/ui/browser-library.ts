@@ -1,3 +1,5 @@
+import { dialogSurface, actionRow } from "./primitives";
+import { formField } from "./form-field";
 import type { Invoke } from "./contracts";
 import { actionButton, showActionError } from "./action-feedback";
 import { createSearchList } from "./search-list";
@@ -8,13 +10,12 @@ export async function browserSettings(invoke: Invoke) {
     "browser.settings",
     {},
   );
-  const dialog = document.createElement("dialog");
-  dialog.className = "picker";
+  const dialog = dialogSurface("Browser settings");
+
   dialog.setAttribute("aria-label", "Browser settings");
   const title = document.createElement("h2");
   title.textContent = "Browser settings";
-  const label = document.createElement("label");
-  label.textContent = "Search engine ";
+
   const select = document.createElement("select");
   select.setAttribute("aria-label", "Search engine");
   const names = {
@@ -32,11 +33,11 @@ export async function browserSettings(invoke: Invoke) {
       { reportError: false },
     ).catch((error) => showActionError(error, dialog));
   };
-  label.append(select);
+  const label = formField("Search engine", select);
   dialog.append(
     title,
     label,
-    actionButton("Done", async () => dialog.close()),
+    actionRow(actionButton("Done", async () => dialog.close())),
   );
   dialog.onclose = () => dialog.remove();
   document.body.append(dialog);
@@ -124,7 +125,7 @@ export function browserHistory(
     input,
     list,
     actionButton("Clear history", () => remove()),
-    actionButton("Done", async () => dialog.close()),
+    actionRow(actionButton("Done", async () => dialog.close())),
   );
   dialog.onclose = () => {
     revision++;

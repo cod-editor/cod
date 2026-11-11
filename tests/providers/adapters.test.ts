@@ -372,7 +372,7 @@ for (const provider of ["codex", "kimi"] as const) {
       assert.equal(
         (
           await adapter.send("", [
-            { mimeType: "image/png", data: "aW52ZW50ZWQ=" },
+            { mimeType: "image/png", data: "aW52ZW50ZWQ=", reference: 3 },
           ])
         ).status,
         "completed",

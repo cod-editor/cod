@@ -147,7 +147,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       provider === "codex"
         ? image?.url === "data:image/png;base64,aW52ZW50ZWQ="
         : image?.mimeType === "image/png" && image?.data === "aW52ZW50ZWQ=";
-    if (!valid) {
+    if (
+      !valid ||
+      !content.some((item) => item.type === "text" && item.text === "[Image 3]")
+    ) {
       write({
         id: m.id,
         error: { code: -32000, message: "Missing native image payload" },

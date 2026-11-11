@@ -123,3 +123,24 @@ test("Codex replay preserves known timing identity and native phases without inv
     undefined,
   );
 });
+
+test("native image labels preserve the original prompt and stable attachment reference", () => {
+  const conversation = fixture();
+  conversation.messages[0]!.text = "Example two: [Image 2]";
+  conversation.messages[0]!.images![0]!.reference = 2;
+  commitHistory(conversation, {
+    messages: [
+      {
+        id: "native",
+        role: "user",
+        text: "Example two: [Image 2]\n[Image 2]\n[Native image content]",
+        order: 1,
+      },
+    ],
+    tools: [],
+    partial: false,
+    order: 2,
+  });
+  assert.equal(conversation.messages[0]!.text, "Example two: [Image 2]");
+  assert.equal(conversation.messages[0]!.images?.[0]?.reference, 2);
+});

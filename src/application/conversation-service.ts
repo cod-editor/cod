@@ -558,7 +558,8 @@ export class ConversationApplicationService {
     if (!Array.isArray(value) || value.length > 8)
       throw new Error("At most 8 images may be attached");
     let bytes = 0;
-    return value.map((item) => {
+    const references = new Set<number>();
+    return value.map((item, index) => {
       const image = object(item);
       if (
         !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
@@ -568,12 +569,23 @@ export class ConversationApplicationService {
         !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data)
       )
         throw new Error("Invalid image attachment");
+      const reference = image.reference ?? index + 1;
+      if (
+        !Number.isSafeInteger(reference) ||
+        Number(reference) <= 0 ||
+        references.has(Number(reference))
+      )
+        throw new Error("Image references must be distinct positive integers");
+      references.add(Number(reference));
       bytes += Buffer.byteLength(image.data, "base64");
       if (bytes > 20 * 1024 * 1024) throw new Error("Attachments exceed 20 MB");
       return {
         mimeType:
           image.mimeType as import("../providers/types").ImageAttachment["mimeType"],
         data: image.data,
+        ...(Number.isSafeInteger(image.reference) && Number(image.reference) > 0
+          ? { reference: Number(image.reference) }
+          : {}),
         ...(typeof image.name === "string"
           ? { name: image.name.slice(0, 255) }
           : {}),

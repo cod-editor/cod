@@ -1,3 +1,4 @@
+import { actionRow, dialogSurface, uiButton } from "./primitives";
 import { readPreference, writePreference } from "./preferences";
 
 type TextSurface = "ui" | "editor" | "chat" | "terminal";
@@ -45,7 +46,7 @@ export function appearanceDialog(
   browser?: () => void,
 ): void {
   if (document.querySelector("dialog[open]")) return;
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface("Settings");
   dialog.className = "appearance-settings";
   dialog.setAttribute("aria-label", "Settings");
   const heading = document.createElement("h2");
@@ -77,10 +78,8 @@ export function appearanceDialog(
   const note = document.createElement("p");
   note.className = "settings-note";
   note.textContent = "Sizes are in pixels. Web pages keep their own text size.";
-  const actions = document.createElement("div");
-  actions.className = "dialog-actions";
-  const reset = document.createElement("button");
-  reset.textContent = "Reset defaults";
+  const actions = actionRow();
+  const reset = uiButton("Reset defaults");
   reset.onclick = () => {
     for (const key of Object.keys(defaults) as TextSurface[])
       update(key, defaults[key]);
@@ -90,13 +89,10 @@ export function appearanceDialog(
         (input, i) => (input.value = String(Object.values(defaults)[i])),
       );
   };
-  const done = document.createElement("button");
-  done.textContent = "Done";
-  done.className = "primary";
+  const done = uiButton("Done", "primary");
   done.onclick = () => dialog.close();
   if (shortcuts) {
-    const keys = document.createElement("button");
-    keys.textContent = "Keyboard shortcuts";
+    const keys = uiButton("Keyboard shortcuts");
     keys.onclick = () => {
       dialog.close();
       shortcuts();
@@ -104,8 +100,7 @@ export function appearanceDialog(
     actions.append(keys);
   }
   if (browser) {
-    const button = document.createElement("button");
-    button.textContent = "Browser settings";
+    const button = uiButton("Browser settings");
     button.onclick = () => {
       dialog.close();
       browser();

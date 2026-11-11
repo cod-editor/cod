@@ -1,8 +1,9 @@
+import { dialogSurface, actionRow } from "./primitives";
 import type { Invoke } from "./contracts";
 import type { BrowserDownload } from "../browser/download-types";
 import { actionButton, showActionError } from "./action-feedback";
 export function browserDownloads(invoke: Invoke) {
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface("Downloads");
   dialog.className = "picker browser-library";
   dialog.setAttribute("aria-label", "Downloads");
   const heading = document.createElement("h2");
@@ -37,7 +38,7 @@ export function browserDownloads(invoke: Invoke) {
           const title = document.createElement("strong");
           title.textContent = item.basename;
           const status = document.createElement("p"),
-            actions = document.createElement("div");
+            actions = actionRow();
           row.append(title, status, actions);
           list.append(row);
           view = { row, status, actions, key: "" };
@@ -90,7 +91,7 @@ export function browserDownloads(invoke: Invoke) {
     heading,
     empty,
     list,
-    actionButton("Done", async () => dialog.close()),
+    actionRow(actionButton("Done", async () => dialog.close())),
   );
   dialog.onclose = () => {
     clearTimeout(timer);

@@ -178,7 +178,10 @@ export function commitHistory(
   // Native replay may omit image bytes. Preserve local image payloads only when
   // one unambiguous user prompt in each history identifies the same message.
   const prompt = (value: string) =>
-    value.replace(/\[Native [^\]]+ content\]/g, "").trim();
+    value
+      .replace(/\[Native [^\]]+ content\]/g, "")
+      .replace(/(?:\n\[Image \d+\]\s*)+$/g, "")
+      .trim();
   const cachedImages = conversation.messages.filter(
     (message) => message.role === "user" && message.images?.length,
   );
@@ -193,8 +196,10 @@ export function commitHistory(
         (other) =>
           other.role === "user" && prompt(other.text) === prompt(message.text),
       ).length === 1
-    )
+    ) {
       message.images = matches[0]!.images;
+      message.text = matches[0]!.text;
+    }
   }
   const turnLinks = new Map<string, string>();
   const ambiguous = new Set<string>();

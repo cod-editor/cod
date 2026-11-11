@@ -59,7 +59,11 @@ await Promise.all([
   copyFile("src/preview.html", "dist/preview.html"),
   copyFile("src/preview.css", "dist/preview.css"),
   copyFile("src/index.html", "dist/index.html"),
-  copyFile("src/styles.css", "dist/styles.css"),
+  build({
+    entryPoints: ["src/styles.css"],
+    bundle: true,
+    outfile: "dist/styles.css",
+  }),
   copyFile("src/scrollbars.css", "dist/scrollbars.css"),
   copyFile("assets/cod-icon.png", "dist/cod-icon.png"),
   copyFile("node_modules/@xterm/xterm/css/xterm.css", "dist/xterm.css"),

@@ -145,11 +145,11 @@ test("Failed opening cannot leave stale composer handlers when a pane is reused"
         ?.chatDrafts?.[paneId];
       return { text: draft?.text, images: draft?.images?.length };
     })
-    .toEqual({ text: prompt, images: 1 });
+    .toEqual({ text: prompt + "[Image 1]", images: 1 });
   const other = await shell.newChat(workspace, "codex");
   await shell.send(other.id, "Unrelated conversation");
   await shell.cli("conversation", "show", "--id", chat.id);
-  await expect(composer).toHaveValue(prompt);
+  await expect(composer).toHaveValue(prompt + "[Image 1]");
   await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
     1,
   );
@@ -157,7 +157,7 @@ test("Failed opening cannot leave stale composer handlers when a pane is reused"
   await shell.start();
   await expect(
     shell.pane(paneId).getByRole("textbox", { name: "Message", exact: true }),
-  ).toHaveValue(prompt);
+  ).toHaveValue(prompt + "[Image 1]");
   await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
     1,
   );
@@ -168,7 +168,7 @@ test("Failed opening cannot leave stale composer handlers when a pane is reused"
   await expect
     .poll(async () =>
       (await shell.inspect(chat.id)).messages.some(
-        (m) => m.role === "user" && m.text === prompt,
+        (m) => m.role === "user" && m.text === prompt + "[Image 1]",
       ),
     )
     .toBe(true);
@@ -1058,4 +1058,66 @@ test("Chat removal preserves unresolved review and interactive-page origins", as
   ).toBe(true);
   expect((await shell.inspect(pageChat.id)).nativeId).toBe(pageChat.nativeId);
   expect(await shell.prompts()).toHaveLength(0);
+});
+
+test("Pasted images have stable references at the caret across removal and restart", async ({}, info) => {
+  const workspace = await shell.create("Image references");
+  const chat = await shell.newChat(workspace, "codex");
+  const composer = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await composer().fill("Example one: . Example two: .");
+  async function paste(position: number) {
+    await composer().evaluate((node, position) => {
+      const input = node as HTMLTextAreaElement;
+      input.setSelectionRange(position, position);
+      const data = new DataTransfer();
+      const png = Uint8Array.from(
+        atob(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+        ),
+        (c) => c.charCodeAt(0),
+      );
+      data.items.add(new File([png], "example.png", { type: "image/png" }));
+      input.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true }),
+      );
+    }, position);
+  }
+  await paste(13);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await paste((await composer().inputValue()).lastIndexOf("."));
+  await expect(composer()).toHaveValue(
+    "Example one: [Image 1]. Example two: [Image 2].",
+  );
+  await expect(shell.pane(chat.paneId).locator(".image-reference")).toHaveText([
+    "[Image 1]",
+    "[Image 2]",
+  ]);
+  await shell
+    .pane(chat.paneId)
+    .getByRole("button", { name: "Remove image", exact: true })
+    .first()
+    .click();
+  await expect(composer()).toHaveValue(
+    "Example one: . Example two: [Image 2].",
+  );
+  await shell.stop();
+  await shell.start();
+  await expect(composer()).toHaveValue(
+    "Example one: . Example two: [Image 2].",
+  );
+  await expect(shell.pane(chat.paneId).locator(".image-reference")).toHaveText([
+    "[Image 2]",
+  ]);
+  await shell.page.screenshot({
+    path: info.outputPath("image-references.png"),
+  });
+  await composer().press(`${modifier}+Enter`);
+  await expect(
+    transcript(chat).locator(".message-images .image-reference"),
+  ).toHaveText(["[Image 2]"]);
 });

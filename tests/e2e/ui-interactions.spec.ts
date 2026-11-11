@@ -846,3 +846,65 @@ test("Model menu preserves caret, fits above the composer and rolls back a rejec
     await app.cleanup();
   }
 });
+
+test("Shared dialog controls retain consistent geometry and fit enlarged text", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.create("Control geometry");
+    await app.page.keyboard.press(`${modifier}+,`);
+    const settings = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    const buttons = settings.locator(".ui-actions button");
+    const heights = await buttons.evaluateAll((nodes) =>
+      nodes.map((node) => node.getBoundingClientRect().height),
+    );
+    expect(new Set(heights).size).toBe(1);
+    expect(heights[0]).toBe(28);
+    const input = settings.getByRole("spinbutton", {
+      name: "Interface text size",
+      exact: true,
+    });
+    await input.fill("20");
+    await input.press("Tab");
+    const overflow = await settings.evaluate((dialog) =>
+      [...dialog.querySelectorAll("button,input,select")].some((node) => {
+        const rect = node.getBoundingClientRect(),
+          bounds = dialog.getBoundingClientRect();
+        return rect.right > bounds.right || rect.left < bounds.left;
+      }),
+    );
+    expect(overflow).toBe(false);
+    const positions = await settings
+      .locator("input")
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getBoundingClientRect().left),
+      );
+    expect(new Set(positions).size).toBe(1);
+    await app.page.screenshot({ path: info.outputPath("shared-settings.png") });
+    await settings
+      .getByRole("button", { name: "Reset defaults", exact: true })
+      .click();
+    await settings
+      .getByRole("button", { name: "Browser settings", exact: true })
+      .click();
+    const browser = app.page.getByRole("dialog", {
+      name: "Browser settings",
+      exact: true,
+    });
+    await expect(
+      browser.getByRole("combobox", { name: "Search engine", exact: true }),
+    ).toBeVisible();
+    await expect(
+      browser.getByRole("button", { name: "Done", exact: true }),
+    ).toHaveCSS("min-height", "28px");
+    await app.page.screenshot({
+      path: info.outputPath("shared-browser-settings.png"),
+    });
+  } finally {
+    await app.cleanup();
+  }
+});

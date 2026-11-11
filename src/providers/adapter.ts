@@ -448,10 +448,16 @@ export class NativeAdapter implements ProviderAdapter {
               input: [
                 ...skills,
                 ...(text ? [{ type: "text", text }] : []),
-                ...images.map((image) => ({
-                  type: "image",
-                  url: `data:${image.mimeType};base64,${image.data}`,
-                })),
+                ...images.flatMap((image, index) => [
+                  {
+                    type: "text",
+                    text: `[Image ${image.reference ?? index + 1}]`,
+                  },
+                  {
+                    type: "image",
+                    url: `data:${image.mimeType};base64,${image.data}`,
+                  },
+                ]),
               ],
               ...this.selection.overrides(),
             }),
@@ -472,11 +478,17 @@ export class NativeAdapter implements ProviderAdapter {
                 sessionId: this.id,
                 prompt: [
                   ...(text ? [{ type: "text", text }] : []),
-                  ...images.map((image) => ({
-                    type: "image",
-                    mimeType: image.mimeType,
-                    data: image.data,
-                  })),
+                  ...images.flatMap((image, index) => [
+                    {
+                      type: "text",
+                      text: `[Image ${image.reference ?? index + 1}]`,
+                    },
+                    {
+                      type: "image",
+                      mimeType: image.mimeType,
+                      data: image.data,
+                    },
+                  ]),
                 ],
               },
               this.options.turnTimeoutMs ?? 60 * 60 * 1000,

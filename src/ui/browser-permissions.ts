@@ -1,3 +1,4 @@
+import { actionRow, dialogSurface } from "./primitives";
 import {
   sitePermissionNames,
   type SitePolicy,
@@ -42,7 +43,7 @@ export function updateSiteRequests(
 }
 export async function sitePermissions(invoke: Invoke, url?: string) {
   const policies = await invoke<SitePolicy[]>("browser.permissions", {});
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface("Site permissions");
   dialog.className = "picker site-permissions";
   dialog.setAttribute("aria-label", "Site permissions");
   const title = document.createElement("h2");
@@ -102,7 +103,7 @@ export async function sitePermissions(invoke: Invoke, url?: string) {
     : "No saved site permissions.";
   dialog.append(
     note,
-    actionButton("Done", async () => dialog.close()),
+    actionRow(actionButton("Done", async () => dialog.close())),
   );
   dialog.onclose = () => dialog.remove();
   document.body.append(dialog);

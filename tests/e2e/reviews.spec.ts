@@ -876,3 +876,64 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
       .locator("blockquote"),
   ).toHaveText(["world", "world"]);
 });
+
+test("Review comments stay beside their anchors without rebuilding or jumping to the top", async ({}, info) => {
+  const workspace = await shell.create("Anchored review");
+  const file = path.join(path.dirname(shell.file), "long-review.md");
+  await writeFile(
+    file,
+    Array.from(
+      { length: 70 },
+      (_, i) =>
+        `## Section ${i}\n\nParagraph ${i} with **selected words** for review.\n`,
+    ).join("\n"),
+  );
+  const review = await open(workspace, file);
+  const host = pane(review);
+  await host.locator("[data-preview-toggle]").click();
+  const document = host.getByRole("document", { name: "Review preview" });
+  const target = document.locator("strong").nth(35);
+  await target.scrollIntoViewIfNeeded();
+  await target.evaluate((node) => {
+    const range = window.document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    node.closest<HTMLElement>("article")!.focus({ preventScroll: true });
+    node.closest<HTMLElement>("article")!.dataset.testIdentity = "retained";
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await input.fill("Explain this paragraph");
+  const before = await host
+    .locator(".review-body")
+    .evaluate((node) => node.scrollTop);
+  expect(before).toBeGreaterThan(100);
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  const thread = host.getByLabel("Draft comment", { exact: true });
+  await expect(thread).toContainText("Explain this paragraph");
+  await expect(document).toHaveAttribute("data-test-identity", "retained");
+  expect(
+    await thread.evaluate((node) => node.previousElementSibling?.textContent),
+  ).toContain("Paragraph 35");
+  const after = await host
+    .locator(".review-body")
+    .evaluate((node) => node.scrollTop);
+  expect(Math.abs(after - before)).toBeLessThan(100);
+  await thread.click();
+  await input.fill("Edited at the same anchor");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  await expect(thread).toContainText("Edited at the same anchor");
+  expect(
+    await host.locator(".review-body").evaluate((node) => node.scrollTop),
+  ).toBeGreaterThan(100);
+  const geometry = await host.locator(".review-header").evaluate((node) => ({
+    top: node.getBoundingClientRect().top,
+    parent: node.parentElement!.getBoundingClientRect().top,
+    height: node.getBoundingClientRect().height,
+  }));
+  expect(Math.abs(geometry.top - geometry.parent)).toBeLessThan(2);
+  expect(geometry.height).toBeLessThanOrEqual(40);
+  await shell.page.screenshot({ path: info.outputPath("anchored-review.png") });
+});

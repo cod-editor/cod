@@ -27,6 +27,8 @@ Validate the design as a whole rather than patching each stakeholder comment in 
 
 Apply established preferences everywhere: compact editor conventions, keyboard-first operation, sparse persistent controls, no redundant labels or explanatory clutter. Every visible control needs a reason to remain visible rather than use a shortcut, context menu or Commands. Minimalism must preserve discoverability and keyboard focus. Do not infer a psychological profile from design preferences.
 
+Use the shared UI primitives in `src/ui/primitives.ts`, behavior helpers in `controls.ts`/`action-feedback.ts`, and the spacing/control tokens in `src/ui/components.css`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.
+
 When asked to revise the standalone mock, apply and validate the change without another confirmation; keep production changes separate unless requested. Ask one question at a time. Put durable product decisions in the vision and behavior contracts in the spec.
 
 ## Documentation and repository hygiene

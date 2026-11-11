@@ -1,3 +1,4 @@
+import { uiButton, actionRow, dialogSurface } from "./primitives";
 import { formField } from "./form-field";
 import { actionButton } from "./action-feedback";
 interface InputDialog {
@@ -25,7 +26,7 @@ export function inputDialog(options: InputDialog): void {
           left: previous.scrollLeft,
         }
       : undefined;
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface(options.title);
   dialog.setAttribute("aria-label", options.title);
   const title = document.createElement("h2");
   title.textContent = options.title;
@@ -42,10 +43,9 @@ export function inputDialog(options: InputDialog): void {
   const error = document.createElement("div");
   error.className = "dialog-error";
   error.setAttribute("role", "alert");
-  const actions = document.createElement("div");
-  actions.className = "dialog-actions";
+  const actions = actionRow();
   const cancel = actionButton("Cancel", async () => dialog.close());
-  const submit = document.createElement("button");
+  const submit = uiButton(options.submitLabel, "primary");
   submit.type = "submit";
   submit.className = "primary";
   submit.textContent = options.submitLabel;
@@ -110,14 +110,13 @@ export function confirmAction(
   label: string,
   action: () => Promise<unknown>,
 ): void {
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface(title);
   dialog.setAttribute("aria-label", title);
   const heading = document.createElement("h2");
   heading.textContent = title;
   const body = document.createElement("p");
   body.textContent = text;
-  const actions = document.createElement("div");
-  actions.className = "dialog-actions";
+  const actions = actionRow();
   const cancel = actionButton("Cancel", async () => dialog.close());
   const accept = actionButton(label, async () => {
     await action();

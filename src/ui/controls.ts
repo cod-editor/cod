@@ -1,3 +1,4 @@
+import { uiButton } from "./primitives";
 export const icons: Record<string, string> = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
@@ -48,9 +49,8 @@ export function iconButton(
   label: string,
   action: () => void,
 ): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "icon-button";
+  const button = uiButton("");
+  button.classList.add("icon-button");
   button.title = label;
   button.setAttribute("aria-label", label);
   button.append(icon(name));

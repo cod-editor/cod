@@ -15,6 +15,8 @@ export async function renderMarkdown(
     if (!block.html) continue;
     const element = document.createElement("section");
     element.className = "markdown-block";
+    element.dataset.startLine = String(block.startLine);
+    element.dataset.endLine = String(block.endLine);
     element.dataset.textStart = String(block.start);
     element.dataset.textEnd = String(block.end);
     element.innerHTML = DOMPurify.sanitize(block.html, {

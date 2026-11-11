@@ -1,3 +1,4 @@
+import { dialogSurface, actionRow } from "./primitives";
 import type { Invoke } from "./contracts";
 import type { Bookmark } from "../browser/library";
 import { actionButton, showActionError } from "./action-feedback";
@@ -5,7 +6,7 @@ export function browserBookmarks(
   invoke: Invoke,
   open: (url: string) => Promise<void>,
 ) {
-  const dialog = document.createElement("dialog");
+  const dialog = dialogSurface("Bookmarks");
   dialog.className = "picker browser-library";
   dialog.setAttribute("aria-label", "Bookmarks");
   const input = document.createElement("input");
@@ -115,7 +116,7 @@ export function browserBookmarks(
   dialog.append(
     input,
     list,
-    actionButton("Done", async () => dialog.close()),
+    actionRow(actionButton("Done", async () => dialog.close())),
   );
   dialog.onclose = () => {
     revision++;

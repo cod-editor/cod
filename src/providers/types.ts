@@ -95,6 +95,7 @@ export interface ProviderCapabilities {
   caveats: readonly string[];
 }
 export interface ImageAttachment {
+  reference?: number;
   name?: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   data: string;

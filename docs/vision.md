@@ -76,7 +76,7 @@ Workspace and conversation rows show status through the color of their existing 
 
 Use provider adapters behind one common UI and service model.
 No general-purpose mailbox or message bus is planned for v1. Opening chats alongside each other and sending prompts through codctl remain required; coordination workflows belong in skills and scripts.
-Conversations support image attachments, including clipboard paste, preview before sending and viewing sent images. Preserve attachments with drafts and conversation history. Verify support for each provider and expose unsupported capabilities explicitly.
+Conversations support image attachments, including clipboard paste, preview before sending and viewing sent images. Insert a stable numbered image reference at the caret; the thumbnail and provider input carry the same identity, even when another attachment is removed. Preserve attachments with drafts and conversation history. Verify support for each provider and expose unsupported capabilities explicitly.
 Use the existing coding agents rather than building a new agent loop around model APIs.
 Integration protocols, authentication and native-session continuity must be investigated for all three providers before committing to an adapter design.
 A common interface must not silently discard useful provider capabilities.
@@ -91,6 +91,8 @@ A common interface must not silently discard useful provider capabilities.
 
 No requirement to grow into a full IDE.
 LSP features, blame, hunk reversion and other advanced editing features from the previous vision are not v1 commitments.
+
+Application chrome uses shared control components and a compact spacing scale. Feature screens compose those components instead of introducing independent button, form and toolbar styles.
 
 ### Local review
 

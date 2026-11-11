@@ -45,13 +45,77 @@ export function reviewDocument(
   // A read-only editing host supplies a real keyboard caret in formatted text.
   rendered.contentEditable = "true";
   rendered.spellcheck = false;
-  rendered.addEventListener("beforeinput", (event) => event.preventDefault());
+  rendered.addEventListener("beforeinput", (event) => {
+    if (!(event.target as Element).closest("[data-review-annotation]"))
+      event.preventDefault();
+  });
   rendered.addEventListener("drop", (event) => event.preventDefault());
-  rendered.addEventListener("paste", (event) => event.preventDefault());
+  rendered.addEventListener("paste", (event) => {
+    if (!(event.target as Element).closest("[data-review-annotation]"))
+      event.preventDefault();
+  });
   rendered.addEventListener("click", (event) => {
     if ((event.target as Element).closest("a")) event.preventDefault();
   });
-  element.append(sourceView, rendered);
+  const sourceLayout = document.createElement("div");
+  sourceLayout.className = "review-source-layout";
+  const annotations = document.createElement("aside");
+  annotations.className = "review-annotations";
+  annotations.setAttribute("aria-label", "Anchored comments");
+  sourceLayout.append(sourceView, annotations);
+  element.append(sourceLayout, rendered);
+  const anchored = new Map<HTMLElement, CommentRange>();
+  function positionAnnotations() {
+    sourceLayout.classList.toggle("has-comments", anchored.size > 0);
+    let bottom = 0;
+    const style = getComputedStyle(editor);
+    const lineHeight = parseFloat(style.lineHeight) || 24;
+    for (const [node, range] of [...anchored].sort(
+      (a, b) => a[1].endLine - b[1].endLine,
+    )) {
+      node.contentEditable = "false";
+      node.dataset.reviewAnnotation = "true";
+      node.style.top = "";
+      node.style.visibility = "";
+      if (preview) {
+        const blocks = [
+          ...rendered.querySelectorAll<HTMLElement>(".markdown-block"),
+        ];
+        const block =
+          blocks.find(
+            (block) =>
+              Number(block.dataset.startLine) <= range.endLine &&
+              Number(block.dataset.endLine) >= range.endLine,
+          ) ??
+          blocks
+            .filter((block) => Number(block.dataset.startLine) <= range.endLine)
+            .at(-1);
+        if (block) {
+          let sibling: Element = block;
+          while (
+            sibling.nextElementSibling?.hasAttribute("data-review-annotation")
+          )
+            sibling = sibling.nextElementSibling;
+          sibling.after(node);
+        } else rendered.append(node);
+      } else {
+        annotations.append(node);
+        const top =
+          parseFloat(style.paddingTop) +
+          (range.endLine - 1) * lineHeight -
+          editor.scrollTop;
+        const outside = top < -lineHeight || top > editor.clientHeight;
+        node.style.visibility = outside ? "hidden" : "";
+        if (!outside) {
+          const y = Math.max(bottom, top);
+          node.style.top = `${y}px`;
+          bottom = y + node.offsetHeight + 8;
+        }
+      }
+    }
+  }
+  editor.addEventListener("scroll", positionAnnotations);
+
   let selected = initial;
   let renderedOnce = false;
   function remember(fragment: TextFragment) {
@@ -139,24 +203,28 @@ export function reviewDocument(
     });
   }
   function show() {
-    sourceView.hidden = preview;
+    sourceLayout.hidden = preview;
     rendered.hidden = !preview;
     if (preview && !renderedOnce) {
       renderedOnce = true;
-      void renderMarkdown(rendered, source, () => element.isConnected).catch(
-        (error) => report(String(error)),
-      );
+      void renderMarkdown(rendered, source, () => element.isConnected)
+        .then(positionAnnotations)
+        .catch((error) => report(String(error)));
     }
   }
   function focus() {
-    if (preview) rendered.focus();
+    if (preview) rendered.focus({ preventScroll: true });
     else {
-      editor.focus();
+      const top = editor.scrollTop,
+        left = editor.scrollLeft;
+      editor.focus({ preventScroll: true });
       if (selected?.fragment?.view === "source")
         editor.setSelectionRange(
           displayedOffset(selected.fragment.start),
           displayedOffset(selected.fragment.end),
         );
+      editor.scrollTop = top;
+      editor.scrollLeft = left;
     }
   }
   if (initial?.fragment?.view === "source")
@@ -169,10 +237,20 @@ export function reviewDocument(
     element,
     capture,
     focus,
+    clearAnnotations() {
+      for (const node of anchored.keys()) node.remove();
+      anchored.clear();
+      sourceLayout.classList.remove("has-comments");
+    },
+    place(node: HTMLElement, range: CommentRange) {
+      anchored.set(node, range);
+      positionAnnotations();
+    },
     toggle() {
       capture();
       preview = !preview;
       show();
+      positionAnnotations();
       focus();
       return preview;
     },

@@ -29,6 +29,8 @@ Provider inspection is read-only and reports native capabilities rather than inv
 
 Persist layout, resource IDs, open views, composer text/images/provider/selected skills, native-session references, file drafts, review drafts and close/reopen history. Restore records without replaying commands, inference or arbitrary website form submissions.
 
+Pasted images insert stable `[Image N]` references at the current selection. Attachment removal removes its insertion marker without renumbering other images; thumbnail captions and provider content identify the same image. References and image data persist with composer drafts. Sending waits for attachment reading to finish.
+
 Composer ownership follows the conversation identity, not a reusable pane. After a failed create or resume, opening another conversation in the same pane must bind typing, attachment and send actions to the new conversation. Its unsent text and images must survive switching chats and restarting the app.
 
 Streaming updates may be batched for display; user actions still publish immediately. Collapsed tool rows retain their summaries without constructing full output blocks until expanded, and closing a row releases its rendered output. Background streaming must not require renderer copies or full JSON comparisons of all conversations merely to detect a focus change.
@@ -58,6 +60,8 @@ All views of a file share its current draft. Saving during newer input must not 
 ## Reviews and registered responses
 
 Document review uses a read-only source editor with syntax highlighting, a caret and native text selection. Markdown also has a formatted view with highlighted code and Mermaid, sharing the normal preview renderer. An eye button exposes preview on Markdown tabs and reviews; Toggle Markdown preview is available in Commands. Ordinary preview opens beside the editable source and reuses an existing preview for the same file, without saving or discarding file drafts. Review switches view within the immutable snapshot.
+
+Document comments appear at their anchor: after the corresponding Markdown block in preview, beside the source line in the source editor, and after the selected diff line. Saving, editing or deleting a comment must retain the document instance, caret and viewport while its snapshot is unchanged. The review toolbar sits directly below the tab strip.
 
 Document comments can anchor exact text fragments, not just whole lines. Source anchors use UTF-16 offsets in the snapshot; formatted anchors use offsets in the shared rendered text projection and retain the corresponding source block lines. The service validates the range and derives the saved quote itself. Quotes and offsets survive restart, delivery and view changes; refresh retains outdated anchors rather than guessing a new location. Diagram comments select the Mermaid source. Existing line-based document and diff anchors remain supported.
 
