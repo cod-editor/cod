@@ -167,18 +167,24 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  // Own the settings accelerator before DOM/menu dispatch so one physical key
-  // produces one command. Menu clicks use the same trusted command event.
+  // Own native macOS close-tab and settings accelerators before DOM/menu
+  // dispatch. Prevent the DOM duplicate, including when a preview frame has focus.
+  // Linux Ctrl+W remains surface-specific (terminal readline owns that key).
   mainWindow.webContents.on("before-input-event", (event, input) => {
     const match = resolveKeybinding(
       nativeKeyInput(input),
       process.platform === "darwin" ? "darwin" : "linux",
       "shell",
     );
-    if (match?.command !== "settings") return;
+    if (
+      !match ||
+      (match.command !== "settings" &&
+        !(process.platform === "darwin" && match.command === "tab.close"))
+    )
+      return;
     event.preventDefault();
     if (match.dispatch)
-      mainWindow?.webContents.send("cod:command", { command: "settings" });
+      mainWindow?.webContents.send("cod:command", { command: match.command });
   });
 
   const browserSession = session.fromPartition("persist:cod-browser");

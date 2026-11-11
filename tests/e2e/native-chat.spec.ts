@@ -1205,3 +1205,43 @@ test("Repeated Backspace saves the chat draft without echoing full state on ever
     shell.pane(chat.paneId).locator(".composer-images img"),
   ).toHaveCount(0);
 });
+
+test("Close tab shortcut closes the focused chat and preserves its session", async () => {
+  const workspace = await shell.create("Close chat shortcut");
+  const first = await shell.newChat(workspace, "codex");
+  const second = await shell.newChat(workspace, "codex");
+  const composer = shell
+    .pane(second.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await composer.fill("Keep this draft when closing the tab.");
+  await composer.press(`${modifier}+w`);
+  await expect(shell.pane(second.paneId)).toHaveCount(0);
+  const state = await shell.cli<AppState>("state");
+  expect(state.conversations.some((c) => c.id === second.id)).toBe(true);
+  expect(
+    state.workspaces
+      .find((w) => w.id === workspace)
+      ?.panes.some((p) => p.id === first.paneId),
+  ).toBe(true);
+});
+
+test("Close tab shortcut closes a focused source editor", async () => {
+  const workspace = await shell.create("Close file shortcut");
+  const file = path.join(shell.folders[0], "close-fixture.md");
+  await writeFile(file, "# Invented file\n");
+  const opened = await shell.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+  );
+  const editor = shell
+    .pane(opened.paneId)
+    .getByRole("textbox", { name: "File contents", exact: true });
+  await expect(editor).toBeEnabled();
+  await editor.focus();
+  await editor.press(`${modifier}+w`);
+  await expect(shell.pane(opened.paneId)).toHaveCount(0);
+});
