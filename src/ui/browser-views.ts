@@ -1,3 +1,4 @@
+import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
 import { icon } from "./controls";
@@ -179,6 +180,14 @@ export function createBrowserViews(
     address.placeholder = "Search or enter address";
     address.spellcheck = false;
     navigation.append(address);
+    const suggestions = addressSuggestions(
+      address,
+      invoke,
+      (url) => {
+        void invoke("browser.navigate", { id: record.id, url }).catch(() => {});
+      },
+      scheduleBrowserLayout,
+    );
     const blocking = paneButton("Ad blocking", async () => {
       const dialog = document.createElement("dialog");
       dialog.className = "browser-protection";
@@ -304,6 +313,7 @@ export function createBrowserViews(
     navigation.append(actions);
     navigation.addEventListener("submit", (event) => {
       event.preventDefault();
+      suggestions.close();
       void invoke("browser.navigate", {
         id: record.id,
         url: address.value,
@@ -338,7 +348,14 @@ export function createBrowserViews(
       void invoke("browser.navigate", { id: record.id, url });
     });
     homes.set(record.id, home);
-    body.append(navigation, home.element, content, failure, message);
+    body.append(
+      navigation,
+      suggestions.element,
+      home.element,
+      content,
+      failure,
+      message,
+    );
     container.append(body);
     browserPanes.set(record.id, container);
     updateBrowserPane(container, record);

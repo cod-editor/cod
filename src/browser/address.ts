@@ -1,5 +1,15 @@
+export const searchEngines = [
+  "google",
+  "duckduckgo",
+  "bing",
+  "yandex",
+] as const;
+export type SearchEngine = (typeof searchEngines)[number];
 /** Resolve explicit addresses locally; only ordinary text is sent to search. */
-export function resolveAddress(input: string): string {
+export function resolveAddress(
+  input: string,
+  engine: SearchEngine = "google",
+): string {
   const value = input.trim();
   if (!value) throw new Error("Enter an address or search query");
   if (value === "about:blank") return value;
@@ -23,5 +33,11 @@ export function resolveAddress(input: string): string {
     )
   )
     throw new Error("Only HTTP and HTTPS addresses are supported");
-  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  const prefix = {
+    google: "https://www.google.com/search?q=",
+    duckduckgo: "https://duckduckgo.com/?q=",
+    bing: "https://www.bing.com/search?q=",
+    yandex: "https://yandex.ru/search/?text=",
+  }[engine];
+  return prefix + encodeURIComponent(value);
 }

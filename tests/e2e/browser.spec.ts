@@ -943,3 +943,74 @@ test("Browser default scrollbars match Cod while authored nested scrolling survi
     path: info.outputPath("scrollbar-shell-and-page.png"),
   });
 });
+
+test("Local address suggestions, searchable history and search engine settings survive restart", async ({}, info) => {
+  const workspace = await shell.create("History fixture");
+  const record = await open(workspace, "/history-fixture");
+  await expect
+    .poll(() =>
+      shell.cli<Array<{ url: string }>>(
+        "browser",
+        "history",
+        "--query",
+        "history-fixture",
+      ),
+    )
+    .toEqual([expect.objectContaining({ url: origin + "/history-fixture" })]);
+  const home = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    "about:blank",
+  );
+  const address = shell
+    .pane(home.paneId)
+    .getByRole("textbox", { name: "Address", exact: true });
+  await address.focus();
+  await address.fill("history-fixture");
+  await expect(shell.pane(home.paneId).getByRole("option")).toContainText(
+    "Fixture /history-fixture",
+  );
+  await shell.page.screenshot({
+    path: info.outputPath("address-suggestions.png"),
+  });
+  await address.press("ArrowDown");
+  await address.press("Enter");
+  await expect
+    .poll(async () => (await inspect(home.id)).url)
+    .toBe(origin + "/history-fixture");
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await shell.page
+    .getByRole("textbox", { name: "Filter commands" })
+    .fill("Browser settings");
+  await shell.page.keyboard.press("Enter");
+  await shell.page
+    .getByLabel("Search engine", { exact: true })
+    .selectOption("duckduckgo");
+  await shell.page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect
+    .poll(() => shell.cli("browser", "settings"))
+    .toEqual({ searchEngine: "duckduckgo" });
+  await shell.stop();
+  await shell.start();
+  expect(await shell.cli("browser", "settings")).toEqual({
+    searchEngine: "duckduckgo",
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await shell.page
+    .getByRole("textbox", { name: "Filter commands" })
+    .fill("Browsing history");
+  await shell.page.keyboard.press("Enter");
+  await shell.page
+    .getByRole("textbox", { name: "Search history" })
+    .fill("history-fixture");
+  await expect(
+    shell.page.getByRole("dialog", { name: "Browsing history" }),
+  ).toContainText(origin + "/history-fixture");
+  await shell.page
+    .getByRole("button", { name: "Clear history", exact: true })
+    .click();
+  expect(await shell.cli("browser", "history")).toEqual([]);
+});

@@ -1,3 +1,4 @@
+import { BrowserLibrary } from "../browser/library";
 import { readFileSync } from "node:fs";
 import { resolveAddress } from "../browser/address";
 import {
@@ -26,6 +27,9 @@ export interface BrowserConversationPort {
   send(request: OperationRequest): Promise<{ id: string; status: string }>;
 }
 export class BrowserApplicationService {
+  private readonly library: BrowserLibrary;
+  private readonly recordedPages = new Map<string, string>();
+  private libraryError?: Error;
   private browserService?: BrowserService;
   private agentPages?: AgentPageService;
   private browserAddons?: BrowserAddons;
@@ -39,19 +43,22 @@ export class BrowserApplicationService {
   constructor(
     private readonly store: ApplicationStateStore,
     private readonly conversations: BrowserConversationPort,
-  ) {}
+  ) {
+    this.library = new BrowserLibrary(store.directory);
+  }
   async toggleBlocking(id: string, enabled: boolean): Promise<void> {
     if (!this.browserAddons) throw new Error("Browser add-ons unavailable");
     await this.browserAddons.toggle(this.browser(id).url, enabled);
     this.requireBrowserService().reload(id);
   }
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     for (const controller of this.browserAdmissions.values())
       controller.abort();
     this.browserAdmissions.clear();
     this.browserAddons?.dispose();
     this.browserService?.dispose();
     this.agentPages?.dispose();
+    await this.library.flush();
   }
   attachAgentPageHost(window: BrowserWindow, session: Session): void {
     this.agentPages = new AgentPageService({
@@ -655,7 +662,12 @@ export class BrowserApplicationService {
     const record = this.browser(id);
     if (record.agentPage)
       throw new Error("Registered agent pages cannot navigate to other sites");
-    await this.loadBrowser(record, this.browserUrl(resolveAddress(url)));
+    await this.loadBrowser(
+      record,
+      this.browserUrl(
+        resolveAddress(url, (await this.library.settings()).searchEngine),
+      ),
+    );
     return structuredClone(this.browser(id));
   }
   async loadBrowser(record: BrowserState, url: string): Promise<void> {
@@ -760,6 +772,20 @@ export class BrowserApplicationService {
           ? event.snapshot.url
           : record.url;
       Object.assign(record, event.snapshot, { url });
+      const key = `${url}\n${record.title}`;
+      if (
+        !record.agentPage &&
+        !record.loading &&
+        !record.error &&
+        /^https?:/.test(url) &&
+        record.lastSuccessfulUrl === url &&
+        this.recordedPages.get(record.id) !== key
+      ) {
+        this.recordedPages.set(record.id, key);
+        void this.library.visit(url, record.title).catch((error) => {
+          this.libraryError = error;
+        });
+      }
       this.store.schedulePersist();
       this.store.notify();
     } else if (event.type === "download") {
@@ -820,6 +846,36 @@ export class BrowserApplicationService {
     _trustedUi = false,
   ): Promise<unknown> {
     switch (request.op) {
+      case "browser.settings":
+        return typeof request.searchEngine === "string"
+          ? this.library.configure(request.searchEngine)
+          : this.library.settings();
+      case "browser.history":
+        if (this.libraryError) throw this.libraryError;
+        return this.library.history(
+          typeof request.query === "string" ? request.query : "",
+          Number(request.limit ?? 100),
+        );
+      case "browser.history-delete":
+        return this.library.forget(requiredString(request, "url"));
+      case "browser.history-clear":
+        return this.library.forget();
+      case "browser.suggest": {
+        const query =
+          typeof request.query === "string" ? request.query.trim() : "";
+        const matches = (this.store.data.pinnedSites ?? []).filter((item) =>
+          `${item.title} ${item.url}`
+            .toLocaleLowerCase()
+            .includes(query.toLocaleLowerCase()),
+        );
+        const history = await this.library.history(query, 8);
+        return [
+          ...matches,
+          ...history.filter(
+            (item) => !matches.some((pin) => pin.url === item.url),
+          ),
+        ].slice(0, 8);
+      }
       case "browser.default-status":
         return {
           available: app.isPackaged,

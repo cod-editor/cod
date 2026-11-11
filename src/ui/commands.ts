@@ -1,3 +1,4 @@
+import { browserSettings, browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
 import { conversationRemovalReason } from "../conversation-actions";
 import { createFocusTargets } from "./focus-targets";
@@ -496,6 +497,7 @@ export function createCommands(
         "chat.new",
         "integration.install",
         "browser.default",
+        "browser.settings",
         "workspace.reopen",
         "text.inc",
         "text.dec",
@@ -618,10 +620,15 @@ export function createCommands(
           break;
         case "settings": {
           const origin = focus.capture();
-          appearanceDialog(() => {
-            focus.restore(origin);
-            showKeyboardShortcuts(focus);
-          });
+          appearanceDialog(
+            () => {
+              focus.restore(origin);
+              showKeyboardShortcuts(focus);
+            },
+            () => {
+              void browserSettings(invoke);
+            },
+          );
           break;
         }
         case "workspace.new":
@@ -667,6 +674,14 @@ export function createCommands(
           });
           break;
         }
+        case "browser.settings":
+          await browserSettings(invoke);
+          break;
+        case "browser.history":
+          browserHistory(invoke, async (url) => {
+            if (w) await invoke("browser.open", { workspace: w.id, url });
+          });
+          break;
         case "browser.default":
           defaultBrowserDialog();
           break;

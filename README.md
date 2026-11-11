@@ -39,7 +39,7 @@ CLI creation stays in the background unless focus is explicitly requested. Set `
 
 ## Current limits
 
-New browser tabs show pinned sites shared across workspaces. Use the `+` tile to add a site, its context menu to rename or unpin it, or Commands > Pin current site to home. The address field accepts website addresses without a scheme and searches ordinary text with Google. There is no recent-sites section or bookmarks bar. Search suggestions, browsing-history search and a selectable search engine are not yet implemented.
+New browser tabs show pinned sites shared across workspaces. Use the `+` tile to add a site, its context menu to rename or unpin it, or Commands > Pin current site to home. The address field accepts website addresses without a scheme and searches ordinary text with Google. There is no recent-sites section or bookmarks bar. Address suggestions use local history and pinned sites without sending typed text to a server. Commands > Browsing history searches and clears history; a result's context menu removes that entry. Browser settings selects Google, DuckDuckGo, Bing or Yandex.
 
 - Chats support Codex and Kimi, including images and native-session handoff. Claude remains a product requirement but is not available in the selector.
 - Session commands (`/help`, `/status`, `/skills`, `/plugins`, `/config`, `/agents`) inspect native data without sending a prompt. Codex skill selection attaches the native skill to the next prompt. Configuration and plugin changes, and direct child-agent control, remain in the native client. Token usage appears only after provider telemetry; account limits are available only when Codex supplies them.

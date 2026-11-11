@@ -1796,3 +1796,30 @@ browser-action-list::part(action):focus-visible {
 .hljs-link {
   color: #61afef;
 }
+.browser-suggestions {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  overflow: auto;
+  border-bottom: 1px solid #454b57;
+  padding: 4px;
+}
+.browser-suggestions button,
+.browser-library .command-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+}
+.browser-suggestions button[aria-selected="true"] {
+  background: #454b57;
+}
+.browser-suggestions small,
+.browser-library small {
+  color: #828997;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}

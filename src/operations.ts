@@ -199,7 +199,7 @@ export class ApplicationOperations {
     this.store.beginShutdown();
     await this.conversations.shutdown();
     await this.reviews.shutdown();
-    this.browsers.shutdown();
+    await this.browsers.shutdown();
     await this.terminals.shutdown();
     await this.store.serialize(() => this.store.persist());
   }

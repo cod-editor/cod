@@ -212,6 +212,9 @@ export class WorkspaceApp {
       await this.cli<{ id: string }>("workspace", "create", "--name", name)
     ).id;
     await this.cli("workspace", "focus", "--id", id);
+    await expect(
+      this.page.getByRole("button", { name: "Switch workspace", exact: true }),
+    ).toHaveText(name);
     return id;
   }
   async command(name: string) {
