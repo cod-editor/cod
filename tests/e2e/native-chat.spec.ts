@@ -1613,8 +1613,9 @@ for (const provider of ["codex", "kimi"] as const) {
     expect((await shell.prompts()).length).toBe(1);
     await shell.send(chat.id, "Cancel this queued text");
     await queue
+      .locator(".queued-message")
+      .filter({ hasText: "Cancel this queued text" })
       .getByRole("button", { name: "Cancel queued message", exact: true })
-      .last()
       .click();
     await expect(queue).not.toContainText("Cancel this queued text");
     await queue

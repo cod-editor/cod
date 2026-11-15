@@ -237,6 +237,14 @@ export interface WorkspaceState {
     string,
     {
       text: string;
+      version?: string;
+      writer?: string;
+      localDraft?: {
+        text: string;
+        provider?: ProviderId;
+        skills?: Array<{ name: string; path: string }>;
+        images?: import("./providers/types").ImageAttachment[];
+      };
       provider?: ProviderId;
       skills?: Array<{ name: string; path: string }>;
       images?: import("./providers/types").ImageAttachment[];

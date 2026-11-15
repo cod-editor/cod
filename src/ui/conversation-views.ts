@@ -1,4 +1,4 @@
-import { actionRow } from "./primitives";
+import { actionRow, uiButton } from "./primitives";
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
 import {
@@ -77,29 +77,117 @@ export function createConversationViews({
         : "Claude Code";
   }
   const hydratedComposers = new Set<string>();
-  async function persistComposer(key: string, textOnly = false): Promise<void> {
-    const conversation = getState().conversations.find((c) => c.id === key);
-    const paneId = conversation?.paneId ?? key;
-    const workspace = getState().workspaces.find((w) =>
-      w.panes.some((p) => p.id === paneId),
-    );
-    if (!workspace) return;
-    try {
-      await invoke("conversation.composer", {
-        workspace: workspace.id,
-        paneId,
-        text: composerDrafts.get(key) ?? "",
-        ...(textOnly ? {} : { images: attachmentDrafts.get(key) ?? [] }),
-        skills: selectedSkills(key),
-        ...(draftProviders.has(paneId)
-          ? { provider: draftProviders.get(paneId) }
-          : {}),
-      });
-    } catch {
-      setStatus(
-        "Could not save the conversation draft. Keep Cod open and try again.",
-      );
+  type ComposerDraft = NonNullable<WorkspaceState["chatDrafts"]>[string];
+  const writer = crypto.randomUUID();
+  const versions = new Map<string, string>();
+  const seenVersions = new Map<string, string>();
+  const dirtyComposers = new Set<string>();
+  const composerConflicts = new Map<string, ComposerDraft>();
+  const saves = new Map<
+    string,
+    { again: boolean; textOnly: boolean; promise: Promise<void> }
+  >();
+  function acceptDraft(key: string, paneId: string, draft: ComposerDraft) {
+    versions.set(key, draft.version ?? "");
+    composerDrafts.set(key, draft.text);
+    skillDrafts.set(key, draft.skills ?? []);
+    attachmentDrafts.set(key, draft.images ?? []);
+    if (draft.provider) draftProviders.set(paneId, draft.provider);
+    else draftProviders.delete(paneId);
+    dirtyComposers.delete(key);
+    composerConflicts.delete(key);
+  }
+  function draftConflict(key: string, paneId: string): HTMLElement | undefined {
+    if (!composerConflicts.has(key)) return;
+    const panel = document.createElement("section");
+    panel.className = "conversation-status";
+    panel.setAttribute("aria-label", "Draft conflict");
+    const message = document.createElement("p");
+    message.textContent =
+      "The draft changed outside this window. Your edits are preserved.";
+    const keep = uiButton("Keep my draft");
+    keep.onclick = async () => {
+      await saves.get(key)?.promise;
+      const remote = composerConflicts.get(key);
+      if (!remote) return;
+      versions.set(key, remote.version ?? "");
+      composerConflicts.delete(key);
+      void persistComposer(key).then(invalidate);
+    };
+    const use = uiButton("Use external draft");
+    use.onclick = async () => {
+      await saves.get(key)?.promise;
+      const remote = composerConflicts.get(key);
+      if (!remote) return;
+      acceptDraft(key, paneId, remote);
+      await persistComposer(key);
+      invalidate();
+    };
+    panel.append(message, actionRow(keep, use));
+    return panel;
+  }
+  function persistComposer(key: string, textOnly = false): Promise<void> {
+    dirtyComposers.add(key);
+    const pending = saves.get(key);
+    if (pending) {
+      pending.again = true;
+      pending.textOnly &&= textOnly;
+      return pending.promise;
     }
+    const entry = { again: true, textOnly, promise: Promise.resolve() };
+    saves.set(key, entry);
+    entry.promise = (async () => {
+      while (entry.again) {
+        const conversation = getState().conversations.find((c) => c.id === key);
+        const paneId = conversation?.paneId ?? key;
+        const workspace = getState().workspaces.find((w) =>
+          w.panes.some((p) => p.id === paneId),
+        );
+        if (!workspace) return;
+        const onlyText = entry.textOnly;
+        entry.again = false;
+        entry.textOnly = true;
+        const result = await invoke<{
+          version?: string;
+          conflict?: boolean;
+          conflictSaved?: boolean;
+          draft?: ComposerDraft;
+        }>(
+          "conversation.composer",
+          {
+            workspace: workspace.id,
+            paneId,
+            text: composerDrafts.get(key) ?? "",
+            ...(onlyText ? {} : { images: attachmentDrafts.get(key) ?? [] }),
+            skills: selectedSkills(key),
+            ...(draftProviders.has(paneId)
+              ? { provider: draftProviders.get(paneId) }
+              : {}),
+            expectedVersion: versions.get(key) ?? "",
+            saveConflict: composerConflicts.has(key),
+            writer,
+          },
+          { reportError: false },
+        );
+        if (result.conflict && result.draft) {
+          composerConflicts.set(key, result.draft);
+          invalidate();
+          entry.again = true;
+          entry.textOnly = false;
+          continue;
+        }
+        if (!composerConflicts.has(key))
+          versions.set(key, result.version ?? "");
+        if (!entry.again) dirtyComposers.delete(key);
+      }
+    })()
+      .catch(() => {
+        setStatus(
+          "Could not save the conversation draft. Keep Cod open and try again.",
+        );
+      })
+      .finally(() => saves.delete(key));
+    return entry.promise;
   }
 
   const draftProviders = new Map<string, string>();
@@ -139,6 +227,11 @@ export function createConversationViews({
     const send = async () => {
       if (loadingImages.has(pane.id)) {
         setStatus("Wait for the image to finish loading");
+        return;
+      }
+      await saves.get(pane.id)?.promise;
+      if (composerConflicts.has(pane.id) || dirtyComposers.has(pane.id)) {
+        setStatus("Resolve or save the draft before sending.");
         return;
       }
       const text = input.value;
@@ -211,6 +304,8 @@ export function createConversationViews({
     actions.append(provider);
     composer.append(input, actions);
     bindImages(composer, input, pane.id);
+    const conflict = draftConflict(pane.id, pane.id);
+    if (conflict) body.append(conflict);
     body.append(composer);
     return body;
   }
@@ -946,6 +1041,8 @@ export function createConversationViews({
     };
     composer.append(input, actions);
     bindImages(composer, input, conversation.id);
+    const conflict = draftConflict(conversation.id, conversation.paneId);
+    if (conflict) body.append(conflict);
     body.append(composer);
     return body;
   }
@@ -1000,8 +1097,15 @@ export function createConversationViews({
       return;
     }
     const text = composerDrafts.get(id) ?? "";
-    const images = attachmentDrafts.get(id) ?? [];
+    const images = [...(attachmentDrafts.get(id) ?? [])];
+    const skills = selectedSkills(id);
     if (!text.trim() && !images.length) return;
+    await saves.get(id)?.promise;
+    if (pendingSends.has(id)) return;
+    if (composerConflicts.has(id) || dirtyComposers.has(id)) {
+      setStatus("Resolve or save the draft before sending.");
+      return;
+    }
     sendErrors.delete(id);
     hydratedComposers.add(id);
     pendingSends.add(id);
@@ -1017,7 +1121,7 @@ export function createConversationViews({
       }
       await invoke(
         "conversation.send",
-        { id, text, images, skills: selectedSkills(id) },
+        { id, text, images, skills },
         { reportError: false },
       );
     } catch (error) {
@@ -1035,7 +1139,22 @@ export function createConversationViews({
       composerDrafts.delete(id);
       skillDrafts.delete(id);
     }
-    if (attachmentDrafts.get(id) === images) attachmentDrafts.delete(id);
+    const remaining = attachmentDrafts.get(id) ?? [];
+    if (
+      remaining.length === images.length &&
+      remaining.every((image, i) => image === images[i])
+    )
+      attachmentDrafts.delete(id);
+    const saved = getState().workspaces.find(
+      (w) =>
+        w.id === getState().conversations.find((c) => c.id === id)?.workspaceId,
+    )?.chatDrafts?.[
+      getState().conversations.find((c) => c.id === id)?.paneId ?? ""
+    ];
+    if (!saved) {
+      versions.delete(id);
+      seenVersions.delete(id);
+    }
     invalidate();
   }
 
@@ -1048,14 +1167,26 @@ export function createConversationViews({
           (c) => c.paneId === paneId,
         );
         const key = conversation?.id ?? paneId;
+        const version = draft.version ?? "";
         if (!hydratedComposers.has(key)) {
           hydratedComposers.add(key);
-          if (draft.provider) draftProviders.set(paneId, draft.provider);
-          if (!composerDrafts.has(key)) composerDrafts.set(key, draft.text);
-          if (draft.skills && !skillDrafts.has(key))
-            skillDrafts.set(key, draft.skills);
-          if (draft.images && !attachmentDrafts.has(key))
-            attachmentDrafts.set(key, draft.images);
+          seenVersions.set(key, version);
+          if (!composerDrafts.has(key) && !dirtyComposers.has(key)) {
+            acceptDraft(key, paneId, draft.localDraft ?? draft);
+            versions.set(key, version);
+            if (draft.localDraft) composerConflicts.set(key, draft);
+          } else versions.set(key, draft.version ?? "");
+        } else if (version !== seenVersions.get(key)) {
+          seenVersions.set(key, version);
+          if (draft.writer === writer) versions.set(key, draft.version ?? "");
+          else if (
+            composerConflicts.has(key) ||
+            dirtyComposers.has(key) ||
+            loadingImages.has(key)
+          ) {
+            composerConflicts.set(key, draft);
+            void persistComposer(key);
+          } else acceptDraft(key, paneId, draft);
         }
       }
   }

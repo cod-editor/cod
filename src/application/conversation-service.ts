@@ -714,6 +714,7 @@ export class ConversationApplicationService {
     const draft = workspace.chatDrafts?.[conversation.paneId];
     const attachments = draft?.images ?? [];
     if (
+      !draft?.localDraft &&
       draft?.text === text &&
       attachments.length === images.length &&
       attachments.every(
@@ -792,9 +793,9 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
+      if (!fromQueue) this.clearSubmittedDraft(conversation, text, images);
       this.store.notify();
       this.store.schedulePersist();
-      if (!fromQueue) this.clearSubmittedDraft(conversation, text, images);
       const turn = adapter.send(text, images, skills);
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
@@ -1161,6 +1162,18 @@ export class ConversationApplicationService {
             !(pane.kind === "document" && !pane.filePath)
           )
             throw new Error("Not a chat composer");
+          const previous = workspace.chatDrafts?.[pane.id];
+          if (
+            trustedUi &&
+            request.saveConflict !== true &&
+            typeof request.expectedVersion === "string" &&
+            request.expectedVersion !== (previous?.version ?? "")
+          )
+            return {
+              paneId: pane.id,
+              conflict: true,
+              draft: previous ?? { text: "" },
+            };
           const text = typeof request.text === "string" ? request.text : "";
           if (text.length > 1_000_000)
             throw new Error("Composer draft is too long");
@@ -1172,13 +1185,46 @@ export class ConversationApplicationService {
           const provider =
             request.provider === undefined ? undefined : providerId(request);
           workspace.chatDrafts ??= {};
+          if (trustedUi && request.saveConflict === true) {
+            if (!previous)
+              throw new Error("Conflicting draft is no longer available");
+            workspace.chatDrafts[pane.id] = {
+              ...previous,
+              localDraft: {
+                text,
+                ...(provider ? { provider } : {}),
+                ...(skills.length ? { skills } : {}),
+                ...(request.images === undefined
+                  ? {
+                      images:
+                        previous.localDraft?.images ?? previous.images ?? [],
+                    }
+                  : { images }),
+              },
+            };
+            return {
+              paneId: pane.id,
+              version: previous.version,
+              conflictSaved: true,
+            };
+          }
+          const version = randomUUID();
           workspace.chatDrafts[pane.id] = {
             text,
+            version,
+            ...(!trustedUi && previous?.localDraft
+              ? { localDraft: previous.localDraft }
+              : {}),
+            ...(trustedUi &&
+            typeof request.writer === "string" &&
+            request.writer.length <= 64
+              ? { writer: request.writer }
+              : {}),
             ...(provider ? { provider } : {}),
             ...(skills.length ? { skills } : {}),
             ...(images.length ? { images } : {}),
           };
-          return { paneId: pane.id };
+          return { paneId: pane.id, version };
         });
       }
 

@@ -716,6 +716,7 @@ export class WorkspaceApplicationService {
             pane.draftChat &&
             !pane.filePath &&
             !draft?.text &&
+            !draft?.localDraft &&
             !draft?.images?.length
           );
         });
@@ -937,6 +938,7 @@ export class WorkspaceApplicationService {
                   pane.draftChat &&
                   !pane.filePath &&
                   !draft?.text &&
+                  !draft?.localDraft &&
                   !draft?.images?.length &&
                   !draft?.skills?.length
                 );

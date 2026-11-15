@@ -102,6 +102,15 @@ export class ApplicationStateStore {
         workspace.chatDrafts ??= {};
         workspace.chatDrafts[entry.pane] = {
           ...entry.draft,
+          ...(entry.draft.localDraft
+            ? {
+                localDraft: {
+                  ...entry.draft.localDraft,
+                  images:
+                    workspace.chatDrafts[entry.pane]?.localDraft?.images ?? [],
+                },
+              }
+            : {}),
           ...(workspace.chatDrafts[entry.pane]?.images
             ? { images: workspace.chatDrafts[entry.pane].images }
             : {}),
@@ -133,7 +142,11 @@ export class ApplicationStateStore {
           workspace.chatDrafts ?? {},
         )) {
           if (draft === drafts?.[pane]) continue;
-          const { images: _images, ...text } = draft;
+          const { images: _images, localDraft, ...text } = draft;
+          if (localDraft) {
+            const { images: _localImages, ...localText } = localDraft;
+            Object.assign(text, { localDraft: localText });
+          }
           overlays[`${workspace.id}:${pane}`] = {
             workspace: workspace.id,
             pane,
