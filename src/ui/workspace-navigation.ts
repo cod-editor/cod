@@ -96,8 +96,46 @@ export function createWorkspaceNavigation(
         t.workspaceId === workspace.id &&
         ["running", "starting"].includes(t.status),
     );
+    const order = getState().workspaces.map((item) => item.id);
+    const index = order.indexOf(workspace.id);
+    const initialFocus = document.activeElement;
+    const close = async (force = false) => {
+      await invoke("workspace.close", {
+        id: workspace.id,
+        ...(force ? { force: true } : {}),
+      });
+      requestAnimationFrame(() => {
+        const focused = document.activeElement;
+        if (
+          focused &&
+          focused !== document.body &&
+          focused !== initialFocus &&
+          !tree.contains(focused) &&
+          !focused.closest("dialog")
+        )
+          return;
+        renderTree();
+        const remaining = getState().workspaces.map((item) => item.id);
+        const target = remaining.includes(workspace.id)
+          ? workspace.id
+          : ([
+              ...order.slice(index + 1),
+              ...order.slice(0, index).reverse(),
+            ].find((id) => remaining.includes(id)) ?? remaining[0]);
+        const row = target
+          ? tree.querySelector<HTMLElement>(`[data-workspace-id="${target}"]`)
+          : null;
+        if (row) row.focus();
+        else
+          document
+            .querySelector<HTMLButtonElement>(
+              'button[aria-label="Switch workspace"]',
+            )
+            ?.focus();
+      });
+    };
     if (!agents.length && !terminals.length) {
-      void invoke("workspace.close", { id: workspace.id });
+      void close();
       return;
     }
     const dialog = document.createElement("dialog");
@@ -107,11 +145,11 @@ export function createWorkspaceNavigation(
     const text = document.createElement("p");
     text.textContent = `${agents.length} active agent${agents.length === 1 ? "" : "s"} and ${terminals.length} running terminal${terminals.length === 1 ? "" : "s"} will stop.`;
     const cancel = paneButton("Cancel", async () => dialog.close());
-    const close = paneButton("Stop and close", async () => {
-      await invoke("workspace.close", { id: workspace.id, force: true });
+    const confirm = paneButton("Stop and close", async () => {
+      await close(true);
       dialog.close();
     });
-    dialog.append(title, text, cancel, close);
+    dialog.append(title, text, cancel, confirm);
     document.body.append(dialog);
     dialog.onclose = () => dialog.remove();
     dialog.showModal();
@@ -306,16 +344,33 @@ export function createWorkspaceNavigation(
     writePreference("collapsed-workspaces", [...collapsedWorkspaces]);
     nextTree.replaceChildren();
     for (const workspace of getState().workspaces) {
+      const reviews = (getState().reviews ?? []).filter((review) => {
+        const current = review.rounds.find(
+          (round) => round.id === review.currentRoundId,
+        );
+        return (
+          review.workspaceId === workspace.id &&
+          current &&
+          current.submission?.delivery.status !== "acknowledged"
+        );
+      });
+      const activePane = workspace.panes.find(
+        (pane) => pane.id === workspace.activePaneId,
+      );
+      const activeReview =
+        activePane?.kind === "review" &&
+        reviews.some((review) => review.id === activePane.reviewId);
       const row = treeRow(
         workspace.id,
         workspace.name,
         workspace.id === getState().activeWorkspaceId &&
           (collapsedWorkspaces.has(workspace.id) ||
-            !getState().conversations.some(
+            (!getState().conversations.some(
               (c) =>
                 c.workspaceId === workspace.id &&
                 c.paneId === workspace.activePaneId,
-            )),
+            ) &&
+              !activeReview)),
       );
       row.setAttribute("aria-label", workspace.name);
       row.classList.add("workspace-parent");
@@ -477,19 +532,18 @@ export function createWorkspaceNavigation(
         };
         nextTree.append(item);
       }
-      for (const review of getState().reviews?.filter(
-        (r) => r.workspaceId === workspace.id,
-      ) ?? []) {
-        const current = review.rounds.find(
-          (r) => r.id === review.currentRoundId,
-        );
-        if (!current || current.submission?.delivery.status === "acknowledged")
-          continue;
+      for (const review of reviews) {
         const reviewLabel =
           review.target.kind === "document"
             ? review.target.path.split("/").pop() || "Document review"
             : `Changes · ${review.target.repoRoot.split("/").pop()}`;
-        const item = treeRow(review.id, reviewLabel, false);
+        const item = treeRow(
+          review.id,
+          reviewLabel,
+          workspace.id === getState().activeWorkspaceId &&
+            activePane?.kind === "review" &&
+            activePane.reviewId === review.id,
+        );
         item.setAttribute("aria-label", reviewLabel);
         applyStatus(item, reviewLabel, "review");
         item.classList.add("review-row");
@@ -504,9 +558,9 @@ export function createWorkspaceNavigation(
         };
         item.onclick = () => void open();
         item.onkeydown = (e) => {
-          if (e.key === "Enter") {
+          if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            void open();
+            if (!e.repeat) void open();
           } else navigateTree(e, item);
         };
         const origin = nextTree.querySelector<HTMLElement>(
