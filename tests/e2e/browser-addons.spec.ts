@@ -180,7 +180,9 @@ test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-ho
   await shell.stop();
   await shell.start();
   expect((await inspect(browser.id)).addons.adblock.enabled).toBe(false);
-  expect((await inspect(other.id)).addons.adblock.enabled).toBe(true);
+  await expect
+    .poll(async () => (await inspect(other.id)).addons.adblock.enabled)
+    .toBe(true);
   await shell.cli(
     "browser",
     "blocking",

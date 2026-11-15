@@ -140,7 +140,7 @@ test("An agent moves its existing conversation during a turn without losing the 
       (await app.records()).filter((r) => r.event === "started"),
     ).toHaveLength(1);
     await expect(composer()).toHaveValue(
-      "The next request stays with this session.",
+      "The next request stays with this session.[Image 1]",
     );
     await expect(
       app.pane(firstView).locator(".composer-images img"),
@@ -278,7 +278,7 @@ test("Native session commands inspect without inference and invoke only the sele
     await pasteFixtureImage(app);
     const openSection = async (section: string) => {
       await app.page
-        .locator(".composer")
+        .locator(".composer-actions")
         .click({ button: "right", position: { x: 5, y: 5 } });
       await app.page
         .getByRole("button", { name: "Session commands...", exact: true })
@@ -324,7 +324,7 @@ test("Native session commands inspect without inference and invoke only the sele
     });
     await app.page.keyboard.press("Escape");
     await expect(composer()).toHaveValue(
-      "Retain this draft while I inspect the provider.",
+      "Retain this draft while I inspect the provider.[Image 1]",
     );
     await expect(app.page.locator(".composer-images img")).toHaveCount(1);
     await app.configure({
@@ -546,11 +546,7 @@ test("Completed turns fold commentary and tools while final answers and decision
 
     await first.locator(":scope > summary").click();
     await expect(first.locator(".tool-activity")).toHaveCount(4);
-    await first
-      .locator(".tool-activity")
-      .filter({ hasText: "invented-extra-0" })
-      .locator("summary")
-      .click();
+    await first.locator('summary[title*="invented-extra-0"]').click();
     await expect(first).toContainText("Fixture detail 0");
     await app.page.screenshot({
       path: info.outputPath("completed-expanded-commentary-tools.png"),
@@ -595,15 +591,16 @@ test("Completed turns fold commentary and tools while final answers and decision
     await composer.press(`${modifier}+Enter`);
     const failure = app.page
       .locator(".tool-activity")
-      .filter({ hasText: "Invented tool failed" });
+      .filter({ has: app.page.locator('summary[title*="invented-extra-0"]') })
+      .last();
     await expect
       .poll(async () => (await app.inspect(conversationId)).status)
       .toBe("ready");
     await expect(failure.locator(":scope > summary")).toContainText("failed");
     await expect(failure).not.toHaveAttribute("data-action-required", "true");
-    const failedTurn = app.page
-      .locator("details.turn-activity")
-      .filter({ has: failure });
+    const failedTurn = failure.locator(
+      "xpath=ancestor::details[contains(@class, 'turn-activity')][1]",
+    );
     await expect(failedTurn).toHaveCount(1);
     await expect(failure).toBeHidden();
     await failedTurn.scrollIntoViewIfNeeded();

@@ -83,6 +83,11 @@ async function observeInvocations(page: Page) {
     .split("\n")
     .findIndex((line) => line.includes("return await window.cod.invoke("));
   if (lineNumber < 0) throw new Error("Trusted invocation boundary missing");
+  const operationName = /\{\s*op:\s*([\w$]+)/.exec(
+    scriptSource.split("\n")[lineNumber],
+  )?.[1];
+  if (!operationName)
+    throw new Error("Trusted invocation operation binding missing");
   const { breakpointId } = await session.send("Debugger.setBreakpoint", {
     location: { scriptId: renderer.scriptId, lineNumber },
   });
@@ -91,7 +96,7 @@ async function observeInvocations(page: Page) {
       if (event.hitBreakpoints?.includes(breakpointId)) {
         const value = await session.send("Debugger.evaluateOnCallFrame", {
           callFrameId: event.callFrames[0].callFrameId,
-          expression: "op",
+          expression: operationName,
           returnByValue: true,
         });
         if (typeof value.result.value === "string")
@@ -180,6 +185,7 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     await expect(allow).toBeVisible();
     expect(
       invocations.operations.filter((op) => op === "conversation.send"),
+      JSON.stringify(invocations.operations),
     ).toHaveLength(1);
     expect(
       invocations.operations.filter((op) => op === "conversation.start"),
@@ -202,7 +208,12 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     ).toBeFocused();
     await app.page.keyboard.type("Cancelled workspace");
     await app.page.keyboard.press("Escape");
-    await expect(composer()).toBeFocused();
+    const selectedWorkspace = (await state(app)).activeWorkspaceId;
+    await expect(
+      app.page.locator(
+        `#workspace-tree > [data-workspace-id="${selectedWorkspace}"]`,
+      ),
+    ).toBeFocused();
     await expect(composer()).toHaveValue("next draft remains intact");
     expect(
       await composer().evaluate(

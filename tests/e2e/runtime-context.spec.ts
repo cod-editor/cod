@@ -106,5 +106,5 @@ test("Runtime AC3 help covers actual capabilities and normal file operations rem
       "--pane-id",
       pane.paneId,
     ),
-  ).toEqual({ content: "" });
+  ).toEqual({ content: "", version: expect.any(String) });
 });

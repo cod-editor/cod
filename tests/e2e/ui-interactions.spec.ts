@@ -888,13 +888,13 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     await settings
       .getByRole("button", { name: "Reset defaults", exact: true })
       .click();
+    await expect(
+      settings.getByRole("button", { name: "Reset defaults", exact: true }),
+    ).toBeEnabled();
     await settings
-      .getByRole("button", { name: "Browser settings", exact: true })
-      .click();
-    const browser = app.page.getByRole("dialog", {
-      name: "Browser settings",
-      exact: true,
-    });
+      .getByRole("searchbox", { name: "Search settings", exact: true })
+      .fill("browser");
+    const browser = settings;
     await expect(
       browser.getByRole("combobox", { name: "Search engine", exact: true }),
     ).toBeVisible();

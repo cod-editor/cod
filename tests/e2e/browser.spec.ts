@@ -35,6 +35,17 @@ async function open(workspace: string, route = "/one") {
   );
 }
 async function remote(route: string, source: string) {
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        ({ webContents }, url) =>
+          webContents
+            .getAllWebContents()
+            .some((w) => w.getURL() === url && !w.isLoadingMainFrame()),
+        origin + route,
+      ),
+    )
+    .toBe(true);
   return shell.app!.evaluate(
     async ({ webContents }, { url, source }) => {
       const wc = webContents

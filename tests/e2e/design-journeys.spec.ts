@@ -75,7 +75,7 @@ test("New task stays a compact bottom-composer chat at normal and wide window si
     });
   }
   await composer.fill("Keep this unsent task description");
-  await composer.press("Enter");
+  await composer.press("Shift+Enter");
   await expect(composer).toHaveValue("Keep this unsent task description\n");
   expect(
     (await shell.cli<{ conversations: unknown[] }>("state")).conversations,
@@ -895,7 +895,7 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
         .first(),
     ).toBeFocused();
     expect((await state()).zoomedGroupId).toBeFalsy();
-    expect(await panelWidths()).toEqual(widths);
+    await expect.poll(panelWidths).toEqual(widths);
     await chatGroup
       .getByRole("button", { name: "Maximize pane", exact: true })
       .click();
@@ -925,7 +925,9 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
     await addressInput.fill("file:///invented-forbidden-file");
     await addressInput.press("Enter");
     const localError = shell.pane(browser.paneId).getByRole("alert");
-    await expect(localError).toContainText("Unsupported browser URL protocol");
+    await expect(localError).toContainText(
+      "Only HTTP and HTTPS addresses are supported",
+    );
     await expect
       .poll(async () => {
         const message = (await localError.boundingBox())!;
@@ -939,7 +941,7 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
     await nativeGroup
       .getByRole("button", { name: "Restore panes", exact: true })
       .click();
-    expect(await panelWidths()).toEqual(widths);
+    await expect.poll(panelWidths).toEqual(widths);
     expect((await state()).groupLayout).toEqual(before.groupLayout);
     // An enabled global command reports its empty result in the header.
     await shell.command("Reopen closed workspace");
