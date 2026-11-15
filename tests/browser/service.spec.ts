@@ -457,12 +457,15 @@ test("B1 AC5 visibility retains page identity, bounds validate and disposal pres
   );
   await call("close", "one");
   await call("close", "one");
-  expect(
-    await application.evaluate(
-      ({ webContents }, id) => Boolean(webContents.fromId(id)),
-      nativeId,
-    ),
-  ).toBe(false);
+  expect(await call("list")).toEqual([]);
+  await expect
+    .poll(() =>
+      application.evaluate(
+        ({ webContents }, id) => Boolean(webContents.fromId(id)),
+        nativeId,
+      ),
+    )
+    .toBe(false);
   await open("two");
   await call("dispose");
   await call("dispose");
