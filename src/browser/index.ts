@@ -3,6 +3,7 @@ import type { BrowserDownload } from "./download-types";
 import { installScrollbarStyle } from "./scrollbars";
 import {
   WebContentsView,
+  dialog,
   type BrowserWindow,
   type Session,
   type WebContents,
@@ -50,6 +51,7 @@ interface Resource {
   lastSuccessfulUrl?: string;
   diagnostics?: BrowserDiagnostics;
   popups: Set<BrowserWindow>;
+  closing?: Promise<boolean>;
 }
 interface Options {
   window: BrowserWindow;
@@ -447,7 +449,56 @@ export class BrowserService {
     );
     return resource.diagnostics[action]();
   }
-  close(id: string) {
+  requestClose(id: string): Promise<boolean> {
+    const resource = this.resources.get(id);
+    if (!resource || resource.view.webContents.isDestroyed())
+      return Promise.resolve(true);
+    if (resource.closing) return resource.closing;
+    const contents = resource.view.webContents;
+    const pending = new Promise<boolean>((resolve, reject) => {
+      const finish = (closed: boolean) => {
+        contents.removeListener("destroyed", destroyed);
+        contents.removeListener("will-prevent-unload", blocked);
+        resource.closing = undefined;
+        if (closed) this.close(id, contents);
+        resolve(closed);
+      };
+      const destroyed = () => finish(true);
+      const blocked = () => {
+        // Default prevention keeps the page intact while the native confirmation
+        // is open. Only an explicit Leave retries without the page guard.
+        void dialog
+          .showMessageBox(this.options.window, {
+            type: "warning",
+            title: "Leave page?",
+            message: "Changes you made may not be saved.",
+            buttons: ["Stay", "Leave"],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          })
+          .then(({ response }) => {
+            if (contents.isDestroyed()) return;
+            if (response === 1) this.close(id, contents);
+            else finish(false);
+          })
+          .catch(() => finish(false));
+      };
+      contents.once("destroyed", destroyed);
+      contents.once("will-prevent-unload", blocked);
+      try {
+        contents.close({ waitForBeforeUnload: true });
+      } catch (error) {
+        contents.removeListener("destroyed", destroyed);
+        contents.removeListener("will-prevent-unload", blocked);
+        resource.closing = undefined;
+        reject(error);
+      }
+    });
+    resource.closing = pending;
+    return pending;
+  }
+  close(id: string, contents?: WebContents) {
     const resource = this.resources.get(id);
     if (!resource) return;
     resource.diagnostics?.dispose();
@@ -455,10 +506,13 @@ export class BrowserService {
     for (const popup of resource.popups)
       if (!popup.isDestroyed()) popup.destroy();
     resource.popups.clear();
-    if (!this.options.window.isDestroyed())
+    if (
+      !this.options.window.isDestroyed() &&
+      this.options.window.contentView.children.includes(resource.view)
+    )
       this.options.window.contentView.removeChildView(resource.view);
-    if (!resource.view.webContents.isDestroyed())
-      resource.view.webContents.close({ waitForBeforeUnload: false });
+    const target = contents ?? resource.view.webContents;
+    if (!target.isDestroyed()) target.close({ waitForBeforeUnload: false });
     this.emit({ type: "closed", id, workspaceId: resource.workspaceId });
   }
   dispose = () => {

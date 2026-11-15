@@ -1369,3 +1369,85 @@ test("Development builds explain why default browser registration needs a packag
     dialog.getByRole("button", { name: "Make default browser" }),
   ).toHaveCount(0);
 });
+
+test("Guarded tab close keeps the page and form on Stay and removes them only on Leave", async () => {
+  const workspace = await shell.create("Protected form");
+  const browser = await open(workspace);
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  await remote(
+    "/one",
+    `document.body.innerHTML = '<input id="unsaved" value="Invented unsaved form">'; document.querySelector('input').focus(); window.onbeforeunload = () => false; void 0;`,
+  );
+  await pageKey("/one", "A");
+  const typed = await remote("/one", `document.querySelector('input').value`);
+  await shell.app!.evaluate(({ dialog }) => {
+    Object.assign(globalThis, { formClosePrompts: [], formCloseResponse: 0 });
+    Object.assign(dialog, {
+      showMessageBox: async (...args: any[]) => {
+        const state = globalThis as any;
+        state.formClosePrompts.push(args.at(-1));
+        return { response: state.formCloseResponse, checkboxChecked: false };
+      },
+    });
+  });
+  // Exercise the real page key route and pane.close, not a synthetic DOM event.
+  await pageKey("/one", "W", [
+    process.platform === "darwin" ? "meta" : "control",
+  ]);
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(() => (globalThis as any).formClosePrompts.length),
+    )
+    .toBe(1);
+  await expect(shell.pane(browser.paneId)).toBeVisible();
+  expect(await remote("/one", `document.querySelector('input').value`)).toBe(
+    typed,
+  );
+  const state = await shell.cli<any>("state");
+  expect(
+    state.workspaces.find((w: any) => w.id === workspace).closedTabs ?? [],
+  ).toHaveLength(0);
+  await shell.app!.evaluate(() => {
+    (globalThis as any).formCloseResponse = 1;
+  });
+  const closed = await shell.cli<{ closed: boolean }>(
+    "browser",
+    "close",
+    "--id",
+    browser.id,
+  );
+  expect(closed.closed).toBe(true);
+  await expect(shell.pane(browser.paneId)).toHaveCount(0);
+});
+
+test("Guarded workspace close cancels before removing the workspace or its page", async () => {
+  const workspace = await shell.create("Protected workspace form");
+  const browser = await open(workspace);
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  await remote(
+    "/one",
+    `document.body.innerHTML = '<input value="Workspace draft">'; document.querySelector('input').focus(); window.onbeforeunload = () => false; void 0;`,
+  );
+  await pageKey("/one", "A");
+  await shell.app!.evaluate(({ dialog }) => {
+    Object.assign(dialog, {
+      showMessageBox: async () => ({ response: 0, checkboxChecked: false }),
+    });
+  });
+  const result = await shell.cli<{ closed: boolean }>(
+    "workspace",
+    "close",
+    "--id",
+    workspace,
+  );
+  expect(result.closed).toBe(false);
+  expect((await inspect(browser.id)).id).toBe(browser.id);
+  expect(
+    await remote("/one", `document.querySelector('input').value`),
+  ).toContain("Workspace draft");
+  await expect(shell.row("Protected workspace form")).toBeVisible();
+});

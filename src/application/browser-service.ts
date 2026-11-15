@@ -297,7 +297,9 @@ export class BrowserApplicationService {
         const browser = browserForContents(contents);
         if (browser)
           void this.store
-            .change(() => this.removeBrowser(browser))
+            .change(async () => {
+              if (await this.requestClose(browser)) this.removeBrowser(browser);
+            })
             .catch(() => undefined);
       },
     });
@@ -750,6 +752,10 @@ export class BrowserApplicationService {
       throw error;
     }
   }
+  async requestClose(record: BrowserState): Promise<boolean> {
+    if (record.agentPage) return true;
+    return (await this.browserService?.requestClose(record.id)) ?? true;
+  }
   removeBrowser(record: BrowserState): void {
     this.store.data.browsers = this.store.data.browsers.filter(
       (item) => item !== record,
@@ -1119,10 +1125,12 @@ export class BrowserApplicationService {
         return structuredClone(this.browser(requiredString(request, "id")));
 
       case "browser.close":
-        return this.store.change(() => {
+        return this.store.change(async () => {
           const record = this.browser(requiredString(request, "id"));
+          if (!(await this.requestClose(record)))
+            return { id: record.id, closed: false };
           this.removeBrowser(record);
-          return { id: record.id };
+          return { id: record.id, closed: true };
         });
 
       case "browser.recover": {

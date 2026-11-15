@@ -29,7 +29,11 @@ export class WorkspaceApplicationService {
     >,
     private readonly browsers: Pick<
       BrowserApplicationService,
-      "browser" | "removeBrowser" | "loadAgentPage" | "restoreBrowser"
+      | "browser"
+      | "removeBrowser"
+      | "requestClose"
+      | "loadAgentPage"
+      | "restoreBrowser"
     >,
     private readonly terminals: Pick<
       TerminalApplicationService,
@@ -55,26 +59,38 @@ export class WorkspaceApplicationService {
     return { id };
   }
 
-  async closeWorkspace(id: string): Promise<{ id: string }> {
+  async closeWorkspace(id: string): Promise<{ id: string; closed?: boolean }> {
     const index = this.store.data.workspaces.findIndex(
       (item) => item.id === id,
     );
     if (index < 0) throw new Error(`Workspace not found: ${id}`);
+    const archived = structuredClone({
+      workspace: this.store.data.workspaces[index]!,
+      conversations: this.store.data.conversations.filter(
+        (item) => item.workspaceId === id,
+      ),
+      terminals: this.store.data.terminals.filter(
+        (item) => item.workspaceId === id,
+      ),
+      browsers: this.store.data.browsers.filter(
+        (item) => item.workspaceId === id,
+      ),
+    });
+    // Ask pages before stopping agents or shells. Earlier pages explicitly
+    // discarded by the user remain closed (and individually reopenable) if a
+    // later page cancels the workspace close.
+    for (const browser of this.store.data.browsers.filter(
+      (item) => item.workspaceId === id,
+    )) {
+      const result = await this.closePane({
+        op: "pane.close",
+        workspace: id,
+        id: browser.paneId,
+      });
+      if (result.closed === false) return { id, closed: false };
+    }
     this.store.data.closedWorkspaces ??= [];
-    this.store.data.closedWorkspaces.push(
-      structuredClone({
-        workspace: this.store.data.workspaces[index]!,
-        conversations: this.store.data.conversations.filter(
-          (item) => item.workspaceId === id,
-        ),
-        terminals: this.store.data.terminals.filter(
-          (item) => item.workspaceId === id,
-        ),
-        browsers: this.store.data.browsers.filter(
-          (item) => item.workspaceId === id,
-        ),
-      }),
-    );
+    this.store.data.closedWorkspaces.push(archived);
     for (const conversation of this.store.data.conversations.filter(
       (item) => item.workspaceId === id,
     )) {
@@ -332,11 +348,18 @@ export class WorkspaceApplicationService {
     return { paneId };
   }
 
-  async closePane(request: OperationRequest): Promise<{ paneId: string }> {
+  async closePane(
+    request: OperationRequest,
+  ): Promise<{ paneId: string; closed?: boolean }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
     const pane = this.store.pane(workspace, requiredString(request, "id"));
+    if (
+      pane.kind === "browser" &&
+      !(await this.browsers.requestClose(this.browsers.browser(pane.browserId)))
+    )
+      return { paneId: pane.id, closed: false };
     workspace.closedTabs ??= [];
     workspace.closedTabs.push({
       pane: structuredClone(pane),
