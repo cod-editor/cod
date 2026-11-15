@@ -366,10 +366,18 @@ test("Report evidence links render local JSON, images and JSONL and return throu
   const first = await open();
   await call("setBounds", "one", { x: 0, y: 0, width: 700, height: 500 });
   await call("setVisible", "one", true);
-  const page = app
-    .context()
-    .pages()
-    .find((p) => p.url() === first.url)!;
+  let attached: import("@playwright/test").Page | undefined;
+  await expect
+    .poll(() => {
+      attached = app
+        .context()
+        .pages()
+        .find((p) => p.url() === first.url);
+      return !!attached;
+    })
+    .toBe(true);
+  if (!attached) throw new Error("Registered report did not attach");
+  const page = attached;
   // Observe the actual right-click handler without leaving a blocking native popup open.
   await app.evaluate(({ Menu }) => {
     Menu.prototype.popup = function () {
