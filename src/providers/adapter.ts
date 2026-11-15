@@ -37,6 +37,7 @@ interface Approval {
   nativeOptions: Map<string, unknown>;
 }
 interface ActiveTurn {
+  outputReceived?: boolean;
   id?: string;
   external?: boolean;
   cancelRequested?: boolean;
@@ -493,9 +494,14 @@ export class NativeAdapter implements ProviderAdapter {
           if (!reason) throw new Error("Provider omitted native stop reason");
           if (reason === "cancelled")
             this.finish({ status: "cancelled", nativeReason: reason });
-          else if (reason === "end_turn")
+          else if (reason === "end_turn") {
+            if (!active.outputReceived)
+              throw new Error(
+                "Kimi returned no response. Check account limits or continue in its CLI for details.",
+              );
             this.finish({ status: "completed", nativeReason: reason });
-          else throw new Error(`Provider stopped before completion: ${reason}`);
+          } else
+            throw new Error(`Provider stopped before completion: ${reason}`);
         }
       } catch (error) {
         this.fail(errorOf(error));
@@ -697,6 +703,14 @@ export class NativeAdapter implements ProviderAdapter {
       const kind = update.sessionUpdate;
       if (kind === "agent_message_chunk" || kind === "user_message_chunk") {
         const content = object(update.content);
+        if (
+          kind === "agent_message_chunk" &&
+          content.type === "text" &&
+          typeof content.text === "string" &&
+          content.text.trim() &&
+          this.active
+        )
+          this.active.outputReceived = true;
         if (content.type === "text" && typeof content.text === "string")
           this.emit({
             type: "text",
@@ -705,14 +719,15 @@ export class NativeAdapter implements ProviderAdapter {
             replay: this.replay,
           });
         else this.emit({ type: "history", details: update });
-      } else if (kind === "tool_call" || kind === "tool_call_update")
+      } else if (kind === "tool_call" || kind === "tool_call_update") {
+        if (this.active) this.active.outputReceived = true;
         this.emit({
           type: "tool",
           phase: kind === "tool_call" ? "started" : "updated",
           details: update,
           replay: this.replay,
         });
-      else this.emit({ type: "history", details: update });
+      } else this.emit({ type: "history", details: update });
     }
   }
   private requestPermission(message: RpcMessage) {

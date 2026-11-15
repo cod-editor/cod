@@ -1356,7 +1356,15 @@ test("Queued Codex turns retain permission and interruption controls", async () 
     "--text",
     "Must not overlap",
   );
-  expect(result.code).not.toBe(0);
+  expect(result.code).toBe(0);
+  expect(
+    (await inspectQueuedChat(chat.id)).queuedMessages?.map((m) => m.text),
+  ).toEqual(["Must not overlap"]);
+  expect(
+    (await inspectQueuedChat(chat.id)).messages.some(
+      (m) => m.role === "user" && m.text === "Must not overlap",
+    ),
+  ).toBe(false);
   await shell.cli(
     "conversation",
     "permission",
@@ -1369,6 +1377,12 @@ test("Queued Codex turns retain permission and interruption controls", async () 
   );
   await expect.poll(() => status(chat.id)).toBe("ready");
   await expect(transcript(chat)).toContainText("DENIED External approval");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Must not overlap");
+  await expect
+    .poll(async () => (await inspectQueuedChat(chat.id)).queuedMessages?.length)
+    .toBe(0);
   const revision = (await inspectQueuedChat(chat.id)).completionRevision;
   await queueFixture(chat, "held", "External hold [hold]");
   await expect.poll(() => status(chat.id)).toBe("working");
@@ -1405,7 +1419,10 @@ test("Queued turn at completion cannot be cleared by the previous send promise",
     "--text",
     "Overlap",
   );
-  expect(result.code).not.toBe(0);
+  expect(result.code).toBe(0);
+  expect(
+    (await inspectQueuedChat(chat.id)).queuedMessages?.map((m) => m.text),
+  ).toEqual(["Overlap"]);
   expect(
     (await inspectQueuedChat(chat.id)).turns?.at(-1)?.finishedAt,
   ).toBeUndefined();
@@ -1578,4 +1595,189 @@ test("Enter sends chat, Shift Enter inserts a line and IME and model controls do
   await expect.poll(() => shell.prompts()).toHaveLength(1);
   await expect(input).toHaveValue("");
   await expect(transcript(chat)).toContainText("First line\nSecond line");
+});
+
+for (const provider of ["codex", "kimi"] as const) {
+  test(`Busy ${provider} chat queues messages, edits in place and cancels without losing the next draft`, async () => {
+    const workspace = await shell.create("Message queue");
+    const chat = await shell.newChat(workspace, provider);
+    await shell.send(chat.id, "First request [approve]");
+    await expect.poll(() => status(chat.id)).toBe("waiting");
+    const pane = shell.pane(chat.paneId);
+    const input = pane.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("Original queued text");
+    await input.press("Enter");
+    const queue = pane.getByRole("region", { name: "Queued messages" });
+    await expect(queue).toContainText("Original queued text");
+    await expect(input).toHaveValue("");
+    expect((await shell.prompts()).length).toBe(1);
+    await shell.send(chat.id, "Cancel this queued text");
+    await queue
+      .getByRole("button", { name: "Cancel queued message", exact: true })
+      .last()
+      .click();
+    await expect(queue).not.toContainText("Cancel this queued text");
+    await queue
+      .getByRole("button", { name: "Edit queued message", exact: true })
+      .click();
+    await queue
+      .getByRole("textbox", { name: "Edit queued message" })
+      .fill("Revised queued text");
+    const permission = (await shell.inspect(chat.id)).pendingPermissions[0];
+    await shell.cli(
+      "conversation",
+      "permission",
+      "--id",
+      chat.id,
+      "--request-id",
+      permission.id,
+      "--option-id",
+      permission.options[0].id,
+    );
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    // Completion cannot dispatch the entry while its editor is open.
+    expect((await shell.prompts()).length).toBe(1);
+    await input.fill("Keep this next draft");
+    await queue.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(async () => text(await shell.inspect(chat.id)))
+      .toContain("DONE Revised queued text");
+    await expect(queue).toHaveCount(0);
+    await expect(input).toHaveValue("Keep this next draft");
+    expect((await shell.prompts()).length).toBe(2);
+    await shell.stop();
+    await shell.start();
+    await shell.cli("conversation", "show", "--id", chat.id);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("Keep this next draft");
+  });
+}
+
+test("Queued messages and images survive restart and resume explicitly without replaying interrupted sends", async () => {
+  const workspace = await shell.create("Durable message queue");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Hold initial request [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  const image = {
+    reference: 1,
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+  };
+  const first = await shell.cli<{ messageId: string }>(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Image [Image 1]",
+    "--images",
+    JSON.stringify([image]),
+  );
+  await shell.send(chat.id, "Second queued message");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  const inspect = () =>
+    shell.cli<ConversationState>("conversation", "inspect", "--id", chat.id);
+  expect((await inspect()).queuedMessages?.map((m) => m.text)).toEqual([
+    "Image [Image 1]",
+    "Second queued message",
+  ]);
+  expect((await inspect()).queuedMessages?.[0].images).toEqual([image]);
+  expect((await shell.prompts()).length).toBe(1);
+  await shell.cli(
+    "conversation",
+    "queue-edit",
+    "--id",
+    chat.id,
+    "--message-id",
+    first.messageId,
+    "--text",
+    "Edited image [Image 1]",
+  );
+  const pane = shell.pane(chat.paneId);
+  await expect(
+    pane.getByRole("region", { name: "Queued messages" }).locator("img"),
+  ).toHaveCount(1);
+  await shell.page.screenshot({
+    path: test.info().outputPath("message-queue.png"),
+  });
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(780, 650),
+  );
+  const queue = pane.getByRole("region", { name: "Queued messages" });
+  const edit = queue
+    .getByRole("button", { name: "Edit queued message", exact: true })
+    .first();
+  await edit.focus();
+  await expect(edit).toBeFocused();
+  expect(
+    await queue.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
+  await shell.page.screenshot({
+    path: test.info().outputPath("message-queue-narrow.png"),
+  });
+  await pane
+    .getByRole("button", { name: "Continue queue", exact: true })
+    .click();
+  await expect
+    .poll(async () => text(await shell.inspect(chat.id)))
+    .toContain("DONE Second queued message");
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.length)
+    .toBe(0);
+  expect((await shell.prompts()).length).toBe(3);
+});
+
+test("Interrupted sends pause remaining queued messages and restart never repeats an uncertain send", async () => {
+  const workspace = await shell.create("Queue interruption");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "First request [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await shell.send(chat.id, "Next request [hold]");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const inspect = () =>
+    shell.cli<ConversationState>("conversation", "inspect", "--id", chat.id);
+  expect((await inspect()).queuePaused).toBe(true);
+  expect((await shell.prompts()).length).toBe(1);
+  await shell.cli("conversation", "queue-resume", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.[0].status)
+    .toBe("sending");
+  await shell.send(chat.id, "Last queued request");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.[0].status)
+    .toBe("uncertain");
+  expect((await inspect()).queuePaused).toBe(true);
+  expect((await shell.prompts()).length).toBe(2);
+  const blocked = await shell.raw(
+    "conversation",
+    "queue-resume",
+    "--id",
+    chat.id,
+  );
+  expect(blocked.code).not.toBe(0);
+  expect(blocked.stderr).toContain("uncertain");
+  const uncertain = (await inspect()).queuedMessages![0];
+  await shell.cli(
+    "conversation",
+    "queue-remove",
+    "--id",
+    chat.id,
+    "--message-id",
+    uncertain.id,
+  );
+  await shell.cli("conversation", "queue-resume", "--id", chat.id);
+  await expect
+    .poll(async () => text(await shell.inspect(chat.id)))
+    .toContain("DONE Last queued request");
+  expect((await shell.prompts()).length).toBe(3);
 });

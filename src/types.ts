@@ -142,7 +142,18 @@ export interface PendingPermission {
   details: unknown;
 }
 
+export interface QueuedMessage {
+  editing?: boolean;
+  id: string;
+  text: string;
+  images?: import("./providers/types").ImageAttachment[];
+  skills?: Array<{ name: string; path: string }>;
+  status: "queued" | "sending" | "uncertain";
+}
+
 export interface ConversationState {
+  queuedMessages?: QueuedMessage[];
+  queuePaused?: boolean;
   displayName?: string;
   handoffTerminalId?: string;
   taskStatus?: "working" | "waiting" | "review" | "ready" | "failed";

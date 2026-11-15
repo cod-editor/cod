@@ -49,6 +49,12 @@ export function groupTurnActivity(
     nodes.forEach((node, index) => {
       if (node.classList.contains("tool-activity")) lastTool = index;
     });
+    const lastAssistant = [...nodes]
+      .reverse()
+      .find(
+        (node) =>
+          node.classList.contains("assistant") && node.textContent?.trim(),
+      );
     const activity = nodes.filter((node, index) => {
       if (node.hasAttribute("data-action-required")) return false;
       if (node.classList.contains("tool-activity")) return true;
@@ -57,8 +63,24 @@ export function groupTurnActivity(
       if (live && node.dataset.phase !== "final") return true;
       // Unknown imported history: preserve the complete final assistant block
       // after the last tool; never classify a sole answer by its wording.
-      return !node.dataset.phase && lastTool >= 0 && index < lastTool;
+      return (
+        !node.dataset.phase &&
+        node !== lastAssistant &&
+        lastTool >= 0 &&
+        index < lastTool
+      );
     });
+    if (completed && recorded?.outcome === "completed" && !lastAssistant) {
+      const warning = document.createElement("div");
+      warning.className = "turn-reply-missing";
+      warning.textContent = "Agent finished without a text reply.";
+      const preceding =
+        nodes.at(-1) ??
+        [...transcript.children].find(
+          (node) => (node as HTMLElement).dataset.turnId === id,
+        );
+      transcript.insertBefore(warning, preceding?.nextSibling ?? null);
+    }
     const duration = recorded?.durationMs;
     const text = live
       ? conversation.status === "waiting"

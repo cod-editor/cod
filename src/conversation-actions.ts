@@ -5,6 +5,8 @@ export function conversationRemovalReason(
   state: AppState,
   conversation: ConversationState,
 ): string | undefined {
+  if (conversation.queuedMessages?.length)
+    return "Send or cancel queued messages before removing this chat.";
   if (conversation.handoffTerminalId)
     return "Return this session to chat before removing it.";
   if (

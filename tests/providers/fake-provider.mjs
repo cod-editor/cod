@@ -219,6 +219,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     }
   }
+  if (mode === "empty-completion" && provider === "kimi") {
+    reply(m, { stopReason: "end_turn" });
+    return;
+  }
   if (mode === "rpc-error") {
     write({
       id: m.id,

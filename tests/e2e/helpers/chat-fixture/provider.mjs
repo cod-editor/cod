@@ -403,6 +403,10 @@ function receive(message, external = false) {
   };
   history.push(active.turn);
   persist();
+  if (provider === "kimi" && configuration().emptyReply) {
+    complete();
+    return;
+  }
   if (provider === "codex") {
     if (!external) reply(message, { turn: { id: active.turnId } });
     notify("turn/started", {
@@ -548,7 +552,7 @@ function receive(message, external = false) {
             "commentary",
             true,
           );
-        text(`DONE ${prompt}`);
+        if (!configuration().noFinalReply) text(`DONE ${prompt}`);
         complete();
       }, configuration().finalDelayMs ?? 500);
   }, configuration().streamDelayMs ?? 200);

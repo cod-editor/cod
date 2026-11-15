@@ -44,6 +44,88 @@ export class ConversationApplicationService {
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
   private externalTurns = new Set<string>();
+  private drainingQueues = new Set<string>();
+  private scheduleQueue(id: string): void {
+    // Let native completion handlers release their active turn first.
+    setTimeout(() => void this.drainQueue(id), 0);
+  }
+  private async drainQueue(id: string): Promise<void> {
+    const conversation = this.store.data.conversations.find((c) => c.id === id);
+    if (
+      !conversation ||
+      this.store.closing ||
+      this.drainingQueues.has(id) ||
+      this.isActive(id) ||
+      conversation.queuePaused ||
+      conversation.handoffTerminalId ||
+      conversation.status !== "ready"
+    )
+      return;
+    const message = conversation.queuedMessages?.[0];
+    if (!message || message.status !== "queued" || message.editing) return;
+    this.drainingQueues.add(id);
+    try {
+      const admitted = await this.store.change(() => {
+        if (
+          !this.isCurrent(conversation) ||
+          this.isActive(id) ||
+          conversation.status !== "ready" ||
+          conversation.queuePaused ||
+          conversation.queuedMessages?.[0] !== message ||
+          message.status !== "queued" ||
+          message.editing
+        )
+          return false;
+        message.status = "sending";
+        return true;
+      });
+      if (!admitted) return;
+      await this.sendConversation(
+        {
+          op: "conversation.send",
+          id,
+          text: message.text,
+          images: message.images,
+          skills: message.skills,
+          queuedMessageId: message.id,
+        },
+        true,
+      );
+    } catch (error) {
+      if (this.isCurrent(conversation)) {
+        const current = conversation.queuedMessages?.find(
+          (m) => m.id === message.id,
+        );
+        if (current) current.status = "queued";
+        conversation.queuePaused = true;
+        conversation.error = `Message remains queued: ${error instanceof Error ? error.message : String(error)}`;
+        this.store.notify();
+        this.store.schedulePersist(true);
+      }
+    } finally {
+      this.drainingQueues.delete(id);
+    }
+  }
+  private finishQueued(
+    conversation: ConversationState,
+    request: OperationRequest,
+    pause: boolean,
+  ): void {
+    const message = conversation.queuedMessages?.find(
+      (m) => m.id === request.queuedMessageId,
+    );
+    if (message) {
+      if (pause) message.status = "uncertain";
+      else
+        conversation.queuedMessages = conversation.queuedMessages!.filter(
+          (m) => m !== message,
+        );
+    }
+    if (pause) conversation.queuePaused = true;
+    this.store.notify();
+    this.scheduleQueue(conversation.id);
+  }
+
   private turnClocks = new Map<
     string,
     { id: string; start: number; workingStart?: number; worked: number }
@@ -105,6 +187,7 @@ export class ConversationApplicationService {
   }
   release(id: string): void {
     if (!this.externalTurns.has(id)) this.activeTurns.delete(id);
+    this.scheduleQueue(id);
   }
   async ensureReady(conversation: ConversationState): Promise<void> {
     await this.ensureController(conversation);
@@ -401,6 +484,7 @@ export class ConversationApplicationService {
     if (
       this.activeTurns.has(id) ||
       this.controllerInitializations.has(id) ||
+      conversation.queuedMessages?.length ||
       conversation.pendingPermissions.length ||
       conversation.status === "starting"
     )
@@ -621,24 +705,76 @@ export class ConversationApplicationService {
     });
   }
 
+  private clearSubmittedDraft(
+    conversation: ConversationState,
+    text: string,
+    images: import("../providers/types").ImageAttachment[],
+  ): void {
+    const workspace = this.store.workspace(conversation.workspaceId);
+    const draft = workspace.chatDrafts?.[conversation.paneId];
+    const attachments = draft?.images ?? [];
+    if (
+      draft?.text === text &&
+      attachments.length === images.length &&
+      attachments.every(
+        (image, i) =>
+          image.data === images[i].data &&
+          image.mimeType === images[i].mimeType &&
+          image.reference === images[i].reference,
+      )
+    )
+      delete workspace.chatDrafts![conversation.paneId];
+  }
+
   async sendConversation(
     request: OperationRequest,
-  ): Promise<{ id: string; status: string }> {
+    fromQueue = false,
+  ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
     const text = typeof request.text === "string" ? request.text : "";
     if (parseProviderCommand(text))
       throw new Error(
         "Session commands are not prompts. Use conversation.native-inspect with a section, or open the desktop command menu.",
       );
+    if (text.length > 1_000_000) throw new Error("Message is too long");
     const images = this.validateImages(request.images);
     const skills = this.validateSkills(request.skills);
     if (!text.trim() && !images.length)
       throw new Error("Message must not be blank");
-    if (this.activeTurns.has(conversation.id)) {
-      throw new Error("A turn is already active for this conversation");
+    if (conversation.handoffTerminalId)
+      throw new Error("Return to chat before sending a message");
+    if (!fromQueue && request.pageId && this.activeTurns.has(conversation.id))
+      throw new Error("Origin conversation is busy");
+    if (
+      !fromQueue &&
+      (this.activeTurns.has(conversation.id) ||
+        conversation.queuedMessages?.length)
+    ) {
+      const messageId = randomUUID();
+      await this.store.change(() => {
+        if (this.store.closing) throw new Error("Cod is shutting down");
+        this.assertCurrent(conversation);
+        if ((conversation.queuedMessages?.length ?? 0) >= 100)
+          throw new Error("Message queue is full");
+        (conversation.queuedMessages ??= []).push({
+          id: messageId,
+          text,
+          ...(images.length ? { images } : {}),
+          ...(skills.length ? { skills } : {}),
+          status: "queued",
+        });
+        this.clearSubmittedDraft(conversation, text, images);
+      });
+      this.scheduleQueue(conversation.id);
+      return { id: conversation.id, status: "queued", messageId };
     }
+    if (this.activeTurns.has(conversation.id))
+      throw new Error("Conversation is busy");
+    if (!fromQueue) conversation.queuePaused = false;
     this.activeTurns.add(conversation.id);
     try {
+      // Sending is a barrier after pending coalesced composer writes.
+      if (!fromQueue) await this.store.serialize(() => undefined);
       const adapter = await this.ensureController(conversation);
       await adapter.resolveSkills(text, skills);
       this.assertCurrent(conversation);
@@ -658,9 +794,7 @@ export class ConversationApplicationService {
         conversation.completionRevision ?? 0;
       this.store.notify();
       this.store.schedulePersist();
-      const workspace = this.store.workspace(conversation.workspaceId);
-      if (workspace.chatDrafts)
-        delete workspace.chatDrafts[conversation.paneId];
+      if (!fromQueue) this.clearSubmittedDraft(conversation, text, images);
       const turn = adapter.send(text, images, skills);
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
@@ -671,6 +805,12 @@ export class ConversationApplicationService {
             this.activeTurns.delete(conversation.id);
           }
           finishPage("completed");
+          if (outcome.status === "cancelled") conversation.queuePaused = true;
+          this.finishQueued(
+            conversation,
+            fromQueue ? request : { op: "" },
+            false,
+          );
           this.store.schedulePersist(true);
         },
         (error) => {
@@ -678,6 +818,11 @@ export class ConversationApplicationService {
           if (this.turnClocks.get(conversation.id)?.id !== turnId) return;
           this.finishTurn(conversation, "failed");
           this.activeTurns.delete(conversation.id);
+          this.finishQueued(
+            conversation,
+            fromQueue ? request : { op: "" },
+            true,
+          );
           conversation.status = "failed";
           conversation.error =
             error instanceof Error ? error.message : String(error);
@@ -845,6 +990,9 @@ export class ConversationApplicationService {
         break;
       case "completed":
         this.finishTurn(conversation, event.outcome.status);
+        if (event.outcome.status === "cancelled")
+          conversation.queuePaused = true;
+        this.scheduleQueue(id);
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         if (event.outcome.status === "completed") {
           conversation.completionRevision =
@@ -856,6 +1004,7 @@ export class ConversationApplicationService {
         break;
       case "error":
         this.finishTurn(conversation, "failed");
+        conversation.queuePaused = true;
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         conversation.status = "failed";
         conversation.error = event.message;
@@ -1099,6 +1248,67 @@ export class ConversationApplicationService {
       case "conversation.send":
         return this.sendConversation(request);
 
+      case "conversation.queue-edit":
+      case "conversation.queue-remove":
+        return this.store
+          .change(() => {
+            const conversation = this.store.conversation(
+              requiredString(request, "id"),
+            );
+            const message = conversation.queuedMessages?.find(
+              (m) => m.id === requiredString(request, "messageId"),
+            );
+            if (!message) throw new Error("Queued message not found");
+            if (message.status === "sending")
+              throw new Error("Message is already being sent");
+            if (request.op === "conversation.queue-remove") {
+              conversation.queuedMessages = conversation.queuedMessages!.filter(
+                (m) => m !== message,
+              );
+            } else {
+              if (message.status !== "queued")
+                throw new Error(
+                  "Delivery is uncertain; inspect native history before resending",
+                );
+              const text =
+                typeof request.text === "string" ? request.text : message.text;
+              if (text.length > 1_000_000 || parseProviderCommand(text))
+                throw new Error("Invalid queued prompt");
+              const images =
+                request.images === undefined
+                  ? message.images
+                  : this.validateImages(request.images);
+              if (!text.trim() && !images?.length)
+                throw new Error("Message must not be blank");
+              message.text = text;
+              message.editing = request.editing === true;
+              message.images = images;
+              if (request.skills !== undefined)
+                message.skills = this.validateSkills(request.skills);
+            }
+            return { id: conversation.id, messageId: message.id };
+          })
+          .then((result) => {
+            this.scheduleQueue(result.id);
+            return result;
+          });
+      case "conversation.queue-resume": {
+        const conversation = this.store.conversation(
+          requiredString(request, "id"),
+        );
+        if (conversation.queuedMessages?.some((m) => m.status !== "queued"))
+          throw new Error(
+            "Resolve the uncertain message before continuing the queue",
+          );
+        await this.ensureController(conversation);
+        await this.store.change(() => {
+          conversation.queuePaused = false;
+          conversation.error = undefined;
+        });
+        this.scheduleQueue(conversation.id);
+        return { id: conversation.id };
+      }
+
       case "conversation.interrupt":
         return this.interruptConversation(requiredString(request, "id"));
 
@@ -1130,6 +1340,11 @@ export class ConversationApplicationService {
 
   restoreInterrupted(): void {
     for (const conversation of this.store.data.conversations) {
+      if (conversation.queuedMessages?.length) {
+        conversation.queuePaused = true;
+        for (const message of conversation.queuedMessages)
+          if (message.status === "sending") message.status = "uncertain";
+      }
       if (["starting", "working", "waiting"].includes(conversation.status)) {
         conversation.status = "failed";
         conversation.pendingPermissions = [];

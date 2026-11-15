@@ -1,3 +1,4 @@
+import { actionRow } from "./primitives";
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
 import {
@@ -61,6 +62,8 @@ export function createConversationViews({
     skillDrafts.set(key, skills);
     return skills;
   }
+  const queueEdits = new Map<string, string>();
+  const pendingSends = new Set<string>();
   const pendingStarts = new Set<string>();
   const loadingImages = new Set<string>();
   const sendErrors = new Map<string, string>();
@@ -786,6 +789,116 @@ export function createConversationViews({
     currentStatus.hidden = !currentStatus.textContent;
     body.append(currentStatus);
 
+    const waiting = (conversation.queuedMessages ?? []).filter(
+      (m) => m.status !== "sending",
+    );
+    if (waiting.length) {
+      const queue = document.createElement("section");
+      queue.className = "message-queue";
+      queue.setAttribute("aria-label", "Queued messages");
+      const heading = document.createElement("div");
+      heading.className = "queue-heading";
+      heading.textContent = conversation.queuePaused
+        ? "Queue paused"
+        : "Queued";
+      queue.append(heading);
+      if (
+        conversation.queuePaused &&
+        waiting.every((m) => m.status === "queued")
+      ) {
+        const resume = paneButton("Continue queue", () =>
+          invoke("conversation.queue-resume", { id: conversation.id }),
+        );
+        resume.classList.add("quiet");
+        queue.append(resume);
+      }
+      for (const message of waiting) {
+        const row = document.createElement("div");
+        row.className = "queued-message";
+        row.dataset.focusKey = `queued:${message.id}`;
+        if (message.editing && !queueEdits.has(message.id))
+          queueEdits.set(message.id, message.text);
+        if (queueEdits.has(message.id)) {
+          const field = document.createElement("textarea");
+          field.setAttribute("aria-label", "Edit queued message");
+          field.value = queueEdits.get(message.id)!;
+          field.oninput = () => queueEdits.set(message.id, field.value);
+          const save = paneButton("Save", async () => {
+            await invoke("conversation.queue-edit", {
+              id: conversation.id,
+              messageId: message.id,
+              text: queueEdits.get(message.id),
+            });
+            queueEdits.delete(message.id);
+            invalidate();
+          });
+          const cancel = paneButton("Cancel", async () => {
+            await invoke("conversation.queue-edit", {
+              id: conversation.id,
+              messageId: message.id,
+            });
+            queueEdits.delete(message.id);
+            invalidate();
+          });
+          cancel.classList.add("quiet");
+          field.onkeydown = (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              cancel.click();
+            }
+          };
+          row.append(field, actionRow(cancel, save));
+        } else {
+          const preview = document.createElement("div");
+          preview.className = "queued-message-text";
+          preview.textContent = message.text || "Image attachment";
+          row.append(preview);
+          if (message.images?.length) row.append(imageStrip(message.images));
+          const actions = actionRow();
+          if (message.status === "queued") {
+            const edit = paneButton("Edit", async () => {
+              await invoke("conversation.queue-edit", {
+                id: conversation.id,
+                messageId: message.id,
+                editing: true,
+              });
+              queueEdits.set(message.id, message.text);
+              invalidate();
+              requestAnimationFrame(() => {
+                const field = panes.querySelector<HTMLTextAreaElement>(
+                  `[data-focus-key="queued:${message.id}"] textarea`,
+                );
+                field?.focus();
+              });
+            });
+            edit.classList.add("quiet");
+            edit.setAttribute("aria-label", "Edit queued message");
+            actions.append(edit);
+          } else {
+            const warning = document.createElement("span");
+            warning.textContent =
+              "Delivery uncertain. Check the conversation before resending.";
+            row.append(warning);
+          }
+          const remove = paneButton(
+            message.status === "uncertain" ? "Dismiss" : "Cancel",
+            () =>
+              invoke("conversation.queue-remove", {
+                id: conversation.id,
+                messageId: message.id,
+              }),
+          );
+          remove.classList.add("quiet");
+          remove.setAttribute("aria-label", "Cancel queued message");
+          actions.append(remove);
+          row.append(actions);
+        }
+        queue.append(row);
+      }
+      body.append(queue);
+    }
+
     const composer = document.createElement("div");
     composer.className = "composer";
     const input = document.createElement("textarea");
@@ -877,6 +990,7 @@ export function createConversationViews({
     };
   }
   async function sendMessage(id: string): Promise<void> {
+    if (pendingSends.has(id)) return;
     if (loadingImages.has(id)) {
       setStatus("Wait for the image to finish loading");
       return;
@@ -889,6 +1003,8 @@ export function createConversationViews({
     const images = attachmentDrafts.get(id) ?? [];
     if (!text.trim() && !images.length) return;
     sendErrors.delete(id);
+    hydratedComposers.add(id);
+    pendingSends.add(id);
     try {
       if (routeProviderCommand(text, commandOptions(id))) {
         if (composerDrafts.get(id) === text) {
@@ -911,6 +1027,8 @@ export function createConversationViews({
       );
       invalidate();
       return;
+    } finally {
+      pendingSends.delete(id);
     }
 
     if (composerDrafts.get(id) === text) {

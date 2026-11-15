@@ -471,3 +471,26 @@ for (const mode of [
     }
   });
 }
+
+test("Kimi empty native completion is an actionable failure rather than a successful answer", async () => {
+  const { adapter, events } = setup("kimi", "empty-completion");
+  try {
+    await adapter.create();
+    await assert.rejects(
+      adapter.send("Invented status request"),
+      /Kimi returned no response/,
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "error" && event.message.includes("account limits"),
+      ),
+    );
+    assert.equal(
+      events.filter((event) => event.type === "completed").length,
+      0,
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
