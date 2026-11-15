@@ -1214,8 +1214,25 @@ test("Close tab shortcut closes the focused chat and preserves its session", asy
     .pane(second.paneId)
     .getByRole("textbox", { name: "Message", exact: true });
   await composer.fill("Keep this draft when closing the tab.");
+  await shell
+    .pane(second.paneId)
+    .locator(".composer")
+    .evaluate((node) => {
+      Object.assign(window, { closedComposer: new WeakRef(node) });
+    });
   await composer.press(`${modifier}+w`);
   await expect(shell.pane(second.paneId)).toHaveCount(0);
+  const session = await shell.page.context().newCDPSession(shell.page);
+  await session.send("HeapProfiler.collectGarbage");
+  expect(
+    await shell.page.evaluate(
+      () =>
+        (
+          window as unknown as { closedComposer: WeakRef<HTMLElement> }
+        ).closedComposer.deref() === undefined,
+    ),
+  ).toBe(true);
+  await session.detach();
   const state = await shell.cli<AppState>("state");
   expect(state.conversations.some((c) => c.id === second.id)).toBe(true);
   expect(
