@@ -27,3 +27,20 @@ export function toolbar(...children: Array<Node | string>) {
   bar.append(...children);
   return bar;
 }
+
+export function settingEntry(
+  title: string,
+  input: HTMLInputElement | HTMLSelectElement,
+) {
+  const row = document.createElement("div");
+  row.className = "settings-entry";
+  const label = document.createElement("label");
+  label.className = "setting-row compact";
+  const text = document.createElement("span");
+  text.textContent = title;
+  label.append(text, input);
+  const reset = uiButton("Reset", "quiet");
+  reset.setAttribute("aria-label", `Reset ${title.replace(" · ", " ")}`);
+  row.append(label, reset);
+  return { row, input, reset };
+}

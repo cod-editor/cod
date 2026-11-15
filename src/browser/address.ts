@@ -5,10 +5,11 @@ export const searchEngines = [
   "yandex",
 ] as const;
 export type SearchEngine = (typeof searchEngines)[number];
+export const defaultSearchEngine: SearchEngine = "google";
 /** Resolve explicit addresses locally; only ordinary text is sent to search. */
 export function resolveAddress(
   input: string,
-  engine: SearchEngine = "google",
+  engine: SearchEngine = defaultSearchEngine,
 ): string {
   const value = input.trim();
   if (!value) throw new Error("Enter an address or search query");

@@ -1,7 +1,7 @@
 import { browserBookmarks } from "./browser-bookmarks";
 import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
-import { browserSettings, browserHistory } from "./browser-library";
+import { browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
 import { conversationRemovalReason } from "../conversation-actions";
 import { createFocusTargets } from "./focus-targets";
@@ -724,15 +724,10 @@ export function createCommands(
           break;
         case "settings": {
           const origin = focus.capture();
-          appearanceDialog(
-            () => {
-              focus.restore(origin);
-              showKeyboardShortcuts(focus);
-            },
-            () => {
-              void browserSettings(invoke);
-            },
-          );
+          appearanceDialog(() => {
+            focus.restore(origin);
+            showKeyboardShortcuts(focus);
+          });
           break;
         }
         case "workspace.new":
@@ -806,7 +801,7 @@ export function createCommands(
           );
           break;
         case "browser.settings":
-          await browserSettings(invoke);
+          appearanceDialog(() => showKeyboardShortcuts(focus), "browser");
           break;
         case "browser.history":
           browserHistory(invoke, async (url) => {

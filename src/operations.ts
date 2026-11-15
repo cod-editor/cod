@@ -1,3 +1,4 @@
+import { defaultSearchEngine } from "./browser/address";
 import { SettingsService } from "./application/settings-service";
 import { IntegrationApplicationService } from "./application/integration-service";
 import { WorkspaceApplicationService } from "./application/workspace-service";
@@ -122,8 +123,25 @@ export class ApplicationOperations {
     if (request.op.startsWith("review."))
       return this.reviews.handle(request, trustedUi);
     if (request.op === "settings.get") return this.settings.state;
-    if (request.op === "settings.update")
-      return this.settings.update(request.values, request.reset === true);
+    if (request.op === "settings.update") {
+      const result = await this.settings.update(
+        request.values,
+        request.reset === true,
+      );
+      if (request.reset === true) {
+        try {
+          await this.browsers.handle({
+            op: "browser.settings",
+            searchEngine: defaultSearchEngine,
+          });
+        } catch (error) {
+          throw new Error(
+            `Appearance settings were reset, but browser settings could not be reset: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return result;
+    }
     const domain = request.op.split(".")[0];
     if (
       domain === "workspace" ||

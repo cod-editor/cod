@@ -1,4 +1,9 @@
-import { actionRow, dialogSurface, uiButton } from "./primitives";
+import {
+  searchEngines,
+  defaultSearchEngine,
+  type SearchEngine,
+} from "../browser/address";
+import { actionRow, dialogSurface, uiButton, settingEntry } from "./primitives";
 import { readPreference, writePreference } from "./preferences";
 import {
   defaultSettings,
@@ -109,7 +114,7 @@ export function changeTextSize(amount: number | "reset"): void {
 }
 export function appearanceDialog(
   shortcuts?: () => void,
-  browser?: () => void,
+  initialQuery = "",
 ): void {
   if (document.querySelector("dialog[open]")) return;
   const origin = document.activeElement as HTMLElement | null;
@@ -138,12 +143,6 @@ export function appearanceDialog(
     SettingKey,
     (typeof settingsSchema)[SettingKey],
   ][]) {
-    const row = document.createElement("div");
-    row.className = "settings-entry";
-    const label = document.createElement("label");
-    label.className = "setting-row compact";
-    const text = document.createElement("span");
-    text.textContent = `${spec.group} · ${spec.label}`;
     const input =
       "choices" in spec
         ? document.createElement("select")
@@ -190,18 +189,72 @@ export function appearanceDialog(
           cause instanceof Error ? cause.message : String(cause);
       });
     };
-    label.append(text, input);
-    const reset = uiButton("Reset", "quiet");
-    reset.setAttribute("aria-label", `Reset ${spec.group} ${spec.label}`);
+    const { row, reset } = settingEntry(`${spec.group} · ${spec.label}`, input);
     reset.onclick = () => {
       void update({ [key]: spec.default }).catch((cause) => {
         error.textContent = String(cause);
       });
     };
-    row.append(label, reset);
     list.append(row);
     rows.set(key, { row, input, reset });
   }
+  const engine = document.createElement("select");
+  engine.setAttribute("aria-label", "Search engine");
+  const names = {
+    google: "Google",
+    duckduckgo: "DuckDuckGo",
+    bing: "Bing",
+    yandex: "Yandex",
+  };
+  engine.append(...searchEngines.map((id) => new Option(names[id], id)));
+  const browserRow = settingEntry("Browser · Search engine", engine);
+  list.append(browserRow.row);
+  let browserValue: SearchEngine | undefined;
+  let browserBusy = false;
+  const refreshBrowser = () => {
+    engine.disabled = browserBusy || !browserValue;
+    browserRow.reset.disabled =
+      browserBusy || !browserValue || browserValue === defaultSearchEngine;
+    browserRow.reset.style.visibility =
+      browserValue === defaultSearchEngine ? "hidden" : "visible";
+    if (browserValue) engine.value = browserValue;
+  };
+  const loadBrowser = async () => {
+    const value = await window.cod.invoke<{ searchEngine: SearchEngine }>({
+      op: "browser.settings",
+    });
+    browserValue = value.searchEngine;
+    refreshBrowser();
+  };
+  const saveBrowser = async (value: string) => {
+    resetAll.disabled = true;
+    browserBusy = true;
+    refreshBrowser();
+    try {
+      const result = await window.cod.invoke<{ searchEngine: SearchEngine }>({
+        op: "browser.settings",
+        searchEngine: value,
+      });
+      browserValue = result.searchEngine;
+      error.textContent = "";
+    } catch (cause) {
+      error.textContent = String(cause);
+    } finally {
+      browserBusy = false;
+      refreshBrowser();
+      resetAll.disabled = false;
+    }
+  };
+  engine.onchange = () => {
+    void saveBrowser(engine.value);
+  };
+  browserRow.reset.onclick = () => {
+    void saveBrowser(defaultSearchEngine);
+  };
+  refreshBrowser();
+  void loadBrowser().catch((cause) => {
+    error.textContent = String(cause);
+  });
   const refresh = () => {
     error.textContent = current.error ?? "";
     for (const [key, { input, reset }] of rows) {
@@ -217,11 +270,18 @@ export function appearanceDialog(
   };
   refresh();
   document.addEventListener("cod:settings-changed", refresh);
-  search.oninput = () => {
+  const filter = () => {
     const query = search.value.trim().toLowerCase();
     for (const [key, { row }] of rows)
       row.hidden = !`${key} ${row.textContent}`.toLowerCase().includes(query);
+    browserRow.row.hidden =
+      !`browser.searchEngine ${browserRow.row.textContent}`
+        .toLowerCase()
+        .includes(query);
   };
+  search.oninput = filter;
+  search.value = initialQuery;
+  filter();
   const actions = actionRow();
   const file = uiButton("Edit settings.json");
   file.onclick = () => {
@@ -238,21 +298,26 @@ export function appearanceDialog(
     };
     actions.append(button);
   }
-  if (browser) {
-    const button = uiButton("Browser settings");
-    button.onclick = () => {
-      dialog.close();
-      browser();
-    };
-    actions.append(button);
-  }
   const resetAll = uiButton("Reset defaults");
   resetAll.onclick = () => {
+    resetAll.disabled = true;
+    browserBusy = true;
+    refreshBrowser();
     void window.cod
       .invoke<SettingsState>({ op: "settings.update", reset: true })
       .then(receive)
       .catch((cause) => {
         error.textContent = String(cause);
+      })
+      .finally(async () => {
+        try {
+          await loadBrowser();
+        } catch (cause) {
+          error.textContent = String(cause);
+        }
+        browserBusy = false;
+        refreshBrowser();
+        resetAll.disabled = false;
       });
   };
   actions.append(resetAll);

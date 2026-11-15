@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 const execute = promisify(execFile);
@@ -602,6 +602,135 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     expect(
       (await app.cli<any>("settings", "get")).values["terminal.cursorStyle"],
     ).toBe("bar");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Global settings search and reset include the persisted browser search engine", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.create("Browser settings fixture");
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.command("Settings...");
+    let dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    let search = dialog.getByRole("searchbox", { name: "Search settings" });
+    await search.fill("search engine");
+    let engine = dialog.getByRole("combobox", {
+      name: "Search engine",
+      exact: true,
+    });
+    await expect(engine).toBeVisible();
+    await expect(engine).toHaveValue("bing");
+    await expect(
+      dialog.getByRole("spinbutton", {
+        name: "Interface text size",
+        exact: true,
+      }),
+    ).toBeHidden();
+    await engine.selectOption("duckduckgo");
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "duckduckgo" });
+    await expect(
+      dialog.getByRole("button", {
+        name: "Reset Browser Search engine",
+        exact: true,
+      }),
+    ).toBeEnabled();
+    await dialog
+      .getByRole("button", { name: "Reset Browser Search engine", exact: true })
+      .click();
+    await expect(engine).toHaveValue("google");
+    await expect(engine).toBeEnabled();
+    await engine.selectOption("yandex");
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "yandex" });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.stop();
+    await app.start();
+    await app.command("Browser settings");
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    search = dialog.getByRole("searchbox", { name: "Search settings" });
+    engine = dialog.getByRole("combobox", {
+      name: "Search engine",
+      exact: true,
+    });
+    await expect(engine).toHaveValue("yandex");
+    await expect(search).toHaveValue("browser");
+    await search.press("Tab");
+    await expect(engine).toBeFocused();
+    await dialog.screenshot({
+      path: info.outputPath("unified-browser-settings.png"),
+    });
+    await app.page.setViewportSize({ width: 460, height: 700 });
+    const fieldBounds = await engine.boundingBox();
+    const dialogBounds = await dialog.boundingBox();
+    expect(fieldBounds!.x + fieldBounds!.width).toBeLessThanOrEqual(
+      dialogBounds!.x + dialogBounds!.width,
+    );
+    await dialog.screenshot({
+      path: info.outputPath("narrow-browser-settings.png"),
+    });
+    await dialog
+      .getByRole("button", { name: "Reset defaults", exact: true })
+      .click();
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "google" });
+    await expect(engine).toHaveValue("google");
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.cli("settings", "update", "--reset", "true");
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "google",
+    });
+    await app.stop();
+    await app.start();
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "google",
+    });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Global reset reports a partial failure without claiming browser settings changed", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": 19 }),
+    );
+    const library = path.join(app.data, "browser-library.json");
+    await rename(library, library + ".saved");
+    await mkdir(library);
+    const result = await app.raw("settings", "update", "--reset", "true");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "Appearance settings were reset, but browser settings could not be reset",
+    );
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "bing",
+    });
+    const appearance = await app.cli<{ values: Record<string, unknown> }>(
+      "settings",
+      "get",
+    );
+    expect(appearance.values["ui.fontSize"]).toBe(14);
+    await rm(library, { recursive: true });
+    await rename(library + ".saved", library);
   } finally {
     await app.cleanup();
   }

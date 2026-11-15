@@ -1,7 +1,11 @@
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { searchEngines, type SearchEngine } from "./address.ts";
+import {
+  searchEngines,
+  defaultSearchEngine,
+  type SearchEngine,
+} from "./address.ts";
 export interface HistoryEntry {
   url: string;
   title: string;
@@ -19,7 +23,10 @@ interface LibraryData {
 }
 /** Browsing history is queried on demand, never copied into chat state updates. */
 export class BrowserLibrary {
-  private data: LibraryData = { history: [], searchEngine: "google" };
+  private data: LibraryData = {
+    history: [],
+    searchEngine: defaultSearchEngine,
+  };
   private ready?: Promise<void>;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly directory: string;

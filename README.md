@@ -84,7 +84,7 @@ An unfinished session is reported at the next startup; this alone does not disti
 
 ## Settings
 
-Open Settings from Commands or the platform settings shortcut. Search by area or setting name. Changes apply to open views and persist in `settings.json` beside the data file; Edit settings.json opens it in your system editor. Keyboard shortcuts opens the searchable reference and existing `keymap.json`. Browser settings remain available from the same window. Workspace-specific chat width takes precedence over the global width.
+Open Settings from Commands or the platform settings shortcut. Search by area or setting name. Appearance changes apply to open views and persist in `settings.json` beside the data file; Edit settings.json opens it in your system editor. Keyboard shortcuts opens the searchable reference and existing `keymap.json`. The browser search engine is searchable in the same window and stays in the browser profile library; Browser settings in Commands opens that section. Workspace-specific chat width takes precedence over the global width.
 
 Font family fields accept CSS font-family lists for installed fonts. Font sizes are in pixels; line heights are multipliers. Terminal settings include block/bar/underline cursor, blinking and scrollback. Editor settings include tab display width and long-line wrapping; tab width does not rewrite file indentation. The source editor uses the platform text caret; changing its shape is not supported. Settings currently cover these implemented controls, not the full extension, theme and language configuration surface of VS Code or Zed.
 
@@ -100,4 +100,4 @@ Files use strict JSON with flat keys, for example:
 }
 ```
 
-Invalid settings keep the last working values and display an error in Settings. Repair the file to resume applying changes. Reset restores defaults. Existing text-size preferences are imported once. CLI access uses `codctl settings get` and `codctl settings update --values '{"terminal.cursorStyle":"bar"}'`; `--reset true` resets global settings.
+Invalid settings keep the last working values and display an error in Settings. Repair the file to resume applying changes. Reset restores defaults. Existing text-size preferences are imported once. CLI access uses `codctl settings get` and `codctl settings update --values '{"terminal.cursorStyle":"bar"}'`; `--reset true` resets appearance settings and the browser search engine, preserving keybindings, bookmarks, pins and browsing history. A failure in either settings store is reported; a partial reset is never reported as complete.

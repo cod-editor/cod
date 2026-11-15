@@ -1,49 +1,8 @@
-import { dialogSurface, actionRow } from "./primitives";
-import { formField } from "./form-field";
+import { actionRow } from "./primitives";
 import type { Invoke } from "./contracts";
 import { actionButton, showActionError } from "./action-feedback";
 import { createSearchList } from "./search-list";
 import { menu } from "./controls";
-import { searchEngines, type SearchEngine } from "../browser/address";
-export async function browserSettings(invoke: Invoke) {
-  const settings = await invoke<{ searchEngine: SearchEngine }>(
-    "browser.settings",
-    {},
-  );
-  const dialog = dialogSurface("Browser settings");
-
-  dialog.setAttribute("aria-label", "Browser settings");
-  const title = document.createElement("h2");
-  title.textContent = "Browser settings";
-
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", "Search engine");
-  const names = {
-    google: "Google",
-    duckduckgo: "DuckDuckGo",
-    bing: "Bing",
-    yandex: "Yandex",
-  };
-  select.append(...searchEngines.map((id) => new Option(names[id], id)));
-  select.value = settings.searchEngine;
-  select.onchange = () => {
-    void invoke(
-      "browser.settings",
-      { searchEngine: select.value },
-      { reportError: false },
-    ).catch((error) => showActionError(error, dialog));
-  };
-  const label = formField("Search engine", select);
-  dialog.append(
-    title,
-    label,
-    actionRow(actionButton("Done", async () => dialog.close())),
-  );
-  dialog.onclose = () => dialog.remove();
-  document.body.append(dialog);
-  dialog.showModal();
-  select.focus();
-}
 export function browserHistory(
   invoke: Invoke,
   open: (url: string) => Promise<void>,
