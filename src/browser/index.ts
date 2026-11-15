@@ -321,7 +321,7 @@ export class BrowserService {
       });
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
-      const committed = (_event: Electron.Event, committedUrl: string) => {
+      const committed = (_event: Electron.Event, _committedUrl: string) => {
         const history = resource.contents.navigationHistory;
         const index = history.getActiveIndex();
         const { start, end } = navigationWindow(history.length(), index);
@@ -334,15 +334,27 @@ export class BrowserService {
           entries,
           index: index - start,
         });
-        if (/^https?:\/\//.test(committedUrl))
-          resource.lastSuccessfulUrl = committedUrl;
         changed();
       };
       view.webContents.on("did-navigate", committed);
+      view.webContents.on("did-finish-load", () => {
+        const url = resource.contents.getURL();
+        if (!resource.error && /^https?:\/\//.test(url))
+          resource.lastSuccessfulUrl = url;
+        changed();
+      });
       view.webContents.on(
         "did-navigate-in-page",
         (event, committedUrl, mainFrame) => {
-          if (mainFrame) committed(event, committedUrl);
+          if (mainFrame) {
+            if (
+              !resource.error &&
+              !resource.contents.isLoadingMainFrame() &&
+              /^https?:\/\//.test(committedUrl)
+            )
+              resource.lastSuccessfulUrl = committedUrl;
+            committed(event, committedUrl);
+          }
         },
       );
       view.webContents.on("page-title-updated", changed);
@@ -551,6 +563,7 @@ export class BrowserService {
     if (!resource || resource.contents.isDestroyed())
       return Promise.resolve(true);
     if (resource.closing) return resource.closing;
+    resource.diagnostics?.stop();
     const contents = resource.contents;
     const pending = new Promise<boolean>((resolve, reject) => {
       const finish = (closed: boolean) => {

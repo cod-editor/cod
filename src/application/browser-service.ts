@@ -740,6 +740,11 @@ export class BrowserApplicationService {
     return structuredClone(this.browser(record.id));
   }
   async restoreBrowser(record: BrowserState): Promise<void> {
+    const pending = this.browserInitializations.get(record.id);
+    if (pending) {
+      await pending;
+      return;
+    }
     if (!record.error)
       return this.loadBrowser(record, record.url, record.navigation);
     const restoredFailure = {
@@ -749,15 +754,22 @@ export class BrowserApplicationService {
       lastSuccessfulUrl: record.lastSuccessfulUrl,
       navigation: record.navigation,
     };
-    const snapshot = await this.requireBrowserService().open({
+    const initialization = this.requireBrowserService().open({
       id: record.id,
       workspaceId: record.workspaceId,
       url: "about:blank",
       restoredFailure,
     });
-    Object.assign(record, snapshot);
-    this.store.schedulePersist();
-    this.store.notify();
+    this.browserInitializations.set(record.id, initialization);
+    try {
+      const snapshot = await initialization;
+      Object.assign(record, snapshot);
+      this.store.schedulePersist();
+      this.store.notify();
+    } finally {
+      if (this.browserInitializations.get(record.id) === initialization)
+        this.browserInitializations.delete(record.id);
+    }
   }
   async navigateBrowser(id: string, url: string): Promise<BrowserState> {
     const record = this.browser(id);
@@ -907,6 +919,12 @@ export class BrowserApplicationService {
       return;
     }
     if (event.type === "changed") {
+      if (
+        this.browserInitializations.has(record.id) &&
+        record.error &&
+        !event.snapshot.error
+      )
+        return;
       const url =
         event.snapshot.url &&
         !(
@@ -1242,6 +1260,7 @@ export class BrowserApplicationService {
 
       case "browser.recover": {
         const id = requiredString(request, "id");
+        await this.browserInitializations.get(id);
         if (this.browser(id).agentPage)
           throw new Error(
             "Registered agent pages cannot recover browser navigation",
@@ -1263,6 +1282,7 @@ export class BrowserApplicationService {
       case "browser.reload": {
         const id = requiredString(request, "id");
         const browser = this.browser(id);
+        await this.browserInitializations.get(id);
         if (browser.agentPage) {
           const contents = this.agentPages?.getWebContents(id);
           if (!contents || contents.isDestroyed())
@@ -1281,10 +1301,13 @@ export class BrowserApplicationService {
           return { id };
         }
         const service = this.requireBrowserService();
+        if (!service.list().some((item) => item.id === id)) {
+          if (request.op === "browser.reload" && !browser.error)
+            return this.navigateBrowser(id, browser.url);
+          await this.restoreBrowser(browser);
+        }
         if (request.op === "browser.back") service.back(id);
         else if (request.op === "browser.forward") service.forward(id);
-        else if (!service.list().some((item) => item.id === id))
-          return this.navigateBrowser(id, this.browser(id).url);
         else service.reload(id);
         return { id };
       }
