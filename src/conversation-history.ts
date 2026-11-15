@@ -180,7 +180,7 @@ export function commitHistory(
   const prompt = (value: string) =>
     value
       .replace(/\[Native [^\]]+ content\]/g, "")
-      .replace(/(?:\n\[Image \d+\]\s*)+$/g, "")
+      .replace(/(?:\s*\[Image \d+\]\s*)+$/g, "")
       .trim();
   const cachedImages = conversation.messages.filter(
     (message) => message.role === "user" && message.images?.length,

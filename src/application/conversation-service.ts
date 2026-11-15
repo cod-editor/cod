@@ -1263,12 +1263,14 @@ export class ConversationApplicationService {
           return { id: conversation.id, taskStatus: conversation.taskStatus };
         });
 
-      case "conversation.options":
-        return (
-          await this.ensureController(
-            this.store.conversation(requiredString(request, "id")),
-          )
-        ).getOptions();
+      case "conversation.options": {
+        const conversation = this.store.conversation(
+          requiredString(request, "id"),
+        );
+        if (conversation.status === "failed")
+          throw new Error("Conversation failed. Send explicitly to retry.");
+        return (await this.ensureController(conversation)).getOptions();
+      }
 
       case "conversation.option": {
         if (request.option !== "model" && request.option !== "reasoning")

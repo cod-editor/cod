@@ -320,18 +320,34 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     const waiting = await shell.inspect(chat.id);
     expect(waiting.pendingPermissions).toHaveLength(1);
     expect(text(waiting)).not.toContain("ALLOWED");
+    const queued = await shell.cli<{ messageId: string }>(
+      "conversation",
+      "send",
+      "--id",
+      chat.id,
+      "--text",
+      "concurrent-turn",
+    );
     expect(
       (
-        await shell.raw(
-          "conversation",
-          "send",
-          "--id",
-          chat.id,
-          "--text",
-          "concurrent-turn",
-        )
-      ).code,
-    ).not.toBe(0);
+        (await shell.inspect(chat.id)) as Chat & {
+          queuedMessages: Array<{ id: string; text: string }>;
+        }
+      ).queuedMessages,
+    ).toContainEqual(
+      expect.objectContaining({
+        id: queued.messageId,
+        text: "concurrent-turn",
+      }),
+    );
+    await shell.cli(
+      "conversation",
+      "queue-remove",
+      "--id",
+      chat.id,
+      "--message-id",
+      queued.messageId,
+    );
     expect(
       (
         await shell.raw(
