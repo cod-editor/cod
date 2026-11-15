@@ -139,10 +139,7 @@ export function createWorkspaceNavigation(
         saving: boolean;
       }
     | undefined;
-  async function renameWorkspace(id: string): Promise<void> {
-    const workspace = getState().workspaces.find((item) => item.id === id);
-    if (!workspace) return;
-    const origin = document.activeElement as HTMLElement | null;
+  async function revealWorkspaceTree(): Promise<void> {
     const active = getState().workspaces.find(
       (item) => item.id === getState().activeWorkspaceId,
     );
@@ -154,6 +151,12 @@ export function createWorkspaceNavigation(
         id: active.id,
         settings: { workspacesVisible: true },
       });
+  }
+  async function renameWorkspace(id: string): Promise<void> {
+    const workspace = getState().workspaces.find((item) => item.id === id);
+    if (!workspace) return;
+    const origin = document.activeElement as HTMLElement | null;
+    await revealWorkspaceTree();
     editing = {
       id,
       kind: "workspace",
@@ -174,6 +177,8 @@ export function createWorkspaceNavigation(
     const conversation = getState().conversations.find((c) => c.id === id);
     if (!conversation) return;
     const origin = document.activeElement as HTMLElement | null;
+    await revealWorkspaceTree();
+    collapsedWorkspaces.delete(conversation.workspaceId);
     editing = {
       id,
       kind: "conversation",
@@ -230,9 +235,11 @@ export function createWorkspaceNavigation(
     editing = undefined;
     renderTree();
     if (restore) {
-      if (origin?.isConnected) origin.focus();
-      else
-        tree.querySelector<HTMLElement>(`[data-workspace-id="${id}"]`)?.focus();
+      const row = tree.querySelector<HTMLElement>(
+        `[data-workspace-id="${id}"]`,
+      );
+      if (row) row.focus();
+      else if (origin?.isConnected && origin !== document.body) origin.focus();
     }
   }
   async function saveRename(restore: boolean): Promise<void> {
