@@ -119,7 +119,7 @@ export function createDocumentViews(
       if (result.unavailable) {
         messages.set(
           paneId,
-          "Conflict: file missing or unreadable on disk; local text retained.",
+          "Conflict: file missing or unreadable on disk; local draft retained.",
         );
       } else if (dirty && result.content !== originals.get(key)) {
         messages.set(
