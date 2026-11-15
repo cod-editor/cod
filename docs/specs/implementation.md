@@ -29,7 +29,7 @@ Provider inspection is read-only and reports native capabilities rather than inv
 
 Persist layout, resource IDs, open views, composer text/images/provider/selected skills, native-session references, file drafts, review drafts and close/reopen history. Restore records without replaying commands, inference or arbitrary website form submissions.
 
-Composer typing persists each edit without echoing the application snapshot back to its originating UI. Text-only `conversation.composer` updates preserve existing images when `images` is omitted; an explicit empty array removes them. Attachment changes and CLI composer updates still notify the UI.
+Composer typing persists the latest text without echoing the application snapshot back to its originating UI. Consecutive trusted text edits may share a durable save within a 150 ms batch; intervening operations form ordering barriers, so a delayed save cannot restore a sent or cleared draft. Save acknowledgment still follows durable persistence, and failures reject all callers in the batch. Text-only `conversation.composer` updates preserve existing images when `images` is omitted; an explicit empty array removes them. Attachment changes and CLI composer updates still notify the UI.
 
 Pasted images insert stable `[Image N]` references at the current selection. Attachment removal removes its insertion marker without renumbering other images; thumbnail captions and provider content identify the same image. References and image data persist with composer drafts. Sending waits for attachment reading to finish.
 

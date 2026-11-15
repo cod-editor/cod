@@ -22,6 +22,10 @@ export class ApplicationStateStore {
     drafts: {},
   };
   private queue: Promise<unknown> = Promise.resolve();
+  private pendingDrafts = new Map<
+    string,
+    { mutation: () => unknown | Promise<unknown>; promise: Promise<unknown> }
+  >();
   private timer?: NodeJS.Timeout;
   private notificationTimer?: NodeJS.Timeout;
   closing = false;
@@ -84,6 +88,8 @@ export class ApplicationStateStore {
     return conversation;
   }
   serialize<T>(operation: () => T | Promise<T>): Promise<T> {
+    // Any intervening operation is an ordering barrier for draft coalescing.
+    this.pendingDrafts.clear();
     const result = this.queue.then(operation);
     this.queue = result.then(
       () => undefined,
@@ -95,25 +101,48 @@ export class ApplicationStateStore {
     mutation: () => T | Promise<T>,
     options: { notify?: boolean } = {},
   ): Promise<T> {
-    return this.serialize(async () => {
-      const before = this.snapshot();
-      const original = {
-        ...this.data,
-        workspaces: [...this.data.workspaces],
-        conversations: [...this.data.conversations],
-        browsers: [...this.data.browsers],
-        terminals: [...this.data.terminals],
-      };
-      try {
-        const result = await mutation();
-        await this.persist();
-        if (options.notify !== false) this.notify();
-        return result;
-      } catch (error) {
-        rollbackState(this.data, before, original);
-        throw error;
-      }
+    return this.serialize(() => this.commitChange(mutation, options));
+  }
+  /** Coalesce only consecutive trusted text edits, never across another operation. */
+  changeDraft(
+    key: string,
+    mutation: () => unknown | Promise<unknown>,
+  ): Promise<unknown> {
+    const pending = this.pendingDrafts.get(key);
+    if (pending) {
+      pending.mutation = mutation;
+      return pending.promise;
+    }
+    const entry = { mutation, promise: Promise.resolve() as Promise<unknown> };
+    entry.promise = this.serialize(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (this.pendingDrafts.get(key) === entry) this.pendingDrafts.delete(key);
+      return this.commitChange(entry.mutation, { notify: false });
     });
+    this.pendingDrafts.set(key, entry);
+    return entry.promise;
+  }
+  private async commitChange<T>(
+    mutation: () => T | Promise<T>,
+    options: { notify?: boolean },
+  ): Promise<T> {
+    const before = this.snapshot();
+    const original = {
+      ...this.data,
+      workspaces: [...this.data.workspaces],
+      conversations: [...this.data.conversations],
+      browsers: [...this.data.browsers],
+      terminals: [...this.data.terminals],
+    };
+    try {
+      const result = await mutation();
+      await this.persist();
+      if (options.notify !== false) this.notify();
+      return result;
+    } catch (error) {
+      rollbackState(this.data, before, original);
+      throw error;
+    }
   }
   notify(coalesce = false): void {
     this.beforeNotify?.();
@@ -151,16 +180,20 @@ export class ApplicationStateStore {
     this.timer = undefined;
   }
   async persist(): Promise<void> {
-    const saved = this.snapshot();
-    saved.terminals = saved.terminals.map((terminal) => ({
-      ...terminal,
-      status: "starting",
-      pid: 0,
-      output: "",
-      sequence: 0,
-      exitCode: undefined,
-      error: undefined,
-    }));
+    // JSON.stringify captures this shallow view synchronously before the first
+    // await; a second deep clone of every transcript and image is unnecessary.
+    const saved = {
+      ...this.data,
+      terminals: this.data.terminals.map((terminal) => ({
+        ...terminal,
+        status: "starting",
+        pid: 0,
+        output: "",
+        sequence: 0,
+        exitCode: undefined,
+        error: undefined,
+      })),
+    };
     const statePath = path.join(this.directory, "state.json");
     const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, "utf8");

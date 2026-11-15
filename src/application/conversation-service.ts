@@ -978,47 +978,48 @@ export class ConversationApplicationService {
       case "conversation.reclaim":
         return this.reclaimConversation(requiredString(request, "id"));
 
-      case "conversation.composer":
-        return this.store.change(
-          () => {
-            const workspace = this.store.workspace(
-              requiredString(request, "workspace"),
-            );
-            const pane = this.store.pane(
-              workspace,
-              requiredString(request, "paneId"),
-            );
-            if (
-              pane.kind !== "conversation" &&
-              !(pane.kind === "document" && !pane.filePath)
-            )
-              throw new Error("Not a chat composer");
-            const text = typeof request.text === "string" ? request.text : "";
-            if (text.length > 1_000_000)
-              throw new Error("Composer draft is too long");
-            const images =
-              request.images === undefined
-                ? (workspace.chatDrafts?.[pane.id]?.images ?? [])
-                : this.validateImages(request.images);
-            const skills = this.validateSkills(request.skills);
-            const provider =
-              request.provider === undefined ? undefined : providerId(request);
-            workspace.chatDrafts ??= {};
-            workspace.chatDrafts[pane.id] = {
-              text,
-              ...(provider ? { provider } : {}),
-              ...(skills.length ? { skills } : {}),
-              ...(images.length ? { images } : {}),
-            };
-            return { paneId: pane.id };
-          },
-          {
-            // The composing renderer already owns this text. Echoing every key
-            // redraws the entire application and re-transfers attachment bytes.
-            // CLI edits and attachment changes still refresh the UI.
-            notify: !trustedUi || request.images !== undefined,
-          },
-        );
+      case "conversation.composer": {
+        const textOnly = trustedUi && request.images === undefined;
+        const save = textOnly
+          ? (mutation: () => unknown) =>
+              this.store.changeDraft(
+                `composer:${requiredString(request, "workspace")}:${requiredString(request, "paneId")}`,
+                mutation,
+              )
+          : (mutation: () => unknown) => this.store.change(mutation);
+        return save(() => {
+          const workspace = this.store.workspace(
+            requiredString(request, "workspace"),
+          );
+          const pane = this.store.pane(
+            workspace,
+            requiredString(request, "paneId"),
+          );
+          if (
+            pane.kind !== "conversation" &&
+            !(pane.kind === "document" && !pane.filePath)
+          )
+            throw new Error("Not a chat composer");
+          const text = typeof request.text === "string" ? request.text : "";
+          if (text.length > 1_000_000)
+            throw new Error("Composer draft is too long");
+          const images =
+            request.images === undefined
+              ? (workspace.chatDrafts?.[pane.id]?.images ?? [])
+              : this.validateImages(request.images);
+          const skills = this.validateSkills(request.skills);
+          const provider =
+            request.provider === undefined ? undefined : providerId(request);
+          workspace.chatDrafts ??= {};
+          workspace.chatDrafts[pane.id] = {
+            text,
+            ...(provider ? { provider } : {}),
+            ...(skills.length ? { skills } : {}),
+            ...(images.length ? { images } : {}),
+          };
+          return { paneId: pane.id };
+        });
+      }
 
       case "conversation.acknowledge":
         return this.store.change(() => {
