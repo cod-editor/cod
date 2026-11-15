@@ -1,10 +1,14 @@
+import { uiButton } from "./primitives";
 export const icons: Record<string, string> = {
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   workspace:
     '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18M8 8v13"/>',
   folder:
     '<path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  "folder-open":
+    '<path d="M3 17V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 11h18l-2 8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 12h8M8 16h8"/>',
   conversation: '<path d="M4 4h16v12H8l-4 4z"/>',
   review: '<path d="M4 4h16v12H8l-4 4zM8 10h8M12 6v8"/>',
@@ -24,6 +28,7 @@ export const icons: Record<string, string> = {
   forward: '<path d="m12 4 8 8-8 8M4 12h16"/>',
   reload: '<path d="M20 10a8 8 0 1 0-1 8M20 3v7h-7"/>',
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/>',
+  download: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="1"/>',
 };
 export function icon(name: string): SVGSVGElement {
@@ -44,9 +49,8 @@ export function iconButton(
   label: string,
   action: () => void,
 ): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "icon-button";
+  const button = uiButton("");
+  button.classList.add("icon-button");
   button.title = label;
   button.setAttribute("aria-label", label);
   button.append(icon(name));
@@ -57,6 +61,7 @@ export type MenuAction = {
   label: string;
   run: () => void;
   disabled?: boolean;
+  title?: string;
   selected?: boolean;
 } | null;
 export function menu(
@@ -85,6 +90,7 @@ export function menu(
       button.prepend(check);
     }
     button.disabled = !!item.disabled;
+    if (item.title) button.title = item.title;
     button.onpointermove = () => button.focus({ preventScroll: true });
     button.onclick = () => {
       performed = true;
@@ -138,5 +144,9 @@ export function menu(
             buttons.length
     ]?.focus();
   };
-  dialog.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  (
+    dialog.querySelector<HTMLButtonElement>(
+      'button[aria-pressed="true"]:not(:disabled)',
+    ) ?? dialog.querySelector<HTMLButtonElement>("button:not(:disabled)")
+  )?.focus();
 }

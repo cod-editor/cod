@@ -1,5 +1,11 @@
+import { actionRow, uiButton } from "./primitives";
+import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
-import { groupTurnActivity, toolCaption } from "./turn-activity";
+import {
+  groupTurnActivity,
+  toolCaption,
+  compactToolCaption,
+} from "./turn-activity";
 import {
   routeProviderCommand,
   showProviderCommands,
@@ -9,9 +15,20 @@ import { reconcileView } from "./view-reconcile";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
-import { iconButton, menu } from "./controls";
+import { icon, iconButton, menu } from "./controls";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+function setChoiceCaption(button: HTMLButtonElement, text: string): void {
+  let label = button.querySelector<HTMLSpanElement>(".choice-caption");
+  if (!label) {
+    label = document.createElement("span");
+    label.className = "choice-caption";
+    const arrow = icon("chevron");
+    arrow.classList.add("choice-chevron");
+    button.append(label, arrow);
+  }
+  label.textContent = text;
+}
 interface ChatDependencies {
   getState: () => AppState;
   invoke: Invoke;
@@ -45,8 +62,12 @@ export function createConversationViews({
     skillDrafts.set(key, skills);
     return skills;
   }
+  const queueEdits = new Map<string, string>();
+  const pendingSends = new Set<string>();
   const pendingStarts = new Set<string>();
+  const loadingImages = new Set<string>();
   const sendErrors = new Map<string, string>();
+  const expandedTools = new Set<string>();
   const integration = createIntegrationSetup(invoke, invalidate);
   function providerLabel(provider: string): string {
     return provider === "codex"
@@ -56,29 +77,117 @@ export function createConversationViews({
         : "Claude Code";
   }
   const hydratedComposers = new Set<string>();
-  async function persistComposer(key: string): Promise<void> {
-    const conversation = getState().conversations.find((c) => c.id === key);
-    const paneId = conversation?.paneId ?? key;
-    const workspace = getState().workspaces.find((w) =>
-      w.panes.some((p) => p.id === paneId),
-    );
-    if (!workspace) return;
-    try {
-      await invoke("conversation.composer", {
-        workspace: workspace.id,
-        paneId,
-        text: composerDrafts.get(key) ?? "",
-        images: attachmentDrafts.get(key) ?? [],
-        skills: selectedSkills(key),
-        ...(draftProviders.has(paneId)
-          ? { provider: draftProviders.get(paneId) }
-          : {}),
-      });
-    } catch {
-      setStatus(
-        "Could not save the conversation draft. Keep Cod open and try again.",
-      );
+  type ComposerDraft = NonNullable<WorkspaceState["chatDrafts"]>[string];
+  const writer = crypto.randomUUID();
+  const versions = new Map<string, string>();
+  const seenVersions = new Map<string, string>();
+  const dirtyComposers = new Set<string>();
+  const composerConflicts = new Map<string, ComposerDraft>();
+  const saves = new Map<
+    string,
+    { again: boolean; textOnly: boolean; promise: Promise<void> }
+  >();
+  function acceptDraft(key: string, paneId: string, draft: ComposerDraft) {
+    versions.set(key, draft.version ?? "");
+    composerDrafts.set(key, draft.text);
+    skillDrafts.set(key, draft.skills ?? []);
+    attachmentDrafts.set(key, draft.images ?? []);
+    if (draft.provider) draftProviders.set(paneId, draft.provider);
+    else draftProviders.delete(paneId);
+    dirtyComposers.delete(key);
+    composerConflicts.delete(key);
+  }
+  function draftConflict(key: string, paneId: string): HTMLElement | undefined {
+    if (!composerConflicts.has(key)) return;
+    const panel = document.createElement("section");
+    panel.className = "conversation-status";
+    panel.setAttribute("aria-label", "Draft conflict");
+    const message = document.createElement("p");
+    message.textContent =
+      "The draft changed outside this window. Your edits are preserved.";
+    const keep = uiButton("Keep my draft");
+    keep.onclick = async () => {
+      await saves.get(key)?.promise;
+      const remote = composerConflicts.get(key);
+      if (!remote) return;
+      versions.set(key, remote.version ?? "");
+      composerConflicts.delete(key);
+      void persistComposer(key).then(invalidate);
+    };
+    const use = uiButton("Use external draft");
+    use.onclick = async () => {
+      await saves.get(key)?.promise;
+      const remote = composerConflicts.get(key);
+      if (!remote) return;
+      acceptDraft(key, paneId, remote);
+      await persistComposer(key);
+      invalidate();
+    };
+    panel.append(message, actionRow(keep, use));
+    return panel;
+  }
+  function persistComposer(key: string, textOnly = false): Promise<void> {
+    dirtyComposers.add(key);
+    const pending = saves.get(key);
+    if (pending) {
+      pending.again = true;
+      pending.textOnly &&= textOnly;
+      return pending.promise;
     }
+    const entry = { again: true, textOnly, promise: Promise.resolve() };
+    saves.set(key, entry);
+    entry.promise = (async () => {
+      while (entry.again) {
+        const conversation = getState().conversations.find((c) => c.id === key);
+        const paneId = conversation?.paneId ?? key;
+        const workspace = getState().workspaces.find((w) =>
+          w.panes.some((p) => p.id === paneId),
+        );
+        if (!workspace) return;
+        const onlyText = entry.textOnly;
+        entry.again = false;
+        entry.textOnly = true;
+        const result = await invoke<{
+          version?: string;
+          conflict?: boolean;
+          conflictSaved?: boolean;
+          draft?: ComposerDraft;
+        }>(
+          "conversation.composer",
+          {
+            workspace: workspace.id,
+            paneId,
+            text: composerDrafts.get(key) ?? "",
+            ...(onlyText ? {} : { images: attachmentDrafts.get(key) ?? [] }),
+            skills: selectedSkills(key),
+            ...(draftProviders.has(paneId)
+              ? { provider: draftProviders.get(paneId) }
+              : {}),
+            expectedVersion: versions.get(key) ?? "",
+            saveConflict: composerConflicts.has(key),
+            writer,
+          },
+          { reportError: false },
+        );
+        if (result.conflict && result.draft) {
+          composerConflicts.set(key, result.draft);
+          invalidate();
+          entry.again = true;
+          entry.textOnly = false;
+          continue;
+        }
+        if (!composerConflicts.has(key))
+          versions.set(key, result.version ?? "");
+        if (!entry.again) dirtyComposers.delete(key);
+      }
+    })()
+      .catch(() => {
+        setStatus(
+          "Could not save the conversation draft. Keep Cod open and try again.",
+        );
+      })
+      .finally(() => saves.delete(key));
+    return entry.promise;
   }
 
   const draftProviders = new Map<string, string>();
@@ -102,7 +211,7 @@ export function createConversationViews({
     input.value = composerDrafts.get(pane.id) ?? "";
     input.oninput = () => {
       composerDrafts.set(pane.id, input.value);
-      persistComposer(pane.id);
+      persistComposer(pane.id, true);
     };
     input.disabled = pendingStarts.has(pane.id);
     const feedback = document.createElement("div");
@@ -116,6 +225,15 @@ export function createConversationViews({
     feedback.hidden = !feedback.textContent;
     body.append(feedback);
     const send = async () => {
+      if (loadingImages.has(pane.id)) {
+        setStatus("Wait for the image to finish loading");
+        return;
+      }
+      await saves.get(pane.id)?.promise;
+      if (composerConflicts.has(pane.id) || dirtyComposers.has(pane.id)) {
+        setStatus("Resolve or save the draft before sending.");
+        return;
+      }
       const text = input.value;
       const images = attachmentDrafts.get(pane.id) ?? [];
       if ((!text.trim() && !images.length) || pendingStarts.has(pane.id))
@@ -151,12 +269,7 @@ export function createConversationViews({
         invalidate();
       }
     };
-    input.onkeydown = (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        void send();
-      }
-    };
+    input.addEventListener("cod:send-message", () => void send());
     composer.oncontextmenu = (e) => {
       if (e.target === input) return;
       e.preventDefault();
@@ -169,7 +282,9 @@ export function createConversationViews({
     const provider = document.createElement("button");
     provider.type = "button";
     provider.setAttribute("aria-label", "Provider");
-    provider.textContent = providerLabel(selected);
+    provider.className = "composer-choice";
+    provider.setAttribute("aria-haspopup", "dialog");
+    setChoiceCaption(provider, providerLabel(selected));
     provider.onclick = () =>
       menu(
         provider,
@@ -180,22 +295,17 @@ export function createConversationViews({
           run: () => {
             draftProviders.set(pane.id, id);
             void persistComposer(pane.id);
-            provider.textContent = providerLabel(id);
+            setChoiceCaption(provider, providerLabel(id));
             input.placeholder = `Message ${providerLabel(id)}...`;
             invalidate();
           },
         })),
       );
     actions.append(provider);
-    const cwd = document.createElement("span");
-    cwd.className = "composer-context";
-    cwd.textContent = workspace.folders
-      .map((p) => p.split("/").pop())
-      .join(", ");
-    cwd.title = workspace.folders.join("\n");
-    actions.append(cwd);
     composer.append(input, actions);
     bindImages(composer, input, pane.id);
+    const conflict = draftConflict(pane.id, pane.id);
+    if (conflict) body.append(conflict);
     body.append(composer);
     return body;
   }
@@ -306,7 +416,11 @@ export function createConversationViews({
       const img = document.createElement("img");
       img.src = `data:${image.mimeType};base64,${image.data}`;
       img.alt = image.name || "Attached image";
-      img.onclick = () => {
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "image-preview";
+      preview.setAttribute("aria-label", `View ${img.alt}`);
+      preview.onclick = () => {
         const dialog = document.createElement("dialog");
         dialog.className = "image-viewer";
         const large = img.cloneNode() as HTMLImageElement;
@@ -315,12 +429,22 @@ export function createConversationViews({
           iconButton("close", "Close image", () => dialog.close()),
         );
         document.body.append(dialog);
-        dialog.onclose = () => dialog.remove();
+        dialog.onclose = () => {
+          dialog.remove();
+          if (preview.isConnected) preview.focus();
+        };
         dialog.showModal();
       };
-      item.append(img);
-      if (remove)
-        item.append(iconButton("close", "Remove image", () => remove(index)));
+      const caption = document.createElement("span");
+      caption.className = "image-reference";
+      caption.textContent = `[Image ${image.reference ?? index + 1}]`;
+      preview.append(img, caption);
+      item.append(preview);
+      if (remove) {
+        const close = iconButton("close", "Remove image", () => remove(index));
+        close.classList.add("compact");
+        item.append(close);
+      }
       strip.append(item);
     });
     return strip;
@@ -336,6 +460,16 @@ export function createConversationViews({
       if (images.length)
         composer.prepend(
           imageStrip(images, (index) => {
+            const marker = `[Image ${images[index].reference ?? index + 1}]`;
+            const position = input.value.indexOf(marker);
+            if (position >= 0)
+              input.setRangeText(
+                "",
+                position,
+                position + marker.length,
+                "preserve",
+              );
+            composerDrafts.set(key, input.value);
             images.splice(index, 1);
             attachmentDrafts.set(key, images);
             persistComposer(key);
@@ -344,41 +478,79 @@ export function createConversationViews({
         );
     };
     const add = async (files: File[]) => {
-      const images = attachmentDrafts.get(key) ?? [];
-      for (const file of files) {
-        if (
-          !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-            file.type,
-          )
-        )
-          continue;
-        if (
-          images.length >= 8 ||
-          images.reduce(
-            (total, image) => total + Math.ceil((image.data.length * 3) / 4),
-            0,
-          ) +
-            file.size >
-            20 * 1024 * 1024
-        ) {
-          setStatus("Use at most 8 images, up to 20 MB total");
-          break;
-        }
-        const data = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-        images.push({
-          mimeType: file.type as ChatImage["mimeType"],
-          data,
-          name: file.name,
-        });
+      if (loadingImages.has(key)) {
+        setStatus("Wait for the image to finish loading");
+        return;
       }
-      attachmentDrafts.set(key, images);
-      await persistComposer(key);
-      refresh();
+      loadingImages.add(key);
+      let unfinishedMarker: string | undefined;
+      try {
+        const images = attachmentDrafts.get(key) ?? [];
+        attachmentDrafts.set(key, images);
+        for (const file of files) {
+          if (
+            !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+              file.type,
+            )
+          )
+            continue;
+          if (
+            images.length >= 8 ||
+            images.reduce(
+              (total, image) => total + Math.ceil((image.data.length * 3) / 4),
+              0,
+            ) +
+              file.size >
+              20 * 1024 * 1024
+          ) {
+            setStatus("Use at most 8 images, up to 20 MB total");
+            break;
+          }
+          const reference =
+            Math.max(
+              0,
+              ...images.map((image, index) => image.reference ?? index + 1),
+              ...[...input.value.matchAll(/\[Image (\d+)\]/g)].map((match) =>
+                Number(match[1]),
+              ),
+            ) + 1;
+          const marker = `[Image ${reference}]`;
+          unfinishedMarker = marker;
+          input.setRangeText(
+            marker,
+            input.selectionStart,
+            input.selectionEnd,
+            "end",
+          );
+          composerDrafts.set(key, input.value);
+          const data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          images.push({
+            reference,
+            mimeType: file.type as ChatImage["mimeType"],
+            data,
+            name: file.name,
+          });
+          unfinishedMarker = undefined;
+        }
+        attachmentDrafts.set(key, images);
+        await persistComposer(key);
+        refresh();
+      } catch (error) {
+        if (unfinishedMarker) {
+          input.value = input.value.replace(unfinishedMarker, "");
+          composerDrafts.set(key, input.value);
+        }
+        await persistComposer(key);
+        refresh();
+        setStatus(`Could not attach image: ${String(error)}`);
+      } finally {
+        loadingImages.delete(key);
+      }
     };
     input.addEventListener("paste", (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
@@ -438,75 +610,104 @@ export function createConversationViews({
         ["reasoning", options.reasoning],
       ] as const) {
         if (!choices.length) continue;
-        const select = document.createElement("select");
-        select.setAttribute(
-          "aria-label",
-          option === "model" ? "Model" : "Reasoning effort",
-        );
-        select.disabled = conversation.status !== "ready";
-        for (const choice of choices) {
-          const caption =
-            option === "reasoning"
-              ? ((
-                  {
-                    xhigh: "Extra high",
-                    minimal: "Minimal",
-                    low: "Low",
-                    medium: "Medium",
-                    high: "High",
-                    none: "None",
-                    max: "Max",
-                  } as Record<string, string>
-                )[choice.value] ??
-                choice.value
-                  .replace(/[_-]/g, " ")
-                  .replace(/^./, (c) => c.toUpperCase()))
-              : choice.label.split(/\n| — /)[0];
-          const item = new Option(caption, choice.value);
-          item.title = choice.label;
-          select.append(item);
-        }
+        const choiceLabel = (choice: { value: string; label: string }) =>
+          option === "reasoning"
+            ? ((
+                {
+                  xhigh: "Extra high",
+                  minimal: "Minimal",
+                  low: "Low",
+                  medium: "Medium",
+                  high: "High",
+                  none: "None",
+                  max: "Max",
+                } as Record<string, string>
+              )[choice.value] ??
+              choice.value
+                .replace(/[_-]/g, " ")
+                .replace(/^./, (c) => c.toUpperCase()))
+            : choice.label.split(/\n| — /)[0];
         const optionKey = `${conversation.id}:${option}`;
-        if (pendingOptions.has(optionKey))
-          select.setAttribute("aria-busy", "true");
-        select.value =
+        const value =
           pendingOptions.get(optionKey) ??
           options.pending?.[option] ??
           options.current[option] ??
           choices[0].value;
-        select.title =
-          choices.find((choice) => choice.value === select.value)?.label ??
-          select.value;
-        select.onchange = () => {
-          const inFlight = pendingOptions.get(optionKey);
-          if (inFlight !== undefined) {
-            select.value = inFlight;
-            return;
-          }
-          const value = select.value;
-          pendingOptions.set(optionKey, value);
-          select.setAttribute("aria-busy", "true");
-          void invoke<import("../providers/types").ProviderOptions>(
-            "conversation.option",
-            { id: conversation.id, option, value },
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "composer-choice";
+        button.dataset.focusKey = `option:${optionKey}`;
+        button.setAttribute(
+          "aria-label",
+          option === "model" ? "Model" : "Reasoning effort",
+        );
+        button.setAttribute("aria-haspopup", "dialog");
+        setChoiceCaption(
+          button,
+          choiceLabel(
+            choices.find((choice) => choice.value === value) ?? choices[0],
+          ),
+        );
+        button.disabled = conversation.status !== "ready";
+        button.setAttribute("aria-busy", String(pendingOptions.has(optionKey)));
+        button.onclick = () => {
+          if (pendingOptions.has(optionKey)) return;
+          const latest = providerOptions.get(conversation.id);
+          if (
+            !latest ||
+            getState().conversations.find((c) => c.id === conversation.id)
+              ?.status !== "ready"
           )
-            .then((result) => providerOptions.set(conversation.id, result))
-            .catch(() => undefined)
-            .finally(() => {
-              pendingOptions.delete(optionKey);
-              const current = select.closest<HTMLElement>(".model-choices");
-              if (current)
-                reconcileView(
-                  current,
-                  modelChoices(
-                    getState().conversations.find(
-                      (c) => c.id === conversation.id,
-                    ) ?? conversation,
-                  ),
-                );
-            });
+            return;
+          const currentValue =
+            latest.pending?.[option] ?? latest.current[option];
+          const currentChoices =
+            option === "model" ? latest.models : latest.reasoning;
+          menu(
+            button,
+            currentChoices.map((choice) => ({
+              label: choiceLabel(choice),
+              selected: choice.value === currentValue,
+              run: () => {
+                button.focus({ preventScroll: true });
+                if (
+                  choice.value === currentValue ||
+                  pendingOptions.has(optionKey)
+                )
+                  return;
+                pendingOptions.set(optionKey, choice.value);
+                setChoiceCaption(button, choiceLabel(choice));
+                button.setAttribute("aria-busy", "true");
+                void invoke<import("../providers/types").ProviderOptions>(
+                  "conversation.option",
+                  { id: conversation.id, option, value: choice.value },
+                  { reportError: false },
+                )
+                  .then((result) =>
+                    providerOptions.set(conversation.id, result),
+                  )
+                  .catch((error) =>
+                    showActionError(error, button.closest(".composer") ?? host),
+                  )
+                  .finally(() => {
+                    pendingOptions.delete(optionKey);
+                    const current =
+                      button.closest<HTMLElement>(".model-choices");
+                    if (current)
+                      reconcileView(
+                        current,
+                        modelChoices(
+                          getState().conversations.find(
+                            (c) => c.id === conversation.id,
+                          ) ?? conversation,
+                        ),
+                      );
+                  });
+              },
+            })),
+          );
         };
-        host.append(select);
+        host.append(button);
       }
     return host;
   }
@@ -544,6 +745,9 @@ export function createConversationViews({
         const row = document.createElement("div");
         row.className = `chat-message ${entry.message.role}`;
         row.dataset.messageId = entry.message.id;
+        if (entry.message.turnId) row.dataset.turnId = entry.message.turnId;
+        if (entry.message.phase) row.dataset.phase = entry.message.phase;
+        if (entry.message.interactive) row.dataset.actionRequired = "true";
         const role = document.createElement("div");
         role.className = "message-role";
         role.textContent =
@@ -577,7 +781,8 @@ export function createConversationViews({
             entry.message.id,
             conversation.id,
           );
-        row.append(role, text);
+        if (entry.message.role === "system") row.append(role);
+        row.append(text);
         if (entry.message.images?.length)
           row.append(imageStrip(entry.message.images));
         transcript.append(row);
@@ -585,45 +790,56 @@ export function createConversationViews({
         const tool = document.createElement("details");
         tool.className = "tool-activity";
         tool.dataset.toolId = entry.tool.id;
+        if (entry.tool.turnId) tool.dataset.turnId = entry.tool.turnId;
         const label = document.createElement("summary");
         const info = entry.tool.details as Record<string, unknown> | null;
+        tool.dataset.toolPhase = entry.tool.phase;
+        tool.dataset.compactCaption = compactToolCaption(info);
         const failed = !!(
           info?.error ||
           info?.isError ||
           ["failed", "error"].includes(String(info?.status))
         );
         label.textContent =
-          toolCaption(info) + ` · ${failed ? "failed" : entry.tool.phase}`;
+          compactToolCaption(info) + (failed ? " · failed" : "");
         label.title = toolCaption(info);
-        const details = document.createElement("pre");
-        details.textContent =
-          JSON.stringify(entry.tool.details, null, 2) ??
-          String(entry.tool.details);
-        const actionable = !!(
-          failed ||
-          /request.?user.?input|ask.?user|question/i.test(
-            String(info?.name ?? info?.toolName ?? ""),
-          )
+        const actionable = /request.?user.?input|ask.?user|question/i.test(
+          String(info?.name ?? info?.toolName ?? ""),
         );
         if (actionable) {
           tool.dataset.actionRequired = "true";
-          tool.open = true;
         }
-        tool.append(label, details);
+        const expansionKey = `${conversation.id}:${entry.tool.id}`;
+        tool.open = actionable || expandedTools.has(expansionKey);
+        tool.append(label);
+        if (tool.open) {
+          const details = document.createElement("pre");
+          details.textContent =
+            JSON.stringify(entry.tool.details, null, 2) ??
+            String(entry.tool.details);
+          tool.append(details);
+        }
+        tool.ontoggle = (event) => {
+          const current = event.currentTarget as HTMLDetailsElement;
+          if (!current.isConnected || actionable) return;
+          if (current.open === expandedTools.has(expansionKey)) return;
+          if (current.open) expandedTools.add(expansionKey);
+          else expandedTools.delete(expansionKey);
+          invalidate();
+        };
         transcript.append(tool);
       }
     }
-    groupTurnActivity(transcript, providerLabel(conversation.provider));
+    groupTurnActivity(transcript, conversation);
     const setup = integration.offer(conversation.provider);
     if (setup && !conversation.messages.length && !conversation.error)
       transcript.append(setup);
     body.append(transcript);
     if (conversation.historyPartial) {
       const warning = document.createElement("div");
-      warning.className = "conversation-status history-warning";
-      warning.textContent =
-        "Native history is partial; older pages have not been loaded.";
-      body.append(warning);
+      warning.className = "history-warning";
+      warning.textContent = "Earlier messages are not shown";
+      transcript.prepend(warning);
     }
     for (const permission of conversation.pendingPermissions) {
       const card = document.createElement("div");
@@ -661,16 +877,122 @@ export function createConversationViews({
         ? `Provider failed: ${conversation.error}`
         : conversation.status === "starting"
           ? `Starting ${providerLabel(conversation.provider)}...`
-          : conversation.status === "working"
-            ? `${providerLabel(conversation.provider)} is working...`
-            : conversation.status === "waiting"
-              ? "Waiting for your response"
-              : "");
+          : "");
     if (conversation.handoffTerminalId)
       currentStatus.textContent =
         "Open in the CLI terminal. Exit the CLI before returning to chat.";
     currentStatus.hidden = !currentStatus.textContent;
     body.append(currentStatus);
+
+    const waiting = (conversation.queuedMessages ?? []).filter(
+      (m) => m.status !== "sending",
+    );
+    if (waiting.length) {
+      const queue = document.createElement("section");
+      queue.className = "message-queue";
+      queue.setAttribute("aria-label", "Queued messages");
+      const heading = document.createElement("div");
+      heading.className = "queue-heading";
+      heading.textContent = conversation.queuePaused
+        ? "Queue paused"
+        : "Queued";
+      queue.append(heading);
+      if (
+        conversation.queuePaused &&
+        waiting.every((m) => m.status === "queued")
+      ) {
+        const resume = paneButton("Continue queue", () =>
+          invoke("conversation.queue-resume", { id: conversation.id }),
+        );
+        resume.classList.add("quiet");
+        queue.append(resume);
+      }
+      for (const message of waiting) {
+        const row = document.createElement("div");
+        row.className = "queued-message";
+        row.dataset.focusKey = `queued:${message.id}`;
+        if (message.editing && !queueEdits.has(message.id))
+          queueEdits.set(message.id, message.text);
+        if (queueEdits.has(message.id)) {
+          const field = document.createElement("textarea");
+          field.setAttribute("aria-label", "Edit queued message");
+          field.value = queueEdits.get(message.id)!;
+          field.oninput = () => queueEdits.set(message.id, field.value);
+          const save = paneButton("Save", async () => {
+            await invoke("conversation.queue-edit", {
+              id: conversation.id,
+              messageId: message.id,
+              text: queueEdits.get(message.id),
+            });
+            queueEdits.delete(message.id);
+            invalidate();
+          });
+          const cancel = paneButton("Cancel", async () => {
+            await invoke("conversation.queue-edit", {
+              id: conversation.id,
+              messageId: message.id,
+            });
+            queueEdits.delete(message.id);
+            invalidate();
+          });
+          cancel.classList.add("quiet");
+          field.onkeydown = (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              cancel.click();
+            }
+          };
+          row.append(field, actionRow(cancel, save));
+        } else {
+          const preview = document.createElement("div");
+          preview.className = "queued-message-text";
+          preview.textContent = message.text || "Image attachment";
+          row.append(preview);
+          if (message.images?.length) row.append(imageStrip(message.images));
+          const actions = actionRow();
+          if (message.status === "queued") {
+            const edit = paneButton("Edit", async () => {
+              await invoke("conversation.queue-edit", {
+                id: conversation.id,
+                messageId: message.id,
+                editing: true,
+              });
+              queueEdits.set(message.id, message.text);
+              invalidate();
+              requestAnimationFrame(() => {
+                const field = panes.querySelector<HTMLTextAreaElement>(
+                  `[data-focus-key="queued:${message.id}"] textarea`,
+                );
+                field?.focus();
+              });
+            });
+            edit.classList.add("quiet");
+            edit.setAttribute("aria-label", "Edit queued message");
+            actions.append(edit);
+          } else {
+            const warning = document.createElement("span");
+            warning.textContent =
+              "Delivery uncertain. Check the conversation before resending.";
+            row.append(warning);
+          }
+          const remove = paneButton(
+            message.status === "uncertain" ? "Dismiss" : "Cancel",
+            () =>
+              invoke("conversation.queue-remove", {
+                id: conversation.id,
+                messageId: message.id,
+              }),
+          );
+          remove.classList.add("quiet");
+          remove.setAttribute("aria-label", "Cancel queued message");
+          actions.append(remove);
+          row.append(actions);
+        }
+        queue.append(row);
+      }
+      body.append(queue);
+    }
 
     const composer = document.createElement("div");
     composer.className = "composer";
@@ -680,13 +1002,7 @@ export function createConversationViews({
     input.value = composerDrafts.get(conversation.id) ?? "";
     input.addEventListener("input", () => {
       composerDrafts.set(conversation.id, input.value);
-      persistComposer(conversation.id);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void sendMessage(conversation.id);
-      }
+      persistComposer(conversation.id, true);
     });
     const actions = document.createElement("div");
     actions.className = "composer-actions";
@@ -695,11 +1011,6 @@ export function createConversationViews({
     actions.append(provider);
     if (!conversation.handoffTerminalId)
       actions.append(modelChoices(conversation));
-    const cwd = document.createElement("span");
-    cwd.className = "composer-context";
-    cwd.textContent = conversation.cwd.split("/").pop() || conversation.cwd;
-    cwd.title = conversation.cwd;
-    actions.append(cwd);
     if (
       !conversation.handoffTerminalId &&
       ["working", "waiting"].includes(conversation.status)
@@ -718,6 +1029,11 @@ export function createConversationViews({
       menu({ x: e.clientX, y: e.clientY }, [
         { label: "Send message", run: () => void sendMessage(conversation.id) },
         {
+          label: "Session info...",
+          run: () =>
+            showProviderCommands(commandOptions(conversation.id), "status"),
+        },
+        {
           label: "Session commands...",
           run: () => showProviderCommands(commandOptions(conversation.id)),
         },
@@ -725,6 +1041,8 @@ export function createConversationViews({
     };
     composer.append(input, actions);
     bindImages(composer, input, conversation.id);
+    const conflict = draftConflict(conversation.id, conversation.paneId);
+    if (conflict) body.append(conflict);
     body.append(composer);
     return body;
   }
@@ -769,14 +1087,28 @@ export function createConversationViews({
     };
   }
   async function sendMessage(id: string): Promise<void> {
+    if (pendingSends.has(id)) return;
+    if (loadingImages.has(id)) {
+      setStatus("Wait for the image to finish loading");
+      return;
+    }
     if (getState().conversations.find((c) => c.id === id)?.handoffTerminalId) {
       setStatus("Exit the CLI and use Return to chat before sending.");
       return;
     }
     const text = composerDrafts.get(id) ?? "";
-    const images = attachmentDrafts.get(id) ?? [];
+    const images = [...(attachmentDrafts.get(id) ?? [])];
+    const skills = selectedSkills(id);
     if (!text.trim() && !images.length) return;
+    await saves.get(id)?.promise;
+    if (pendingSends.has(id)) return;
+    if (composerConflicts.has(id) || dirtyComposers.has(id)) {
+      setStatus("Resolve or save the draft before sending.");
+      return;
+    }
     sendErrors.delete(id);
+    hydratedComposers.add(id);
+    pendingSends.add(id);
     try {
       if (routeProviderCommand(text, commandOptions(id))) {
         if (composerDrafts.get(id) === text) {
@@ -789,7 +1121,7 @@ export function createConversationViews({
       }
       await invoke(
         "conversation.send",
-        { id, text, images, skills: selectedSkills(id) },
+        { id, text, images, skills },
         { reportError: false },
       );
     } catch (error) {
@@ -799,13 +1131,30 @@ export function createConversationViews({
       );
       invalidate();
       return;
+    } finally {
+      pendingSends.delete(id);
     }
 
     if (composerDrafts.get(id) === text) {
       composerDrafts.delete(id);
       skillDrafts.delete(id);
     }
-    if (attachmentDrafts.get(id) === images) attachmentDrafts.delete(id);
+    const remaining = attachmentDrafts.get(id) ?? [];
+    if (
+      remaining.length === images.length &&
+      remaining.every((image, i) => image === images[i])
+    )
+      attachmentDrafts.delete(id);
+    const saved = getState().workspaces.find(
+      (w) =>
+        w.id === getState().conversations.find((c) => c.id === id)?.workspaceId,
+    )?.chatDrafts?.[
+      getState().conversations.find((c) => c.id === id)?.paneId ?? ""
+    ];
+    if (!saved) {
+      versions.delete(id);
+      seenVersions.delete(id);
+    }
     invalidate();
   }
 
@@ -818,14 +1167,26 @@ export function createConversationViews({
           (c) => c.paneId === paneId,
         );
         const key = conversation?.id ?? paneId;
+        const version = draft.version ?? "";
         if (!hydratedComposers.has(key)) {
           hydratedComposers.add(key);
-          if (draft.provider) draftProviders.set(paneId, draft.provider);
-          if (!composerDrafts.has(key)) composerDrafts.set(key, draft.text);
-          if (draft.skills && !skillDrafts.has(key))
-            skillDrafts.set(key, draft.skills);
-          if (draft.images && !attachmentDrafts.has(key))
-            attachmentDrafts.set(key, draft.images);
+          seenVersions.set(key, version);
+          if (!composerDrafts.has(key) && !dirtyComposers.has(key)) {
+            acceptDraft(key, paneId, draft.localDraft ?? draft);
+            versions.set(key, version);
+            if (draft.localDraft) composerConflicts.set(key, draft);
+          } else versions.set(key, draft.version ?? "");
+        } else if (version !== seenVersions.get(key)) {
+          seenVersions.set(key, version);
+          if (draft.writer === writer) versions.set(key, draft.version ?? "");
+          else if (
+            composerConflicts.has(key) ||
+            dirtyComposers.has(key) ||
+            loadingImages.has(key)
+          ) {
+            composerConflicts.set(key, draft);
+            void persistComposer(key);
+          } else acceptDraft(key, paneId, draft);
         }
       }
   }
@@ -843,16 +1204,24 @@ export function createConversationViews({
     draft: (workspace: WorkspaceState, pane: PaneState) =>
       stable("draft:" + pane.id, renderDraftChat(workspace, pane)),
     conversation: (conversation: import("../types").ConversationState) =>
-      stable("chat:" + conversation.paneId, renderConversation(conversation)),
+      stable("chat:" + conversation.id, renderConversation(conversation)),
     integration: integration.open,
     send: sendMessage,
     reconcile() {
       reconcile();
       for (const id of views.keys())
         if (
-          !getState().workspaces.some((w) =>
-            w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
-          )
+          id.startsWith("chat:")
+            ? !getState().workspaces.some((w) =>
+                w.panes.some(
+                  (p) =>
+                    p.kind === "conversation" &&
+                    p.conversationId === id.slice(5),
+                ),
+              )
+            : !getState().workspaces.some((w) =>
+                w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
+              )
         )
           views.delete(id);
     },

@@ -1,0 +1,207 @@
+/* Shared scale and control geometry. Feature CSS owns layout, never a second button/form theme. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius: 3px;
+  --control-height: 28px;
+  --toolbar-height: 36px;
+  --font-small: calc(var(--ui-font-size) - 2px);
+  --ui-line-height: 1.4;
+}
+.ui-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ui-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--toolbar-height);
+  flex: none;
+}
+button.quiet {
+  border-color: transparent;
+  background: transparent;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  border: 1px solid var(--line);
+  background: #343944;
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+  min-height: var(--control-height);
+  line-height: var(--ui-line-height);
+  cursor: default;
+}
+button:not(:disabled):hover {
+  background: var(--control-hover);
+}
+button:not(:disabled):active {
+  background: var(--control-pressed);
+}
+button:disabled {
+  opacity: 0.45;
+}
+button.primary {
+  background: #414855;
+  color: #d7dae0;
+}
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid #7e9fc6;
+  outline-offset: -1px;
+}
+input,
+textarea,
+select {
+  background: #282c34;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  line-height: var(--ui-line-height);
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 1px solid #69768b;
+  outline-offset: -1px;
+}
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  vertical-align: middle;
+}
+.icon-button {
+  padding: 5px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: #9da5b4;
+  flex: none;
+}
+.icon-button:hover {
+  background: var(--control-hover);
+  color: #d7dae0;
+}
+
+dialog {
+  width: min(480px, calc(100vw - 40px));
+  border: 1px solid #464c58;
+  border-radius: 5px;
+  background: #2f343d;
+  color: #abb2bf;
+  padding: var(--space-3);
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow: auto;
+  box-shadow: 0 12px 40px #0006;
+}
+dialog::backdrop {
+  background: #0004;
+}
+dialog h2 {
+  font-size: calc(var(--ui-font-size) + 1px);
+  font-weight: 500;
+  margin: 0 0 var(--space-3);
+  color: #d7dae0;
+}
+dialog label {
+  display: block;
+  margin: var(--space-3) 0 var(--space-1);
+}
+dialog input:not([type="checkbox"]):not([type="radio"]) {
+  display: block;
+  width: 100%;
+}
+dialog input[type="checkbox"],
+dialog input[type="radio"] {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.dialog-error {
+  color: #e06c75;
+  margin-top: 8px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* A label and a fixed control column stay aligned across adjacent settings. */
+.setting-row,
+dialog .setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: var(--space-4);
+  margin: var(--space-3) 0;
+}
+.setting-row > input,
+.setting-row > select {
+  min-width: 0;
+  width: 100%;
+}
+.icon-button.compact {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 2px;
+}
+
+.appearance-settings {
+  width: min(720px, calc(100vw - 2 * var(--space-4)));
+}
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings-entry .setting-row {
+  flex: 1;
+  grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr);
+}
+.settings-list {
+  max-height: 55vh;
+  overflow: auto;
+}
+@media (max-width: 480px) {
+  .settings-entry .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}
+
+.setting-row.compact,
+dialog .setting-row.compact {
+  margin: var(--space-1) 0;
+}
+.setting-row > input[type="checkbox"] {
+  width: auto;
+  justify-self: start;
+}

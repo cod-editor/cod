@@ -6,13 +6,20 @@ Read [the vision](docs/vision.md) and, for implementation, [the contracts](docs/
 
 ## Workflow
 
+New user defect reports go to the front of the pending repair queue. Preserve the current coherent change and reach a safe verification boundary before switching; do not abandon work or end execution just because feedback arrived. Treat a status question as a request for an update while continuing the authorized queue.
+
+For an authorized repair backlog, continue from each verified checkpoint to the next agreed item without requiring a new prompt. Publishing a checkpoint or reporting status does not complete the backlog. Use completion notifications for long checks and resume dependent work when they finish; stop only for an actual blocker, a user pause or completion of the requested scope.
+
 1. Identify the user outcome, requirements and relevant compatibility gaps before choosing an implementation.
 2. Make focused changes with clear module boundaries. Keep UI, CLI, persistence and native provider behavior aligned.
 3. Verify observable behavior with appropriate tests. Use real Electron, Git and PTYs with invented fixture data; distinguish protocol fixtures from live compatibility.
 4. Format changes and inspect the diff for unintended edits, secrets and regressions.
-5. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
+5. Publish coherent verified checkpoints periodically and merge their pull requests once required checks pass; this is standing user authorization. Never bypass failing required checks.
+6. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
 
 ## Design
+
+Before adding a protocol, service, abstraction or compatibility layer, inspect the existing mechanisms and relevant reference products. Prefer solving the problem through an existing interface. Justify any additional mechanism with a concrete unmet requirement and account for its lifecycle, failure modes, maintenance and verification cost; do not add layers merely because they are available.
 
 Validate the design as a whole rather than patching each stakeholder comment in isolation:
 
@@ -23,7 +30,15 @@ Validate the design as a whole rather than patching each stakeholder comment in 
 5. Inspect rendered screenshots at realistic sizes and exercise keyboard/mouse paths. Combine scenario walkthroughs, reference comparison, model review and behavioral tests.
 6. Iterate until contradictions are resolved or explicitly identified. The stakeholder sets priorities; agents own research, QA and debugging.
 
+Before implementation, compare the complete user task with the chosen reference product and record observable acceptance behavior in the existing spec: keyboard and mouse entry, selection versus activation, rename, cancel, focus return, persistence and recovery. Explicitly identify intentional omissions; do not assume that an unimplemented ordinary action is out of scope. Tests must check the intended task, not merely confirm the bindings or controls the implementation happened to add.
+
+Treat user-adjustable properties as part of the initial feature: identify their defaults, configuration ownership, validation, live application and reset behavior. Extend the shared settings schema and components rather than accumulating isolated preference dialogs.
+
+For input, streaming and persistence paths, verify responsiveness and bounded resource use with representative large histories and attachments as well as empty fixtures. Distinguish correctness tests from performance evidence; a saved final value alone does not prove responsive typing. When fixing a defect, inspect neighboring actions and test the proposed cause directly before declaring it resolved.
+
 Apply established preferences everywhere: compact editor conventions, keyboard-first operation, sparse persistent controls, no redundant labels or explanatory clutter. Every visible control needs a reason to remain visible rather than use a shortcut, context menu or Commands. Minimalism must preserve discoverability and keyboard focus. Do not infer a psychological profile from design preferences.
+
+Use the shared UI primitives in `src/ui/primitives.ts`, behavior helpers in `controls.ts`/`action-feedback.ts`, and the spacing/control tokens in `src/ui/components.css`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.
 
 When asked to revise the standalone mock, apply and validate the change without another confirmation; keep production changes separate unless requested. Ask one question at a time. Put durable product decisions in the vision and behavior contracts in the spec.
 

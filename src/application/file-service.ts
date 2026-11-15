@@ -104,8 +104,18 @@ export class FileApplicationService {
       };
     }
     return this.store.change(() => {
-      const workspace = this.store.workspace(workspaceId),
-        active = workspace.activePaneId,
+      const workspace = this.store.workspace(workspaceId);
+      const existing =
+        resource.kind === "preview"
+          ? workspace.panes.find(
+              (p) => p.kind === "preview" && p.filePath === resource.filePath,
+            )
+          : undefined;
+      if (existing) {
+        workspace.activePaneId = existing.id;
+        return { paneId: existing.id };
+      }
+      const active = workspace.activePaneId,
         id = randomUUID();
       workspace.panes.push({ id, ...resource });
       workspace.layout = replaceLeaf(workspace.layout, active, {
@@ -249,7 +259,7 @@ export class FileApplicationService {
 
   filePane(request: OperationRequest): {
     workspace: WorkspaceState;
-    pane: PaneState;
+    pane: Extract<PaneState, { kind: "document" }>;
   } {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
@@ -260,17 +270,36 @@ export class FileApplicationService {
     return { workspace, pane };
   }
 
-  async readPaneFile(
-    request: OperationRequest,
-  ): Promise<{ content: string; draft?: FileDraft; unavailable?: boolean }> {
+  async fileVersion(request: OperationRequest): Promise<{ version: string }> {
+    const { pane } = this.filePane(request);
+    try {
+      const metadata = await stat(pane.filePath!, { bigint: true });
+      return {
+        version: `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}`,
+      };
+    } catch {
+      return { version: "unavailable" };
+    }
+  }
+  async readPaneFile(request: OperationRequest): Promise<{
+    content: string;
+    draft?: FileDraft;
+    unavailable?: boolean;
+    version?: string;
+  }> {
     const { pane } = this.filePane(request);
     if (pane.kind !== "document") throw new Error("Pane has no open file");
     let canonical = pane.canonicalPath ?? path.resolve(pane.filePath!);
     try {
       canonical = await realpath(pane.filePath!);
+      const version = (await this.fileVersion(request)).version;
       const content = await readFile(canonical, "utf8"),
         draft = this.store.data.drafts[canonical];
-      return { content, ...(draft ? { draft: structuredClone(draft) } : {}) };
+      return {
+        content,
+        version,
+        ...(draft ? { draft: structuredClone(draft) } : {}),
+      };
     } catch (error) {
       const draft = this.store.data.drafts[canonical];
       if (draft)
@@ -374,6 +403,9 @@ export class FileApplicationService {
 
       case "file.resolve":
         return this.resolveFile(request);
+
+      case "file.version":
+        return this.fileVersion(request);
 
       case "file.read":
         return this.readPaneFile(request);

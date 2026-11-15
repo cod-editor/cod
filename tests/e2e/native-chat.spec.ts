@@ -1,8 +1,8 @@
 import { test, expect, type Locator } from "@playwright/test";
-import type { ConversationState } from "../../src/types";
+import type { AppState, ConversationState } from "../../src/types";
 import { createServer } from "node:http";
 import path from "node:path";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import {
   ChatApp,
@@ -31,13 +31,148 @@ const transcript = (chat: { paneId: string }) =>
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
 async function expandActivity(pane: Locator) {
-  for (const activity of await pane.locator(".turn-activity").all())
+  for (const activity of await pane.locator("details.turn-activity").all())
     if ((await activity.getAttribute("open")) === null)
       await activity.locator(":scope > summary").click();
 }
 const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
 const text = (chat: Chat) =>
   chat.messages.map((message) => message.text).join("\n");
+
+test("Collapsed tool history does not materialize output until expanded", async () => {
+  await shell.configure({ codex: { reasoningOptions: true } });
+  const workspace = await shell.create("Long tool history");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const stateFile = path.join(shell.data, "state.json");
+  const saved = JSON.parse(await readFile(stateFile, "utf8")) as AppState;
+  const importedId = "codex-fixture-large-import";
+  saved.conversations.find((c) => c.id === chat.id)!.nativeId = importedId;
+  await writeFile(stateFile, JSON.stringify(saved));
+  await writeFile(
+    path.join(shell.recording + ".sessions", importedId + ".json"),
+    JSON.stringify([
+      {
+        id: "large-turn",
+        status: "completed",
+        items: Array.from({ length: 400 }, (_, index) => ({
+          id: `large-tool-${index}`,
+          type: "commandExecution",
+          command: "echo invented",
+          status: "completed",
+          aggregatedOutput: "invented-output ".repeat(100),
+        })),
+      },
+    ]),
+  );
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect
+    .poll(() =>
+      shell.page.evaluate(
+        async (id) =>
+          (
+            await window.cod.invoke<ConversationState>({
+              op: "conversation.inspect",
+              id,
+            })
+          ).tools.length,
+        chat.id,
+      ),
+    )
+    .toBe(400);
+  const pane = shell.pane(chat.paneId);
+  await expect(pane.locator(".tool-activity")).toHaveCount(400);
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
+  await expandActivity(pane);
+  const tool = pane.locator(".tool-activity").first();
+  await tool.locator("summary").click();
+  await expect(tool.locator("pre")).toContainText("invented-output");
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(1);
+  await tool.locator("summary").click();
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
+});
+
+test("Failed opening cannot leave stale composer handlers when a pane is reused", async () => {
+  const workspace = await shell.create("Composer recovery");
+  const paneId = (await shell.workspace(workspace)).activePaneId;
+  await shell.configure({
+    codex: { initializeDelayMs: 600, initializeError: true },
+  });
+  const failed = shell.raw(
+    "conversation",
+    "resume",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--native-id",
+    "fixture-failed-resume",
+    "--cwd",
+    shell.folders[0],
+  );
+  await expect(
+    shell
+      .pane(paneId)
+      .getByRole("status", { name: "Conversation status", exact: true }),
+  ).toContainText("Starting");
+  expect((await failed).code).not.toBe(0);
+  await shell.configure({});
+  const chat = await shell.newChat(workspace, "codex");
+  expect(chat.paneId).toBe(paneId);
+  const composer = shell
+    .pane(paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  const prompt = "A long invented draft with attachments. ".repeat(80);
+  await composer.fill(prompt);
+  await composer.evaluate((input) => {
+    const data = new DataTransfer();
+    const png = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    data.items.add(new File([png], "invented.png", { type: "image/png" }));
+    input.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true }),
+    );
+  });
+  await expect
+    .poll(async () => {
+      const state = await shell.cli<AppState>("state");
+      const draft = state.workspaces.find((w) => w.id === workspace)
+        ?.chatDrafts?.[paneId];
+      return { text: draft?.text, images: draft?.images?.length };
+    })
+    .toEqual({ text: prompt + "[Image 1]", images: 1 });
+  const other = await shell.newChat(workspace, "codex");
+  await shell.send(other.id, "Unrelated conversation");
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(composer).toHaveValue(prompt + "[Image 1]");
+  await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
+    1,
+  );
+  await shell.stop();
+  await shell.start();
+  await expect(
+    shell.pane(paneId).getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue(prompt + "[Image 1]");
+  await expect(shell.pane(paneId).locator(".composer-images img")).toHaveCount(
+    1,
+  );
+  await shell
+    .pane(paneId)
+    .getByRole("textbox", { name: "Message", exact: true })
+    .press(`${modifier}+Enter`);
+  await expect
+    .poll(async () =>
+      (await shell.inspect(chat.id)).messages.some(
+        (m) => m.role === "user" && m.text === prompt + "[Image 1]",
+      ),
+    )
+    .toBe(true);
+});
 
 for (const provider of ["codex", "kimi"] as Provider[]) {
   test(`Chat AC1 ${provider}: UI creates native conversation and streams assistant/tool activity`, async () => {
@@ -90,12 +225,7 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     await expect(transcript(chat)).not.toContainText("FOREIGN_OUTPUT");
     expect((await shell.inspect(chat.id)).tools.length).toBeGreaterThan(0);
     await expandActivity(pane);
-    await pane
-      .locator(".tool-activity")
-      .filter({ hasText: /invented-tool/ })
-      .first()
-      .locator("summary")
-      .click();
+    await pane.locator(".tool-activity").first().locator("summary").click();
     await expect(pane.getByText(/invented-tool/).first()).toBeVisible();
   });
 }
@@ -190,18 +320,34 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     const waiting = await shell.inspect(chat.id);
     expect(waiting.pendingPermissions).toHaveLength(1);
     expect(text(waiting)).not.toContain("ALLOWED");
+    const queued = await shell.cli<{ messageId: string }>(
+      "conversation",
+      "send",
+      "--id",
+      chat.id,
+      "--text",
+      "concurrent-turn",
+    );
     expect(
       (
-        await shell.raw(
-          "conversation",
-          "send",
-          "--id",
-          chat.id,
-          "--text",
-          "concurrent-turn",
-        )
-      ).code,
-    ).not.toBe(0);
+        (await shell.inspect(chat.id)) as Chat & {
+          queuedMessages: Array<{ id: string; text: string }>;
+        }
+      ).queuedMessages,
+    ).toContainEqual(
+      expect.objectContaining({
+        id: queued.messageId,
+        text: "concurrent-turn",
+      }),
+    );
+    await shell.cli(
+      "conversation",
+      "queue-remove",
+      "--id",
+      chat.id,
+      "--message-id",
+      queued.messageId,
+    );
     expect(
       (
         await shell.raw(
@@ -421,7 +567,6 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     const historyTool = shell
       .pane(attached.paneId)
       .locator(".tool-activity")
-      .filter({ hasText: "invented-tool" })
       .first();
     if (await historyTool.count()) await historyTool.locator("summary").click();
     await expect(
@@ -605,11 +750,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
     live.messages.filter((message) => message.role === "assistant"),
   ).toHaveLength(2);
   await expandActivity(shell.pane(chat.paneId));
-  const liveTool = shell
-    .pane(chat.paneId)
-    .locator(".tool-activity")
-    .filter({ hasText: "invented-tool" })
-    .first();
+  const liveTool = shell.pane(chat.paneId).locator(".tool-activity").first();
   if (await liveTool.count()) await liveTool.locator("summary").click();
   const ordered = await shell.cli<ConversationState>(
     "conversation",
@@ -645,7 +786,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(
     shell
       .pane(chat.paneId)
-      .getByText(/history is partial|partial native history/i),
+      .getByText("Earlier messages are not shown", { exact: true }),
   ).toBeVisible();
   // Keeping cached context or showing only authoritative partial history are valid;
   // if cached leading text remains, its original position must remain before the tail.
@@ -653,4 +794,1007 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
     expect(rendered.indexOf(`STREAM ${original}`)).toBeLessThan(
       rendered.indexOf(`DONE ${original}`),
     );
+});
+
+async function removalMenu(id: string) {
+  const row = shell.page.locator(
+    `.conversation-row[data-workspace-id="${id}"]`,
+  );
+  if (
+    !(await shell.page
+      .locator("#workspace-tree")
+      .evaluate((node) => node.contains(document.activeElement)))
+  )
+    await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await shell.page.keyboard.press("Home");
+  for (let step = 0; step < 20; step++) {
+    if (await row.evaluate((node) => node === document.activeElement)) break;
+    await shell.page.keyboard.press("ArrowDown");
+  }
+  await expect(row).toBeFocused();
+  await shell.page.keyboard.press("Shift+F10");
+  const menu = shell.page.getByRole("dialog", { name: "Actions", exact: true });
+  await expect(menu).toBeVisible();
+  return menu.getByRole("button", {
+    name: "Remove from workspace",
+    exact: true,
+  });
+}
+
+for (const provider of ["codex", "kimi"] as const) {
+  test(`Chat removal ${provider}: keyboard action removes workspace membership, undo restores draft and native resume keeps history`, async ({}, info) => {
+    const workspace = await shell.create(`Remove ${provider} task`);
+    const chat = await shell.newChat(workspace, provider);
+    await shell.send(chat.id, "Invented retained native history");
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    const nativeFile = path.join(
+      shell.recording + ".sessions",
+      chat.nativeId + ".json",
+    );
+    const nativeBytes = await readFile(nativeFile);
+    const composer = shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("Preserve this unsent local draft");
+    await expect
+      .poll(
+        async () =>
+          (await shell.cli<AppState>("state")).workspaces.find(
+            (w) => w.id === workspace,
+          )?.chatDrafts?.[chat.paneId]?.text,
+      )
+      .toBe("Preserve this unsent local draft");
+    await shell.cli(
+      "conversation",
+      "report-status",
+      "--id",
+      chat.id,
+      "--status",
+      "ready",
+    );
+    const promptCount = (await shell.prompts()).length;
+    let action = await removalMenu(chat.id);
+    await expect(action).toBeEnabled();
+    await shell.page.screenshot({
+      path: info.outputPath(`${provider}-remove-context-menu.png`),
+    });
+    await tabTo(shell.page, action);
+    await shell.page.keyboard.press("Enter");
+    await expect(
+      shell.page.locator(`.conversation-row[data-workspace-id="${chat.id}"]`),
+    ).toHaveCount(0);
+    await expect(shell.pane(chat.paneId)).toHaveCount(0);
+    const parent = shell.page.locator(
+      `#workspace-tree > [data-workspace-id="${workspace}"]`,
+    );
+    await expect(parent).toBeFocused();
+    await expect(parent).toHaveAttribute("data-status", "");
+    expect(
+      (await shell.cli<AppState>("state")).conversations.some(
+        (c) => c.id === chat.id,
+      ),
+    ).toBe(false);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    await shell.stop();
+    await shell.start();
+    expect(
+      (await shell.cli<AppState>("state")).conversations.some(
+        (c) => c.id === chat.id,
+      ),
+    ).toBe(false);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    // Use the existing user-facing undo command; no new archive service.
+    await shell.page.keyboard.press(`${modifier}+Shift+T`);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("Preserve this unsent local draft");
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    expect(await shell.prompts()).toHaveLength(promptCount);
+    action = await removalMenu(chat.id);
+    await tabTo(shell.page, action);
+    await shell.page.keyboard.press("Enter");
+    await expect(shell.pane(chat.paneId)).toHaveCount(0);
+    const resumed = await shell.cli<{
+      id: string;
+      paneId: string;
+      nativeId: string;
+    }>(
+      "conversation",
+      "resume",
+      "--workspace",
+      workspace,
+      "--provider",
+      provider,
+      "--cwd",
+      shell.folders[0],
+      "--native-id",
+      chat.nativeId,
+    );
+    expect(resumed.nativeId).toBe(chat.nativeId);
+    const beforeUndo = (await shell.cli<AppState>("state")).workspaces.find(
+      (w) => w.id === workspace,
+    )!.closedTabs;
+    const duplicateUndo = await shell.raw(
+      "pane",
+      "reopen",
+      "--workspace",
+      workspace,
+    );
+    expect(duplicateUndo.code).not.toBe(0);
+    expect(duplicateUndo.stderr).toContain("already open");
+    expect(
+      (await shell.cli<AppState>("state")).workspaces.find(
+        (w) => w.id === workspace,
+      )!.closedTabs,
+    ).toEqual(beforeUndo);
+    expect(text(await shell.inspect(resumed.id))).toContain(
+      "DONE Invented retained native history",
+    );
+    expect(await shell.prompts()).toHaveLength(promptCount);
+    expect(await readFile(nativeFile)).toEqual(nativeBytes);
+    await shell.page.screenshot({
+      path: info.outputPath(`${provider}-removed-session-native-resume.png`),
+    });
+    await shell.send(resumed.id, "Continue the same native history");
+    await expect.poll(() => status(resumed.id)).toBe("ready");
+    expect((await shell.inspect(resumed.id)).nativeId).toBe(chat.nativeId);
+    expect(text(await shell.inspect(resumed.id))).toContain(
+      "DONE Continue the same native history",
+    );
+  });
+}
+
+test("Chat removal refuses working, waiting and handed-off sessions without stopping their native process", async () => {
+  const workspace = await shell.create("Removal guards");
+  const chat = await shell.newChat(workspace, "codex");
+  for (const prompt of [
+    "[hold] Keep running",
+    "[approve] Keep permission pending",
+  ]) {
+    await shell.send(chat.id, prompt);
+    const expected = prompt.includes("[approve]") ? "waiting" : "working";
+    await expect.poll(() => status(chat.id)).toBe(expected);
+    const before = await shell.inspect(chat.id);
+    const action = await removalMenu(chat.id);
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAttribute("title", /Stop the current response/);
+    await shell.page.keyboard.press("Escape");
+    expect(
+      (await shell.raw("conversation", "remove", "--id", chat.id)).code,
+    ).not.toBe(0);
+    expect(await status(chat.id)).toBe(expected);
+    expect((await shell.inspect(chat.id)).pendingPermissions).toEqual(
+      before.pendingPermissions,
+    );
+    await shell
+      .pane(chat.paneId)
+      .getByRole("button", { name: "Stop", exact: true })
+      .click();
+    await expect.poll(() => status(chat.id)).toBe("ready");
+  }
+  const handoff = await shell.cli<{ terminalId: string; paneId: string }>(
+    "conversation",
+    "handoff",
+    "--id",
+    chat.id,
+  );
+  const action = await removalMenu(chat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute("title", /Return this session to chat/);
+  await shell.page.keyboard.press("Escape");
+  expect(
+    (await shell.raw("conversation", "remove", "--id", chat.id)).code,
+  ).not.toBe(0);
+  const state = await shell.cli<AppState>("state");
+  expect(state.terminals.find((t) => t.id === handoff.terminalId)?.status).toBe(
+    "running",
+  );
+  expect(
+    state.conversations.find((c) => c.id === chat.id)?.handoffTerminalId,
+  ).toBe(handoff.terminalId);
+  await shell.cli("terminal", "close", "--id", handoff.terminalId);
+  await shell.cli("conversation", "reclaim", "--id", chat.id);
+  await shell.send(chat.id, "Still usable after rejected removal");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect(text(await shell.inspect(chat.id))).toContain(
+    "DONE Still usable after rejected removal",
+  );
+});
+
+test("Chat removal preserves unresolved review and interactive-page origins", async () => {
+  const workspace = await shell.create("Origin removal guards");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    shell.folders[0],
+  );
+  const reviewChat = await shell.newChat(workspace, "codex");
+  await shell.cli(
+    "review",
+    "open-document",
+    "--workspace",
+    workspace,
+    "--path",
+    shell.file,
+    "--conversation",
+    reviewChat.id,
+  );
+  const beforeReview = await shell.cli<AppState>("state");
+  let action = await removalMenu(reviewChat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute("title", /Finish the pending review/);
+  await shell.page.keyboard.press("Escape");
+  const rejectedReview = await shell.raw(
+    "conversation",
+    "remove",
+    "--id",
+    reviewChat.id,
+  );
+  expect(rejectedReview.code).not.toBe(0);
+  expect(rejectedReview.stderr).toContain("pending review");
+  expect((await shell.cli<AppState>("state")).reviews).toEqual(
+    beforeReview.reviews,
+  );
+  expect((await shell.inspect(reviewChat.id)).nativeId).toBe(
+    reviewChat.nativeId,
+  );
+  const pageChat = await shell.newChat(workspace, "codex");
+  const file = path.join(shell.folders[0], "invented-form.html");
+  await writeFile(
+    file,
+    '<!doctype html><title>Invented decision</title><form><label>Choice <input name="choice"></label><button>Submit</button></form>',
+  );
+  const page = await shell.cli<{ id: string }>(
+    "page",
+    "open",
+    "--workspace",
+    workspace,
+    "--conversation",
+    pageChat.id,
+    "--path",
+    file,
+  );
+  action = await removalMenu(pageChat.id);
+  await expect(action).toBeDisabled();
+  await expect(action).toHaveAttribute(
+    "title",
+    /Finish or close the interactive page/,
+  );
+  await shell.page.keyboard.press("Escape");
+  expect(
+    (await shell.raw("conversation", "remove", "--id", pageChat.id)).code,
+  ).not.toBe(0);
+  expect(
+    (await shell.cli<AppState>("state")).browsers.some((b) => b.id === page.id),
+  ).toBe(true);
+  expect((await shell.inspect(pageChat.id)).nativeId).toBe(pageChat.nativeId);
+  expect(await shell.prompts()).toHaveLength(0);
+});
+
+test("Pasted images have stable references at the caret across removal and restart", async ({}, info) => {
+  const workspace = await shell.create("Image references");
+  const chat = await shell.newChat(workspace, "codex");
+  const composer = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await composer().fill("Example one: . Example two: .");
+  async function paste(position: number) {
+    await composer().evaluate((node, position) => {
+      const input = node as HTMLTextAreaElement;
+      input.setSelectionRange(position, position);
+      const data = new DataTransfer();
+      const png = Uint8Array.from(
+        atob(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+        ),
+        (c) => c.charCodeAt(0),
+      );
+      data.items.add(new File([png], "example.png", { type: "image/png" }));
+      input.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true }),
+      );
+    }, position);
+  }
+  await paste(13);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await paste((await composer().inputValue()).lastIndexOf("."));
+  await expect(composer()).toHaveValue(
+    "Example one: [Image 1]. Example two: [Image 2].",
+  );
+  await expect(shell.pane(chat.paneId).locator(".image-reference")).toHaveText([
+    "[Image 1]",
+    "[Image 2]",
+  ]);
+  await shell
+    .pane(chat.paneId)
+    .getByRole("button", { name: "Remove image", exact: true })
+    .first()
+    .click();
+  await expect(composer()).toHaveValue(
+    "Example one: . Example two: [Image 2].",
+  );
+  await shell.stop();
+  await shell.start();
+  await expect(composer()).toHaveValue(
+    "Example one: . Example two: [Image 2].",
+  );
+  await expect(shell.pane(chat.paneId).locator(".image-reference")).toHaveText([
+    "[Image 2]",
+  ]);
+  await shell.page.screenshot({
+    path: info.outputPath("image-references.png"),
+  });
+  await composer().press(`${modifier}+Enter`);
+  await expect(
+    transcript(chat).locator(".message-images .image-reference"),
+  ).toHaveText(["[Image 2]"]);
+});
+
+test("Repeated Backspace saves the chat draft without echoing full state on every key", async () => {
+  const workspace = await shell.create("Responsive composer");
+  const chat = await shell.newChat(workspace, "codex");
+  const original = "Long invented draft. ".repeat(4000);
+  const image = {
+    reference: 1,
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+  };
+  await shell.page.evaluate(
+    async ({ workspace, paneId, original, image }) => {
+      await window.cod.invoke({
+        op: "conversation.composer",
+        workspace,
+        paneId,
+        text: original,
+        images: [image],
+      });
+    },
+    { workspace, paneId: chat.paneId, original, image },
+  );
+  await shell.stop();
+  await shell.start();
+  const input = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input()).toHaveValue(original);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await input().focus();
+  await input().evaluate((node) => {
+    const textarea = node as HTMLTextAreaElement;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  });
+  await shell.page.evaluate(() => {
+    const counters = { snapshots: 0 };
+    Object.assign(window, { composerCounters: counters });
+    window.cod.onState(() => {
+      counters.snapshots++;
+    });
+  });
+  // Repeated keydown exercises Chromium's native key repeat, not synthetic input.
+  for (let i = 0; i < 80; i++) await shell.page.keyboard.down("Backspace");
+  await shell.page.keyboard.up("Backspace");
+  const expected = original.slice(0, -80);
+  await expect(input()).toHaveValue(expected);
+  await expect(input()).toBeFocused();
+  await expect
+    .poll(async () => {
+      try {
+        const saved = JSON.parse(
+          await readFile(path.join(shell.data, "composer-text.json"), "utf8"),
+        );
+        return (
+          Object.values(saved.drafts) as Array<{
+            pane: string;
+            draft: { text: string };
+          }>
+        ).find((entry) => entry.pane === chat.paneId)?.draft.text;
+      } catch {
+        return undefined;
+      }
+    })
+    .toBe(expected);
+  expect(
+    await shell.page.evaluate(
+      () =>
+        (window as unknown as { composerCounters: { snapshots: number } })
+          .composerCounters.snapshots,
+    ),
+  ).toBeLessThan(5);
+  await shell.stop();
+  await shell.start();
+  await expect(input()).toHaveValue(expected);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await shell
+    .pane(chat.paneId)
+    .getByRole("button", { name: "Remove image", exact: true })
+    .click();
+  await shell.stop();
+  await shell.start();
+  await expect(input()).toHaveValue(expected);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(0);
+});
+
+test("Close tab shortcut closes the focused chat and preserves its session", async () => {
+  const workspace = await shell.create("Close chat shortcut");
+  const first = await shell.newChat(workspace, "codex");
+  const second = await shell.newChat(workspace, "codex");
+  const composer = shell
+    .pane(second.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await composer.fill("Keep this draft when closing the tab.");
+  await shell
+    .pane(second.paneId)
+    .locator(".composer")
+    .evaluate((node) => {
+      Object.assign(window, { closedComposer: new WeakRef(node) });
+    });
+  await composer.press(`${modifier}+w`);
+  await expect(shell.pane(second.paneId)).toHaveCount(0);
+  const session = await shell.page.context().newCDPSession(shell.page);
+  await session.send("HeapProfiler.collectGarbage");
+  expect(
+    await shell.page.evaluate(
+      () =>
+        (
+          window as unknown as { closedComposer: WeakRef<HTMLElement> }
+        ).closedComposer.deref() === undefined,
+    ),
+  ).toBe(true);
+  await session.detach();
+  await expect
+    .poll(async () => {
+      const journal = await readFile(
+        path.join(shell.data, "diagnostics", "runtime.jsonl"),
+        "utf8",
+      );
+      return journal.includes('"event":"close-tab-result"');
+    })
+    .toBe(true);
+  const journal = await readFile(
+    path.join(shell.data, "diagnostics", "runtime.jsonl"),
+    "utf8",
+  );
+  expect(journal).not.toContain("Keep this draft when closing the tab.");
+  const state = await shell.cli<AppState>("state");
+  expect(state.conversations.some((c) => c.id === second.id)).toBe(true);
+  expect(
+    state.workspaces
+      .find((w) => w.id === workspace)
+      ?.panes.some((p) => p.id === first.paneId),
+  ).toBe(true);
+});
+
+test("Close tab shortcut closes a focused source editor", async () => {
+  const workspace = await shell.create("Close file shortcut");
+  const file = path.join(shell.folders[0], "close-fixture.md");
+  await writeFile(file, "# Invented file\n");
+  const opened = await shell.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+  );
+  const editor = shell
+    .pane(opened.paneId)
+    .getByRole("textbox", { name: "File contents", exact: true });
+  await expect(editor).toBeEnabled();
+  await editor.focus();
+  await editor.press(`${modifier}+w`);
+  await expect(shell.pane(opened.paneId)).toHaveCount(0);
+});
+
+async function queueFixture(
+  chat: { nativeId: string },
+  id: string,
+  text: string,
+) {
+  const destination = path.join(
+    shell.recording + ".sessions",
+    chat.nativeId + ".queue.json",
+  );
+  await writeFile(destination + ".tmp", JSON.stringify({ id, text }));
+  await rename(destination + ".tmp", destination);
+}
+
+test("Queued Codex turns update the transcript and attention without stealing focus", async () => {
+  const workspace = await shell.create("Queued completions");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Initial turn");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const before = await inspectQueuedChat(chat.id);
+  const other = await shell.newChat(workspace, "codex");
+  await queueFixture(chat, "job-one", "Job finished externally");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Job finished externally");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const after = await inspectQueuedChat(chat.id);
+  expect(after.completionRevision).toBe((before.completionRevision ?? 0) + 1);
+  expect(after.turns).toHaveLength((before.turns?.length ?? 0) + 1);
+  expect(
+    after.messages.filter(
+      (m) => m.role === "user" && m.text === "Job finished externally",
+    ),
+  ).toHaveLength(1);
+  expect(
+    after.messages.filter(
+      (m) => m.role === "user" && m.text === "Initial turn",
+    ),
+  ).toHaveLength(1);
+  expect(after.turns?.at(-1)?.outcome).toBe("completed");
+  expect(after.tools.at(-1)?.turnId).toBe(after.turns?.at(-1)?.id);
+  expect((await shell.workspace(workspace)).activePaneId).toBe(other.paneId);
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(transcript(chat)).toContainText("DONE Job finished externally");
+  await shell.page.screenshot({
+    path: test.info().outputPath("queued-turn-visible.png"),
+  });
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(transcript(chat)).toContainText("DONE Job finished externally");
+});
+
+async function textFromInspection(id: string) {
+  return text(await inspectQueuedChat(id));
+}
+
+test("Queued Codex turns retain permission and interruption controls", async () => {
+  const workspace = await shell.create("Queued permission");
+  const chat = await shell.newChat(workspace, "codex");
+  await queueFixture(chat, "approval", "External approval [approve]");
+  await expect.poll(() => status(chat.id)).toBe("waiting");
+  const pending = await inspectQueuedChat(chat.id);
+  expect(pending.pendingPermissions).toHaveLength(1);
+  const result = await shell.raw(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Must not overlap",
+  );
+  expect(result.code).toBe(0);
+  expect(
+    (await inspectQueuedChat(chat.id)).queuedMessages?.map((m) => m.text),
+  ).toEqual(["Must not overlap"]);
+  expect(
+    (await inspectQueuedChat(chat.id)).messages.some(
+      (m) => m.role === "user" && m.text === "Must not overlap",
+    ),
+  ).toBe(false);
+  await shell.cli(
+    "conversation",
+    "permission",
+    "--id",
+    chat.id,
+    "--request-id",
+    pending.pendingPermissions[0].id,
+    "--option-id",
+    "deny",
+  );
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(transcript(chat)).toContainText("DENIED External approval");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Must not overlap");
+  await expect
+    .poll(async () => (await inspectQueuedChat(chat.id)).queuedMessages?.length)
+    .toBe(0);
+  const revision = (await inspectQueuedChat(chat.id)).completionRevision;
+  await queueFixture(chat, "held", "External hold [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect((await inspectQueuedChat(chat.id)).turns?.at(-1)?.outcome).toBe(
+    "cancelled",
+  );
+  expect((await inspectQueuedChat(chat.id)).completionRevision).toBe(revision);
+  await shell.send(chat.id, "Normal follow-up");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("DONE Normal follow-up");
+});
+
+function inspectQueuedChat(id: string) {
+  return shell.cli<ConversationState>("conversation", "inspect", "--id", id);
+}
+
+test("Queued turn at completion cannot be cleared by the previous send promise", async () => {
+  await shell.configure({ codex: { queueAfterCompletion: true } });
+  const workspace = await shell.create("Immediate queue");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Initial turn");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("Queued immediately [hold]");
+  expect(await status(chat.id)).toBe("working");
+  const result = await shell.raw(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Overlap",
+  );
+  expect(result.code).toBe(0);
+  expect(
+    (await inspectQueuedChat(chat.id)).queuedMessages?.map((m) => m.text),
+  ).toEqual(["Overlap"]);
+  expect(
+    (await inspectQueuedChat(chat.id)).turns?.at(-1)?.finishedAt,
+  ).toBeUndefined();
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  expect(
+    (await inspectQueuedChat(chat.id)).turns?.map((t) => t.outcome),
+  ).toEqual(["completed", "cancelled"]);
+});
+
+test("Local diagnostics record process memory and clean shutdown without conversation content", async () => {
+  const workspace = await shell.create("PRIVATE_DIAGNOSTIC_FIXTURE");
+  await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const directory = path.join(shell.data, "diagnostics");
+  const log = await readFile(path.join(directory, "runtime.jsonl"), "utf8");
+  const entries = log
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(entries.some((entry) => entry.event === "start")).toBe(true);
+  const memory = entries.find((entry) => entry.event === "memory");
+  expect(memory.main.rss).toBeGreaterThan(0);
+  expect(memory.processes.length).toBeGreaterThan(0);
+  expect(entries.at(-1).event).toBe("shutdown");
+  expect(log).not.toContain("PRIVATE_DIAGNOSTIC_FIXTURE");
+  expect(
+    JSON.parse(await readFile(path.join(directory, "session.json"), "utf8"))
+      .clean,
+  ).toBe(true);
+});
+
+test("Workspace tree Space opens focused items and Enter renames workspace and chat inline", async () => {
+  const first = await shell.create("First keyboard workspace");
+  const chat = await shell.newChat(first, "codex");
+  const second = await shell.create("Second keyboard workspace");
+  const workspaceRow = () =>
+    shell.page.locator(`[role="treeitem"][data-workspace-id="${first}"]`);
+  const chatRow = () =>
+    shell.page.locator(`[role="treeitem"][data-workspace-id="${chat.id}"]`);
+  await workspaceRow().focus();
+  expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(second);
+  await workspaceRow().press("Space");
+  await expect
+    .poll(async () => (await shell.cli<AppState>("state")).activeWorkspaceId)
+    .toBe(first);
+  await workspaceRow().focus();
+  await workspaceRow().press("Enter");
+  const workspaceName = shell.page.getByRole("textbox", {
+    name: "Workspace name",
+    exact: true,
+  });
+  await expect(workspaceName).toBeFocused();
+  await workspaceName.fill("Renamed workspace");
+  await workspaceName.press("Enter");
+  await expect(workspaceRow()).toContainText("Renamed workspace");
+  await expect(workspaceRow()).toBeFocused();
+  await chatRow().focus();
+  await chatRow().press("Enter");
+  const chatName = shell.page.getByRole("textbox", {
+    name: "Conversation name",
+    exact: true,
+  });
+  await expect(chatName).toBeFocused();
+  await chatName.fill("Cancelled name");
+  await chatName.press("Escape");
+  await expect(chatRow()).not.toContainText("Cancelled name");
+  await expect(chatRow()).toBeFocused();
+  await chatRow().press("Enter");
+  await chatName.fill("Renamed conversation");
+  await chatName.press("Enter");
+  await expect(chatRow()).toContainText("Renamed conversation");
+  await chatRow().press("Space");
+  await expect(shell.pane(chat.paneId)).toBeVisible();
+  expect(await shell.prompts()).toHaveLength(0);
+  await shell.stop();
+  await shell.start();
+  await expect(chatRow()).toContainText("Renamed conversation");
+  await expect(workspaceRow()).toContainText("Renamed workspace");
+});
+
+test("Short composer input with 25 MB state writes only small draft data", async ({}, info) => {
+  const workspace = await shell.create("Input responsiveness");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const file = path.join(shell.data, "state.json");
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  // Invented inert history load; it must not be cloned or serialized by typing.
+  saved.fixtureHistory = "invented history ".repeat(1_600_000);
+  await writeFile(file, JSON.stringify(saved));
+  await shell.start();
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toBeEnabled();
+  const start = performance.now();
+  await input.pressSequentially("A short invented message", { delay: 20 });
+  for (let i = 0; i < 12; i++) await input.press("Backspace");
+  const expected = "A short invented message".slice(0, -12);
+  await expect(input).toHaveValue(expected);
+  await expect
+    .poll(async () => {
+      try {
+        const data = await readFile(
+          path.join(shell.data, "composer-text.json"),
+          "utf8",
+        );
+        const entries = Object.values(JSON.parse(data).drafts) as Array<{
+          draft: { text: string };
+        }>;
+        return (
+          entries.some((entry) => entry.draft.text === expected) &&
+          data.length < 2048
+        );
+      } catch {
+        return false;
+      }
+    })
+    .toBe(true);
+  info.annotations.push({
+    type: "input-duration-ms",
+    description: String(Math.round(performance.now() - start)),
+  });
+  const disk = JSON.parse(await readFile(file, "utf8")) as AppState;
+  expect(
+    disk.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[chat.paneId]
+      ?.text ?? "",
+  ).toBe("");
+  await shell.stop();
+  await shell.start();
+  await expect(
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue(expected);
+});
+
+test("Enter sends chat, Shift Enter inserts a line and IME and model controls do not send", async () => {
+  await shell.configure({ kimi: { options: true, multipleModels: true } });
+  const workspace = await shell.create("Chat Enter behavior");
+  const chat = await shell.newChat(workspace, "kimi");
+  const host = shell.pane(chat.paneId);
+  const input = host.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("First line");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Second line");
+  await expect(input).toHaveValue("First line\nSecond line");
+  await input.evaluate((node) =>
+    node.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      }),
+    ),
+  );
+  expect(await shell.prompts()).toHaveLength(0);
+  const model = host.getByRole("button", { name: "Model", exact: true });
+  await model.focus();
+  await model.press("Enter");
+  await expect(
+    shell.page.getByRole("dialog", { name: "Actions", exact: true }),
+  ).toBeVisible();
+  expect(await shell.prompts()).toHaveLength(0);
+  await shell.page.keyboard.press("Escape");
+  await input.focus();
+  await input.press("Enter");
+  await expect.poll(() => shell.prompts()).toHaveLength(1);
+  await expect(input).toHaveValue("");
+  await expect(transcript(chat)).toContainText("First line\nSecond line");
+});
+
+for (const provider of ["codex", "kimi"] as const) {
+  test(`Busy ${provider} chat queues messages, edits in place and cancels without losing the next draft`, async () => {
+    const workspace = await shell.create("Message queue");
+    const chat = await shell.newChat(workspace, provider);
+    await shell.send(chat.id, "First request [approve]");
+    await expect.poll(() => status(chat.id)).toBe("waiting");
+    const pane = shell.pane(chat.paneId);
+    const input = pane.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("Original queued text");
+    await input.press("Enter");
+    const queue = pane.getByRole("region", { name: "Queued messages" });
+    await expect(queue).toContainText("Original queued text");
+    await expect(input).toHaveValue("");
+    expect((await shell.prompts()).length).toBe(1);
+    await shell.send(chat.id, "Cancel this queued text");
+    await queue
+      .locator(".queued-message")
+      .filter({ hasText: "Cancel this queued text" })
+      .getByRole("button", { name: "Cancel queued message", exact: true })
+      .click();
+    await expect(queue).not.toContainText("Cancel this queued text");
+    await queue
+      .getByRole("button", { name: "Edit queued message", exact: true })
+      .click();
+    await queue
+      .getByRole("textbox", { name: "Edit queued message" })
+      .fill("Revised queued text");
+    const permission = (await shell.inspect(chat.id)).pendingPermissions[0];
+    await shell.cli(
+      "conversation",
+      "permission",
+      "--id",
+      chat.id,
+      "--request-id",
+      permission.id,
+      "--option-id",
+      permission.options[0].id,
+    );
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    // Completion cannot dispatch the entry while its editor is open.
+    expect((await shell.prompts()).length).toBe(1);
+    await input.fill("Keep this next draft");
+    await queue.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(async () => text(await shell.inspect(chat.id)))
+      .toContain("DONE Revised queued text");
+    await expect(queue).toHaveCount(0);
+    await expect(input).toHaveValue("Keep this next draft");
+    expect((await shell.prompts()).length).toBe(2);
+    await shell.stop();
+    await shell.start();
+    await shell.cli("conversation", "show", "--id", chat.id);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("Keep this next draft");
+  });
+}
+
+test("Queued messages and images survive restart and resume explicitly without replaying interrupted sends", async () => {
+  const workspace = await shell.create("Durable message queue");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Hold initial request [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  const image = {
+    reference: 1,
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+  };
+  const first = await shell.cli<{ messageId: string }>(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Image [Image 1]",
+    "--images",
+    JSON.stringify([image]),
+  );
+  await shell.send(chat.id, "Second queued message");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  const inspect = () =>
+    shell.cli<ConversationState>("conversation", "inspect", "--id", chat.id);
+  expect((await inspect()).queuedMessages?.map((m) => m.text)).toEqual([
+    "Image [Image 1]",
+    "Second queued message",
+  ]);
+  expect((await inspect()).queuedMessages?.[0].images).toEqual([image]);
+  expect((await shell.prompts()).length).toBe(1);
+  await shell.cli(
+    "conversation",
+    "queue-edit",
+    "--id",
+    chat.id,
+    "--message-id",
+    first.messageId,
+    "--text",
+    "Edited image [Image 1]",
+  );
+  const pane = shell.pane(chat.paneId);
+  await expect(
+    pane.getByRole("region", { name: "Queued messages" }).locator("img"),
+  ).toHaveCount(1);
+  await shell.page.screenshot({
+    path: test.info().outputPath("message-queue.png"),
+  });
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(780, 650),
+  );
+  const queue = pane.getByRole("region", { name: "Queued messages" });
+  const edit = queue
+    .getByRole("button", { name: "Edit queued message", exact: true })
+    .first();
+  await edit.focus();
+  await expect(edit).toBeFocused();
+  expect(
+    await queue.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
+  await shell.page.screenshot({
+    path: test.info().outputPath("message-queue-narrow.png"),
+  });
+  await pane
+    .getByRole("button", { name: "Continue queue", exact: true })
+    .click();
+  await expect
+    .poll(async () => text(await shell.inspect(chat.id)))
+    .toContain("DONE Second queued message");
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.length)
+    .toBe(0);
+  expect((await shell.prompts()).length).toBe(3);
+});
+
+test("Interrupted sends pause remaining queued messages and restart never repeats an uncertain send", async () => {
+  const workspace = await shell.create("Queue interruption");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "First request [hold]");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await shell.send(chat.id, "Next request [hold]");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const inspect = () =>
+    shell.cli<ConversationState>("conversation", "inspect", "--id", chat.id);
+  expect((await inspect()).queuePaused).toBe(true);
+  expect((await shell.prompts()).length).toBe(1);
+  await shell.cli("conversation", "queue-resume", "--id", chat.id);
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.[0].status)
+    .toBe("sending");
+  await shell.send(chat.id, "Last queued request");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect
+    .poll(async () => (await inspect()).queuedMessages?.[0].status)
+    .toBe("uncertain");
+  expect((await inspect()).queuePaused).toBe(true);
+  expect((await shell.prompts()).length).toBe(2);
+  const blocked = await shell.raw(
+    "conversation",
+    "queue-resume",
+    "--id",
+    chat.id,
+  );
+  expect(blocked.code).not.toBe(0);
+  expect(blocked.stderr).toContain("uncertain");
+  const uncertain = (await inspect()).queuedMessages![0];
+  await shell.cli(
+    "conversation",
+    "queue-remove",
+    "--id",
+    chat.id,
+    "--message-id",
+    uncertain.id,
+  );
+  await shell.cli("conversation", "queue-resume", "--id", chat.id);
+  await expect
+    .poll(async () => text(await shell.inspect(chat.id)))
+    .toContain("DONE Last queued request");
+  expect((await shell.prompts()).length).toBe(3);
 });

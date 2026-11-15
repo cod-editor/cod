@@ -200,16 +200,18 @@ export class BrowserDiagnostics {
   private timer?: ReturnType<typeof setTimeout>;
   private owned = false;
   private contents: WebContents;
+  private debug: WebContents["debugger"];
   private restoredFailureUrl: () => string | undefined;
   constructor(
     contents: WebContents,
     restoredFailureUrl: () => string | undefined = () => undefined,
   ) {
     this.contents = contents;
+    this.debug = contents.debugger;
     this.restoredFailureUrl = restoredFailureUrl;
   }
   async start() {
-    if (this.owned || this.contents.debugger.isAttached())
+    if (this.owned || this.debug.isAttached())
       throw new Error("Browser debugger already attached");
     const nativeUrl = this.contents.getURL();
     const scopeUrl =
@@ -220,10 +222,10 @@ export class BrowserDiagnostics {
       );
     this.capture = new DiagnosticCapture();
     try {
-      this.contents.debugger.attach("1.3");
+      this.debug.attach("1.3");
       this.owned = true;
-      this.contents.debugger.on("message", this.message);
-      this.contents.debugger.on("detach", this.detached);
+      this.debug.on("message", this.message);
+      this.debug.on("detach", this.detached);
       this.contents.on("did-start-navigation", this.navigation);
       this.contents.on("did-redirect-navigation", this.navigation);
       this.contents.once("destroyed", this.dispose);
@@ -231,7 +233,7 @@ export class BrowserDiagnostics {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          this.contents.debugger.sendCommand("Network.enable"),
+          this.debug.sendCommand("Network.enable"),
           new Promise((_, reject) => {
             timeout = setTimeout(() => reject(new Error("timeout")), 5000);
           }),
@@ -252,14 +254,15 @@ export class BrowserDiagnostics {
   stop(state: State = "stopped") {
     this.capture?.stop(state);
     if (this.timer) clearTimeout(this.timer);
-    this.contents.debugger.removeListener("message", this.message);
-    this.contents.debugger.removeListener("detach", this.detached);
+    this.debug.removeListener("message", this.message);
+    this.debug.removeListener("detach", this.detached);
     this.contents.removeListener("did-start-navigation", this.navigation);
     this.contents.removeListener("did-redirect-navigation", this.navigation);
     this.contents.removeListener("destroyed", this.dispose);
     if (this.owned) {
       this.owned = false;
-      if (this.contents.debugger.isAttached()) this.contents.debugger.detach();
+      if (!this.contents.isDestroyed() && this.debug.isAttached())
+        this.debug.detach();
     }
     return this.capture ? this.read() : undefined;
   }

@@ -17,19 +17,19 @@ for (const provider of ["codex", "kimi"] as const) {
     const row = () => shell.page.locator(`[data-workspace-id="${chat.id}"]`);
     const workspaceRow = () =>
       shell.page.locator(`[data-workspace-id="${workspace}"]`);
-    const badge = () => row().locator(".attention");
-    const workspaceBadge = () => workspaceRow().locator(".attention");
+
     const quiet = async () => {
-      await expect(badge()).toHaveCount(0);
-      await expect(workspaceBadge()).toHaveCount(0);
+      await expect(row()).toHaveAttribute("data-status", "");
+      await expect(workspaceRow()).toHaveAttribute("data-status", "");
     };
     const ready = async () => {
       await expect
         .poll(async () => (await shell.inspect(chat.id)).status)
         .toBe("ready");
-      await expect(badge()).toHaveText("○");
-      await expect(workspaceBadge()).toHaveText("○");
-      await expect(workspaceBadge()).toHaveAttribute("title", "ready");
+      await expect(row()).toHaveAttribute("data-status", "ready");
+      await expect(workspaceRow()).toHaveAttribute("data-status", "ready");
+      await expect(row()).toHaveAttribute("aria-label", /Completed/);
+      await expect(workspaceRow()).toHaveAttribute("aria-label", /Completed/);
     };
     await quiet();
     await shell.send(chat.id, "First completed answer");
@@ -88,16 +88,24 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
   const workspace = await shell.create("Explicit review attention");
   const chat = await shell.newChat(workspace, "codex");
   const row = () => shell.page.locator(`[data-workspace-id="${chat.id}"]`);
-  const badge = () => row().locator(".attention");
+  const workspaceRow = () =>
+    shell.page.locator(`[data-workspace-id="${workspace}"]`);
   const reviewVisible = async () => {
     await expect(row()).toHaveAttribute("data-status", "review");
-    await expect(badge()).toHaveAttribute("title", "review");
-    await expect(badge().locator("svg")).toBeVisible();
-    const workspaceBadge = shell.page.locator(
-      `[data-workspace-id="${workspace}"] .attention`,
+    await expect(row()).toHaveAttribute("aria-label", /Review requested/);
+    await expect(
+      row().locator(":scope > .icon, :scope > .tree-disclosure > .icon"),
+    ).toBeVisible();
+    await expect(workspaceRow()).toHaveAttribute("data-status", "review");
+    await expect(workspaceRow()).toHaveAttribute(
+      "aria-label",
+      /Review requested/,
     );
-    await expect(workspaceBadge).toHaveAttribute("title", "review");
-    await expect(workspaceBadge.locator("svg")).toBeVisible();
+    await expect(
+      workspaceRow().locator(
+        ":scope > .icon, :scope > .tree-disclosure > .icon",
+      ),
+    ).toBeVisible();
   };
   await shell.cli(
     "conversation",
@@ -150,7 +158,7 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
     "--status",
     "ready",
   );
-  await expect(badge()).toHaveText("○");
+  await expect(row()).toHaveAttribute("data-status", "ready");
   await shell.cli("conversation", "acknowledge", "--id", chat.id);
-  await expect(badge()).toHaveCount(0);
+  await expect(row()).toHaveAttribute("data-status", "");
 });

@@ -13,6 +13,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { realpath, stat, open } from "node:fs/promises";
 import path from "node:path";
+import { installPageContextMenu } from "../browser/context-menu";
 const SCHEME = "cod-artifact";
 let schemeRegistered = false;
 export function registerAgentPageScheme(
@@ -77,6 +78,7 @@ const mime: globalThis.Record<string, string> = {
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
+  ".jsonl": "text/plain; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -184,15 +186,11 @@ export class AgentPageService {
         return false;
       const registered = new URL(page.url);
       if (details.resourceType === "mainFrame")
-        return (
-          details.frame === contents.mainFrame &&
-          target.pathname === registered.pathname
-        );
+        return details.frame === contents.mainFrame;
       const current = new URL(contents.getURL());
       if (
         current.protocol !== registered.protocol ||
-        current.host !== registered.host ||
-        current.pathname !== registered.pathname
+        current.host !== registered.host
       )
         return false;
       const requesting = new URL(
@@ -264,7 +262,7 @@ export class AgentPageService {
           "X-Content-Type-Options": "nosniff",
           "Access-Control-Allow-Origin": "*",
           "Content-Security-Policy":
-            "sandbox allow-scripts allow-forms; object-src 'none'; base-uri 'none'",
+            "sandbox allow-scripts allow-forms allow-popups; object-src 'none'; base-uri 'none'",
         },
       });
     } catch {
@@ -374,7 +372,13 @@ export class AgentPageService {
     contents.once("destroyed", () => this.owners.delete(contentsId));
     this.options.window.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
-    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    installPageContextMenu(contents, this.options.window);
+    contents.setWindowOpenHandler(({ url }) => {
+      const target = new URL(url);
+      if (target.protocol === SCHEME + ":" && target.host === host)
+        void contents.loadURL(url).catch(() => {});
+      return { action: "deny" };
+    });
     const allowed = (value: string) => {
       try {
         const candidate = new URL(value);
@@ -422,6 +426,12 @@ export class AgentPageService {
   }
   list() {
     return [...this.pages.keys()].map((id) => this.snapshot(id));
+  }
+  diagnosticContext(contentsId: number) {
+    const owner = this.owners.get(contentsId);
+    return owner
+      ? { browserId: owner.id, workspaceId: owner.workspaceId }
+      : undefined;
   }
   getWebContents(id: string) {
     return this.page(id).view.webContents;

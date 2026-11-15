@@ -19,6 +19,11 @@ export function createNavigationWidths(invoke: Invoke) {
   const clamp = (width: number) => Math.max(160, Math.min(maximum(), width));
   function paint(panel: NavigationPanel, width: number) {
     const actual = clamp(width);
+    if (panel.setting === "workspacesWidth")
+      document.documentElement.style.setProperty(
+        "--workspaces-width",
+        `${actual}px`,
+      );
     panel.host.style.width = `${actual}px`;
     panel.handle.setAttribute("aria-valuenow", String(actual));
     panel.handle.setAttribute("aria-valuemin", "160");
@@ -29,6 +34,7 @@ export function createNavigationWidths(invoke: Invoke) {
     for (const panel of panels) {
       panel.handle.hidden =
         !next ||
+        !!next.zoomedGroupId ||
         (panel.visible === "workspacesVisible"
           ? next.settings?.workspacesVisible === false
           : next.settings?.filesVisible !== true);
@@ -115,6 +121,10 @@ export function createNavigationWidths(invoke: Invoke) {
   window.addEventListener("resize", () => apply(), { signal: events.signal });
   return {
     apply,
+    clear() {
+      workspace = undefined;
+      for (const panel of panels) panel.handle.hidden = true;
+    },
     dispose() {
       events.abort();
       for (const panel of panels) panel.handle.remove();

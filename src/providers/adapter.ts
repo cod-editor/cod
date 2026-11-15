@@ -1,7 +1,6 @@
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
 import { NativeSelection } from "./selection.ts";
-import { validateContextServer, contextParams } from "./context-server.ts";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -38,7 +37,9 @@ interface Approval {
   nativeOptions: Map<string, unknown>;
 }
 interface ActiveTurn {
+  outputReceived?: boolean;
   id?: string;
+  external?: boolean;
   cancelRequested?: boolean;
   buffer: RpcMessage[];
   resolve(value: TurnOutcome): void;
@@ -59,6 +60,7 @@ export class NativeAdapter implements ProviderAdapter {
   private failure?: Error;
   private id: string | null = null;
   private active?: ActiveTurn;
+  private finishedTurns = new Set<string>();
   private approvals = new Map<string, Approval>();
   private readonly controllerId = randomUUID();
   private permissionSequence = 0;
@@ -73,10 +75,7 @@ export class NativeAdapter implements ProviderAdapter {
       throw new Error("Provider cwd must be an absolute path");
     this.provider = provider;
     this.selection = new NativeSelection(provider);
-    this.options = {
-      ...options,
-      contextServer: validateContextServer(options.contextServer),
-    };
+    this.options = { ...options };
     this.cwd = options.cwd;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.capabilities = {
@@ -202,11 +201,10 @@ export class NativeAdapter implements ProviderAdapter {
           ? {
               cwd: this.cwd,
               ...(resumeId ? { threadId: resumeId } : { ephemeral: false }),
-              ...contextParams(this.provider, this.options.contextServer),
             }
           : {
               cwd: this.cwd,
-              ...contextParams(this.provider, this.options.contextServer),
+              mcpServers: [],
               ...(resumeId ? { sessionId: resumeId } : {}),
             },
       );
@@ -426,15 +424,7 @@ export class NativeAdapter implements ProviderAdapter {
         buffer: [],
         resolve,
         reject,
-        timer: setTimeout(
-          () => {
-            this.fail(
-              new Error("Provider turn timed out; controller must be resumed"),
-            );
-            void this.rpc?.close();
-          },
-          this.options.turnTimeoutMs ?? 60 * 60 * 1000,
-        ),
+        timer: this.turnTimer(),
       };
     });
     this.active = active;
@@ -453,10 +443,16 @@ export class NativeAdapter implements ProviderAdapter {
               input: [
                 ...skills,
                 ...(text ? [{ type: "text", text }] : []),
-                ...images.map((image) => ({
-                  type: "image",
-                  url: `data:${image.mimeType};base64,${image.data}`,
-                })),
+                ...images.flatMap((image, index) => [
+                  {
+                    type: "text",
+                    text: `[Image ${image.reference ?? index + 1}]`,
+                  },
+                  {
+                    type: "image",
+                    url: `data:${image.mimeType};base64,${image.data}`,
+                  },
+                ]),
               ],
               ...this.selection.overrides(),
             }),
@@ -477,11 +473,17 @@ export class NativeAdapter implements ProviderAdapter {
                 sessionId: this.id,
                 prompt: [
                   ...(text ? [{ type: "text", text }] : []),
-                  ...images.map((image) => ({
-                    type: "image",
-                    mimeType: image.mimeType,
-                    data: image.data,
-                  })),
+                  ...images.flatMap((image, index) => [
+                    {
+                      type: "text",
+                      text: `[Image ${image.reference ?? index + 1}]`,
+                    },
+                    {
+                      type: "image",
+                      mimeType: image.mimeType,
+                      data: image.data,
+                    },
+                  ]),
                 ],
               },
               this.options.turnTimeoutMs ?? 60 * 60 * 1000,
@@ -492,9 +494,14 @@ export class NativeAdapter implements ProviderAdapter {
           if (!reason) throw new Error("Provider omitted native stop reason");
           if (reason === "cancelled")
             this.finish({ status: "cancelled", nativeReason: reason });
-          else if (reason === "end_turn")
+          else if (reason === "end_turn") {
+            if (!active.outputReceived)
+              throw new Error(
+                "Kimi returned no response. Check account limits or continue in its CLI for details.",
+              );
             this.finish({ status: "completed", nativeReason: reason });
-          else throw new Error(`Provider stopped before completion: ${reason}`);
+          } else
+            throw new Error(`Provider stopped before completion: ${reason}`);
         }
       } catch (error) {
         this.fail(errorOf(error));
@@ -502,6 +509,17 @@ export class NativeAdapter implements ProviderAdapter {
     })();
     return result;
   }
+  private turnTimer() {
+    return setTimeout(
+      () => {
+        this.fail(
+          new Error("Provider turn timed out; controller must be resumed"),
+        );
+      },
+      this.options.turnTimeoutMs ?? 60 * 60 * 1000,
+    );
+  }
+
   private receive(message: RpcMessage) {
     if (this.closed || this.failure) return;
     const p = message.params;
@@ -549,6 +567,28 @@ export class NativeAdapter implements ProviderAdapter {
     }
     if (this.provider === "codex") {
       const turnId = string(p.turnId) ?? string(object(p.turn).id);
+      // Native queue/goal continuations start without a Cod turn/start request.
+      // Only an explicit start for our bound thread may establish ownership;
+      // arbitrary late item events must never resurrect a finished turn.
+      if (
+        message.method === "turn/started" &&
+        message.id === undefined &&
+        turnId &&
+        !this.active &&
+        !this.binding &&
+        !this.finishedTurns.has(turnId)
+      ) {
+        this.active = {
+          id: turnId,
+          external: true,
+          buffer: [],
+          resolve: () => {},
+          reject: () => {},
+          timer: this.turnTimer(),
+        };
+        this.emit({ type: "turn-started", nativeTurnId: turnId });
+        this.state("working");
+      }
       if (!this.active || turnId !== this.active.id) {
         if (message.id !== undefined)
           this.rpc?.reject(
@@ -580,6 +620,46 @@ export class NativeAdapter implements ProviderAdapter {
         message.method === "item/completed"
       ) {
         const item = object(p.item);
+        if (
+          this.active?.external &&
+          message.method === "item/started" &&
+          item.type === "userMessage" &&
+          typeof item.id === "string"
+        ) {
+          this.emit({
+            type: "text",
+            role: "user",
+            itemId: item.id,
+            text: (Array.isArray(item.content) ? item.content : [])
+              .map(
+                (part) =>
+                  string(object(part).text) ??
+                  `[Native ${string(object(part).type) ?? "non-text"} content]`,
+              )
+              .join("\n"),
+            replay: false,
+          });
+        }
+        if (item.type === "agentMessage" && typeof item.id === "string") {
+          this.emit({
+            type: "message-meta",
+            itemId: item.id,
+            phase:
+              item.phase === "commentary"
+                ? "commentary"
+                : item.phase === "partial_answer"
+                  ? "partial"
+                  : item.phase === "final_answer"
+                    ? "final"
+                    : undefined,
+            interactive:
+              Array.isArray(item.questions) && item.questions.length > 0,
+            ...(message.method === "item/completed" &&
+            typeof item.text === "string"
+              ? { text: item.text }
+              : {}),
+          });
+        }
         if (
           [
             "commandExecution",
@@ -623,6 +703,14 @@ export class NativeAdapter implements ProviderAdapter {
       const kind = update.sessionUpdate;
       if (kind === "agent_message_chunk" || kind === "user_message_chunk") {
         const content = object(update.content);
+        if (
+          kind === "agent_message_chunk" &&
+          content.type === "text" &&
+          typeof content.text === "string" &&
+          content.text.trim() &&
+          this.active
+        )
+          this.active.outputReceived = true;
         if (content.type === "text" && typeof content.text === "string")
           this.emit({
             type: "text",
@@ -631,14 +719,15 @@ export class NativeAdapter implements ProviderAdapter {
             replay: this.replay,
           });
         else this.emit({ type: "history", details: update });
-      } else if (kind === "tool_call" || kind === "tool_call_update")
+      } else if (kind === "tool_call" || kind === "tool_call_update") {
+        if (this.active) this.active.outputReceived = true;
         this.emit({
           type: "tool",
           phase: kind === "tool_call" ? "started" : "updated",
           details: update,
           replay: this.replay,
         });
-      else this.emit({ type: "history", details: update });
+      } else this.emit({ type: "history", details: update });
     }
   }
   private requestPermission(message: RpcMessage) {
@@ -753,6 +842,11 @@ export class NativeAdapter implements ProviderAdapter {
       this.emit({ type: "permission-resolved", requestId });
     this.approvals.clear();
     if (!active) return;
+    if (active.id) {
+      this.finishedTurns.add(active.id);
+      if (this.finishedTurns.size > 128)
+        this.finishedTurns.delete(this.finishedTurns.values().next().value!);
+    }
     clearTimeout(active.timer);
     if (error) active.reject(error);
     else if (outcome) {

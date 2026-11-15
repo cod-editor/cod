@@ -100,12 +100,12 @@ test.beforeEach(async () => {
     response.setHeader("Content-Type", "text/html");
     if (route === "/popup") {
       response.end(
-        `<!doctype html><title>Popup fixture</title><script>opener.postMessage('invented-popup-ready','*');onmessage=e=>document.title=e.data;</script><button onclick="window.open('/popup-child')">Nested popup</button>`,
+        `<!doctype html><title>Popup fixture</title><script>opener.postMessage('invented-popup-ready','*');onmessage=e=>document.title=e.data;</script><button onclick="window.open('/popup-child', 'fixture-child', 'popup,width=400,height=400')">Nested popup</button>`,
       );
       return;
     }
     response.end(
-      `<!doctype html><title>${route}</title><h1>${route}</h1><span id="load">${++loads}</span><a href="/two">Next</a><button onclick="window.open('/popup')">Popup</button><form action="/upload" method="post" enctype="multipart/form-data"><input type="file" name="file"><button>Upload</button></form><a href="/download">Download</a><script>window.pageIdentity=crypto.randomUUID();onmessage=e=>{window.popupMessage=e.data;e.source.postMessage('invented-opener-ack','*')};</script>`,
+      `<!doctype html><title>${route}</title><h1>${route}</h1><span id="load">${++loads}</span><a href="/two">Next</a><button onclick="window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')">Popup</button><form action="/upload" method="post" enctype="multipart/form-data"><input type="file" name="file"><button>Upload</button></form><a href="/download">Download</a><script>window.pageIdentity=crypto.randomUUID();onmessage=e=>{window.popupMessage=e.data;e.source.postMessage('invented-opener-ack','*')};</script>`,
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -221,7 +221,10 @@ test("B1 AC3 sandboxed views and recursive popups reject unsafe navigation and p
   await js("one", `window.location.href='file:///etc/passwd'`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await url("one", "/one");
-  await js("one", `void window.open('/popup')`);
+  await js(
+    "one",
+    `void window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')`,
+  );
   await expect
     .poll(() => js("one", "window.popupMessage"))
     .toBe("invented-popup-ready");
@@ -282,7 +285,7 @@ test("B1 AC3 sandboxed views and recursive popups reject unsafe navigation and p
   ).toEqual({ node: "undefined", bridge: "undefined" });
   await application.evaluate(async ({ BrowserWindow }, id) => {
     await BrowserWindow.fromId(id)!.webContents.executeJavaScript(
-      `window.open('/popup-child');void window.open('file:///etc/passwd')`,
+      `window.open('/popup-child', 'fixture-child', 'popup,width=400,height=400');void window.open('file:///etc/passwd')`,
     );
   }, popup.id);
   await expect
@@ -345,20 +348,23 @@ test("B1 AC4 Chromium file upload and safe collision-preserving download transfe
       application.evaluate(() =>
         (globalThis as any).browserFixture.events.find(
           (event: any) =>
-            event.type === "download" && event.status === "completed",
+            event.type === "download" && event.download.status === "completed",
         ),
       ),
     )
     .toBeTruthy();
   const completed = await application.evaluate(() =>
     (globalThis as any).browserFixture.events.find(
-      (event: any) => event.type === "download" && event.status === "completed",
+      (event: any) =>
+        event.type === "download" && event.download.status === "completed",
     ),
   );
   expect(completed.id).toBe("one");
-  expect(path.basename(completed.basename)).toBe(completed.basename);
-  expect(path.dirname(completed.path)).toBe(downloads);
-  expect(await readFile(completed.path, "utf8")).toBe(bytes);
+  expect(path.basename(completed.download.basename)).toBe(
+    completed.download.basename,
+  );
+  expect(path.dirname(completed.download.path)).toBe(downloads);
+  expect(await readFile(completed.download.path, "utf8")).toBe(bytes);
   expect(await readFile(path.join(downloads, "fixture.txt"), "utf8")).toBe(
     "PREEXISTING_KEEP",
   );
@@ -451,12 +457,15 @@ test("B1 AC5 visibility retains page identity, bounds validate and disposal pres
   );
   await call("close", "one");
   await call("close", "one");
-  expect(
-    await application.evaluate(
-      ({ webContents }, id) => Boolean(webContents.fromId(id)),
-      nativeId,
-    ),
-  ).toBe(false);
+  expect(await call("list")).toEqual([]);
+  await expect
+    .poll(() =>
+      application.evaluate(
+        ({ webContents }, id) => Boolean(webContents.fromId(id)),
+        nativeId,
+      ),
+    )
+    .toBe(false);
   await open("two");
   await call("dispose");
   await call("dispose");
@@ -473,4 +482,45 @@ test("B1 AC5 visibility retains page identity, bounds validate and disposal pres
         (globalThis as any).browserFixture.window.contentView.children.length,
     ),
   ).toBe(0);
+});
+
+test("Listing tabs during native destruction never reads destroyed WebContents", async () => {
+  await call("open", { id: "closing", workspaceId: "w", url: origin + "/one" });
+  await call("open", {
+    id: "surviving",
+    workspaceId: "w",
+    url: origin + "/two",
+  });
+  await application.evaluate(() => {
+    const { service } = (globalThis as any).browserFixture;
+    Object.assign(globalThis, { destroyedListResult: null });
+    const contents = service.getWebContents("closing");
+    contents.once("destroyed", () => {
+      // Same ordering as an extension tabs.remove callback: the native view may
+      // have lost its .webContents property before Cod's explicit cleanup runs.
+      try {
+        (globalThis as any).destroyedListResult = {
+          ids: service.list().map((item: any) => item.id),
+        };
+      } catch (error) {
+        (globalThis as any).destroyedListResult = { error: String(error) };
+      }
+    });
+    contents.close({ waitForBeforeUnload: false });
+  });
+  await expect
+    .poll(() =>
+      application.evaluate(() => (globalThis as any).destroyedListResult),
+    )
+    .not.toBeNull();
+  const result = await application.evaluate(
+    () => (globalThis as any).destroyedListResult,
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.ids).toContain("surviving");
+  expect(result.ids).not.toContain("closing");
+  await call("close", "closing");
+  expect((await call("list")).map((item: any) => item.id)).toContain(
+    "surviving",
+  );
 });

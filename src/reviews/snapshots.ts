@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { ProjectService } from "../projects/index.ts";
+import { documentFragment } from "../markdown-document.ts";
 export type Target =
   | { kind: "document"; path: string }
   | { kind: "diff"; repoRoot: string; base?: string; head?: string };
@@ -229,12 +230,14 @@ export async function capture(
   };
 }
 export interface Range {
+  fragment?: import("../markdown-document").TextFragment;
   startLine: number;
   endLine: number;
   path?: string;
   side?: "old" | "new";
 }
 export interface Anchor {
+  fragment?: import("../markdown-document").TextFragment;
   snapshotId: string;
   path: string;
   startLine: number;
@@ -247,6 +250,36 @@ export function anchor(
   target: Target,
   range: Range,
 ): { anchor: Anchor; quote: string } {
+  if (range.fragment) {
+    if (
+      target.kind !== "document" ||
+      range.side ||
+      (range.path && range.path !== target.path)
+    )
+      throw new Error("Text fragments require a document snapshot");
+    if (
+      range.fragment.view === "markdown" &&
+      !/\.md(?:own|arkdown)?$/i.test(target.path)
+    )
+      throw new Error("Rendered selections require Markdown");
+    const selected = documentFragment(snapshot.text, range.fragment);
+    if (
+      selected.startLine !== range.startLine ||
+      selected.endLine !== range.endLine
+    )
+      throw new Error("Fragment coordinates do not match the saved document");
+    return {
+      quote: selected.quote,
+      anchor: {
+        snapshotId: snapshot.id,
+        path: target.path,
+        startLine: selected.startLine,
+        endLine: selected.endLine,
+        selectedTextHash: hash(selected.quote),
+        fragment: { ...range.fragment },
+      },
+    };
+  }
   if (
     !Number.isInteger(range.startLine) ||
     !Number.isInteger(range.endLine) ||

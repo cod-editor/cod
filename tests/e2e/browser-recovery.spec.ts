@@ -59,6 +59,7 @@ test.beforeEach(async () => {
   await app.prepare();
   requests = [];
   server = createServer((request, response) => {
+    response.setHeader("Cache-Control", "no-store");
     requests.push(request.url!);
     const url = new URL(request.url!, "http://fixture");
     if (
@@ -82,7 +83,7 @@ test.beforeEach(async () => {
     throw new Error("Fixture unavailable");
   origin = `http://127.0.0.1:${address.port}`;
   await app.start();
-  const workspace = (await app.state()).workspaces[0].id;
+  const workspace = await app.create("Recovery fixture");
   browser = await app.cli<Browser>(
     "browser",
     "open",
@@ -120,6 +121,7 @@ test("Failed authorization restores without replay; Reload retries it and explic
   expect((await inspect()).url).toBe(
     origin + "/authorize?state=expired-invented-state",
   );
+  expect((await inspect()).lastSuccessfulUrl).toBe(origin + "/");
   const recover = app
     .pane(browser.paneId)
     .getByRole("button", { name: "Return to previous page", exact: true });

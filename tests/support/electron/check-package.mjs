@@ -12,6 +12,27 @@ const bundle = path.join(artifact, "Cod.app");
 const app = path.join(bundle, "Contents/Resources/app");
 const executable = path.join(bundle, "Contents/MacOS/Electron");
 await execute("codesign", ["--verify", "--deep", "--strict", bundle]);
+const { stdout: plistJson } = await execute("plutil", [
+  "-convert",
+  "json",
+  "-o",
+  "-",
+  path.join(bundle, "Contents/Info.plist"),
+]);
+const plist = JSON.parse(plistJson);
+const schemes = (plist.CFBundleURLTypes ?? []).flatMap(
+  (entry) => entry.CFBundleURLSchemes ?? [],
+);
+if (!schemes.includes("http") || !schemes.includes("https"))
+  throw new Error("Packaged browser does not declare both web URL schemes");
+for (const key of [
+  "NSCameraUsageDescription",
+  "NSMicrophoneUsageDescription",
+  "NSLocationUsageDescription",
+])
+  if (typeof plist[key] !== "string" || !plist[key].trim())
+    throw new Error(`Missing permission description: ${key}`);
+
 const { stdout: help } = await execute(
   path.join(artifact, "codctl"),
   ["--help"],

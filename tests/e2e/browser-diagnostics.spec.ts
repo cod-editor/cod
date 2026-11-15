@@ -7,6 +7,7 @@ const secret = "INVENTED_PRIVATE_DIAGNOSTIC_SENTINEL";
 const initialUrl = `${origin}/oauth/authorize?state=${secret}#${secret}`;
 let app: WorkspaceApp;
 let browser: { id: string; paneId: string };
+let mainErrors = "";
 interface Report {
   state: string;
   events: Array<{ kind: string; route: string; status?: number }>;
@@ -36,6 +37,15 @@ test.beforeEach(async () => {
   app = new WorkspaceApp();
   await app.prepare();
   await app.start();
+  mainErrors = "";
+  app.app!.process().stderr?.on("data", (data) => {
+    mainErrors = (mainErrors + String(data)).slice(-16384);
+  });
+  await app.app!.evaluate(() => {
+    process.on("uncaughtExceptionMonitor", (error) =>
+      console.error("FIXTURE_MAIN_ERROR", error.stack),
+    );
+  });
   await app.app!.evaluate(async ({ session }, secret) => {
     const profile = session.fromPartition("persist:cod-browser");
     await profile.cookies.set({
@@ -68,7 +78,7 @@ test.beforeEach(async () => {
       );
     });
   }, secret);
-  const workspace = (await app.state()).workspaces[0].id;
+  const workspace = await app.create("Browser diagnostics fixture");
   browser = await app.cli(
     "browser",
     "open",
@@ -79,6 +89,7 @@ test.beforeEach(async () => {
   );
 });
 test.afterEach(async () => {
+  if (mainErrors.includes("FIXTURE_MAIN_ERROR")) console.log(mainErrors);
   await app?.cleanup();
 });
 

@@ -159,6 +159,25 @@ try {
         `Set :${key} ${value}`,
         plist,
       ]);
+    for (const [key, value] of Object.entries({
+      NSCameraUsageDescription:
+        "Allow websites you approve in Cod to use your camera.",
+      NSMicrophoneUsageDescription:
+        "Allow websites you approve in Cod to use your microphone.",
+      NSLocationUsageDescription:
+        "Allow websites you approve in Cod to use your location.",
+    })) {
+      await run("/usr/libexec/PlistBuddy", [
+        "-c",
+        `Delete :${key}`,
+        plist,
+      ]).catch(() => {});
+      await run("/usr/libexec/PlistBuddy", [
+        "-c",
+        `Add :${key} string ${value}`,
+        plist,
+      ]);
+    }
     // Declare browser capability without changing the user's default browser.
     await run("/usr/libexec/PlistBuddy", [
       "-c",
@@ -274,7 +293,7 @@ try {
           "package.json",
           "node_modules",
         ],
-        verification: "Packaging only; launch/PTY/CLI/MCP smoke required",
+        verification: "Packaging only; launch/PTY/CLI smoke required",
       },
       null,
       2,

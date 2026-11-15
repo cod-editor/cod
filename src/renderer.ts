@@ -1,4 +1,8 @@
-import { applyAppearance } from "./ui/appearance";
+import { updateLiveActivity } from "./ui/turn-activity";
+import { configureKeymap } from "./keyboard";
+import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
+import { createContentFind } from "./ui/content-find";
+import { applyAppearance, initializeAppearance } from "./ui/appearance";
 import type { OperationName } from "./command-catalog";
 import { createWorkspaceView } from "./ui/workspace-view";
 import { createCommands } from "./ui/commands";
@@ -29,7 +33,7 @@ const panes = document.querySelector<HTMLDivElement>("#panes")!;
 const workspaceName =
   document.querySelector<HTMLHeadingElement>("#workspace-name")!;
 const status = document.querySelector<HTMLElement>("#status")!;
-const focus = createFocusManager(panes, tree);
+const focus = createFocusManager(panes, tree, (id) => browsers.focusNative(id));
 let state: AppState = {
   workspaces: [],
   activeWorkspaceId: null,
@@ -69,7 +73,6 @@ const layout = createPaneLayout(() => state, invoke, {
 });
 const navigation = createWorkspaceNavigation(tree, () => state, invoke, {
   newConversation: () => commands.newConversation(),
-  workspaceDialog: (mode) => commands.workspace(mode),
   folderDialog: (workspace) => commands.folder(workspace),
   conversationActions: (c) => commands.conversationActions(c),
   paneButton,
@@ -80,12 +83,21 @@ const projects = new FileTree(
   (workspace) => commands.folder(workspace),
 );
 
+const finder = createContentFind(
+  () => state,
+  focus,
+  terminals.find,
+  browsers.layout,
+);
 const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   focus,
   files: projects,
   layout,
   chat: chats,
   navigation,
+  saveFile: documents.save,
+  focusNativeView: browsers.focusNative,
+  find: finder,
 });
 
 const workspaceView = createWorkspaceView(
@@ -108,6 +120,7 @@ const workspaceView = createWorkspaceView(
 );
 function render() {
   workspaceView.render();
+  finder.reconcile();
 }
 
 function activeWorkspace(): WorkspaceState | undefined {
@@ -118,9 +131,13 @@ function activeWorkspace(): WorkspaceState | undefined {
 
 function setStatus(message: string): void {
   status.textContent = message;
+  status.title = message;
   const current = message;
   window.setTimeout(() => {
-    if (status.textContent === current) status.textContent = "";
+    if (status.textContent === current) {
+      status.textContent = "";
+      status.title = "";
+    }
   }, 5000);
 }
 
@@ -148,70 +165,66 @@ async function invoke<T>(
   }
 }
 
-window.cod.onBrowserShortcut(({ id, action }) => {
-  if (action === "settings") commands.settings();
-  else if (action === "palette") commands.palette();
-  else if (action === "panel") commands.focusPanel();
-  else if (action === "close") {
-    const browser = state.browsers.find((browser) => browser.id === id);
-    if (browser)
-      void invoke("pane.close", {
-        workspace: browser.workspaceId,
-        id: browser.paneId,
-      }).catch(() => undefined);
-  } else {
-    browsers.focusAddress(id);
-  }
+window.cod.onCommand(({ command, browserId }) => {
+  void commands.execute(command, browserId);
 });
 
+let pendingStateRender = false;
 window.cod.onState((next) => {
-  const previous = state;
   state = next;
-  const focusedPane = document.activeElement?.closest("[data-pane-id]");
-  const comparable = structuredClone(next);
-  for (const workspace of comparable.workspaces) {
-    workspace.activePaneId =
-      previous.workspaces.find((item) => item.id === workspace.id)
-        ?.activePaneId ?? workspace.activePaneId;
-  }
-  if (focusedPane && JSON.stringify(comparable) === JSON.stringify(previous)) {
-    const workspace = activeWorkspace();
-    for (const element of panes.querySelectorAll<HTMLElement>(
-      "[data-pane-id]",
-    )) {
-      element.dataset.active = String(
-        element.dataset.paneId === workspace?.activePaneId,
-      );
-    }
-  } else {
+  commands.refresh();
+  if (pendingStateRender) return;
+  pendingStateRender = true;
+  requestAnimationFrame(() => {
+    pendingStateRender = false;
     render();
-  }
+  });
 });
-void invoke<AppState>("state")
-  .then(async (next) => {
+const keymapReady = window.cod.getKeymap().then((keymap) => {
+  configureKeymap(keymap.overrides, keyboardPlatform);
+  updateKeymapStatus(keymap);
+});
+window.cod.onKeymap((keymap) => {
+  configureKeymap(keymap.overrides, keyboardPlatform);
+  updateKeymapStatus(keymap);
+  render();
+});
+void Promise.all([keymapReady, initializeAppearance()])
+  .then(() => invoke<AppState>("state"))
+  .then((next) => {
     state = next;
-    if (!next.workspaces.length && !next.closedWorkspaces?.length) {
-      await invoke("workspace.create", { name: "Untitled" });
-      commands.focusComposer();
-      return;
-    }
     render();
+    if (
+      document.activeElement === document.body &&
+      !document.querySelector("dialog[open]")
+    )
+      panes
+        .querySelector<HTMLTextAreaElement>(
+          '[data-active="true"] textarea[aria-label="Message"]',
+        )
+        ?.focus();
+    document.body.dataset.ready = "true";
   })
   .catch(() => undefined);
 
 if (navigator.userAgent.includes("Mac"))
   document.body.classList.add("platform-mac");
 
+const activityClock = setInterval(() => updateLiveActivity(), 1000);
+
 window.addEventListener(
   "beforeunload",
   () => {
+    clearInterval(activityClock);
     commands.dispose();
+    finder.dispose();
     layout.dispose();
     workspaceView.dispose();
     projects.dispose();
     focus.dispose();
     browsers.dispose();
     terminals.dispose();
+    documents.dispose();
   },
   { once: true },
 );

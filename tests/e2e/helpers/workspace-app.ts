@@ -139,6 +139,7 @@ export class WorkspaceApp {
         return Boolean(page);
       })
       .toBe(true);
+    await this.page.locator('body[data-ready="true"]').waitFor();
     await this.page
       .getByRole("button", { name: "Switch workspace", exact: true })
       .waitFor();
@@ -169,6 +170,9 @@ export class WorkspaceApp {
           cwd: this.root,
           env: this.environment,
           timeout: 10000,
+          // State includes retained native history and can legitimately exceed
+          // Node's 1 MB stdout default even when each protocol item is small.
+          maxBuffer: 32 * 1024 * 1024,
         },
       );
       return { code: 0, stdout: result.stdout, stderr: result.stderr };
@@ -209,6 +213,9 @@ export class WorkspaceApp {
       await this.cli<{ id: string }>("workspace", "create", "--name", name)
     ).id;
     await this.cli("workspace", "focus", "--id", id);
+    await expect(
+      this.page.getByRole("button", { name: "Switch workspace", exact: true }),
+    ).toHaveText(name);
     return id;
   }
   async command(name: string) {

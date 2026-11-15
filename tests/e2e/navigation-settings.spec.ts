@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 const execute = promisify(execFile);
@@ -151,7 +152,9 @@ test("Settings adjust the actual interface, editor and chat text and survive res
       origin.id,
     );
     await expect(
-      app.pane(review.paneId).locator(".review-line").first(),
+      app
+        .pane(review.paneId)
+        .getByRole("textbox", { name: "Review source", exact: true }),
     ).toHaveCSS("font-size", "19px");
     await app.page.screenshot({
       path: info.outputPath("scaled-review-source.png"),
@@ -273,7 +276,7 @@ test("Folder actions use the native chooser from Commands and empty and populate
   }
 });
 
-test("Footer pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
+test("Header pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -408,17 +411,21 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
     await app.page.screenshot({
       path: info.outputPath("palette-keyboard-selection.png"),
     });
+    await input.fill("Rename workspace");
     await input.press("Enter");
     await expect(
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),
     ).toBeVisible();
     await app.page.keyboard.press("Escape");
-    await expect(composer).toBeFocused();
+    await expect(
+      app.page.getByRole("treeitem", { name: /Keyboard navigation/ }).first(),
+    ).toBeFocused();
     expect(
       await composer.evaluate(
         (node) => (node as HTMLTextAreaElement).selectionStart,
       ),
     ).toBe(caret);
+    await composer.focus();
     await app.page.keyboard.press(`${modifier}+Shift+P`);
     await input.fill("No invented command has this name");
     await input.press("ArrowDown");
@@ -510,6 +517,223 @@ test("Workspace and file pickers preserve filtering after arrow navigation", asy
     await app.page.screenshot({
       path: info.outputPath("content-search-top-placement.png"),
     });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Searchable settings apply font, terminal cursor and external edits live and preserve invalid files", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const workspace = await app.create("Settings fixture");
+    const terminal = await app.cli<{ paneId: string }>(
+      "terminal",
+      "open",
+      "--workspace",
+      workspace,
+    );
+    await app.page.keyboard.press(`${modifier}+,`);
+    const dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .fill("cursor");
+    await expect(
+      dialog.getByRole("combobox", { name: "Terminal Cursor shape" }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("spinbutton", { name: "Interface text size" }),
+    ).toBeHidden();
+    await dialog
+      .getByRole("combobox", { name: "Terminal Cursor shape" })
+      .selectOption("bar");
+    await dialog
+      .getByRole("checkbox", { name: "Terminal Blinking cursor" })
+      .check();
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values[
+            "terminal.cursorStyle"
+          ],
+      )
+      .toBe("bar");
+    await dialog.getByRole("searchbox").fill("");
+    await dialog
+      .getByRole("textbox", { name: "Editor Font family" })
+      .fill("monospace");
+    await dialog
+      .getByRole("textbox", { name: "Editor Font family" })
+      .press("Tab");
+    await app.page.screenshot({
+      path: info.outputPath("searchable-settings.png"),
+    });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "terminal.fontSize": 20, "chat.fontFamily": "serif" }),
+    );
+    await expect(
+      app.pane(terminal.paneId).locator(".xterm-screen"),
+    ).toBeVisible();
+    const file = path.join(app.data, "settings.json");
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    expect(saved["terminal.cursorStyle"]).toBe("bar");
+    expect(saved["terminal.cursorBlink"]).toBe(true);
+    await writeFile(
+      file,
+      '{"ui.fontSize":18,"terminal.cursorStyle":"underline"}',
+    );
+    await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
+    await writeFile(file, "broken JSON");
+    await app.page.keyboard.press(`${modifier}+,`);
+    await expect(dialog.getByRole("status")).toContainText("Invalid JSON");
+    await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
+    expect(await readFile(file, "utf8")).toBe("broken JSON");
+    await writeFile(file, JSON.stringify(saved));
+    await expect(dialog.getByRole("status")).toBeEmpty();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.stop();
+    await app.start();
+    expect(
+      (await app.cli<any>("settings", "get")).values["terminal.cursorStyle"],
+    ).toBe("bar");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Global settings search and reset include the persisted browser search engine", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.create("Browser settings fixture");
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.command("Settings...");
+    let dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    let search = dialog.getByRole("searchbox", { name: "Search settings" });
+    await search.fill("search engine");
+    let engine = dialog.getByRole("combobox", {
+      name: "Search engine",
+      exact: true,
+    });
+    await expect(engine).toBeVisible();
+    await expect(engine).toHaveValue("bing");
+    await expect(
+      dialog.getByRole("spinbutton", {
+        name: "Interface text size",
+        exact: true,
+      }),
+    ).toBeHidden();
+    await engine.selectOption("duckduckgo");
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "duckduckgo" });
+    await expect(
+      dialog.getByRole("button", {
+        name: "Reset Browser Search engine",
+        exact: true,
+      }),
+    ).toBeEnabled();
+    await dialog
+      .getByRole("button", { name: "Reset Browser Search engine", exact: true })
+      .click();
+    await expect(engine).toHaveValue("google");
+    await expect(engine).toBeEnabled();
+    await engine.selectOption("yandex");
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "yandex" });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.stop();
+    await app.start();
+    await app.command("Browser settings");
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    search = dialog.getByRole("searchbox", { name: "Search settings" });
+    engine = dialog.getByRole("combobox", {
+      name: "Search engine",
+      exact: true,
+    });
+    await expect(engine).toHaveValue("yandex");
+    await expect(search).toHaveValue("browser");
+    await search.press("Tab");
+    await expect(engine).toBeFocused();
+    await dialog.screenshot({
+      path: info.outputPath("unified-browser-settings.png"),
+    });
+    await app.page.setViewportSize({ width: 460, height: 700 });
+    const fieldBounds = await engine.boundingBox();
+    const dialogBounds = await dialog.boundingBox();
+    expect(fieldBounds!.x + fieldBounds!.width).toBeLessThanOrEqual(
+      dialogBounds!.x + dialogBounds!.width,
+    );
+    await dialog.screenshot({
+      path: info.outputPath("narrow-browser-settings.png"),
+    });
+    await dialog
+      .getByRole("button", { name: "Reset defaults", exact: true })
+      .click();
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "google" });
+    await expect(engine).toHaveValue("google");
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.cli("settings", "update", "--reset", "true");
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "google",
+    });
+    await app.stop();
+    await app.start();
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "google",
+    });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Global reset reports a partial failure without claiming browser settings changed", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.cli("browser", "settings", "--search-engine", "bing");
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": 19 }),
+    );
+    const library = path.join(app.data, "browser-library.json");
+    await rename(library, library + ".saved");
+    await mkdir(library);
+    const result = await app.raw("settings", "update", "--reset", "true");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "Appearance settings were reset, but browser settings could not be reset",
+    );
+    expect(await app.cli("browser", "settings")).toEqual({
+      searchEngine: "bing",
+    });
+    const appearance = await app.cli<{ values: Record<string, unknown> }>(
+      "settings",
+      "get",
+    );
+    expect(appearance.values["ui.fontSize"]).toBe(14);
+    await rm(library, { recursive: true });
+    await rename(library + ".saved", library);
   } finally {
     await app.cleanup();
   }

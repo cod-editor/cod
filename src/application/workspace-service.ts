@@ -1,3 +1,4 @@
+import { conversationRemovalReason } from "../conversation-actions";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -24,11 +25,15 @@ export class WorkspaceApplicationService {
     private readonly store: ApplicationStateStore,
     private readonly conversations: Pick<
       ConversationApplicationService,
-      "disposeController"
+      "disposeController" | "isActive" | "reserve" | "release"
     >,
     private readonly browsers: Pick<
       BrowserApplicationService,
-      "browser" | "removeBrowser" | "loadAgentPage" | "restoreBrowser"
+      | "browser"
+      | "removeBrowser"
+      | "requestClose"
+      | "loadAgentPage"
+      | "restoreBrowser"
     >,
     private readonly terminals: Pick<
       TerminalApplicationService,
@@ -54,26 +59,38 @@ export class WorkspaceApplicationService {
     return { id };
   }
 
-  async closeWorkspace(id: string): Promise<{ id: string }> {
+  async closeWorkspace(id: string): Promise<{ id: string; closed?: boolean }> {
     const index = this.store.data.workspaces.findIndex(
       (item) => item.id === id,
     );
     if (index < 0) throw new Error(`Workspace not found: ${id}`);
+    const archived = structuredClone({
+      workspace: this.store.data.workspaces[index]!,
+      conversations: this.store.data.conversations.filter(
+        (item) => item.workspaceId === id,
+      ),
+      terminals: this.store.data.terminals.filter(
+        (item) => item.workspaceId === id,
+      ),
+      browsers: this.store.data.browsers.filter(
+        (item) => item.workspaceId === id,
+      ),
+    });
+    // Ask pages before stopping agents or shells. Earlier pages explicitly
+    // discarded by the user remain closed (and individually reopenable) if a
+    // later page cancels the workspace close.
+    for (const browser of this.store.data.browsers.filter(
+      (item) => item.workspaceId === id,
+    )) {
+      const result = await this.closePane({
+        op: "pane.close",
+        workspace: id,
+        id: browser.paneId,
+      });
+      if (result.closed === false) return { id, closed: false };
+    }
     this.store.data.closedWorkspaces ??= [];
-    this.store.data.closedWorkspaces.push(
-      structuredClone({
-        workspace: this.store.data.workspaces[index]!,
-        conversations: this.store.data.conversations.filter(
-          (item) => item.workspaceId === id,
-        ),
-        terminals: this.store.data.terminals.filter(
-          (item) => item.workspaceId === id,
-        ),
-        browsers: this.store.data.browsers.filter(
-          (item) => item.workspaceId === id,
-        ),
-      }),
-    );
+    this.store.data.closedWorkspaces.push(archived);
     for (const conversation of this.store.data.conversations.filter(
       (item) => item.workspaceId === id,
     )) {
@@ -174,9 +191,19 @@ export class WorkspaceApplicationService {
         (group) => group.id === requiredString(request, "group"),
       );
       if (!target) throw new Error("Target group not found");
+      const remaining = target.paneIds.filter((pane) => pane !== id);
+      const index =
+        request.index === undefined ? remaining.length : request.index;
+      if (
+        typeof index !== "number" ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index > remaining.length
+      )
+        throw new Error("Tab index must be within the destination group");
       for (const group of workspace.groups!)
         group.paneIds = group.paneIds.filter((pane) => pane !== id);
-      target.paneIds.push(id);
+      target.paneIds.splice(index, 0, id);
       target.activePaneId = id;
       target.hidden = false;
       workspace.activePaneId = id;
@@ -321,11 +348,18 @@ export class WorkspaceApplicationService {
     return { paneId };
   }
 
-  async closePane(request: OperationRequest): Promise<{ paneId: string }> {
+  async closePane(
+    request: OperationRequest,
+  ): Promise<{ paneId: string; closed?: boolean }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
     const pane = this.store.pane(workspace, requiredString(request, "id"));
+    if (
+      pane.kind === "browser" &&
+      !(await this.browsers.requestClose(this.browsers.browser(pane.browserId)))
+    )
+      return { paneId: pane.id, closed: false };
     workspace.closedTabs ??= [];
     workspace.closedTabs.push({
       pane: structuredClone(pane),
@@ -369,6 +403,80 @@ export class WorkspaceApplicationService {
     return { paneId: pane.id };
   }
 
+  async removeConversation(
+    request: OperationRequest,
+  ): Promise<{ id: string; nativeId: string }> {
+    const id = requiredString(request, "id");
+    const result = await this.store.change(async () => {
+      const conversation = this.store.conversation(id);
+      const reviews = await this.reviews.list();
+      const reason = conversationRemovalReason(
+        { ...this.store.data, reviews },
+        conversation,
+      );
+      if (reason) throw new Error(reason);
+      if (this.conversations.isActive(id))
+        throw new Error("Stop the current response before removing this chat.");
+      this.conversations.reserve(id);
+      try {
+        const workspace = this.store.workspace(conversation.workspaceId);
+        const saved = structuredClone(conversation);
+        workspace.closedTabs = workspace.closedTabs?.filter(
+          (record) =>
+            record.pane.kind !== "conversation" ||
+            record.pane.conversationId !== id,
+        );
+        const panes = workspace.panes.filter(
+          (pane) => pane.kind === "conversation" && pane.conversationId === id,
+        );
+        for (const pane of panes)
+          await this.closePane({
+            op: "pane.close",
+            workspace: workspace.id,
+            id: pane.id,
+          });
+        const closed = [...(workspace.closedTabs ?? [])]
+          .reverse()
+          .find(
+            (record) =>
+              record.pane.kind === "conversation" &&
+              record.pane.conversationId === id,
+          );
+        workspace.closedTabs = workspace.closedTabs?.filter(
+          (record) =>
+            record === closed ||
+            record.pane.kind !== "conversation" ||
+            record.pane.conversationId !== id,
+        );
+        if (closed) closed.conversation = saved;
+        else
+          (workspace.closedTabs ??= []).push({
+            pane: {
+              id: saved.paneId,
+              kind: "conversation",
+              conversationId: id,
+            },
+            conversation: saved,
+          });
+        if (workspace.closedTabs && workspace.closedTabs.length > 50)
+          workspace.closedTabs.shift();
+        this.store.data.conversations = this.store.data.conversations.filter(
+          (item) => item.id !== id,
+        );
+        if (workspace.lastConversationId === id)
+          workspace.lastConversationId = [...this.store.data.conversations]
+            .reverse()
+            .find((item) => item.workspaceId === workspace.id)?.id;
+        normalizeGroups(workspace);
+        await this.conversations.disposeController(id);
+        return { id, nativeId: saved.nativeId };
+      } finally {
+        this.conversations.release(id);
+      }
+    });
+    return result;
+  }
+
   async reopenPane(request: OperationRequest): Promise<{ paneId: string }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
@@ -404,7 +512,31 @@ export class WorkspaceApplicationService {
       }
     }
     return this.store.change(() => {
+      if (workspace.closedTabs?.at(-1) !== closed)
+        throw new Error("The closed tab list changed. Try reopening again.");
+      if (
+        closed.conversation &&
+        this.store.data.conversations.some(
+          (active) =>
+            active.id !== closed.conversation!.id &&
+            active.provider === closed.conversation!.provider &&
+            active.nativeId === closed.conversation!.nativeId,
+        )
+      )
+        throw new Error(
+          "This native session is already open. Use its existing chat.",
+        );
       workspace.closedTabs!.pop();
+      if (
+        closed.conversation &&
+        !this.store.data.conversations.some(
+          (item) => item.id === closed.conversation!.id,
+        )
+      ) {
+        closed.conversation.paneId = closed.pane.id;
+        this.store.data.conversations.push(closed.conversation);
+        workspace.lastConversationId = closed.conversation.id;
+      }
       if (!workspace.panes.some((pane) => pane.id === closed.pane.id))
         workspace.panes.push(closed.pane);
       if (closed.browser?.agentPage)
@@ -584,6 +716,7 @@ export class WorkspaceApplicationService {
             pane.draftChat &&
             !pane.filePath &&
             !draft?.text &&
+            !draft?.localDraft &&
             !draft?.images?.length
           );
         });
@@ -766,6 +899,11 @@ export class WorkspaceApplicationService {
               throw new Error(`${key} must be between 160 and 800`);
           }
           workspace.settings = { ...workspace.settings, ...settings };
+          if (
+            settings.filesVisible === true ||
+            settings.workspacesVisible === true
+          )
+            workspace.zoomedGroupId = null;
           return workspace.settings;
         });
 
@@ -800,6 +938,7 @@ export class WorkspaceApplicationService {
                   pane.draftChat &&
                   !pane.filePath &&
                   !draft?.text &&
+                  !draft?.localDraft &&
                   !draft?.images?.length &&
                   !draft?.skills?.length
                 );
@@ -822,6 +961,9 @@ export class WorkspaceApplicationService {
           workspace.zoomedGroupId = null;
           return { workspaceId: workspace.id, paneId: id };
         });
+
+      case "conversation.remove":
+        return this.removeConversation(request);
 
       case "conversation.show":
         return this.store.change(() => {

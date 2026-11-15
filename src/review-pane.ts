@@ -1,3 +1,7 @@
+import { diffHunks } from "./diff-hunks";
+import { uiButton, actionRow, toolbar } from "./ui/primitives";
+import { reviewDocument } from "./ui/review-document";
+import { shortcutTitle } from "./ui/keyboard-ui";
 import { conversationLabel } from "./ui/message-label";
 import { readPreference, writePreference } from "./ui/preferences";
 import { iconButton, menu } from "./ui/controls";
@@ -32,6 +36,7 @@ export function reviewPane(
     end: number;
     body: string;
     editing?: string;
+    range?: Range;
   };
   let pending = readPreference<PendingEditor | null>(
       `review-editor.${id}`,
@@ -46,6 +51,7 @@ export function reviewPane(
       snapshotId: detail.rounds.find((r) => r.id === selectedRound)!.snapshotId,
       selection,
       end,
+      range: textRange,
       body: input.value,
       ...(editing ? { editing } : {}),
     };
@@ -56,11 +62,16 @@ export function reviewPane(
     writePreference(`review-editor.${id}`, null);
     staleEditor = false;
   };
+  let textRange: Range | undefined;
+  let documentView: ReturnType<typeof reviewDocument> | undefined;
+  let documentSnapshot = "";
+  let previewMode = readPreference<boolean>(`review-preview.${id}`, false);
   let shownError = false;
   let diskTimer: ReturnType<typeof setTimeout> | undefined;
+  let diffAnchors: Array<{ old?: Range; new?: Range; hunk: string }> = [];
   let ranges: Range[] = [],
     buttons: HTMLButtonElement[] = [];
-  const header = document.createElement("div"),
+  const header = toolbar(),
     content = region("Review content"),
     comments = region("Draft comments"),
     feedback = region("Submitted feedback"),
@@ -68,6 +79,7 @@ export function reviewPane(
     changes = region("Document changes"),
     status = document.createElement("div");
   status.setAttribute("role", "status");
+  content.className = "review-content";
   const roundSelect = select("Round");
   const form = document.createElement("div"),
     input = document.createElement("textarea");
@@ -86,7 +98,7 @@ export function reviewPane(
     };
     document.addEventListener("focusin", movedFocus, true);
     try {
-      const range = selectedRange();
+      const range = editing ? undefined : selectedRange();
       await invoke(editing ? "review.comment-edit" : "review.comment-add", {
         id,
         roundId: selectedRound,
@@ -100,32 +112,60 @@ export function reviewPane(
       input.value = "";
       await reload();
       if (restoreSelection) focusSelection();
-      status.textContent = "Saved";
+      status.textContent = "";
     } finally {
       document.removeEventListener("focusin", movedFocus, true);
     }
   });
   form.append(
     input,
-    save,
-    button("Cancel comment", () => {
-      forget();
-      form.hidden = true;
-      draw();
-      focusSelection();
-    }),
+    actionRow(
+      save,
+      button("Cancel comment", () => {
+        forget();
+        form.hidden = true;
+        draw();
+        focusSelection();
+      }),
+    ),
   );
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      form.hidden = true;
+    if (event.key === "Escape" && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Leave the draft and its actions visible when returning to the document.
+      // Hiding it would leave submission blocked without a recovery affordance.
+      status.textContent = pending?.body.trim()
+        ? "Unfinished comment retained. Save or cancel it before sending feedback."
+        : "";
       focusSelection();
     }
   });
   function openComment(commentId?: string, body = "") {
-    if (pending?.body.trim() && commentId && commentId !== pending.editing) {
-      status.textContent = "Save or cancel the unfinished comment first.";
+    if (pending?.body.trim()) {
+      const sameComment = commentId === pending.editing;
+      status.textContent = sameComment
+        ? ""
+        : "Save or cancel the unfinished comment first.";
+      // Reopening the same comment resumes its editor; the saved card is not
+      // authoritative while a newer, persisted rewrite exists.
+      form.hidden = false;
+      draw();
+      input.focus({ preventScroll: true });
       return;
     }
+    if (!commentId && documentView) {
+      textRange = documentView.capture();
+      if (!textRange) {
+        status.textContent = "Select a text fragment first";
+        return;
+      }
+    }
+    const existingComment = detail?.rounds
+      .find((r) => r.id === selectedRound)
+      ?.comments.find((c) => c.id === commentId);
+    if (existingComment && !existingComment.outdated)
+      textRange = existingComment.anchor;
     editing = commentId;
     input.value = body || (!commentId ? (pending?.body ?? "") : "");
     staleEditor = false;
@@ -133,7 +173,17 @@ export function reviewPane(
     restored = true;
     remember();
     form.hidden = false;
-    buttons[end]?.after(form);
+    if (existingComment?.outdated) comments.after(form);
+    else if (documentView)
+      documentView.place(
+        form,
+        commentId
+          ? detail!.rounds
+              .find((r) => r.id === selectedRound)!
+              .comments.find((c) => c.id === commentId)!.anchor
+          : selectedRange(),
+      );
+    else buttons[end]?.after(form);
     input.focus();
   }
   input.addEventListener("input", () => {
@@ -141,20 +191,51 @@ export function reviewPane(
     submit.disabled = !!input.value.trim();
   });
   function focusSelection() {
+    if (documentView) {
+      documentView.focus();
+      return;
+    }
     const line = buttons[selection];
     if (!line) return;
     line.dataset.rangeMove = "true";
-    line.focus();
+    line.focus({ preventScroll: true });
     delete line.dataset.rangeMove;
   }
   function selectedRange(): Range {
+    if (documentView) {
+      const range = textRange ?? documentView.capture();
+      if (!range) throw new Error("Select a text fragment first");
+      return range;
+    }
+    if (diffAnchors.length) {
+      const rows = diffAnchors.slice(
+        Math.min(selection, end),
+        Math.max(selection, end) + 1,
+      );
+      const side = rows.some((row) => !row.new) ? "old" : "new";
+      if (
+        !rows.length ||
+        rows.some((row) => !row[side] || row.hunk !== rows[0].hunk)
+      )
+        throw new Error("Select lines in the same file, hunk and side");
+      return { ...rows[0][side]!, endLine: rows.at(-1)![side]!.endLine };
+    }
     const a = ranges[Math.min(selection, end)],
       b = ranges[Math.max(selection, end)];
     if (!a || !b || a.path !== b.path || a.side !== b.side)
       throw new Error("Select lines on the same file and side");
     return { ...a, endLine: b.endLine };
   }
-  const addComment = button("Add comment (Alt+Enter)", () => openComment());
+  host.addEventListener("cod:add-comment", () => {
+    const round = detail?.rounds.find((r) => r.id === selectedRound);
+    if (round?.status === "draft" && round.id === detail?.currentRoundId)
+      openComment();
+  });
+  host.addEventListener("cod:submit-review", () => {
+    if (!submit.disabled && !submit.hidden) submit.click();
+  });
+  const addComment = button("Add comment", () => openComment());
+  addComment.title = shortcutTitle("review.addComment", "Add comment");
   const refresh = button("Refresh round", async () => {
     if (!detail) return;
     await invoke("review.refresh", {
@@ -190,7 +271,8 @@ export function reviewPane(
     });
     await reload();
   });
-  header.className = "review-header";
+  header.className = "review-header ui-toolbar";
+  form.className = "review-comment-editor ui-stack";
   const originLabel = document.createElement("span");
   originLabel.className = "review-origin";
   const more = iconButton("more", "Review actions", () =>
@@ -208,7 +290,19 @@ export function reviewPane(
       },
     ]),
   );
-  header.append(roundSelect, originLabel, more, submit);
+  const previewButton = iconButton("eye", "Preview Markdown", () => {
+    if (!documentView) return;
+    previewMode = documentView.toggle();
+    writePreference(`review-preview.${id}`, previewMode);
+    previewButton.setAttribute("aria-pressed", String(previewMode));
+    previewButton.title = previewMode ? "Show source" : "Preview Markdown";
+    previewButton.setAttribute("aria-label", previewButton.title);
+  });
+  previewButton.dataset.previewToggle = "";
+  host.addEventListener("cod:toggle-preview", () => {
+    if (!previewButton.hidden) previewButton.click();
+  });
+  header.append(roundSelect, originLabel, more, previewButton, submit);
   host.append(
     header,
     status,
@@ -222,10 +316,12 @@ export function reviewPane(
   roundSelect.addEventListener("change", () => {
     selectedRound = roundSelect.value;
     selection = end = 0;
+    textRange = undefined;
     draw();
   });
   function draw() {
     if (!detail) return;
+    const scrollTop = host.scrollTop;
     const round =
       detail.rounds.find((r) => r.id === selectedRound) ??
       detail.rounds.at(-1)!;
@@ -251,6 +347,7 @@ export function reviewPane(
       editing = pending.editing;
       selection = pending.selection;
       end = pending.end;
+      textRange = pending.range;
       form.hidden = false;
       staleEditor =
         pending.roundId !== round.id || pending.snapshotId !== round.snapshotId;
@@ -261,124 +358,184 @@ export function reviewPane(
           "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
       }
     }
-    const label = document.createElement("p");
-    label.className = "review-source";
-    label.textContent =
-      detail.target.kind === "document"
-        ? detail.target.path
-        : detail.target.repoRoot;
-    label.title = `Saved revision ${snapshot.hash}`;
-    content.replaceChildren(label);
-    if (detail.target.kind === "diff") {
-      const comparison = document.createElement("p");
-      comparison.textContent = detail.target.base
-        ? `${detail.target.base} (${snapshot.base}) → ${detail.target.head} (${snapshot.head})`
-        : "Local tracked changes (saved working-tree diff)";
-      content.append(comparison);
-    }
-    ranges = [];
-    buttons = [];
-    function add(text: string, name: string, range: Range) {
-      const index = buttons.length;
-      const line = document.createElement("button");
-      line.type = "button";
-      line.className = "review-line";
-      line.textContent = text;
-      line.setAttribute("aria-label", name);
-      line.setAttribute(
-        "aria-pressed",
-        String(
-          index >= Math.min(selection, end) &&
-            index <= Math.max(selection, end),
-        ),
-      );
-      ranges.push(range);
-      buttons.push(line);
-      line.addEventListener("focus", () => {
-        if (!line.dataset.rangeMove) selection = end = index;
-      });
-      line.addEventListener("keydown", (event) => {
-        if (
-          (event.altKey && event.key === "Enter") ||
-          ((event.ctrlKey || event.metaKey) &&
-            event.shiftKey &&
-            event.key.toLowerCase() === "m")
-        ) {
-          event.preventDefault();
-          if (round.status === "draft" && round.id === detail!.currentRoundId)
-            openComment();
-        }
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          event.preventDefault();
-          const next = Math.max(
-            0,
-            Math.min(
-              buttons.length - 1,
-              index + (event.key === "ArrowDown" ? 1 : -1),
-            ),
-          );
-          if (event.shiftKey) end = next;
-          else selection = end = next;
-          buttons[next].dataset.rangeMove = "true";
-          buttons[next].focus();
-          delete buttons[next].dataset.rangeMove;
-          buttons.forEach((b, i) =>
-            b.setAttribute(
-              "aria-pressed",
-              String(
-                i >= Math.min(selection, end) && i <= Math.max(selection, end),
+    documentView?.clearAnnotations();
+    const reuseDocument =
+      snapshot.kind === "document" &&
+      documentView &&
+      documentSnapshot === snapshot.id;
+    if (!reuseDocument) {
+      const label = document.createElement("p");
+      label.className = "review-source";
+      label.textContent =
+        detail.target.kind === "document"
+          ? detail.target.path
+          : detail.target.repoRoot;
+      label.title = `Saved revision ${snapshot.hash}`;
+      content.replaceChildren(label);
+      if (detail.target.kind === "diff") {
+        const comparison = document.createElement("p");
+        comparison.textContent = detail.target.base
+          ? `${detail.target.base} (${snapshot.base}) → ${detail.target.head} (${snapshot.head})`
+          : "Local tracked changes (saved working-tree diff)";
+        content.append(comparison);
+      }
+      ranges = [];
+      diffAnchors = [];
+      buttons = [];
+      function add(text: string, name: string, range: Range) {
+        const index = buttons.length;
+        const line = document.createElement("button");
+        line.type = "button";
+        line.tabIndex = index === end ? 0 : -1;
+        line.className = "review-line";
+        line.textContent = text;
+        line.setAttribute("aria-label", name);
+        line.setAttribute(
+          "aria-pressed",
+          String(
+            index >= Math.min(selection, end) &&
+              index <= Math.max(selection, end),
+          ),
+        );
+        ranges.push(range);
+        buttons.push(line);
+        line.addEventListener("focus", () => {
+          for (const item of buttons) item.tabIndex = item === line ? 0 : -1;
+          if (!line.dataset.rangeMove) selection = end = index;
+        });
+        line.addEventListener("keydown", (event) => {
+          if (event.isComposing) return;
+          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            event.preventDefault();
+            const next = Math.max(
+              0,
+              Math.min(
+                buttons.length - 1,
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? buttons.length - 1
+                    : index + (event.key === "ArrowDown" ? 1 : -1),
               ),
-            ),
-          );
-        }
-      });
-      line.oncontextmenu = (event) => {
-        event.preventDefault();
-        selection = end = index;
-        menu({ x: event.clientX, y: event.clientY }, [
-          {
-            label: "Add comment",
-            disabled:
-              round.status !== "draft" || round.id !== detail!.currentRoundId,
-            run: () => openComment(),
+            );
+            if (event.shiftKey) end = next;
+            else selection = end = next;
+            buttons[next].dataset.rangeMove = "true";
+            buttons[next].focus();
+            delete buttons[next].dataset.rangeMove;
+            buttons.forEach((b, i) =>
+              b.setAttribute(
+                "aria-pressed",
+                String(
+                  i >= Math.min(selection, end) &&
+                    i <= Math.max(selection, end),
+                ),
+              ),
+            );
+          }
+        });
+        line.oncontextmenu = (event) => {
+          event.preventDefault();
+          selection = end = index;
+          menu({ x: event.clientX, y: event.clientY }, [
+            {
+              label: "Add comment",
+              disabled:
+                round.status !== "draft" || round.id !== detail!.currentRoundId,
+              run: () => openComment(),
+            },
+          ]);
+        };
+        content.append(line);
+      }
+      previewButton.hidden =
+        snapshot.kind !== "document" ||
+        detail.target.kind !== "document" ||
+        !/\.md(?:own|arkdown)?$/i.test(detail.target.path);
+      previewButton.setAttribute("aria-pressed", String(previewMode));
+      previewButton.title = previewMode ? "Show source" : "Preview Markdown";
+      previewButton.setAttribute("aria-label", previewButton.title);
+      if (snapshot.kind === "document" && detail.target.kind === "document") {
+        if (documentSnapshot && documentSnapshot !== snapshot.id && !pending)
+          textRange = undefined;
+        documentSnapshot = snapshot.id;
+        documentView = reviewDocument(
+          snapshot.text,
+          detail.target.path,
+          !previewButton.hidden && previewMode,
+          textRange,
+          (range) => {
+            textRange = range;
           },
-        ]);
-      };
-      content.append(line);
-    }
-    if (snapshot.kind === "document") {
-      const lines = snapshot.text.split("\n");
-      if (lines.at(-1) === "") lines.pop();
-      lines.forEach((text, i) =>
-        add(`${i + 1}  ${text}`, `Line ${i + 1}`, {
-          startLine: i + 1,
-          endLine: i + 1,
-        }),
-      );
-    } else
-      for (const file of snapshot.files)
-        for (const side of ["old", "new"] as const) {
-          const sidePath = side === "old" ? file.oldPath : file.newPath;
-          if (sidePath) {
+          () => addComment.click(),
+          (message) => {
+            status.textContent = message;
+          },
+        );
+        content.append(documentView.element);
+      } else {
+        documentView = undefined;
+        const files = diffHunks(snapshot.text);
+        for (const [fileIndex, file] of snapshot.files.entries()) {
+          for (const [side, path] of [
+            ["Old", file.oldPath],
+            ["New", file.newPath],
+          ] as const) {
+            if (!path) continue;
             const heading = document.createElement("h3");
-            heading.textContent = `${side === "old" ? "Old" : "New"}: ${sidePath}`;
+            heading.textContent = `${side}: ${path}`;
             content.append(heading);
           }
-          for (const [number, text] of Object.entries(file[side])) {
-            const path = side === "old" ? file.oldPath : file.newPath;
-            if (path)
+          for (const [hunkIndex, hunk] of (files[fileIndex] ?? []).entries()) {
+            const header = document.createElement("pre");
+            header.className = "review-diff-hunk";
+            header.textContent = hunk.header;
+            content.append(header);
+            for (const row of hunk.rows) {
+              const old =
+                row.oldLine !== undefined && file.oldPath
+                  ? {
+                      path: file.oldPath,
+                      side: "old" as const,
+                      startLine: row.oldLine,
+                      endLine: row.oldLine,
+                    }
+                  : undefined;
+              const next =
+                row.newLine !== undefined && file.newPath
+                  ? {
+                      path: file.newPath,
+                      side: "new" as const,
+                      startLine: row.newLine,
+                      endLine: row.newLine,
+                    }
+                  : undefined;
+              const anchor = next ?? old;
+              if (!anchor) continue;
+              const mark =
+                row.kind === "removed" ? "-" : row.kind === "added" ? "+" : " ";
               add(
-                `${side === "old" ? "-" : "+"}${number}  ${text}`,
-                `${side === "old" ? "Old" : "New"} line ${number} ${path}`,
-                {
-                  startLine: Number(number),
-                  endLine: Number(number),
-                  path,
-                  side,
-                },
+                `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  ${row.text}`,
+                `${anchor.side === "old" ? "Old" : "New"} line ${anchor.startLine} ${anchor.path}`,
+                anchor,
               );
+              buttons.at(-1)!.dataset.diffKind = row.kind;
+              diffAnchors.push({
+                old,
+                new: next,
+                hunk: `${fileIndex}:${hunkIndex}`,
+              });
+              if (row.noNewline) {
+                const note = document.createElement("div");
+                note.className = "review-diff-note";
+                note.textContent = "No newline at end of file";
+                content.append(note);
+              }
+            }
           }
         }
+      }
+    }
     comments.replaceChildren();
     for (const comment of round.comments) {
       const item = document.createElement("div"),
@@ -399,7 +556,7 @@ export function reviewPane(
         : commentState;
       body.textContent = comment.body;
       item.append(caption, body);
-      if (comment.outdated) {
+      if (comment.quote) {
         const quote = document.createElement("blockquote");
         quote.textContent = comment.quote;
         item.append(quote);
@@ -451,17 +608,31 @@ export function reviewPane(
       }
       const anchorIndex = comment.outdated
         ? -1
-        : ranges.findIndex(
-            (range) =>
-              range.endLine === comment.anchor?.endLine &&
-              (!range.path || range.path === comment.anchor.path) &&
-              range.side === comment.anchor?.side,
-          );
-      if (anchorIndex >= 0) buttons[anchorIndex].after(item);
+        : ranges.findIndex((range, index) => {
+            const candidate = comment.anchor?.side
+              ? (diffAnchors[index]?.[comment.anchor.side] ?? range)
+              : range;
+            return (
+              candidate.endLine === comment.anchor?.endLine &&
+              (!candidate.path || candidate.path === comment.anchor.path) &&
+              candidate.side === comment.anchor?.side
+            );
+          });
+      if (documentView && !comment.outdated)
+        documentView.place(item, comment.anchor);
+      else if (anchorIndex >= 0) buttons[anchorIndex].after(item);
       else comments.append(item);
     }
     if (!form.hidden) {
-      if (staleEditor) content.after(form);
+      if (staleEditor || round.comments.find((c) => c.id === editing)?.outdated)
+        comments.after(form);
+      else if (documentView)
+        documentView.place(
+          form,
+          editing
+            ? round.comments.find((c) => c.id === editing)!.anchor
+            : selectedRange(),
+        );
       else buttons[Math.min(end, buttons.length - 1)]?.after(form);
     }
     compare.disabled =
@@ -516,6 +687,7 @@ export function reviewPane(
           ),
         );
     }
+    host.scrollTop = scrollTop;
   }
   async function reload() {
     const generation = ++loading;
@@ -577,9 +749,7 @@ export function reviewPane(
     status.textContent = error instanceof Error ? error.message : String(error);
   }
   function button(label: string, action: () => unknown) {
-    const element = document.createElement("button");
-    element.type = "button";
-    element.textContent = label;
+    const element = uiButton(label);
     element.addEventListener("click", () => {
       Promise.resolve().then(action).catch(showError);
     });

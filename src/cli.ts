@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
-import path from "node:path";
-import { defaultSocketPath, defaultDataDirectory } from "./paths";
+import { defaultSocketPath } from "./paths";
 import { help, parseArguments } from "./command-catalog";
-import { serveRuntimeContext } from "./runtime-context/index";
 import type { OperationRequest } from "./types";
 
 async function invoke(request: OperationRequest): Promise<unknown> {
@@ -62,10 +60,6 @@ async function invoke(request: OperationRequest): Promise<unknown> {
     connection.on("error", (error) => finish(error));
   });
 }
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-function cliCommand(): string {
-  return `env ELECTRON_RUN_AS_NODE=1 COD_SOCKET_PATH=${quote(defaultSocketPath())} COD_DATA_DIR=${quote(defaultDataDirectory())} ${quote(process.execPath)} ${quote(path.join(__dirname, "cli.cjs"))}`;
-}
 async function main(): Promise<void> {
   try {
     const request = parseArguments(process.argv.slice(2));
@@ -79,15 +73,12 @@ async function main(): Promise<void> {
       request.images = JSON.parse(await readFile(request.imagesFile, "utf8"));
       delete request.imagesFile;
     }
-    if (request.op === "context-server") {
-      serveRuntimeContext({
-        workspaceId: String(request.workspace),
-        conversationId: String(request.conversation),
-        invoke: (operation) => invoke({ op: operation.op }),
-        helpText: help,
-        cliCommand: cliCommand(),
-      });
-      return;
+    if (request.op === "context" && request.conversation === undefined) {
+      if (!process.env.COD_CONVERSATION_ID)
+        throw new Error(
+          "Use --conversation ID outside an app-managed conversation",
+        );
+      request.conversation = process.env.COD_CONVERSATION_ID;
     }
     if (request.op === "review.wait") {
       const timeout =

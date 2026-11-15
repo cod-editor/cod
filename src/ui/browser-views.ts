@@ -1,6 +1,10 @@
+import { browserDownloads } from "./browser-downloads";
+import { updateSiteRequests, sitePermissions } from "./browser-permissions";
+import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
 import { icon } from "./controls";
+import { createBrowserHome } from "./browser-home";
 export function createBrowserViews(
   panes: HTMLElement,
   getState: () => AppState,
@@ -11,28 +15,32 @@ export function createBrowserViews(
   ) => HTMLButtonElement,
 ) {
   const browserPanes = new Map<string, HTMLElement>();
+  const homes = new Map<string, ReturnType<typeof createBrowserHome>>();
   let browserLayoutPending = false;
   function scheduleBrowserLayout(): void {
     if (browserLayoutPending) return;
     browserLayoutPending = true;
     requestAnimationFrame(() => {
       browserLayoutPending = false;
-      const rectangles = document.querySelector("dialog[open]")
-        ? []
-        : [...panes.querySelectorAll<HTMLElement>(".browser-content")]
-            .filter((element) => !element.hidden)
-            .map((element) => {
-              const rect = element.getBoundingClientRect();
-              return {
-                id: element.dataset.browserId!,
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-              };
-            });
-      window.cod.browserLayout(rectangles);
+      flushBrowserLayout();
     });
+  }
+  function flushBrowserLayout(): void {
+    const rectangles = document.querySelector("dialog[open]")
+      ? []
+      : [...panes.querySelectorAll<HTMLElement>(".browser-content")]
+          .filter((element) => !element.hidden)
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              id: element.dataset.browserId!,
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            };
+          });
+    window.cod.browserLayout(rectangles);
   }
   const resizeObserver = new ResizeObserver(scheduleBrowserLayout);
   resizeObserver.observe(panes);
@@ -53,7 +61,8 @@ export function createBrowserViews(
     const address = container.querySelector<HTMLInputElement>(
       'input[aria-label="Address"]',
     )!;
-    if (document.activeElement !== address) address.value = record.url;
+    if (document.activeElement !== address)
+      address.value = record.url === "about:blank" ? "" : record.url;
     container.querySelector<HTMLButtonElement>(
       'button[aria-label="Back"]',
     )!.disabled = !record.canGoBack;
@@ -81,7 +90,12 @@ export function createBrowserViews(
       ),
     );
     const failed = !!record.error && !record.agentPage;
-    container.querySelector<HTMLElement>(".browser-content")!.hidden = failed;
+    const atHome = record.url === "about:blank" && !record.agentPage && !failed;
+    const home = homes.get(record.id)!;
+    home.element.hidden = !atHome;
+    if (atHome) home.update();
+    container.querySelector<HTMLElement>(".browser-content")!.hidden =
+      failed || atHome;
     const failure = container.querySelector<HTMLElement>(".browser-failure")!;
     failure.hidden = !failed;
     failure.querySelector<HTMLButtonElement>("[data-browser-recover]")!.hidden =
@@ -114,13 +128,19 @@ export function createBrowserViews(
       /* Never echo an unparsed address containing credentials or tokens. */
     }
     failure.querySelector("code")!.textContent = displayUrl;
+    updateSiteRequests(
+      container.querySelector<HTMLElement>(".browser-permission-requests")!,
+      record.permissionRequests ?? [],
+      invoke,
+    );
+    const downloads = container.querySelector<HTMLButtonElement>(
+      "[aria-label=Downloads]",
+    );
+    if (downloads) downloads.hidden = !getState().browserDownloads?.length;
     scheduleBrowserLayout();
     container.querySelector<HTMLElement>(".browser-status")!.textContent = [
       record.agentPage ? (record.error ?? "") : "",
       record.permissionDenied ?? "",
-      record.download
-        ? `Download ${record.download.status}: ${record.download.path ?? record.download.basename}`
-        : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -164,9 +184,18 @@ export function createBrowserViews(
     }
     const address = document.createElement("input");
     address.setAttribute("aria-label", "Address");
-    address.value = record.url;
+    address.value = record.url === "about:blank" ? "" : record.url;
+    address.placeholder = "Search or enter address";
     address.spellcheck = false;
     navigation.append(address);
+    const suggestions = addressSuggestions(
+      address,
+      invoke,
+      (url) => {
+        void invoke("browser.navigate", { id: record.id, url }).catch(() => {});
+      },
+      scheduleBrowserLayout,
+    );
     const blocking = paneButton("Ad blocking", async () => {
       const dialog = document.createElement("dialog");
       dialog.className = "browser-protection";
@@ -261,7 +290,17 @@ export function createBrowserViews(
       const done = paneButton("Done", async () => dialog.close());
       const actions = document.createElement("div");
       actions.className = "dialog-actions";
-      actions.append(retry, done);
+      actions.append(
+        paneButton("Site permissions", async () => {
+          dialog.close();
+          await sitePermissions(
+            invoke,
+            getState().browsers.find((b) => b.id === record.id)?.url,
+          );
+        }),
+        retry,
+        done,
+      );
       dialog.append(title, label, status, actions);
       refresh();
       document.body.append(dialog);
@@ -279,6 +318,16 @@ export function createBrowserViews(
     blocking.classList.add("icon-button");
     blocking.replaceChildren(icon("shield"));
     navigation.append(blocking);
+    const downloads = paneButton("Downloads", async () => {
+      browserDownloads(invoke);
+    });
+    downloads.type = "button";
+    downloads.classList.add("icon-button");
+    downloads.setAttribute("aria-label", "Downloads");
+    downloads.title = "Downloads";
+    downloads.replaceChildren(icon("download"));
+    downloads.hidden = !getState().browserDownloads?.length;
+    navigation.append(downloads);
     const actions = document.createElement("browser-action-list");
     actions.addEventListener(
       "click",
@@ -292,6 +341,7 @@ export function createBrowserViews(
     navigation.append(actions);
     navigation.addEventListener("submit", (event) => {
       event.preventDefault();
+      suggestions.close();
       void invoke("browser.navigate", {
         id: record.id,
         url: address.value,
@@ -322,7 +372,22 @@ export function createBrowserViews(
     );
     recover.dataset.browserRecover = "";
     failure.append(failureTitle, error, url, retry, " ", recover);
-    body.append(navigation, content, failure, message);
+    const home = createBrowserHome(getState, invoke, (url) => {
+      void invoke("browser.navigate", { id: record.id, url });
+    });
+    homes.set(record.id, home);
+    const permissionRequests = document.createElement("div");
+    permissionRequests.className = "browser-permission-requests";
+    permissionRequests.hidden = true;
+    body.append(
+      navigation,
+      permissionRequests,
+      suggestions.element,
+      home.element,
+      content,
+      failure,
+      message,
+    );
     container.append(body);
     browserPanes.set(record.id, container);
     updateBrowserPane(container, record);
@@ -347,16 +412,25 @@ export function createBrowserViews(
     },
     reconcile() {
       for (const id of browserPanes.keys())
-        if (!getState().browsers.some((b) => b.id === id))
+        if (!getState().browsers.some((b) => b.id === id)) {
           browserPanes.delete(id);
+          homes.delete(id);
+        }
     },
     layout: scheduleBrowserLayout,
+    focusNative(id: string) {
+      // These ordered IPC sends apply visibility before focus. A closed dialog
+      // must not depend on a future observer/rAF to restore its native origin.
+      flushBrowserLayout();
+      window.cod.browserFocus(id);
+    },
     dispose() {
       resizeObserver.disconnect();
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleBrowserLayout);
       document.removeEventListener("scroll", scheduleBrowserLayout, true);
       browserPanes.clear();
+      homes.clear();
       window.cod.browserLayout([]);
     },
   };

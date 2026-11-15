@@ -5,7 +5,7 @@ import { writeFile, realpath, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
-import { tabTo } from "./helpers/workspace-app";
+import { tabTo, modifier } from "./helpers/workspace-app";
 interface Opened {
   reviewId: string;
   roundId: string;
@@ -53,8 +53,8 @@ test.afterEach(async () => {
   await shell?.cleanup();
 });
 const pane = (review: Opened) => shell.pane(review.paneId);
-const line = (review: Opened, number: number) =>
-  pane(review).getByRole("button", { name: `Line ${number}`, exact: true });
+const source = (review: Opened) =>
+  pane(review).getByRole("textbox", { name: "Review source", exact: true });
 const inspect = (review: Opened) =>
   shell.cli<Summary>("review", "inspect", "--id", review.reviewId);
 async function open(workspace: string, file = shell.file) {
@@ -86,10 +86,27 @@ async function open(workspace: string, file = shell.file) {
 async function comment(
   review: Opened,
   body: string,
-  target: Locator = line(review, 2),
+  target: Locator = source(review),
 ) {
-  await tabTo(shell.page, target);
-  await shell.page.keyboard.press("Alt+Enter");
+  if (await target.evaluate((node) => node instanceof HTMLTextAreaElement)) {
+    await tabTo(shell.page, target);
+    await target.press(`${modifier}+Home`);
+    await target.press("ArrowDown");
+    await target.press("Home");
+  } else {
+    const index = await target.evaluate((node) =>
+      [...node.parentElement!.querySelectorAll(".review-line")].indexOf(node),
+    );
+    await tabTo(
+      shell.page,
+      target.locator("..").locator('.review-line[tabindex="0"]'),
+    );
+    await shell.page.keyboard.press("Home");
+    for (let step = 0; step < index; step++)
+      await shell.page.keyboard.press("ArrowDown");
+    await expect(target).toBeFocused();
+  }
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await expect(
     pane(review).getByRole("textbox", { name: "Comment", exact: true }),
   ).toBeFocused();
@@ -698,7 +715,7 @@ test("Review closed panes reopen from workspace panel and private drafts protect
   expect(failed.code).not.toBe(0);
   expect(failed.stderr).toContain("review drafts");
   const row = shell.page.getByRole("treeitem", {
-    name: "spec.md",
+    name: "spec.md, Review requested",
     exact: true,
   });
   await row.click();
@@ -732,16 +749,18 @@ test("Review closed panes reopen from workspace panel and private drafts protect
 test("Review keyboard ranges and comment edits keep immutable quotes and show disk changes", async ({}, testInfo) => {
   const workspace = await shell.create("Keyboard review ranges");
   const review = await open(workspace);
-  await tabTo(shell.page, line(review, 1));
+  await tabTo(shell.page, source(review));
+  await shell.page.keyboard.press(`${modifier}+Home`);
   await shell.page.keyboard.press("Shift+ArrowDown");
-  await shell.page.keyboard.press("Alt+Enter");
+  await shell.page.keyboard.press("Shift+End");
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await shell.page.keyboard.type("Range comment");
   await pane(review)
     .getByRole("button", { name: "Save comment", exact: true })
     .click();
   const comments = pane(review).getByLabel("Draft comment", { exact: true });
-  await expect(line(review, 1)).toContainText("first line");
-  await expect(line(review, 2)).toContainText("selected review line");
+  await expect(source(review)).toHaveValue(/first line/);
+  await expect(source(review)).toHaveValue(/selected review line/);
   await comments.click();
   await pane(review)
     .getByRole("textbox", { name: "Comment", exact: true })
@@ -750,14 +769,15 @@ test("Review keyboard ranges and comment edits keep immutable quotes and show di
     .getByRole("button", { name: "Save comment", exact: true })
     .click();
   await expect(comments).toContainText("Edited range comment");
-  await expect(line(review, 1)).toHaveAttribute("aria-pressed", "true");
-  await expect(line(review, 2)).toHaveAttribute("aria-pressed", "true");
+  await expect(comments.locator("blockquote")).toHaveText(
+    "first line\nselected review line",
+  );
   await writeFile(shell.file, "changed externally\n");
   await expect(pane(review).getByRole("status")).toContainText(
     "Changed on disk",
   );
-  await expect(line(review, 1)).toContainText("first line");
-  await expect(line(review, 2)).toContainText("selected review line");
+  await expect(source(review)).toHaveValue(/first line/);
+  await expect(source(review)).toHaveValue(/selected review line/);
   await pane(review).screenshot({
     path: testInfo.outputPath("review-keyboard-range.png"),
   });
@@ -766,8 +786,8 @@ test("Review keyboard ranges and comment edits keep immutable quotes and show di
 test("Review unfinished comment editor survives immediate restart without publishing", async () => {
   const workspace = await shell.create("Unfinished private review");
   const review = await open(workspace);
-  await line(review, 2).focus();
-  await shell.page.keyboard.press("Alt+Enter");
+  await source(review).focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await pane(review)
     .getByRole("textbox", { name: "Comment", exact: true })
     .fill("Unfinished private observation");
@@ -788,4 +808,255 @@ test("Review unfinished comment editor survives immediate restart without publis
   await expect(
     pane(review).getByLabel("Draft comment", { exact: true }),
   ).toContainText("Unfinished private observation");
+});
+
+test("Markdown review eye switches source and Mermaid preview and preserves exact fragment comments", async ({}, info) => {
+  const workspace = await shell.create("Markdown review");
+  const file = path.join(path.dirname(shell.file), "review.md");
+  await writeFile(
+    file,
+    "# Review fixture\r\n\r\nHello **world** and friends.\r\n\r\n```mermaid\r\ngraph TD\r\n A[Start] --> B[Finish]\r\n```\r\n",
+  );
+  const review = await open(workspace, file);
+  const host = pane(review);
+  const editor = source(review);
+  await expect(editor).toBeVisible();
+  const immutableSource = await editor.inputValue();
+  await editor.focus();
+  await shell.page.keyboard.type("Must not edit the saved revision");
+  await expect(editor).toHaveValue(immutableSource);
+  await editor.evaluate((node) => {
+    const input = node as HTMLTextAreaElement;
+    const start = input.value.indexOf("world");
+    input.setSelectionRange(start, start + 5);
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await host
+    .getByRole("textbox", { name: "Comment", exact: true })
+    .fill("Source fragment with CRLF");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  await expect(
+    host.getByLabel("Draft comment", { exact: true }).locator("blockquote"),
+  ).toHaveText("world");
+  await expect(host.locator(".editor-colors .hljs-section")).toBeVisible();
+  await host.screenshot({ path: info.outputPath("review-source.png") });
+  const eye = host.locator("[data-preview-toggle]");
+  await eye.click();
+  const rendered = host.getByRole("document", { name: "Review preview" });
+  await expect(
+    rendered.getByRole("heading", { name: "Review fixture" }),
+  ).toBeVisible();
+  await expect(rendered.locator("svg")).toBeVisible();
+  await rendered.locator("strong").evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    node.closest<HTMLElement>("article")!.focus();
+  });
+  await shell.page.keyboard.type("Must not replace selected Markdown");
+  await expect(rendered.locator("strong")).toHaveText("world");
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await host
+    .getByRole("textbox", { name: "Comment", exact: true })
+    .fill("Clarify this word");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  await expect(
+    host.getByLabel("Draft comment", { exact: true }).locator("blockquote"),
+  ).toHaveText(["world", "world"]);
+  await host.screenshot({ path: info.outputPath("review-preview.png") });
+  await eye.click();
+  await expect(editor).toHaveValue(/Hello \*\*world\*\*/);
+  await shell.stop();
+  await shell.start();
+  await expect(
+    pane(review)
+      .getByLabel("Draft comment", { exact: true })
+      .locator("blockquote"),
+  ).toHaveText(["world", "world"]);
+});
+
+test("Review comments stay beside their anchors without rebuilding or jumping to the top", async ({}, info) => {
+  const workspace = await shell.create("Anchored review");
+  const file = path.join(path.dirname(shell.file), "long-review.md");
+  await writeFile(
+    file,
+    Array.from(
+      { length: 70 },
+      (_, i) =>
+        `## Section ${i}\n\nParagraph ${i} with **selected words** for review.\n`,
+    ).join("\n"),
+  );
+  const review = await open(workspace, file);
+  const host = pane(review);
+  await host.locator("[data-preview-toggle]").click();
+  const document = host.getByRole("document", { name: "Review preview" });
+  const target = document.locator("strong").nth(35);
+  await target.scrollIntoViewIfNeeded();
+  await target.evaluate((node) => {
+    const range = window.document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    node.closest<HTMLElement>("article")!.focus({ preventScroll: true });
+    node.closest<HTMLElement>("article")!.dataset.testIdentity = "retained";
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await input.fill("Explain this paragraph");
+  const before = await host
+    .locator(".review-body")
+    .evaluate((node) => node.scrollTop);
+  expect(before).toBeGreaterThan(100);
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  const thread = host.getByLabel("Draft comment", { exact: true });
+  await expect(thread).toContainText("Explain this paragraph");
+  await expect(document).toHaveAttribute("data-test-identity", "retained");
+  expect(
+    await thread.evaluate((node) => node.previousElementSibling?.textContent),
+  ).toContain("Paragraph 35");
+  const after = await host
+    .locator(".review-body")
+    .evaluate((node) => node.scrollTop);
+  expect(Math.abs(after - before)).toBeLessThan(100);
+  await thread.click();
+  await input.fill("Edited at the same anchor");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  await expect(thread).toContainText("Edited at the same anchor");
+  expect(
+    await host.locator(".review-body").evaluate((node) => node.scrollTop),
+  ).toBeGreaterThan(100);
+  const geometry = await host.locator(".review-header").evaluate((node) => ({
+    top: node.getBoundingClientRect().top,
+    parent: node.parentElement!.getBoundingClientRect().top,
+    height: node.getBoundingClientRect().height,
+  }));
+  expect(Math.abs(geometry.top - geometry.parent)).toBeLessThan(2);
+  expect(geometry.height).toBeLessThanOrEqual(40);
+  await shell.page.screenshot({ path: info.outputPath("anchored-review.png") });
+});
+
+test("Reopening a saved comment preserves its unfinished rewrite and Escape leaves recovery visible", async () => {
+  const workspace = await shell.create("Comment rewrite safety");
+  const review = await open(workspace);
+  const host = pane(review);
+  await source(review).focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = () =>
+    host.getByRole("textbox", { name: "Comment", exact: true });
+  await input().fill("Original saved comment");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  const card = () => host.getByLabel("Draft comment", { exact: true });
+  await card().click();
+  await input().fill("Carefully rewritten unfinished comment");
+  await card().click();
+  await expect(input()).toHaveValue("Carefully rewritten unfinished comment");
+  await input().press("Escape");
+  await expect(input()).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Save comment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Cancel comment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Send feedback", exact: true }),
+  ).toBeDisabled();
+  await card().click();
+  await expect(input()).toHaveValue("Carefully rewritten unfinished comment");
+  await shell.stop();
+  await shell.start();
+  const restored = pane(review).getByRole("textbox", {
+    name: "Comment",
+    exact: true,
+  });
+  await expect(restored).toHaveValue("Carefully rewritten unfinished comment");
+  await pane(review)
+    .getByRole("button", { name: "Save comment", exact: true })
+    .click();
+  await expect(
+    pane(review).getByLabel("Draft comment", { exact: true }),
+  ).toContainText("Carefully rewritten unfinished comment");
+  await expect(
+    pane(review).getByRole("button", { name: "Send feedback", exact: true }),
+  ).toBeEnabled();
+});
+
+test("Diff review keeps unchanged context neutral and anchors keyboard comments on removed lines", async ({}, info) => {
+  const workspace = await shell.create("Unified diff review");
+  const folder = shell.folders[0];
+  const file = path.join(folder, "unified.txt");
+  const original = Array.from({ length: 30 }, (_, i) => `unchanged ${i + 1}`);
+  await writeFile(file, original.join("\n") + "\n");
+  const env = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  };
+  execFileSync("git", ["add", "--all"], { cwd: folder, env });
+  execFileSync("git", ["commit", "-m", "Invented baseline"], {
+    cwd: folder,
+    env,
+  });
+  const next = [...original];
+  next[2] = "replacement 3";
+  next[25] = "replacement 26";
+  await writeFile(file, next.join("\n") + "\n");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    chat.id,
+  );
+  const host = pane(review);
+  await expect(host.locator(".review-diff-hunk")).toHaveCount(2);
+  const context = host
+    .locator('.review-line[data-diff-kind="context"]')
+    .filter({ hasText: "unchanged 1" })
+    .first();
+  await expect(context).toBeVisible();
+  expect(
+    (await context.textContent())?.trimStart().startsWith("unchanged"),
+  ).toBe(false); // Both line-number columns precede the content.
+  expect((await context.textContent())?.trimStart()).not.toMatch(/^[+-]/);
+  await expect(
+    host.locator('.review-line[data-diff-kind="removed"]'),
+  ).toHaveCount(2);
+  await expect(
+    host.locator('.review-line[data-diff-kind="added"]'),
+  ).toHaveCount(2);
+  await expect(
+    host
+      .locator('.review-line[data-diff-kind="context"]')
+      .filter({ hasText: /unchanged 1$/ }),
+  ).toHaveCount(1);
+  const canonical = await realpath(file);
+  await comment(
+    review,
+    "Removed line needs discussion",
+    host.getByRole("button", { name: `Old line 3 ${canonical}`, exact: true }),
+  );
+  await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
+    "Removed line needs discussion",
+  );
+  await host.screenshot({ path: info.outputPath("unified-diff.png") });
 });

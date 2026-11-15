@@ -91,6 +91,7 @@ export function createWorkspaceView(
         resourcePanes.delete(id);
     workspaceName.textContent = workspace?.name ?? "No workspace";
     if (!workspace) {
+      layout.applySettings();
       const empty = document.createElement("div");
       empty.className = "empty-workspace";
       const content = document.createElement("div");
@@ -127,9 +128,14 @@ export function createWorkspaceView(
           input.dispatchEvent(new Event("scroll"));
       }
     }
-    focus.restore(returnFocus);
-    if (activeElement?.isConnected && activeElement.closest("[data-pane-id]"))
-      activeElement.focus({ preventScroll: true });
+    // Native views retain their own focus and selection across renderer updates.
+    // Restoring an old native origin here can undo an explicit tab switch before
+    // its new layout has been applied. Only modal cancellation restores it.
+    if (!returnFocus.browserId) {
+      focus.restore(returnFocus);
+      if (activeElement?.isConnected && activeElement.closest("[data-pane-id]"))
+        activeElement.focus({ preventScroll: true });
+    }
     browsers.layout();
   }
 
@@ -156,7 +162,16 @@ export function createWorkspaceView(
       });
       resourcePanes.set(pane.id, container);
     }
+    const wasActive = container.dataset.active === "true";
     container.dataset.active = String(workspace.activePaneId === pane.id);
+    if (
+      pane.kind === "preview" &&
+      !wasActive &&
+      workspace.activePaneId === pane.id
+    )
+      container
+        .querySelector(".markdown-preview")
+        ?.dispatchEvent(new Event("cod:refresh-preview"));
     let content: HTMLElement | undefined;
     if (pane.kind === "empty") {
       container.setAttribute("aria-label", "Empty pane");

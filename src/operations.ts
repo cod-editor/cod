@@ -1,3 +1,5 @@
+import { defaultSearchEngine } from "./browser/address";
+import { SettingsService } from "./application/settings-service";
 import { IntegrationApplicationService } from "./application/integration-service";
 import { WorkspaceApplicationService } from "./application/workspace-service";
 import { ReviewApplicationService } from "./application/review-service";
@@ -16,6 +18,7 @@ import type {
 } from "./types";
 
 export class ApplicationOperations {
+  readonly settings: SettingsService;
   private readonly integration = new IntegrationApplicationService();
   private readonly files: FileApplicationService;
   private readonly browsers: BrowserApplicationService;
@@ -28,6 +31,7 @@ export class ApplicationOperations {
   onDidTerminal: ((event: TerminalUiEvent) => void) | undefined;
 
   constructor(dataDirectory: string) {
+    this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
     this.files = new FileApplicationService(this.store);
     this.browsers = new BrowserApplicationService(this.store, {
@@ -70,6 +74,19 @@ export class ApplicationOperations {
   browserLayout(rectangles: BrowserRectangle[]): void {
     this.browsers.browserLayout(rectangles);
   }
+  browserFind(
+    id: string,
+    text: string,
+    options: { forward?: boolean; findNext?: boolean } = {},
+  ): Promise<number> {
+    return this.browsers.browserFind(id, text, options);
+  }
+  browserStopFind(id: string): void {
+    this.browsers.browserStopFind(id);
+  }
+  browserFocus(id: string): void {
+    this.browsers.browserFocus(id);
+  }
   browserSelect(id: string): void {
     this.browsers.browserSelect(id);
   }
@@ -78,13 +95,25 @@ export class ApplicationOperations {
   }
 
   async initialize(): Promise<void> {
+    await this.settings.load();
     await this.store.load();
+    if (
+      !this.store.data.workspaces.length &&
+      !this.store.data.closedWorkspaces?.length
+    )
+      await this.store.change(() =>
+        this.workspaces.createWorkspace("Untitled"),
+      );
     this.conversations.restoreInterrupted();
     await this.files.restoreIdentity();
     this.browsers.restoreSubmissions();
     this.terminals.restoreAll();
     await this.reviews.reconcileOrigins();
     await this.reviews.refreshReviews();
+  }
+
+  diagnosticContext(contentsId: number) {
+    return this.browsers.diagnosticContext(contentsId);
   }
 
   snapshot(): AppState {
@@ -104,6 +133,26 @@ export class ApplicationOperations {
     }
     if (request.op.startsWith("review."))
       return this.reviews.handle(request, trustedUi);
+    if (request.op === "settings.get") return this.settings.state;
+    if (request.op === "settings.update") {
+      const result = await this.settings.update(
+        request.values,
+        request.reset === true,
+      );
+      if (request.reset === true) {
+        try {
+          await this.browsers.handle({
+            op: "browser.settings",
+            searchEngine: defaultSearchEngine,
+          });
+        } catch (error) {
+          throw new Error(
+            `Appearance settings were reset, but browser settings could not be reset: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return result;
+    }
     const domain = request.op.split(".")[0];
     if (
       domain === "workspace" ||
@@ -111,7 +160,8 @@ export class ApplicationOperations {
       domain === "group" ||
       request.op === "conversation.draft" ||
       request.op === "conversation.show" ||
-      request.op === "conversation.move"
+      request.op === "conversation.move" ||
+      request.op === "conversation.remove"
     )
       return this.workspaces.handle(request, trustedUi);
     if (domain === "conversation")
@@ -151,6 +201,28 @@ export class ApplicationOperations {
           },
         };
 
+      case "context": {
+        const conversation = this.store.data.conversations.find(
+          (item) => item.id === request.conversation,
+        );
+        if (!conversation) throw new Error("Unknown conversation");
+        const workspace = this.store.workspace(conversation.workspaceId);
+        return {
+          workspace: {
+            id: workspace.id,
+            name: workspace.name,
+            folders: [...workspace.folders],
+            activePaneId: workspace.activePaneId,
+          },
+          conversation: {
+            id: conversation.id,
+            provider: conversation.provider,
+            nativeId: conversation.nativeId,
+            cwd: conversation.cwd,
+            status: conversation.status,
+          },
+        };
+      }
       case "state":
         return this.snapshot();
 
@@ -163,7 +235,7 @@ export class ApplicationOperations {
     this.store.beginShutdown();
     await this.conversations.shutdown();
     await this.reviews.shutdown();
-    this.browsers.shutdown();
+    await this.browsers.shutdown();
     await this.terminals.shutdown();
     await this.store.serialize(() => this.store.persist());
   }

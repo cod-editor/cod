@@ -1,3 +1,4 @@
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawn as spawnPty } from "@homebridge/node-pty-prebuilt-multiarch";
@@ -87,7 +88,11 @@ export class TerminalApplicationService {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
-    const cwd = path.resolve(requiredString(request, "cwd"));
+    const cwd = path.resolve(
+      request.cwd === undefined
+        ? (workspace.folders[0] ?? os.homedir())
+        : requiredString(request, "cwd"),
+    );
     const id = randomUUID();
     const snapshot = this.processes.create({
       id,

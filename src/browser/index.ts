@@ -1,5 +1,10 @@
+import { randomUUID } from "node:crypto";
+import type { BrowserDownload } from "./download-types";
+import { installPageContextMenu } from "./context-menu";
+import { installScrollbarStyle } from "./scrollbars";
 import {
   WebContentsView,
+  dialog,
   type BrowserWindow,
   type Session,
   type WebContents,
@@ -8,8 +13,14 @@ import {
 import { mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { BrowserDiagnostics } from "./diagnostics";
+import {
+  navigationWindow,
+  normalizeNavigation,
+  type BrowserNavigation,
+} from "./navigation";
 
 export interface BrowserSnapshot {
+  navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
   url: string;
@@ -33,14 +44,14 @@ export type BrowserEvent =
       type: "download";
       id: string;
       workspaceId: string;
-      basename: string;
-      status: "progressing" | "completed" | "cancelled" | "interrupted";
-      path?: string;
+      download: BrowserDownload;
     };
 interface Resource {
+  navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
   view: WebContentsView;
+  contents: WebContents;
   visible: boolean;
   error?: string;
   failedUrl?: string;
@@ -49,14 +60,20 @@ interface Resource {
   lastSuccessfulUrl?: string;
   diagnostics?: BrowserDiagnostics;
   popups: Set<BrowserWindow>;
-  downloads: Set<DownloadItem>;
+  closing?: Promise<boolean>;
 }
 interface Options {
   window: BrowserWindow;
   session: Session;
   downloadDirectory: string;
+  scrollbarCSS?: string;
   isAllowedExtensionUrl?: (url: string) => boolean;
   onViewCreated?: (contents: WebContents, id: string) => void;
+  onTabCreated?: (
+    tab: BrowserSnapshot,
+    openerId: string,
+    background: boolean,
+  ) => void;
 }
 function safeUrl(value: string, extension?: (url: string) => boolean): string {
   if (typeof value !== "string")
@@ -93,6 +110,35 @@ export class BrowserService {
   private owners = new Map<number, Resource>();
   private listeners = new Set<(event: BrowserEvent) => void>();
   private disposed = false;
+  private retries = new Map<string, { count: number; expires: number }>();
+  private downloads = new Map<
+    string,
+    { item: DownloadItem; update: () => void }
+  >();
+  controlDownload(id: string, action: "pause" | "resume" | "cancel") {
+    const download = this.downloads.get(id);
+    if (!download) throw new Error("Download is no longer active");
+    if (
+      action === "resume" &&
+      !download.item.canResume() &&
+      !download.item.isPaused()
+    )
+      throw new Error("Download cannot resume; retry it");
+    download.item[action]();
+    if (this.downloads.has(id)) download.update();
+  }
+  retryDownload(url: string) {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol))
+      throw new Error("Only HTTP downloads can be retried");
+    for (const [key, value] of this.retries)
+      if (value.expires < Date.now()) this.retries.delete(key);
+    this.retries.set(parsed.href, {
+      count: (this.retries.get(parsed.href)?.count ?? 0) + 1,
+      expires: Date.now() + 120000,
+    });
+    this.options.session.downloadURL(parsed.href);
+  }
   constructor(private options: Options) {
     if (options.session === options.window.webContents.session)
       throw new Error("Browser session must be separate from the app session");
@@ -100,6 +146,9 @@ export class BrowserService {
       throw new Error("Download directory must be absolute");
     options.session.on("will-download", this.download);
     options.window.once("closed", this.dispose);
+  }
+  owner(contentsId: number): string | undefined {
+    return this.owners.get(contentsId)?.id;
   }
   onEvent(listener: (event: BrowserEvent) => void) {
     this.listeners.add(listener);
@@ -122,7 +171,7 @@ export class BrowserService {
   private changed(resource: Resource) {
     if (
       this.resources.get(resource.id) !== resource ||
-      resource.view.webContents.isDestroyed()
+      resource.contents.isDestroyed()
     )
       return;
     this.emit({
@@ -133,6 +182,7 @@ export class BrowserService {
     });
   }
   private secure(contents: WebContents, resource: Resource) {
+    installPageContextMenu(contents, this.options.window);
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
     contents.on("will-navigate", (event, url) => {
@@ -148,24 +198,42 @@ export class BrowserService {
         event.preventDefault();
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
-    contents.setWindowOpenHandler(({ url }) =>
-      allowed(url, this.options.isAllowedExtensionUrl)
-        ? {
-            action: "allow",
-            overrideBrowserWindowOptions: {
-              webPreferences: {
-                session: this.options.session,
-                sandbox: true,
-                contextIsolation: true,
-                nodeIntegration: false,
-                nodeIntegrationInSubFrames: false,
-                webviewTag: false,
-                preload: undefined,
-              },
-            },
-          }
-        : { action: "deny" },
-    );
+    contents.setWindowOpenHandler((details) => {
+      if (!allowed(details.url, this.options.isAllowedExtensionUrl))
+        return { action: "deny" };
+      const webPreferences = {
+        session: this.options.session,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        webviewTag: false,
+        preload: undefined,
+      };
+      if (["foreground-tab", "background-tab"].includes(details.disposition)) {
+        return {
+          action: "allow",
+          outlivesOpener: true,
+          overrideBrowserWindowOptions: { webPreferences },
+          createWindow: (options) => {
+            const tab = this.createResource(
+              { id: randomUUID(), workspaceId: resource.workspaceId },
+              options,
+            );
+            this.options.onTabCreated?.(
+              { ...this.snapshot(tab.id), url: details.url },
+              resource.id,
+              details.disposition === "background-tab",
+            );
+            return tab.contents;
+          },
+        };
+      }
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { webPreferences },
+      };
+    });
     contents.on("did-create-window", (window) => {
       if (this.disposed || !this.resources.has(resource.id)) {
         window.destroy();
@@ -177,42 +245,42 @@ export class BrowserService {
     });
     this.options.onViewCreated?.(contents, resource.id);
   }
-  async open(input: {
-    id: string;
-    workspaceId: string;
-    url: string;
-    restoredFailure?: {
-      url: string;
-      error: string;
-      title?: string;
-      lastSuccessfulUrl?: string;
-    };
-  }) {
+  private createResource(
+    input: { id: string; workspaceId: string },
+    options?: Electron.WebContentsViewConstructorOptions,
+  ): Resource {
     if (this.disposed) throw new Error("Browser service is closed");
     if (!input.id || !input.workspaceId)
       throw new Error("Browser view and workspace IDs are required");
     if (this.resources.has(input.id))
       throw new Error("Browser view ID already exists");
-    const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
+    // createWindow supplies an existing WebContents: adopt it so Chromium can
+    // complete window.open with its original opener and pending POST request.
     const view = new WebContentsView({
+      ...options,
       webPreferences: {
+        ...options?.webPreferences,
         session: this.options.session,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,
         webviewTag: false,
+        preload: undefined,
       },
     });
     const resource: Resource = {
       id: input.id,
       workspaceId: input.workspaceId,
       view,
+      contents: view.webContents,
       visible: true,
       popups: new Set(),
-      downloads: new Set(),
     };
     this.resources.set(input.id, resource);
+    resource.contents.once("destroyed", () =>
+      this.close(resource.id, resource.contents),
+    );
     try {
       this.options.window.contentView.addChildView(view);
       const size = this.options.window.getContentSize();
@@ -223,6 +291,8 @@ export class BrowserService {
         height: Math.max(1, size[1]),
       });
       this.secure(view.webContents, resource);
+      if (this.options.scrollbarCSS)
+        installScrollbarStyle(view.webContents, this.options.scrollbarCSS);
       const changed = () => this.changed(resource);
       view.webContents.on(
         "did-start-navigation",
@@ -251,20 +321,77 @@ export class BrowserService {
       });
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
-      const committed = (_event: Electron.Event, committedUrl: string) => {
-        if (/^https?:\/\//.test(committedUrl))
-          resource.lastSuccessfulUrl = committedUrl;
+      const committed = (_event: Electron.Event, _committedUrl: string) => {
+        const history = resource.contents.navigationHistory;
+        const index = history.getActiveIndex();
+        const { start, end } = navigationWindow(history.length(), index);
+        const entries = [];
+        for (let i = start; i < end; i++) {
+          const entry = history.getEntryAtIndex(i);
+          entries.push({ url: entry.url, title: entry.title });
+        }
+        resource.navigation = normalizeNavigation({
+          entries,
+          index: index - start,
+        });
         changed();
       };
       view.webContents.on("did-navigate", committed);
+      view.webContents.on("did-finish-load", () => {
+        const url = resource.contents.getURL();
+        if (!resource.error && /^https?:\/\//.test(url))
+          resource.lastSuccessfulUrl = url;
+        changed();
+      });
       view.webContents.on(
         "did-navigate-in-page",
         (event, committedUrl, mainFrame) => {
-          if (mainFrame) committed(event, committedUrl);
+          if (mainFrame) {
+            if (
+              !resource.error &&
+              !resource.contents.isLoadingMainFrame() &&
+              /^https?:\/\//.test(committedUrl)
+            )
+              resource.lastSuccessfulUrl = committedUrl;
+            committed(event, committedUrl);
+          }
         },
       );
       view.webContents.on("page-title-updated", changed);
-      await this.load(resource, url);
+      return resource;
+    } catch (error) {
+      if (this.resources.get(input.id) === resource) this.close(input.id);
+      throw error;
+    }
+  }
+  async open(input: {
+    id: string;
+    workspaceId: string;
+    url: string;
+    deferNavigation?: boolean;
+    restoredFailure?: {
+      url: string;
+      error: string;
+      title?: string;
+      lastSuccessfulUrl?: string;
+      navigation?: BrowserNavigation;
+    };
+  }) {
+    const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
+    const resource = this.createResource(input);
+    try {
+      const saved = normalizeNavigation(input.restoredFailure?.navigation);
+      const previous = saved?.entries.filter(
+        (entry) =>
+          entry.url !== input.restoredFailure?.url &&
+          entry.url !== "about:blank",
+      );
+      if (input.restoredFailure && previous?.length)
+        await this.restoreNavigation(input.id, {
+          entries: [...previous, { url: "about:blank", title: "" }],
+          index: previous.length,
+        });
+      else if (!input.deferNavigation) await this.load(resource, url);
       if (input.restoredFailure) {
         resource.restoredFailure = true;
         resource.restoredTitle =
@@ -289,7 +416,7 @@ export class BrowserService {
     }
   }
   private async load(resource: Resource, url: string) {
-    const contents = resource.view.webContents;
+    const contents = resource.contents;
     try {
       await contents.loadURL(url);
     } catch (error) {
@@ -321,12 +448,22 @@ export class BrowserService {
     await this.load(resource, safeUrl(url, this.options.isAllowedExtensionUrl));
     return this.snapshot(id);
   }
+  async restoreNavigation(id: string, value: BrowserNavigation) {
+    const resource = this.resource(id);
+    const navigation = normalizeNavigation(value);
+    if (!navigation) throw new Error("Saved browser history is invalid");
+    resource.navigation = navigation;
+    await resource.contents.navigationHistory.restore(navigation);
+    if (this.resources.get(id) !== resource)
+      throw new Error("Browser view closed during restoration");
+    return this.snapshot(id);
+  }
   back(id: string) {
-    const wc = this.resource(id).view.webContents;
+    const wc = this.resource(id).contents;
     if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
   }
   forward(id: string) {
-    const wc = this.resource(id).view.webContents;
+    const wc = this.resource(id).contents;
     if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
   }
   async recover(id: string) {
@@ -334,7 +471,7 @@ export class BrowserService {
     const target = resource.lastSuccessfulUrl;
     if (!resource.error || !target || target === resource.failedUrl)
       throw new Error("No previous page is available for recovery");
-    const history = resource.view.webContents.navigationHistory;
+    const history = resource.contents.navigationHistory;
     const previous = history.getAllEntries()[history.getActiveIndex() - 1];
     if (history.canGoBack() && previous?.url === target) history.goBack();
     else await this.navigate(id, target);
@@ -343,11 +480,12 @@ export class BrowserService {
     const resource = this.resource(id);
     if (resource.failedUrl) {
       void this.load(resource, resource.failedUrl).catch(() => {});
-    } else resource.view.webContents.reload();
+    } else resource.contents.reload();
   }
   snapshot(id: string): BrowserSnapshot {
     const resource = this.resource(id),
-      wc = resource.view.webContents;
+      wc = resource.contents;
+    if (wc.isDestroyed()) throw new Error("Browser view is closed");
     return {
       id,
       workspaceId: resource.workspaceId,
@@ -358,16 +496,25 @@ export class BrowserService {
       loading: !resource.error && wc.isLoading(),
       error: resource.error,
       lastSuccessfulUrl: resource.lastSuccessfulUrl,
+      navigation: resource.navigation,
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
       visible: resource.visible,
     };
   }
   list() {
-    return [...this.resources.keys()].map((id) => this.snapshot(id));
+    return [...this.resources.values()]
+      .filter((resource) => !resource.contents.isDestroyed())
+      .map((resource) => this.snapshot(resource.id));
+  }
+  diagnosticContext(contentsId: number) {
+    const owner = this.owners.get(contentsId);
+    return owner
+      ? { browserId: owner.id, workspaceId: owner.workspaceId }
+      : undefined;
   }
   getWebContents(id: string) {
-    return this.resource(id).view.webContents;
+    return this.resource(id).contents;
   }
   setBounds(
     id: string,
@@ -400,36 +547,87 @@ export class BrowserService {
     const resource = this.resource(id);
     if (!resource.visible)
       throw new Error("Cannot focus a hidden browser view");
-    resource.view.webContents.focus();
+    resource.contents.focus();
   }
   diagnostics(id: string, action: "start" | "read" | "stop") {
     const resource = this.resource(id);
-    resource.diagnostics ??= new BrowserDiagnostics(
-      resource.view.webContents,
-      () =>
-        resource.restoredFailure && resource.error
-          ? resource.failedUrl
-          : undefined,
+    resource.diagnostics ??= new BrowserDiagnostics(resource.contents, () =>
+      resource.restoredFailure && resource.error
+        ? resource.failedUrl
+        : undefined,
     );
     return resource.diagnostics[action]();
   }
-  close(id: string) {
+  requestClose(id: string): Promise<boolean> {
+    const resource = this.resources.get(id);
+    if (!resource || resource.contents.isDestroyed())
+      return Promise.resolve(true);
+    if (resource.closing) return resource.closing;
+    resource.diagnostics?.stop();
+    const contents = resource.contents;
+    const pending = new Promise<boolean>((resolve, reject) => {
+      const finish = (closed: boolean) => {
+        contents.removeListener("destroyed", destroyed);
+        contents.removeListener("will-prevent-unload", blocked);
+        resource.closing = undefined;
+        if (closed) this.close(id, contents);
+        resolve(closed);
+      };
+      const destroyed = () => finish(true);
+      const blocked = () => {
+        // Default prevention keeps the page intact while the native confirmation
+        // is open. Only an explicit Leave retries without the page guard.
+        void dialog
+          .showMessageBox(this.options.window, {
+            type: "warning",
+            title: "Leave page?",
+            message: "Changes you made may not be saved.",
+            buttons: ["Stay", "Leave"],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          })
+          .then(({ response }) => {
+            if (contents.isDestroyed()) return;
+            if (response === 1) this.close(id, contents);
+            else finish(false);
+          })
+          .catch(() => finish(false));
+      };
+      contents.once("destroyed", destroyed);
+      contents.once("will-prevent-unload", blocked);
+      try {
+        contents.close({ waitForBeforeUnload: true });
+      } catch (error) {
+        contents.removeListener("destroyed", destroyed);
+        contents.removeListener("will-prevent-unload", blocked);
+        resource.closing = undefined;
+        reject(error);
+      }
+    });
+    resource.closing = pending;
+    return pending;
+  }
+  close(id: string, contents?: WebContents) {
     const resource = this.resources.get(id);
     if (!resource) return;
     resource.diagnostics?.dispose();
     this.resources.delete(id);
-    for (const download of resource.downloads) download.cancel();
     for (const popup of resource.popups)
       if (!popup.isDestroyed()) popup.destroy();
     resource.popups.clear();
-    if (!this.options.window.isDestroyed())
+    if (
+      !this.options.window.isDestroyed() &&
+      this.options.window.contentView.children.includes(resource.view)
+    )
       this.options.window.contentView.removeChildView(resource.view);
-    if (!resource.view.webContents.isDestroyed())
-      resource.view.webContents.close({ waitForBeforeUnload: false });
+    const target = contents ?? resource.contents;
+    if (!target.isDestroyed()) target.close({ waitForBeforeUnload: false });
     this.emit({ type: "closed", id, workspaceId: resource.workspaceId });
   }
   dispose = () => {
     if (this.disposed) return;
+    for (const download of this.downloads.values()) download.item.cancel();
     this.disposed = true;
     this.options.session.removeListener("will-download", this.download);
     this.options.window.removeListener("closed", this.dispose);
@@ -441,9 +639,18 @@ export class BrowserService {
     item: DownloadItem,
     contents: WebContents | null,
   ) => {
-    if (!contents) return;
-    const owner = this.owners.get(contents.id);
-    if (!owner || this.disposed) return;
+    if (!contents) {
+      const pending = this.retries.get(item.getURL());
+      if (!pending || pending.expires < Date.now()) return;
+      if (--pending.count === 0) this.retries.delete(item.getURL());
+    }
+    const owner = contents ? this.owners.get(contents.id) : undefined;
+    if (this.disposed || (contents && !owner)) {
+      item.cancel();
+      return;
+    }
+    const id = randomUUID(),
+      startedAt = Date.now();
     const name = basename(item.getFilename());
     let destination = "";
     try {
@@ -469,28 +676,47 @@ export class BrowserService {
       item.cancel();
       this.emit({
         type: "download",
-        id: owner.id,
-        workspaceId: owner.workspaceId,
-        basename: name,
-        status: "interrupted",
+        id: owner?.id ?? "",
+        workspaceId: owner?.workspaceId ?? "",
+        download: {
+          id,
+          startedAt,
+          url: item.getURL(),
+          basename: name,
+          status: "interrupted",
+          receivedBytes: 0,
+          totalBytes: 0,
+          canResume: false,
+        },
       });
       return;
     }
-    owner.downloads.add(item);
     const send = (
       status: "progressing" | "completed" | "cancelled" | "interrupted",
     ) =>
       this.emit({
         type: "download",
-        id: owner.id,
-        workspaceId: owner.workspaceId,
-        basename: path.basename(destination),
-        status,
-        ...(status === "completed" ? { path: destination } : {}),
+        id: owner?.id ?? "",
+        workspaceId: owner?.workspaceId ?? "",
+        download: {
+          id,
+          startedAt,
+          url: item.getURL(),
+          basename: path.basename(destination),
+          status:
+            status === "progressing" && item.isPaused() ? "paused" : status,
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes(),
+          canResume:
+            this.downloads.has(id) &&
+            (status === "progressing" ||
+              (status === "interrupted" && item.canResume())),
+          ...(status === "completed" ? { path: destination } : {}),
+        },
       });
     item.on("updated", (_event, state) => send(state));
     item.once("done", (_event, state) => {
-      owner.downloads.delete(item);
+      this.downloads.delete(id);
       if (state !== "completed") {
         try {
           unlinkSync(destination);
@@ -500,6 +726,7 @@ export class BrowserService {
       }
       send(state);
     });
+    this.downloads.set(id, { item, update: () => send(item.getState()) });
     send("progressing");
   };
 }

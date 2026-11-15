@@ -91,14 +91,13 @@ test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and thr
   await shell.page
     .getByRole("button", { name: "New terminal", exact: true })
     .click();
-  const dialog = shell.page.getByRole("dialog", {
-    name: "New terminal",
-    exact: true,
-  });
-  await dialog
-    .getByRole("textbox", { name: "Working directory", exact: true })
-    .fill(shell.folders[0]);
-  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        (await shell.cli<{ terminals: Terminal[] }>("state")).terminals.length,
+    )
+    .toBe(1);
   const state = await shell.cli<{ terminals: Terminal[] }>("state");
   const terminal = state.terminals.find(
     (item) => item.workspaceId === workspace,
@@ -106,7 +105,7 @@ test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and thr
   expect(terminal).toBeDefined();
   await ready(terminal.id);
   await expect(shell.pane(terminal.paneId).locator(".xterm")).toBeVisible();
-  await tabTo(shell.page, input(terminal.paneId));
+  await expect(input(terminal.paneId)).toBeFocused();
   const tag = marker();
   await shell.page.keyboard.type(
     `test -t 0 && test -t 1 && test -t 2 && printf '${tag}\\n'`,
@@ -208,7 +207,7 @@ test("T1 AC4 keyboard Ctrl-C interrupts foreground work and global shortcuts wor
   await expect(shell.page.getByRole("dialog")).toBeVisible();
   await shell.page.keyboard.press("Escape");
   await tabTo(shell.page, input(terminal.paneId));
-  await shell.page.keyboard.press(`${modifier}+Shift+E`);
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
   await expect(shell.row("Keyboard terminal")).toBeFocused();
 });
 
@@ -221,7 +220,16 @@ test("T1 AC5 pane and workspace close stop owned foreground jobs while another t
   const survivor = await open(second);
   await shell.cli("workspace", "focus", "--id", first);
   await tabTo(shell.page, input(one.paneId));
-  await shell.page.keyboard.press(`${modifier}+W`);
+  // Linux Ctrl+W belongs to readline; Cod closure remains keyboard-accessible.
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await expect(
+    shell.page.getByRole("textbox", { name: "Filter commands" }),
+  ).toBeFocused();
+  await shell.page.keyboard.type("Close tab");
+  await expect(
+    shell.page.getByRole("button", { name: "Close tab", exact: true }),
+  ).toHaveAttribute("aria-current", "true");
+  await shell.page.keyboard.press("Enter");
   await expect.poll(() => alive(job) || alive(firstPid)).toBe(false);
   const closing = await open(first);
   const closingPid = (await inspect(closing.id)).pid;

@@ -24,6 +24,7 @@ export type ProviderEvent = {
   nativeId: string | null;
 } & (
   | { type: "state"; state: ProviderState }
+  | { type: "turn-started"; nativeTurnId: string }
   | {
       type: "text";
       text: string;
@@ -44,20 +45,19 @@ export type ProviderEvent = {
       details: unknown;
     }
   | { type: "permission-resolved"; requestId: string }
+  | {
+      type: "message-meta";
+      itemId: string;
+      phase?: "commentary" | "partial" | "final";
+      interactive?: boolean;
+      text?: string;
+    }
   | { type: "completed"; outcome: TurnOutcome }
   | { type: "history"; details: unknown }
   | { type: "error"; message: string }
   | { type: "diagnostic"; message: string }
 );
-export interface ContextServer {
-  name: string;
-  command: string;
-  args: string[];
-  /** Explicit server variables only; never pass the full process environment. */
-  env: Record<string, string>;
-}
 export interface AdapterOptions {
-  contextServer?: ContextServer;
   cwd: string;
   executable?: string;
   /** Primarily for installations using a launcher, and subprocess contract tests. */
@@ -96,6 +96,7 @@ export interface ProviderCapabilities {
   caveats: readonly string[];
 }
 export interface ImageAttachment {
+  reference?: number;
   name?: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   data: string;

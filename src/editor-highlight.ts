@@ -67,6 +67,7 @@ export function highlightedEditor(
     for (const token of code.querySelectorAll("span"))
       token.setAttribute("data-syntax-token", token.className);
     sync();
+    positionChangedLines(wrapper);
   };
   const sync = () => {
     code.scrollTop = editor.scrollTop;
@@ -86,8 +87,45 @@ export function setChangedLines(wrapper: HTMLElement, lines: number[]): void {
   for (const line of lines) {
     const marker = document.createElement("span");
     marker.dataset.changedLine = String(line);
-    marker.style.top = `calc(20px + ${line - 1} * var(--editor-font-size) * 1.65)`;
+    marker.style.top = `calc(20px + ${line - 1} * var(--editor-font-size) * var(--editor-line-height, 1.65))`;
     marker.title = `Changed line ${line}`;
     markers.append(marker);
   }
+  positionChangedLines(wrapper);
 }
+
+function positionChangedLines(wrapper: HTMLElement): void {
+  const code = wrapper.querySelector<HTMLElement>(".editor-colors");
+  if (!code || !wrapper.isConnected) return;
+  const text = code.textContent ?? "";
+  const starts = [0];
+  for (let i = 0; i < text.length; i++)
+    if (text[i] === "\n") starts.push(i + 1);
+  for (const marker of wrapper.querySelectorAll<HTMLElement>(
+    "[data-changed-line]",
+  )) {
+    let offset = starts[Number(marker.dataset.changedLine) - 1];
+    if (offset === undefined) continue;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const length = node.textContent?.length ?? 0;
+      if (offset < length) {
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, Math.min(offset + 1, length));
+        marker.style.top = `${range.getBoundingClientRect().top - code.getBoundingClientRect().top + code.scrollTop}px`;
+        break;
+      }
+      offset -= length;
+    }
+  }
+}
+const repositionEditors = () => {
+  requestAnimationFrame(() =>
+    document
+      .querySelectorAll<HTMLElement>(".highlighted-editor")
+      .forEach(positionChangedLines),
+  );
+};
+window.addEventListener("resize", repositionEditors);

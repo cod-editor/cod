@@ -43,6 +43,93 @@ export class ConversationApplicationService {
   >();
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
+  private externalTurns = new Set<string>();
+  private drainingQueues = new Set<string>();
+  private scheduleQueue(id: string): void {
+    // Let native completion handlers release their active turn first.
+    setTimeout(() => void this.drainQueue(id), 0);
+  }
+  private async drainQueue(id: string): Promise<void> {
+    const conversation = this.store.data.conversations.find((c) => c.id === id);
+    if (
+      !conversation ||
+      this.store.closing ||
+      this.drainingQueues.has(id) ||
+      this.isActive(id) ||
+      conversation.queuePaused ||
+      conversation.handoffTerminalId ||
+      conversation.status !== "ready"
+    )
+      return;
+    const message = conversation.queuedMessages?.[0];
+    if (!message || message.status !== "queued" || message.editing) return;
+    this.drainingQueues.add(id);
+    try {
+      const admitted = await this.store.change(() => {
+        if (
+          !this.isCurrent(conversation) ||
+          this.isActive(id) ||
+          conversation.status !== "ready" ||
+          conversation.queuePaused ||
+          conversation.queuedMessages?.[0] !== message ||
+          message.status !== "queued" ||
+          message.editing
+        )
+          return false;
+        message.status = "sending";
+        return true;
+      });
+      if (!admitted) return;
+      await this.sendConversation(
+        {
+          op: "conversation.send",
+          id,
+          text: message.text,
+          images: message.images,
+          skills: message.skills,
+          queuedMessageId: message.id,
+        },
+        true,
+      );
+    } catch (error) {
+      if (this.isCurrent(conversation)) {
+        const current = conversation.queuedMessages?.find(
+          (m) => m.id === message.id,
+        );
+        if (current) current.status = "queued";
+        conversation.queuePaused = true;
+        conversation.error = `Message remains queued: ${error instanceof Error ? error.message : String(error)}`;
+        this.store.notify();
+        this.store.schedulePersist(true);
+      }
+    } finally {
+      this.drainingQueues.delete(id);
+    }
+  }
+  private finishQueued(
+    conversation: ConversationState,
+    request: OperationRequest,
+    pause: boolean,
+  ): void {
+    const message = conversation.queuedMessages?.find(
+      (m) => m.id === request.queuedMessageId,
+    );
+    if (message) {
+      if (pause) message.status = "uncertain";
+      else
+        conversation.queuedMessages = conversation.queuedMessages!.filter(
+          (m) => m !== message,
+        );
+    }
+    if (pause) conversation.queuePaused = true;
+    this.store.notify();
+    this.scheduleQueue(conversation.id);
+  }
+
+  private turnClocks = new Map<
+    string,
+    { id: string; start: number; workingStart?: number; worked: number }
+  >();
   private resumeContexts = new Map<string, StagedHistory>();
   private readonly replays = new Set<ProviderAdapter>();
   constructor(
@@ -53,6 +140,43 @@ export class ConversationApplicationService {
     >,
     private readonly views: ConversationViewPort,
   ) {}
+  private beginTurn(conversation: ConversationState): string {
+    const id = randomUUID();
+    (conversation.turns ??= []).push({
+      id,
+      startedAt: new Date().toISOString(),
+    });
+    this.turnClocks.set(conversation.id, {
+      id,
+      start: performance.now(),
+      worked: 0,
+    });
+    return id;
+  }
+  private finishTurn(
+    conversation: ConversationState,
+    outcome: "completed" | "cancelled" | "failed",
+  ): void {
+    const clock = this.turnClocks.get(conversation.id);
+    const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
+    if (!turn || !clock || turn.finishedAt) return;
+    turn.finishedAt = new Date().toISOString();
+    const now = performance.now();
+    turn.elapsedMs = Math.max(0, Math.round(now - clock.start));
+    turn.durationMs = Math.max(
+      0,
+      Math.round(
+        clock.worked +
+          (clock.workingStart === undefined ? 0 : now - clock.workingStart),
+      ),
+    );
+    turn.outcome = outcome;
+  }
+  private currentTurn(conversation: ConversationState): string | undefined {
+    return this.activeTurns.has(conversation.id)
+      ? this.turnClocks.get(conversation.id)?.id
+      : undefined;
+  }
   isActive(id: string): boolean {
     return this.activeTurns.has(id);
   }
@@ -62,7 +186,8 @@ export class ConversationApplicationService {
     this.activeTurns.add(id);
   }
   release(id: string): void {
-    this.activeTurns.delete(id);
+    if (!this.externalTurns.has(id)) this.activeTurns.delete(id);
+    this.scheduleQueue(id);
   }
   async ensureReady(conversation: ConversationState): Promise<void> {
     await this.ensureController(conversation);
@@ -77,14 +202,26 @@ export class ConversationApplicationService {
     if (this.store.closing) throw new Error("Cod is shutting down");
     const adapter = this.controllers.get(conversation.id);
     if (!adapter) throw new Error("Conversation controller unavailable");
+    const turnId = this.beginTurn(conversation);
     conversation.messages.push({
       id: messageId,
+      turnId,
       role: "user",
       text,
       order: this.nextOrder(conversation),
     });
     this.store.notify();
-    await adapter.send(text);
+    try {
+      const outcome = await adapter.send(text);
+      if (this.turnClocks.get(conversation.id)?.id === turnId)
+        this.finishTurn(conversation, outcome.status);
+    } catch (error) {
+      if (this.turnClocks.get(conversation.id)?.id === turnId)
+        this.finishTurn(conversation, "failed");
+      throw error;
+    } finally {
+      this.store.schedulePersist(true);
+    }
   }
   async freshHistory(conversation: ConversationState): Promise<StagedHistory> {
     const existing = this.controllers.get(conversation.id);
@@ -122,6 +259,7 @@ export class ConversationApplicationService {
         (item) => item.id === id,
       );
       if (conversation) {
+        this.finishTurn(conversation, "cancelled");
         conversation.status = "failed";
         conversation.pendingPermissions = [];
         conversation.error =
@@ -130,6 +268,7 @@ export class ConversationApplicationService {
       }
     }
     this.activeTurns.clear();
+    this.externalTurns.clear();
     await Promise.all(
       [...this.controllers.values(), ...this.replays].map((adapter) =>
         adapter.dispose(),
@@ -316,23 +455,6 @@ export class ConversationApplicationService {
     const resolved = await resolveProviderExecutable(conversation.provider);
     const options = {
       cwd: conversation.cwd,
-      contextServer: {
-        name: `cod_context_${randomUUID().replaceAll("-", "")}`,
-        command: process.execPath,
-        args: [
-          path.join(__dirname, "cli.cjs"),
-          "context-server",
-          "--workspace",
-          conversation.workspaceId,
-          "--conversation",
-          conversation.id,
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: "1",
-          COD_SOCKET_PATH: defaultSocketPath(),
-          COD_DATA_DIR: this.store.directory,
-        },
-      },
       executable: resolved.executable,
       args: resolved.args,
       env: {
@@ -362,6 +484,7 @@ export class ConversationApplicationService {
     if (
       this.activeTurns.has(id) ||
       this.controllerInitializations.has(id) ||
+      conversation.queuedMessages?.length ||
       conversation.pendingPermissions.length ||
       conversation.status === "starting"
     )
@@ -524,7 +647,8 @@ export class ConversationApplicationService {
     if (!Array.isArray(value) || value.length > 8)
       throw new Error("At most 8 images may be attached");
     let bytes = 0;
-    return value.map((item) => {
+    const references = new Set<number>();
+    return value.map((item, index) => {
       const image = object(item);
       if (
         !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
@@ -534,12 +658,23 @@ export class ConversationApplicationService {
         !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data)
       )
         throw new Error("Invalid image attachment");
+      const reference = image.reference ?? index + 1;
+      if (
+        !Number.isSafeInteger(reference) ||
+        Number(reference) <= 0 ||
+        references.has(Number(reference))
+      )
+        throw new Error("Image references must be distinct positive integers");
+      references.add(Number(reference));
       bytes += Buffer.byteLength(image.data, "base64");
       if (bytes > 20 * 1024 * 1024) throw new Error("Attachments exceed 20 MB");
       return {
         mimeType:
           image.mimeType as import("../providers/types").ImageAttachment["mimeType"],
         data: image.data,
+        ...(Number.isSafeInteger(image.reference) && Number(image.reference) > 0
+          ? { reference: Number(image.reference) }
+          : {}),
         ...(typeof image.name === "string"
           ? { name: image.name.slice(0, 255) }
           : {}),
@@ -570,29 +705,86 @@ export class ConversationApplicationService {
     });
   }
 
+  private clearSubmittedDraft(
+    conversation: ConversationState,
+    text: string,
+    images: import("../providers/types").ImageAttachment[],
+  ): void {
+    const workspace = this.store.workspace(conversation.workspaceId);
+    const draft = workspace.chatDrafts?.[conversation.paneId];
+    const attachments = draft?.images ?? [];
+    if (
+      !draft?.localDraft &&
+      draft?.text === text &&
+      attachments.length === images.length &&
+      attachments.every(
+        (image, i) =>
+          image.data === images[i].data &&
+          image.mimeType === images[i].mimeType &&
+          image.reference === images[i].reference,
+      )
+    )
+      delete workspace.chatDrafts![conversation.paneId];
+  }
+
   async sendConversation(
     request: OperationRequest,
-  ): Promise<{ id: string; status: string }> {
+    fromQueue = false,
+  ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
     const text = typeof request.text === "string" ? request.text : "";
     if (parseProviderCommand(text))
       throw new Error(
         "Session commands are not prompts. Use conversation.native-inspect with a section, or open the desktop command menu.",
       );
+    if (text.length > 1_000_000) throw new Error("Message is too long");
     const images = this.validateImages(request.images);
     const skills = this.validateSkills(request.skills);
     if (!text.trim() && !images.length)
       throw new Error("Message must not be blank");
-    if (this.activeTurns.has(conversation.id)) {
-      throw new Error("A turn is already active for this conversation");
+    if (conversation.handoffTerminalId)
+      throw new Error("Return to chat before sending a message");
+    if (!fromQueue && request.pageId && this.activeTurns.has(conversation.id))
+      throw new Error("Origin conversation is busy");
+    if (
+      !fromQueue &&
+      (this.activeTurns.has(conversation.id) ||
+        conversation.queuedMessages?.length)
+    ) {
+      const messageId = randomUUID();
+      await this.store.change(() => {
+        if (this.store.closing) throw new Error("Cod is shutting down");
+        this.assertCurrent(conversation);
+        if ((conversation.queuedMessages?.length ?? 0) >= 100)
+          throw new Error("Message queue is full");
+        (conversation.queuedMessages ??= []).push({
+          id: messageId,
+          text,
+          ...(images.length ? { images } : {}),
+          ...(skills.length ? { skills } : {}),
+          status: "queued",
+        });
+        this.clearSubmittedDraft(conversation, text, images);
+      });
+      this.scheduleQueue(conversation.id);
+      return { id: conversation.id, status: "queued", messageId };
     }
+    if (this.activeTurns.has(conversation.id))
+      throw new Error("Conversation is busy");
+    if (!fromQueue) conversation.queuePaused = false;
     this.activeTurns.add(conversation.id);
     try {
+      // Sending is a barrier after pending coalesced composer writes.
+      if (!fromQueue) await this.store.serialize(() => undefined);
       const adapter = await this.ensureController(conversation);
       await adapter.resolveSkills(text, skills);
       this.assertCurrent(conversation);
+      if (this.externalTurns.has(conversation.id))
+        throw new Error("A turn is already active for this conversation");
+      const turnId = this.beginTurn(conversation);
       conversation.messages.push({
         id: randomUUID(),
+        turnId,
         role: "user",
         text,
         ...(images.length ? { images } : {}),
@@ -601,23 +793,37 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
+      if (!fromQueue) this.clearSubmittedDraft(conversation, text, images);
       this.store.notify();
       this.store.schedulePersist();
-      const workspace = this.store.workspace(conversation.workspaceId);
-      if (workspace.chatDrafts)
-        delete workspace.chatDrafts[conversation.paneId];
       const turn = adapter.send(text, images, skills);
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
-        () => {
+        (outcome) => {
+          if (this.turnClocks.get(conversation.id)?.id === turnId) {
+            this.finishTurn(conversation, outcome.status);
+            this.activeTurns.delete(conversation.id);
+          }
           finishPage("completed");
-          this.activeTurns.delete(conversation.id);
+          if (outcome.status === "cancelled") conversation.queuePaused = true;
+          this.finishQueued(
+            conversation,
+            fromQueue ? request : { op: "" },
+            false,
+          );
           this.store.schedulePersist(true);
         },
         (error) => {
           finishPage("uncertain");
+          if (this.turnClocks.get(conversation.id)?.id !== turnId) return;
+          this.finishTurn(conversation, "failed");
           this.activeTurns.delete(conversation.id);
+          this.finishQueued(
+            conversation,
+            fromQueue ? request : { op: "" },
+            true,
+          );
           conversation.status = "failed";
           conversation.error =
             error instanceof Error ? error.message : String(error);
@@ -639,7 +845,7 @@ export class ConversationApplicationService {
       );
       return { id: conversation.id, status: conversation.status };
     } catch (error) {
-      this.activeTurns.delete(conversation.id);
+      this.release(conversation.id);
       throw error;
     }
   }
@@ -685,15 +891,36 @@ export class ConversationApplicationService {
       } else if (conversation.provider === "kimi") {
         stageKimiEvent(resume, event);
       }
-      this.store.notify();
+      this.store.notify(true);
       return;
     }
     switch (event.type) {
-      case "state":
+      case "turn-started":
+        this.beginTurn(conversation);
+        this.activeTurns.add(id);
+        this.externalTurns.add(id);
+        conversation.error = undefined;
+        break;
+      case "state": {
+        const clock = this.turnClocks.get(id);
+        const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
+        if (clock && turn && !turn.finishedAt) {
+          const now = performance.now();
+          if (event.state === "working" && clock.workingStart === undefined)
+            clock.workingStart = now;
+          else if (
+            event.state !== "working" &&
+            clock.workingStart !== undefined
+          ) {
+            clock.worked += now - clock.workingStart;
+            clock.workingStart = undefined;
+          }
+        }
         conversation.status = event.state;
         break;
+      }
       case "text":
-        if (!event.replay && event.role === "assistant") {
+        if (!event.replay) {
           const id = event.itemId
             ? `codex/live/${conversation.nativeId}/${event.itemId}`
             : randomUUID();
@@ -705,11 +932,12 @@ export class ConversationApplicationService {
             0,
             ...conversation.tools.map((tool) => tool.order),
           );
-          if (existing && existing.order >= lastToolOrder) {
-            existing.text += event.text;
+          if (existing) {
+            if (event.role === "assistant") existing.text += event.text;
           } else if (
             !event.itemId &&
-            last?.role === "assistant" &&
+            last?.role === event.role &&
+            last.turnId === this.currentTurn(conversation) &&
             !last.origin &&
             last.order >= lastToolOrder
           ) {
@@ -717,13 +945,34 @@ export class ConversationApplicationService {
           } else {
             conversation.messages.push({
               id,
-              role: "assistant",
+              role: event.role,
+              turnId: this.currentTurn(conversation),
               text: event.text,
               order: this.nextOrder(conversation),
             });
           }
         }
         break;
+      case "message-meta": {
+        const messageId = `codex/live/${conversation.nativeId}/${event.itemId}`;
+        let message = conversation.messages.find(
+          (message) => message.id === messageId,
+        );
+        if (!message) {
+          message = {
+            id: messageId,
+            role: "assistant",
+            text: "",
+            order: this.nextOrder(conversation),
+            turnId: this.currentTurn(conversation),
+          };
+          conversation.messages.push(message);
+        }
+        if (event.phase) message.phase = event.phase;
+        if (event.interactive) message.interactive = true;
+        if (!message.text && event.text) message.text = event.text;
+        break;
+      }
       case "tool":
         if (!event.replay) this.mergeLiveTool(conversation, event);
         break;
@@ -741,6 +990,11 @@ export class ConversationApplicationService {
           );
         break;
       case "completed":
+        this.finishTurn(conversation, event.outcome.status);
+        if (event.outcome.status === "cancelled")
+          conversation.queuePaused = true;
+        this.scheduleQueue(id);
+        if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         if (event.outcome.status === "completed") {
           conversation.completionRevision =
             (conversation.completionRevision ?? 0) + 1;
@@ -750,6 +1004,9 @@ export class ConversationApplicationService {
         }
         break;
       case "error":
+        this.finishTurn(conversation, "failed");
+        conversation.queuePaused = true;
+        if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         conversation.status = "failed";
         conversation.error = event.message;
         this.addApplicationMessage(
@@ -761,7 +1018,7 @@ export class ConversationApplicationService {
       case "diagnostic":
         break;
     }
-    this.store.notify();
+    this.store.notify(true);
     this.store.schedulePersist(
       event.type === "completed" ||
         event.type === "error" ||
@@ -792,6 +1049,7 @@ export class ConversationApplicationService {
     } else {
       conversation.tools.push({
         id: `live/${conversation.nativeId}/${nativeId ?? randomUUID()}`,
+        turnId: this.currentTurn(conversation),
         phase: completed ? "completed" : event.phase,
         details: event.details,
         order: this.nextOrder(conversation),
@@ -813,6 +1071,7 @@ export class ConversationApplicationService {
     conversation.messages.push({
       id: randomUUID(),
       role: "system",
+      turnId: this.currentTurn(conversation),
       text,
       order: this.nextOrder(conversation),
       origin: "application",
@@ -836,14 +1095,12 @@ export class ConversationApplicationService {
     const adapter = this.controllers.get(id);
     this.controllers.delete(id);
     this.activeTurns.delete(id);
+    this.externalTurns.delete(id);
     this.resumeContexts.delete(id);
     await adapter?.dispose();
   }
 
-  async handle(
-    request: OperationRequest,
-    _trustedUi = false,
-  ): Promise<unknown> {
+  async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {
     switch (request.op) {
       case "conversation.discover": {
         const provider = providerId(request);
@@ -871,8 +1128,28 @@ export class ConversationApplicationService {
       case "conversation.reclaim":
         return this.reclaimConversation(requiredString(request, "id"));
 
-      case "conversation.composer":
+      case "conversation.rename":
         return this.store.change(() => {
+          const conversation = this.store.conversation(
+            requiredString(request, "id"),
+          );
+          const name = requiredString(request, "name").trim();
+          if (!name || name.length > 255)
+            throw new Error("Name must contain 1-255 characters");
+          conversation.displayName = name;
+          return { id: conversation.id, name };
+        });
+
+      case "conversation.composer": {
+        const textOnly = trustedUi && request.images === undefined;
+        const save = textOnly
+          ? (mutation: () => unknown) =>
+              this.store.changeDraft(
+                `composer:${requiredString(request, "workspace")}:${requiredString(request, "paneId")}`,
+                mutation,
+              )
+          : (mutation: () => unknown) => this.store.change(mutation);
+        return save(() => {
           const workspace = this.store.workspace(
             requiredString(request, "workspace"),
           );
@@ -885,22 +1162,71 @@ export class ConversationApplicationService {
             !(pane.kind === "document" && !pane.filePath)
           )
             throw new Error("Not a chat composer");
+          const previous = workspace.chatDrafts?.[pane.id];
+          if (
+            trustedUi &&
+            request.saveConflict !== true &&
+            typeof request.expectedVersion === "string" &&
+            request.expectedVersion !== (previous?.version ?? "")
+          )
+            return {
+              paneId: pane.id,
+              conflict: true,
+              draft: previous ?? { text: "" },
+            };
           const text = typeof request.text === "string" ? request.text : "";
           if (text.length > 1_000_000)
             throw new Error("Composer draft is too long");
-          const images = this.validateImages(request.images);
+          const images =
+            request.images === undefined
+              ? (workspace.chatDrafts?.[pane.id]?.images ?? [])
+              : this.validateImages(request.images);
           const skills = this.validateSkills(request.skills);
           const provider =
             request.provider === undefined ? undefined : providerId(request);
           workspace.chatDrafts ??= {};
+          if (trustedUi && request.saveConflict === true) {
+            if (!previous)
+              throw new Error("Conflicting draft is no longer available");
+            workspace.chatDrafts[pane.id] = {
+              ...previous,
+              localDraft: {
+                text,
+                ...(provider ? { provider } : {}),
+                ...(skills.length ? { skills } : {}),
+                ...(request.images === undefined
+                  ? {
+                      images:
+                        previous.localDraft?.images ?? previous.images ?? [],
+                    }
+                  : { images }),
+              },
+            };
+            return {
+              paneId: pane.id,
+              version: previous.version,
+              conflictSaved: true,
+            };
+          }
+          const version = randomUUID();
           workspace.chatDrafts[pane.id] = {
             text,
+            version,
+            ...(!trustedUi && previous?.localDraft
+              ? { localDraft: previous.localDraft }
+              : {}),
+            ...(trustedUi &&
+            typeof request.writer === "string" &&
+            request.writer.length <= 64
+              ? { writer: request.writer }
+              : {}),
             ...(provider ? { provider } : {}),
             ...(skills.length ? { skills } : {}),
             ...(images.length ? { images } : {}),
           };
-          return { paneId: pane.id };
+          return { paneId: pane.id, version };
         });
+      }
 
       case "conversation.acknowledge":
         return this.store.change(() => {
@@ -937,12 +1263,14 @@ export class ConversationApplicationService {
           return { id: conversation.id, taskStatus: conversation.taskStatus };
         });
 
-      case "conversation.options":
-        return (
-          await this.ensureController(
-            this.store.conversation(requiredString(request, "id")),
-          )
-        ).getOptions();
+      case "conversation.options": {
+        const conversation = this.store.conversation(
+          requiredString(request, "id"),
+        );
+        if (conversation.status === "failed")
+          throw new Error("Conversation failed. Send explicitly to retry.");
+        return (await this.ensureController(conversation)).getOptions();
+      }
 
       case "conversation.option": {
         if (request.option !== "model" && request.option !== "reasoning")
@@ -967,6 +1295,67 @@ export class ConversationApplicationService {
 
       case "conversation.send":
         return this.sendConversation(request);
+
+      case "conversation.queue-edit":
+      case "conversation.queue-remove":
+        return this.store
+          .change(() => {
+            const conversation = this.store.conversation(
+              requiredString(request, "id"),
+            );
+            const message = conversation.queuedMessages?.find(
+              (m) => m.id === requiredString(request, "messageId"),
+            );
+            if (!message) throw new Error("Queued message not found");
+            if (message.status === "sending")
+              throw new Error("Message is already being sent");
+            if (request.op === "conversation.queue-remove") {
+              conversation.queuedMessages = conversation.queuedMessages!.filter(
+                (m) => m !== message,
+              );
+            } else {
+              if (message.status !== "queued")
+                throw new Error(
+                  "Delivery is uncertain; inspect native history before resending",
+                );
+              const text =
+                typeof request.text === "string" ? request.text : message.text;
+              if (text.length > 1_000_000 || parseProviderCommand(text))
+                throw new Error("Invalid queued prompt");
+              const images =
+                request.images === undefined
+                  ? message.images
+                  : this.validateImages(request.images);
+              if (!text.trim() && !images?.length)
+                throw new Error("Message must not be blank");
+              message.text = text;
+              message.editing = request.editing === true;
+              message.images = images;
+              if (request.skills !== undefined)
+                message.skills = this.validateSkills(request.skills);
+            }
+            return { id: conversation.id, messageId: message.id };
+          })
+          .then((result) => {
+            this.scheduleQueue(result.id);
+            return result;
+          });
+      case "conversation.queue-resume": {
+        const conversation = this.store.conversation(
+          requiredString(request, "id"),
+        );
+        if (conversation.queuedMessages?.some((m) => m.status !== "queued"))
+          throw new Error(
+            "Resolve the uncertain message before continuing the queue",
+          );
+        await this.ensureController(conversation);
+        await this.store.change(() => {
+          conversation.queuePaused = false;
+          conversation.error = undefined;
+        });
+        this.scheduleQueue(conversation.id);
+        return { id: conversation.id };
+      }
 
       case "conversation.interrupt":
         return this.interruptConversation(requiredString(request, "id"));
@@ -999,6 +1388,11 @@ export class ConversationApplicationService {
 
   restoreInterrupted(): void {
     for (const conversation of this.store.data.conversations) {
+      if (conversation.queuedMessages?.length) {
+        conversation.queuePaused = true;
+        for (const message of conversation.queuedMessages)
+          if (message.status === "sending") message.status = "uncertain";
+      }
       if (["starting", "working", "waiting"].includes(conversation.status)) {
         conversation.status = "failed";
         conversation.pendingPermissions = [];

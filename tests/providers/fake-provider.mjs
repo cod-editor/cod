@@ -19,6 +19,7 @@ if (mode === "owned-child") {
 }
 
 let activeRequest;
+let turnId = "turn-1";
 const write = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const reply = (request, result) => write({ id: request.id, result });
 const notify = (method, params) => write({ method, params });
@@ -26,7 +27,7 @@ function complete(status = "completed") {
   if (provider === "codex")
     notify("turn/completed", {
       threadId: sessionId,
-      turn: { id: "turn-1", status },
+      turn: { id: turnId, status },
     });
   else
     reply(activeRequest, {
@@ -39,6 +40,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     appendFileSync(process.argv[4], JSON.stringify(m) + "\n");
   if (!m.method) {
     if (m.id === "foreign") return;
+    if (m.id === "external-approval") {
+      if (m.result?.decision === "decline") complete();
+      return;
+    }
     if (m.id === "approval") {
       const denied =
         provider === "codex"
@@ -122,6 +127,61 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ? { thread: { id: sessionId, turns: [{ id: "old-turn" }], toolPid } }
         : { sessionId, toolPid },
     );
+    if (provider === "codex" && mode.startsWith("external")) {
+      setTimeout(() => {
+        notify("turn/started", {
+          threadId: "foreign-thread",
+          turn: { id: "foreign-turn" },
+        });
+        turnId = "external-turn";
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        const user = {
+          id: "queued-user",
+          type: "userMessage",
+          content: [{ type: "text", text: "Job finished" }],
+        };
+        notify("item/started", { threadId: sessionId, turnId, item: user });
+        notify("item/completed", { threadId: sessionId, turnId, item: user });
+        notify("item/agentMessage/delta", {
+          threadId: sessionId,
+          turnId,
+          itemId: "queued-answer",
+          delta: "Queue received",
+        });
+        notify("item/started", {
+          threadId: sessionId,
+          turnId,
+          item: {
+            id: "queued-tool",
+            type: "commandExecution",
+            command: "true",
+          },
+        });
+        if (mode === "external-cancel" || mode === "external-timeout") return;
+        if (mode === "external-approval") {
+          write({
+            id: "external-approval",
+            method: "item/commandExecution/requestApproval",
+            params: { threadId: sessionId, turnId, command: "true" },
+          });
+          return;
+        }
+        complete(mode === "external-failed" ? "failed" : "completed");
+        // Duplicate terminal events must not resurrect finished work.
+        notify("turn/started", {
+          threadId: sessionId,
+          turn: { id: turnId, status: "inProgress" },
+        });
+        complete();
+      }, 30);
+    }
     return;
   }
   if (["thread/list", "session/list"].includes(m.method)) {
@@ -140,6 +200,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (!["turn/start", "session/prompt"].includes(m.method)) return;
   activeRequest = m;
+  turnId = "turn-1";
   if (mode === "images") {
     const content = provider === "codex" ? m.params.input : m.params.prompt;
     const image = content.find((item) => item.type === "image");
@@ -147,13 +208,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       provider === "codex"
         ? image?.url === "data:image/png;base64,aW52ZW50ZWQ="
         : image?.mimeType === "image/png" && image?.data === "aW52ZW50ZWQ=";
-    if (!valid) {
+    if (
+      !valid ||
+      !content.some((item) => item.type === "text" && item.text === "[Image 3]")
+    ) {
       write({
         id: m.id,
         error: { code: -32000, message: "Missing native image payload" },
       });
       return;
     }
+  }
+  if (mode === "empty-completion" && provider === "kimi") {
+    reply(m, { stopReason: "end_turn" });
+    return;
   }
   if (mode === "rpc-error") {
     write({
@@ -167,6 +235,39 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (provider === "codex") {
+    if (mode === "phases") {
+      for (const [id, phase, text] of [
+        ["commentary", "commentary", "Checking files"],
+        ["partial", "partial_answer", "Progress so far"],
+        ["final", "final_answer", "Finished"],
+      ]) {
+        notify("item/started", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          item: { type: "agentMessage", id, phase, text: "" },
+        });
+        notify("item/agentMessage/delta", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          itemId: id,
+          delta: text,
+        });
+        notify("item/completed", {
+          threadId: sessionId,
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id,
+            phase,
+            text,
+            questions: id === "partial" ? [{ id: "question" }] : [],
+          },
+        });
+      }
+      reply(m, { turn: { id: "turn-1" } });
+      complete();
+      return;
+    }
     // Deliberately send early notifications before the turn/start response.
     notify("item/agentMessage/delta", {
       threadId: "another-session",

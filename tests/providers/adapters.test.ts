@@ -316,111 +316,52 @@ for (const provider of ["codex", "kimi"] as const) {
 
 for (const provider of ["codex", "kimi"] as const) {
   for (const resume of [false, true]) {
-    for (const enabled of [false, true]) {
-      test(`${provider}: ${resume ? "resume" : "create"} sends ${enabled ? "only explicit context overlay" : "unchanged defaults"}`, async () => {
-        const { mkdtemp, readFile, rm } = await import("node:fs/promises");
-        const { tmpdir } = await import("node:os");
-        const { join } = await import("node:path");
-        const dir = await mkdtemp(join(tmpdir(), "cod-context-contract-"));
-        const log = join(dir, "requests.jsonl");
-        const contextServer = {
-          name: "cod_fixture_unique",
-          command: process.execPath,
-          args: ["/invented/context-server.cjs"],
-          env: { COD_WORKSPACE_ID: "invented" },
-        };
-        const adapter = (
-          provider === "codex" ? createCodexAdapter : createKimiAdapter
-        )({
-          cwd: process.cwd(),
-          executable: process.execPath,
-          args: [fixture, provider, "normal", log],
-          ...(enabled ? { contextServer } : {}),
-        });
-        // Snapshotting prevents a caller changing the name into a config path after validation.
-        contextServer.name = "model_provider";
-        contextServer.env.COD_WORKSPACE_ID = "mutated";
-        contextServer.args.push("mutated");
-        try {
-          if (resume) await adapter.resume(`${provider}-native`);
-          else await adapter.create();
-          const messages = (await readFile(log, "utf8"))
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line));
-          const method =
-            provider === "codex"
-              ? resume
-                ? "thread/resume"
-                : "thread/start"
-              : resume
-                ? "session/load"
-                : "session/new";
-          const request = messages.find((message) => message.method === method);
-          const expected: Record<string, unknown> = { cwd: process.cwd() };
-          if (provider === "codex") {
-            if (resume) expected.threadId = `${provider}-native`;
-            else expected.ephemeral = false;
-            if (enabled)
-              expected.config = {
-                "mcp_servers.cod_fixture_unique": {
-                  command: process.execPath,
-                  args: ["/invented/context-server.cjs"],
-                  env: { COD_WORKSPACE_ID: "invented" },
-                },
-              };
-          } else {
-            if (resume) expected.sessionId = `${provider}-native`;
-            expected.mcpServers = enabled
-              ? [
-                  {
-                    name: "cod_fixture_unique",
-                    command: process.execPath,
-                    args: ["/invented/context-server.cjs"],
-                    env: [{ name: "COD_WORKSPACE_ID", value: "invented" }],
-                  },
-                ]
-              : [];
-          }
-          assert.deepEqual(request.params, expected);
-        } finally {
-          await adapter.dispose();
-          await rm(dir, { recursive: true, force: true });
-        }
+    test(`${provider}: ${resume ? "resume" : "create"} does not inject Cod MCP configuration`, async () => {
+      const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const dir = await mkdtemp(join(tmpdir(), "cod-provider-contract-"));
+      const log = join(dir, "requests.jsonl");
+      const adapter = (
+        provider === "codex" ? createCodexAdapter : createKimiAdapter
+      )({
+        cwd: process.cwd(),
+        executable: process.execPath,
+        args: [fixture, provider, "normal", log],
       });
-    }
+      try {
+        if (resume) await adapter.resume(`${provider}-native`);
+        else await adapter.create();
+        const messages = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const method =
+          provider === "codex"
+            ? resume
+              ? "thread/resume"
+              : "thread/start"
+            : resume
+              ? "session/load"
+              : "session/new";
+        const expected: Record<string, unknown> = { cwd: process.cwd() };
+        if (provider === "codex") {
+          if (resume) expected.threadId = `${provider}-native`;
+          else expected.ephemeral = false;
+        } else {
+          expected.mcpServers = [];
+          if (resume) expected.sessionId = `${provider}-native`;
+        }
+        assert.deepEqual(
+          messages.find((message) => message.method === method).params,
+          expected,
+        );
+      } finally {
+        await adapter.dispose();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   }
-  test(`${provider}: rejects invalid context configuration before spawning`, () => {
-    const valid = {
-      name: "cod_context",
-      command: process.execPath,
-      args: [],
-      env: {},
-    };
-    for (const value of [
-      null,
-      [],
-      { ...valid, name: "a.b" },
-      { ...valid, name: "__proto__" },
-      { ...valid, command: "node" },
-      { ...valid, args: [1] },
-      { ...valid, args: ["bad\0arg"] },
-      { ...valid, env: { KEY: undefined } },
-      { ...valid, env: { "A=B": "value" } },
-      { ...valid, developerInstructions: "replace" },
-    ]) {
-      assert.throws(
-        () =>
-          (provider === "codex" ? createCodexAdapter : createKimiAdapter)({
-            cwd: process.cwd(),
-            executable: "/must/not/spawn",
-            contextServer:
-              value as unknown as import("../../src/providers/types.ts").ContextServer,
-          }),
-        /Invalid context server/,
-      );
-    }
-  });
 }
 
 for (const provider of ["codex", "kimi"] as const) {
@@ -431,7 +372,7 @@ for (const provider of ["codex", "kimi"] as const) {
       assert.equal(
         (
           await adapter.send("", [
-            { mimeType: "image/png", data: "aW52ZW50ZWQ=" },
+            { mimeType: "image/png", data: "aW52ZW50ZWQ=", reference: 3 },
           ])
         ).status,
         "completed",
@@ -441,3 +382,115 @@ for (const provider of ["codex", "kimi"] as const) {
     }
   });
 }
+
+test("Codex exposes explicit native commentary/partial/final metadata without duplicating deltas", async () => {
+  const { adapter, events } = setup("codex", "phases");
+  try {
+    await adapter.create();
+    await adapter.send("fixture phases");
+    const metadata = events.filter((event) => event.type === "message-meta");
+    assert.deepEqual(
+      metadata.map((event) => event.phase),
+      ["commentary", "commentary", "partial", "partial", "final", "final"],
+    );
+    assert.equal(
+      metadata.find((event) => event.itemId === "partial" && event.text)
+        ?.interactive,
+      true,
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text),
+      ["Checking files", "Progress so far", "Finished"],
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("Codex accepts queued turns while idle, routes their input and output once", async () => {
+  const { adapter, events } = setup("codex", "external");
+  try {
+    await adapter.resume("codex-native");
+    await until(() => events.some((e) => e.type === "completed"));
+    assert.equal(events.filter((e) => e.type === "turn-started").length, 1);
+    assert.deepEqual(
+      events.filter((e) => e.type === "text").map((e) => [e.role, e.text]),
+      [
+        ["user", "Job finished"],
+        ["assistant", "Queue received"],
+      ],
+    );
+    assert.equal(events.filter((e) => e.type === "tool").length, 1);
+    assert.equal(events.filter((e) => e.type === "completed").length, 1);
+    assert.equal(
+      events.filter((e) => e.type === "state").at(-1)?.state,
+      "ready",
+    );
+    assert.equal(
+      (await adapter.send("ordinary follow-up")).status,
+      "completed",
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+for (const mode of [
+  "external-cancel",
+  "external-approval",
+  "external-failed",
+]) {
+  test(`Codex queued turn supports ${mode}`, async () => {
+    const { adapter, events } = setup("codex", mode);
+    try {
+      await adapter.create();
+      await until(() => events.some((e) => e.type === "turn-started"));
+      if (mode === "external-cancel") {
+        await assert.rejects(adapter.send("overlap"), /active/i);
+        await adapter.cancel();
+      } else if (mode === "external-approval") {
+        await until(() => events.some((e) => e.type === "permission"));
+        const permission = events.find((e) => e.type === "permission")!;
+        await adapter.permission(permission.requestId, "deny");
+      }
+      await until(() =>
+        events.some(
+          (e) =>
+            e.type === (mode === "external-failed" ? "error" : "completed"),
+        ),
+      );
+      if (mode === "external-cancel")
+        assert.equal(
+          events.find((e) => e.type === "completed")?.outcome.status,
+          "cancelled",
+        );
+    } finally {
+      await adapter.dispose();
+    }
+  });
+}
+
+test("Kimi empty native completion is an actionable failure rather than a successful answer", async () => {
+  const { adapter, events } = setup("kimi", "empty-completion");
+  try {
+    await adapter.create();
+    await assert.rejects(
+      adapter.send("Invented status request"),
+      /Kimi returned no response/,
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "error" && event.message.includes("account limits"),
+      ),
+    );
+    assert.equal(
+      events.filter((event) => event.type === "completed").length,
+      0,
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
