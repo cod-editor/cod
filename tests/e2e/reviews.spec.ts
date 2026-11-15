@@ -983,3 +983,80 @@ test("Reopening a saved comment preserves its unfinished rewrite and Escape leav
     pane(review).getByRole("button", { name: "Send feedback", exact: true }),
   ).toBeEnabled();
 });
+
+test("Diff review keeps unchanged context neutral and anchors keyboard comments on removed lines", async ({}, info) => {
+  const workspace = await shell.create("Unified diff review");
+  const folder = shell.folders[0];
+  const file = path.join(folder, "unified.txt");
+  const original = Array.from({ length: 30 }, (_, i) => `unchanged ${i + 1}`);
+  await writeFile(file, original.join("\n") + "\n");
+  const env = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  };
+  execFileSync("git", ["add", "--all"], { cwd: folder, env });
+  execFileSync("git", ["commit", "-m", "Invented baseline"], {
+    cwd: folder,
+    env,
+  });
+  const next = [...original];
+  next[2] = "replacement 3";
+  next[25] = "replacement 26";
+  await writeFile(file, next.join("\n") + "\n");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    chat.id,
+  );
+  const host = pane(review);
+  await expect(host.locator(".review-diff-hunk")).toHaveCount(2);
+  const context = host
+    .locator('.review-line[data-diff-kind="context"]')
+    .filter({ hasText: "unchanged 1" })
+    .first();
+  await expect(context).toBeVisible();
+  expect(
+    (await context.textContent())?.trimStart().startsWith("unchanged"),
+  ).toBe(false); // Both line-number columns precede the content.
+  expect((await context.textContent())?.trimStart()).not.toMatch(/^[+-]/);
+  await expect(
+    host.locator('.review-line[data-diff-kind="removed"]'),
+  ).toHaveCount(2);
+  await expect(
+    host.locator('.review-line[data-diff-kind="added"]'),
+  ).toHaveCount(2);
+  await expect(
+    host
+      .locator('.review-line[data-diff-kind="context"]')
+      .filter({ hasText: /unchanged 1$/ }),
+  ).toHaveCount(1);
+  const canonical = await realpath(file);
+  await comment(
+    review,
+    "Removed line needs discussion",
+    host.getByRole("button", { name: `Old line 3 ${canonical}`, exact: true }),
+  );
+  await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
+    "Removed line needs discussion",
+  );
+  await host.screenshot({ path: info.outputPath("unified-diff.png") });
+});

@@ -1,6 +1,12 @@
 # Known user-experience defects
 
-Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-02, UX-03 and UX-05 are implemented and passed focused real-Electron acceptance tests (including draft restart checks); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
+Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-02, UX-03, UX-04 and UX-05 are implemented and passed focused real-Electron acceptance tests (including draft restart checks); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
+
+## New reports at the front of the queue
+
+| ID    | Defect and reproduction                                                                                                                     | Acceptance check                                                                                                                                                                                                  | Evidence                                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| UX-16 | Ctrl+W is reported again as failing to close the current tab. Identify focused surface and actual OS modifier events before choosing a fix. | The user's configured close shortcut closes the focused file/chat/browser tab exactly once, preserving drafts and honoring page close guards. Test native macOS routing separately from Linux component evidence. | User report; current regression not yet reproduced. |
 
 ## Protect user work first
 
@@ -34,10 +40,11 @@ Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-0
 
 ## Repair and verification order
 
-1. UX-01 through UX-03: prevent silent loss and stale documents.
-2. UX-04 and UX-05: make review changes and pending work intelligible.
-3. UX-06 through UX-08: make browser startup, tabs and return navigation predictable.
-4. UX-09 through UX-15: unify focus, action discovery, settings and diagnostic attribution.
+1. UX-16 takes precedence once the current coherent fix reaches its verification boundary.
+2. UX-01 through UX-03: prevent silent loss and stale documents.
+3. UX-04 and UX-05: make review changes and pending work intelligible.
+4. UX-06 through UX-08: make browser startup, tabs and return navigation predictable.
+5. UX-09 through UX-15: unify focus, action discovery, settings and diagnostic attribution.
 
 For each repair, test the complete task with keyboard and mouse, interruption, workspace switching and restart where applicable. Use representative histories and attachments for performance checks. Mark an item resolved only after recording the concrete acceptance result in its change/PR; selected passing tests do not replace a passing full CI baseline.
 

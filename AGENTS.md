@@ -6,6 +6,10 @@ Read [the vision](docs/vision.md) and, for implementation, [the contracts](docs/
 
 ## Workflow
 
+New user defect reports go to the front of the pending repair queue. Preserve the current coherent change and reach a safe verification boundary before switching; do not abandon work or end execution just because feedback arrived. Treat a status question as a request for an update while continuing the authorized queue.
+
+For an authorized repair backlog, continue from each verified checkpoint to the next agreed item without requiring a new prompt. Publishing a checkpoint or reporting status does not complete the backlog. Use completion notifications for long checks and resume dependent work when they finish; stop only for an actual blocker, a user pause or completion of the requested scope.
+
 1. Identify the user outcome, requirements and relevant compatibility gaps before choosing an implementation.
 2. Make focused changes with clear module boundaries. Keep UI, CLI, persistence and native provider behavior aligned.
 3. Verify observable behavior with appropriate tests. Use real Electron, Git and PTYs with invented fixture data; distinguish protocol fixtures from live compatibility.

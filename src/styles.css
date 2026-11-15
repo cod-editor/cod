@@ -1834,3 +1834,23 @@ browser-action-list::part(action):focus-visible {
 .review-document .file-editor {
   white-space: pre;
 }
+
+.review-diff-hunk {
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--font-small);
+  overflow-x: auto;
+}
+.review-line[data-diff-kind="added"]:not([aria-pressed="true"]) {
+  background: #98c37912;
+}
+.review-line[data-diff-kind="removed"]:not([aria-pressed="true"]) {
+  background: #e06c7512;
+}
+.review-diff-note {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-small);
+}

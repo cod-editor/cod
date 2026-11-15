@@ -1,3 +1,4 @@
+import { diffHunks } from "./diff-hunks";
 import { uiButton, actionRow, toolbar } from "./ui/primitives";
 import { reviewDocument } from "./ui/review-document";
 import { shortcutTitle } from "./ui/keyboard-ui";
@@ -67,6 +68,7 @@ export function reviewPane(
   let previewMode = readPreference<boolean>(`review-preview.${id}`, false);
   let shownError = false;
   let diskTimer: ReturnType<typeof setTimeout> | undefined;
+  let diffAnchors: Array<{ old?: Range; new?: Range; hunk: string }> = [];
   let ranges: Range[] = [],
     buttons: HTMLButtonElement[] = [];
   const header = toolbar(),
@@ -204,6 +206,19 @@ export function reviewPane(
       const range = textRange ?? documentView.capture();
       if (!range) throw new Error("Select a text fragment first");
       return range;
+    }
+    if (diffAnchors.length) {
+      const rows = diffAnchors.slice(
+        Math.min(selection, end),
+        Math.max(selection, end) + 1,
+      );
+      const side = rows.some((row) => !row.new) ? "old" : "new";
+      if (
+        !rows.length ||
+        rows.some((row) => !row[side] || row.hunk !== rows[0].hunk)
+      )
+        throw new Error("Select lines in the same file, hunk and side");
+      return { ...rows[0][side]!, endLine: rows.at(-1)![side]!.endLine };
     }
     const a = ranges[Math.min(selection, end)],
       b = ranges[Math.max(selection, end)];
@@ -365,6 +380,7 @@ export function reviewPane(
         content.append(comparison);
       }
       ranges = [];
+      diffAnchors = [];
       buttons = [];
       function add(text: string, name: string, range: Range) {
         const index = buttons.length;
@@ -459,29 +475,65 @@ export function reviewPane(
         content.append(documentView.element);
       } else {
         documentView = undefined;
-        for (const file of snapshot.files)
-          for (const side of ["old", "new"] as const) {
-            const sidePath = side === "old" ? file.oldPath : file.newPath;
-            if (sidePath) {
-              const heading = document.createElement("h3");
-              heading.textContent = `${side === "old" ? "Old" : "New"}: ${sidePath}`;
-              content.append(heading);
-            }
-            for (const [number, text] of Object.entries(file[side])) {
-              const path = side === "old" ? file.oldPath : file.newPath;
-              if (path)
-                add(
-                  `${side === "old" ? "-" : "+"}${number}  ${text}`,
-                  `${side === "old" ? "Old" : "New"} line ${number} ${path}`,
-                  {
-                    startLine: Number(number),
-                    endLine: Number(number),
-                    path,
-                    side,
-                  },
-                );
+        const files = diffHunks(snapshot.text);
+        for (const [fileIndex, file] of snapshot.files.entries()) {
+          for (const [side, path] of [
+            ["Old", file.oldPath],
+            ["New", file.newPath],
+          ] as const) {
+            if (!path) continue;
+            const heading = document.createElement("h3");
+            heading.textContent = `${side}: ${path}`;
+            content.append(heading);
+          }
+          for (const [hunkIndex, hunk] of (files[fileIndex] ?? []).entries()) {
+            const header = document.createElement("pre");
+            header.className = "review-diff-hunk";
+            header.textContent = hunk.header;
+            content.append(header);
+            for (const row of hunk.rows) {
+              const old =
+                row.oldLine !== undefined && file.oldPath
+                  ? {
+                      path: file.oldPath,
+                      side: "old" as const,
+                      startLine: row.oldLine,
+                      endLine: row.oldLine,
+                    }
+                  : undefined;
+              const next =
+                row.newLine !== undefined && file.newPath
+                  ? {
+                      path: file.newPath,
+                      side: "new" as const,
+                      startLine: row.newLine,
+                      endLine: row.newLine,
+                    }
+                  : undefined;
+              const anchor = next ?? old;
+              if (!anchor) continue;
+              const mark =
+                row.kind === "removed" ? "-" : row.kind === "added" ? "+" : " ";
+              add(
+                `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  ${row.text}`,
+                `${anchor.side === "old" ? "Old" : "New"} line ${anchor.startLine} ${anchor.path}`,
+                anchor,
+              );
+              buttons.at(-1)!.dataset.diffKind = row.kind;
+              diffAnchors.push({
+                old,
+                new: next,
+                hunk: `${fileIndex}:${hunkIndex}`,
+              });
+              if (row.noNewline) {
+                const note = document.createElement("div");
+                note.className = "review-diff-note";
+                note.textContent = "No newline at end of file";
+                content.append(note);
+              }
             }
           }
+        }
       }
     }
     comments.replaceChildren();
@@ -556,12 +608,16 @@ export function reviewPane(
       }
       const anchorIndex = comment.outdated
         ? -1
-        : ranges.findIndex(
-            (range) =>
-              range.endLine === comment.anchor?.endLine &&
-              (!range.path || range.path === comment.anchor.path) &&
-              range.side === comment.anchor?.side,
-          );
+        : ranges.findIndex((range, index) => {
+            const candidate = comment.anchor?.side
+              ? (diffAnchors[index]?.[comment.anchor.side] ?? range)
+              : range;
+            return (
+              candidate.endLine === comment.anchor?.endLine &&
+              (!candidate.path || candidate.path === comment.anchor.path) &&
+              candidate.side === comment.anchor?.side
+            );
+          });
       if (documentView && !comment.outdated)
         documentView.place(item, comment.anchor);
       else if (anchorIndex >= 0) buttons[anchorIndex].after(item);
