@@ -495,6 +495,12 @@ export class BrowserService {
       .filter((resource) => !resource.contents.isDestroyed())
       .map((resource) => this.snapshot(resource.id));
   }
+  diagnosticContext(contentsId: number) {
+    const owner = this.owners.get(contentsId);
+    return owner
+      ? { browserId: owner.id, workspaceId: owner.workspaceId }
+      : undefined;
+  }
   getWebContents(id: string) {
     return this.resource(id).contents;
   }

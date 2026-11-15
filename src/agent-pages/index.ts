@@ -427,6 +427,12 @@ export class AgentPageService {
   list() {
     return [...this.pages.keys()].map((id) => this.snapshot(id));
   }
+  diagnosticContext(contentsId: number) {
+    const owner = this.owners.get(contentsId);
+    return owner
+      ? { browserId: owner.id, workspaceId: owner.workspaceId }
+      : undefined;
+  }
   getWebContents(id: string) {
     return this.page(id).view.webContents;
   }

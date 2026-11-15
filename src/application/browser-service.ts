@@ -54,6 +54,13 @@ export class BrowserApplicationService {
   ) {
     this.library = new BrowserLibrary(store.directory);
   }
+  diagnosticContext(contentsId: number) {
+    const page = this.agentPages?.diagnosticContext(contentsId);
+    if (page) return { ...page, role: "agent-page" };
+    const browser = this.browserService?.diagnosticContext(contentsId);
+    if (browser) return { ...browser, role: "browser" };
+    return undefined;
+  }
   async toggleBlocking(id: string, enabled: boolean): Promise<void> {
     if (!this.browserAddons) throw new Error("Browser add-ons unavailable");
     await this.browserAddons.toggle(this.browser(id).url, enabled);

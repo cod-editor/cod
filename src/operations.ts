@@ -105,6 +105,10 @@ export class ApplicationOperations {
     await this.reviews.refreshReviews();
   }
 
+  diagnosticContext(contentsId: number) {
+    return this.browsers.diagnosticContext(contentsId);
+  }
+
   snapshot(): AppState {
     return this.store.snapshot();
   }

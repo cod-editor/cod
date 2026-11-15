@@ -19,6 +19,8 @@ import {
   protocol,
   dialog,
   shell,
+  webContents,
+  type WebContents,
 } from "electron";
 import {
   chmod,
@@ -522,12 +524,56 @@ if (ownsInstance) {
   const journal = new DiagnosticJournal(dataDirectory);
   runtimeJournal = journal;
   journal.start(app.getVersion());
+  const contexts = new Map<
+    number,
+    {
+      id: number;
+      pid: number;
+      type: string;
+      role: string;
+      browserId?: string;
+      workspaceId?: string;
+    }
+  >();
+  const contentContext = (contents: WebContents) => {
+    const previous = contexts.get(contents.id);
+    const unavailable = previous ?? {
+      id: contents.id,
+      pid: 0,
+      type: "unavailable",
+      role: "unknown",
+    };
+    if (contents.isDestroyed()) return unavailable;
+    try {
+      const owner = operations?.diagnosticContext(contents.id);
+      const context = {
+        id: contents.id,
+        pid: contents.getOSProcessId() || previous?.pid || 0,
+        type: contents.getType(),
+        role:
+          owner?.role ??
+          (mainWindow &&
+          !mainWindow.isDestroyed() &&
+          contents === mainWindow.webContents
+            ? "application"
+            : contents.getType()),
+        ...(owner
+          ? { browserId: owner.browserId, workspaceId: owner.workspaceId }
+          : {}),
+      };
+      contexts.set(contents.id, context);
+      return context;
+    } catch {
+      return unavailable;
+    }
+  };
   const sample = () => {
     try {
       journal.record("memory", {
         main: process.memoryUsage(),
         freeSystemBytes: os.freemem(),
         totalSystemBytes: os.totalmem(),
+        contents: webContents.getAllWebContents().map(contentContext),
         processes: app.getAppMetrics().map((metric) => ({
           pid: metric.pid,
           type: metric.type,
@@ -550,6 +596,19 @@ if (ownsInstance) {
     });
   });
   app.on("web-contents-created", (_event, contents) => {
+    const updateContext = () => {
+      const previous = contexts.get(contents.id);
+      const current = contentContext(contents);
+      if (JSON.stringify(previous) !== JSON.stringify(current))
+        journal.record("renderer-context", current);
+    };
+    contents.on("dom-ready", updateContext);
+    contents.on("did-finish-load", updateContext);
+    contents.once("destroyed", () => {
+      const context = contexts.get(contents.id);
+      if (context) journal.record("renderer-destroyed", context);
+      contexts.delete(contents.id);
+    });
     contents.on("before-input-event", (_event, input) => {
       // Only the close chord, never arbitrary text or URLs.
       if (
@@ -577,17 +636,16 @@ if (ownsInstance) {
     });
     contents.on("render-process-gone", (_event, details) => {
       journal.record("renderer-gone", {
-        id: contents.id,
-        type: contents.getType(),
+        ...contentContext(contents),
         reason: details.reason,
         exitCode: details.exitCode,
       });
     });
     contents.on("unresponsive", () =>
-      journal.record("unresponsive", { id: contents.id }),
+      journal.record("unresponsive", contentContext(contents)),
     );
     contents.on("responsive", () =>
-      journal.record("responsive", { id: contents.id }),
+      journal.record("responsive", contentContext(contents)),
     );
   });
   app.on("child-process-gone", (_event, details) =>
