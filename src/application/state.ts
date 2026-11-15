@@ -21,6 +21,15 @@ export class ApplicationStateStore {
     pinnedSites: [],
     drafts: {},
   };
+  private composerCheckpoint = "initial";
+  private draftOverlays: Record<
+    string,
+    {
+      workspace: string;
+      pane: string;
+      draft: Omit<NonNullable<WorkspaceState["chatDrafts"]>[string], "images">;
+    }
+  > = {};
   private queue: Promise<unknown> = Promise.resolve();
   private pendingDrafts = new Map<
     string,
@@ -40,9 +49,11 @@ export class ApplicationStateStore {
     try {
       const saved = JSON.parse(
         await readFile(path.join(this.directory, "state.json"), "utf8"),
-      ) as AppState;
+      ) as AppState & { composerCheckpoint?: string };
       if (!Array.isArray(saved.workspaces))
         throw new Error("Invalid saved state");
+      this.composerCheckpoint = saved.composerCheckpoint ?? "initial";
+      delete saved.composerCheckpoint;
       Object.assign(this.data, saved, {
         conversations: saved.conversations ?? [],
         drafts: saved.drafts ?? {},
@@ -66,6 +77,84 @@ export class ApplicationStateStore {
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await this.restoreComposerText();
+  }
+  private async restoreComposerText(): Promise<void> {
+    try {
+      const saved = JSON.parse(
+        await readFile(path.join(this.directory, "composer-text.json"), "utf8"),
+      );
+      if (saved.checkpoint !== this.composerCheckpoint) return;
+      for (const entry of Object.values(
+        saved.drafts,
+      ) as (typeof this.draftOverlays)[string][]) {
+        const workspace = this.data.workspaces.find(
+          (w) => w.id === entry.workspace,
+        );
+        if (
+          !workspace?.panes.some((p) => p.id === entry.pane) ||
+          typeof entry.draft?.text !== "string"
+        )
+          continue;
+        workspace.chatDrafts ??= {};
+        workspace.chatDrafts[entry.pane] = {
+          ...entry.draft,
+          ...(workspace.chatDrafts[entry.pane]?.images
+            ? { images: workspace.chatDrafts[entry.pane].images }
+            : {}),
+        };
+      }
+      this.draftOverlays = saved.drafts;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        throw new Error(
+          "Could not restore composer text; draft file retained",
+          { cause: error },
+        );
+    }
+  }
+  private async commitDraft(
+    mutation: () => unknown | Promise<unknown>,
+  ): Promise<unknown> {
+    // Only chatDrafts may change here. Keep shallow originals for rollback instead
+    // of cloning histories/images for each edit.
+    const before = this.data.workspaces.map((workspace) => ({
+      workspace,
+      drafts: workspace.chatDrafts ? { ...workspace.chatDrafts } : undefined,
+    }));
+    const overlays = { ...this.draftOverlays };
+    try {
+      const result = await mutation();
+      for (const { workspace, drafts } of before) {
+        for (const [pane, draft] of Object.entries(
+          workspace.chatDrafts ?? {},
+        )) {
+          if (draft === drafts?.[pane]) continue;
+          const { images: _images, ...text } = draft;
+          overlays[`${workspace.id}:${pane}`] = {
+            workspace: workspace.id,
+            pane,
+            draft: text,
+          };
+        }
+      }
+      const file = path.join(this.directory, "composer-text.json");
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      await writeFile(
+        temporary,
+        JSON.stringify({
+          checkpoint: this.composerCheckpoint,
+          drafts: overlays,
+        }),
+        { mode: 0o600 },
+      );
+      await rename(temporary, file);
+      this.draftOverlays = overlays;
+      return result;
+    } catch (error) {
+      for (const { workspace, drafts } of before) workspace.chatDrafts = drafts;
+      throw error;
     }
   }
   snapshot(): AppState {
@@ -117,7 +206,7 @@ export class ApplicationStateStore {
     entry.promise = this.serialize(async () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       if (this.pendingDrafts.get(key) === entry) this.pendingDrafts.delete(key);
-      return this.commitChange(entry.mutation, { notify: false });
+      return this.commitDraft(entry.mutation);
     });
     this.pendingDrafts.set(key, entry);
     return entry.promise;
@@ -182,8 +271,10 @@ export class ApplicationStateStore {
   async persist(): Promise<void> {
     // JSON.stringify captures this shallow view synchronously before the first
     // await; a second deep clone of every transcript and image is unnecessary.
+    const checkpoint = randomUUID();
     const saved = {
       ...this.data,
+      composerCheckpoint: checkpoint,
       terminals: this.data.terminals.map((terminal) => ({
         ...terminal,
         status: "starting",
@@ -198,5 +289,7 @@ export class ApplicationStateStore {
     const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, "utf8");
     await rename(temporary, statePath);
+    this.composerCheckpoint = checkpoint;
+    this.draftOverlays = {};
   }
 }

@@ -1173,12 +1173,19 @@ test("Repeated Backspace saves the chat draft without echoing full state on ever
   await expect(input()).toBeFocused();
   await expect
     .poll(async () => {
-      const saved = JSON.parse(
-        await readFile(path.join(shell.data, "state.json"), "utf8"),
-      ) as AppState;
-      return saved.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[
-        chat.paneId
-      ]?.text;
+      try {
+        const saved = JSON.parse(
+          await readFile(path.join(shell.data, "composer-text.json"), "utf8"),
+        );
+        return (
+          Object.values(saved.drafts) as Array<{
+            pane: string;
+            draft: { text: string };
+          }>
+        ).find((entry) => entry.pane === chat.paneId)?.draft.text;
+      } catch {
+        return undefined;
+      }
     })
     .toBe(expected);
   expect(
@@ -1464,4 +1471,60 @@ test("Workspace tree Space opens focused items and Enter renames workspace and c
   await shell.start();
   await expect(chatRow()).toContainText("Renamed conversation");
   await expect(workspaceRow()).toContainText("Renamed workspace");
+});
+
+test("Short composer input with 25 MB state writes only small draft data", async ({}, info) => {
+  const workspace = await shell.create("Input responsiveness");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const file = path.join(shell.data, "state.json");
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  // Invented inert history load; it must not be cloned or serialized by typing.
+  saved.fixtureHistory = "invented history ".repeat(1_600_000);
+  await writeFile(file, JSON.stringify(saved));
+  await shell.start();
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toBeEnabled();
+  const start = performance.now();
+  await input.pressSequentially("A short invented message", { delay: 20 });
+  for (let i = 0; i < 12; i++) await input.press("Backspace");
+  const expected = "A short invented message".slice(0, -12);
+  await expect(input).toHaveValue(expected);
+  await expect
+    .poll(async () => {
+      try {
+        const data = await readFile(
+          path.join(shell.data, "composer-text.json"),
+          "utf8",
+        );
+        const entries = Object.values(JSON.parse(data).drafts) as Array<{
+          draft: { text: string };
+        }>;
+        return (
+          entries.some((entry) => entry.draft.text === expected) &&
+          data.length < 2048
+        );
+      } catch {
+        return false;
+      }
+    })
+    .toBe(true);
+  info.annotations.push({
+    type: "input-duration-ms",
+    description: String(Math.round(performance.now() - start)),
+  });
+  const disk = JSON.parse(await readFile(file, "utf8")) as AppState;
+  expect(
+    disk.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[chat.paneId]
+      ?.text ?? "",
+  ).toBe("");
+  await shell.stop();
+  await shell.start();
+  await expect(
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue(expected);
 });
