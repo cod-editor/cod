@@ -218,6 +218,7 @@ window.addEventListener(
     focus.dispose();
     browsers.dispose();
     terminals.dispose();
+    documents.dispose();
   },
   { once: true },
 );

@@ -786,3 +786,38 @@ test("S3 expanded file tree reconciles externally committed files without losing
       .last(),
   ).toHaveValue(source(0));
 });
+
+test("Open source refreshes external changes and protects dirty text until explicit reload", async () => {
+  const file = path.join(app.folders[0], "spec.md");
+  const host = await open(file);
+  await expect(editor(host)).toHaveValue(/Repository 0/);
+  await writeFile(file, "# Updated by agent\n\nCurrent text\n");
+  await expect(editor(host)).toHaveValue(
+    "# Updated by agent\n\nCurrent text\n",
+  );
+  await editor(host).fill("# My unsaved rewrite\n");
+  await writeFile(file, "# Another external revision\n");
+  await expect(host.getByRole("status")).toContainText("changed on disk");
+  await expect(editor(host)).toHaveValue("# My unsaved rewrite\n");
+  await host
+    .getByRole("button", { name: "Reload from disk", exact: true })
+    .click();
+  await app.page
+    .getByRole("dialog", { name: "Discard local changes?", exact: true })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await expect(editor(host)).toHaveValue("# My unsaved rewrite\n");
+  await host
+    .getByRole("button", { name: "Reload from disk", exact: true })
+    .click();
+  await app.page
+    .getByRole("dialog", { name: "Discard local changes?", exact: true })
+    .getByRole("button", { name: "Discard and reload", exact: true })
+    .click();
+  await expect(editor(host)).toHaveValue("# Another external revision\n");
+  await app.stop();
+  await app.start();
+  await expect(
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toHaveValue("# Another external revision\n");
+});

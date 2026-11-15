@@ -79,6 +79,7 @@ export const commands = {
   "file.image": ["workspace", "path"],
   "file.resolve": ["workspace", "path"],
   "file.open": ["workspace", "path", "line?"],
+  "file.version": ["workspace", "pane-id"],
   "file.read": ["workspace", "pane-id"],
   "file.save": ["workspace", "pane-id", "content", "expected-content"],
   "pane.split": ["workspace", "id", "direction"],

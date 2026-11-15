@@ -1,3 +1,5 @@
+import { uiButton } from "./primitives";
+import { confirmAction } from "./dialogs";
 import { highlightedEditor, setChangedLines } from "../editor-highlight";
 import { reconcileView } from "./view-reconcile";
 import type { AppState, PaneState, WorkspaceState } from "../types";
@@ -34,6 +36,7 @@ export function createDocumentViews(
 ) {
   const drafts = new Map<string, string>();
   const originals = new Map<string, string>();
+  const versions = new Map<string, string>();
   const messages = new Map<string, string>();
   const loading = new Set<string>();
   const pendingLoads = new Map<string, Promise<void>>();
@@ -91,36 +94,57 @@ export function createDocumentViews(
   async function readFile(workspaceId: string, paneId: string): Promise<void> {
     loading.add(paneId);
     const key = fileKey(paneId);
+    const originalAtRead = originals.get(key);
     try {
       const result = await invoke<{
         content: string;
         draft?: import("../types").FileDraft;
         unavailable?: boolean;
+        version?: string;
       }>("file.read", {
         workspace: workspaceId,
         paneId,
       });
-      if (!originals.has(key))
+      if (originalAtRead !== undefined && originals.get(key) !== originalAtRead)
+        return;
+      if (result.version) versions.set(key, result.version);
+      if (!originals.has(key)) {
         originals.set(key, result.draft?.expectedContent ?? result.content);
-      if (result.draft && !drafts.has(key))
-        drafts.set(key, result.draft.content);
+        if (result.draft && !drafts.has(key))
+          drafts.set(key, result.draft.content);
+      }
+      const local = drafts.get(key);
+      const dirty = local !== undefined && local !== originals.get(key);
       failedLoads.delete(paneId);
-      if (result.unavailable && result.draft) {
+      if (result.unavailable) {
         messages.set(
           paneId,
-          "Conflict: file missing or unreadable on disk; restored draft remains editable and copyable.",
+          "Conflict: file missing or unreadable on disk; local text retained.",
         );
-        setStatus("File missing; restored draft retained");
-      } else if (
-        result.draft &&
-        result.content !== result.draft.expectedContent
-      ) {
+      } else if (dirty && result.content !== originals.get(key)) {
         messages.set(
           paneId,
-          "Conflict: file changed on disk; restored draft retained.",
+          "Conflict: the file changed on disk. Your unsaved text is retained.",
         );
-        setStatus("External change detected; restored draft retained");
+      } else if (!dirty) {
+        originals.set(key, result.content);
+        drafts.delete(key);
+        syncDocumentViews(key, result.content);
+        messages.delete(paneId);
+        // A clean persisted draft must not restore obsolete disk content later.
+        if (
+          result.draft &&
+          (result.draft.content !== result.content ||
+            result.draft.expectedContent !== result.content)
+        )
+          await invoke("file.draft", {
+            workspace: workspaceId,
+            paneId,
+            content: result.content,
+            expectedContent: result.content,
+          });
       } else messages.delete(paneId);
+      lineCache.delete(paneId);
     } catch {
       failedLoads.add(paneId);
       messages.set(
@@ -304,6 +328,41 @@ export function createDocumentViews(
       message.className = "pane-message";
       message.setAttribute("role", "status");
       message.textContent = messages.get(pane.id)!;
+      if (
+        messages.get(pane.id)?.startsWith("Conflict") &&
+        !failedLoads.has(pane.id)
+      ) {
+        const reload = uiButton("Reload from disk");
+        reload.onclick = () =>
+          confirmAction(
+            "Discard local changes?",
+            "Reloading replaces your unsaved text with the current file on disk.",
+            "Discard and reload",
+            async () => {
+              const result = await invoke<{
+                content: string;
+                unavailable?: boolean;
+                version?: string;
+              }>("file.read", { workspace: workspace.id, paneId: pane.id });
+              if (result.unavailable)
+                throw new Error("The file is unavailable; local text retained");
+              await invoke("file.draft", {
+                workspace: workspace.id,
+                paneId: pane.id,
+                content: result.content,
+                expectedContent: result.content,
+              });
+              const key = fileKey(pane.id);
+              originals.set(key, result.content);
+              drafts.delete(key);
+              if (result.version) versions.set(key, result.version);
+              messages.delete(pane.id);
+              syncDocumentViews(key, result.content);
+              invalidate();
+            },
+          );
+        message.append(" ", reload);
+      }
       if (failedLoads.has(pane.id)) {
         const retry = document.createElement("button");
         retry.type = "button";
@@ -319,9 +378,60 @@ export function createDocumentViews(
     return body;
   }
 
+  let refreshing = false;
+  async function refreshVisibleFiles(): Promise<void> {
+    if (refreshing || document.hidden) return;
+    refreshing = true;
+    try {
+      const checked = new Set<string>();
+      for (const editor of panes.querySelectorAll<HTMLTextAreaElement>(
+        "textarea.file-editor",
+      )) {
+        if (!editor.getClientRects().length) continue;
+        const paneId =
+          editor.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+        if (!paneId || loading.has(paneId)) continue;
+        const key = fileKey(paneId);
+        if (checked.has(key) || savingFiles.has(key)) continue;
+        checked.add(key);
+        const workspace = getState().workspaces.find((w) =>
+          w.panes.some((p) => p.id === paneId),
+        );
+        if (!workspace || !originals.has(key)) continue;
+        try {
+          const result = await invoke<{ version: string }>(
+            "file.version",
+            { workspace: workspace.id, paneId },
+            { reportError: false },
+          );
+          if (versions.get(key) !== result.version) {
+            versions.set(key, result.version);
+            await loadFile(workspace.id, paneId);
+          }
+        } catch {
+          /* Pane closed or moved while the read was pending. */
+        }
+      }
+    } finally {
+      refreshing = false;
+    }
+  }
+  const refreshTimer = setInterval(() => {
+    void refreshVisibleFiles();
+  }, 1500);
+  const refreshOnFocus = () => {
+    void refreshVisibleFiles();
+  };
+  window.addEventListener("focus", refreshOnFocus);
+  panes.addEventListener("focusin", refreshOnFocus);
   const views = new Map<string, HTMLElement>();
   return {
     save: saveFile,
+    dispose() {
+      clearInterval(refreshTimer);
+      window.removeEventListener("focus", refreshOnFocus);
+      panes.removeEventListener("focusin", refreshOnFocus);
+    },
     view(workspace: WorkspaceState, pane: PaneState) {
       const next = renderDocument(workspace, pane),
         current = views.get(pane.id);

@@ -63,7 +63,7 @@ Plugin installation previews an explicit provider profile, preserves unrelated c
 
 File browsing, filename quick-open and content search are separate interactions. Results include repository/path/line identity. Multiple repositories may contain the same relative filename; status, changed lines and diffs must use the correct repository. Branch comparisons compare the two explicitly requested trees, without an implicit merge base.
 
-All views of a file share its current draft. Saving during newer input must not lose that input. External changes, deletion, rename, symlinks and collisions preserve the unsaved version and offer explicit recovery rather than silently replacing data. Tree refresh must find externally created and committed files even when Git is clean, without losing focus.
+All views of a file share its current draft. Visible source editors check a small file-version token periodically and on focus. External changes reload clean buffers; dirty buffers retain their text and expose an explicit, confirmed reload from disk. Returning responses must not replace a newer saved revision. Saving during newer input must not lose that input. External changes, deletion, rename, symlinks and collisions preserve the unsaved version and offer explicit recovery rather than silently replacing data. Tree refresh must find externally created and committed files even when Git is clean, without losing focus.
 
 ## Reviews and registered responses
 

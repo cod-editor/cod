@@ -1,6 +1,6 @@
 # Known user-experience defects
 
-Open defects identified in the user-experience review of 2026-11-15. UX-02 and UX-05 are implemented and passed focused real-Electron acceptance tests (including restart); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
+Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-02, UX-03 and UX-05 are implemented and passed focused real-Electron acceptance tests (including draft restart checks); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
 
 ## Protect user work first
 
