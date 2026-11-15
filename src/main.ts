@@ -1,3 +1,5 @@
+import os from "node:os";
+import { DiagnosticJournal } from "./diagnostics";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -487,6 +489,64 @@ async function start(): Promise<void> {
   }
 }
 
+if (ownsInstance) {
+  const journal = new DiagnosticJournal(dataDirectory);
+  journal.start(app.getVersion());
+  const sample = () => {
+    try {
+      journal.record("memory", {
+        main: process.memoryUsage(),
+        freeSystemBytes: os.freemem(),
+        totalSystemBytes: os.totalmem(),
+        processes: app.getAppMetrics().map((metric) => ({
+          pid: metric.pid,
+          type: metric.type,
+          memory: metric.memory,
+          cpuPercent: metric.cpu.percentCPUUsage,
+        })),
+      });
+    } catch {
+      journal.record("memory-sample-unavailable");
+    }
+  };
+  void app.whenReady().then(() => {
+    sample();
+    const timer = setInterval(sample, 30_000);
+    timer.unref();
+    app.once("will-quit", () => {
+      clearInterval(timer);
+      sample();
+      journal.stop();
+    });
+  });
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("render-process-gone", (_event, details) => {
+      journal.record("renderer-gone", {
+        id: contents.id,
+        type: contents.getType(),
+        reason: details.reason,
+        exitCode: details.exitCode,
+      });
+    });
+    contents.on("unresponsive", () =>
+      journal.record("unresponsive", { id: contents.id }),
+    );
+    contents.on("responsive", () =>
+      journal.record("responsive", { id: contents.id }),
+    );
+  });
+  app.on("child-process-gone", (_event, details) =>
+    journal.record("child-gone", {
+      type: details.type,
+      reason: details.reason,
+      exitCode: details.exitCode,
+    }),
+  );
+  // Observe fatal exceptions without suppressing Node's normal fatal exit.
+  process.on("uncaughtExceptionMonitor", (_error, origin) =>
+    journal.record("fatal-exception", { origin }),
+  );
+}
 if (ownsInstance) void start();
 else app.quit();
 app.on("window-all-closed", () => app.quit());

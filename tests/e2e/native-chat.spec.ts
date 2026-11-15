@@ -1394,3 +1394,25 @@ test("Queued turn at completion cannot be cleared by the previous send promise",
     (await inspectQueuedChat(chat.id)).turns?.map((t) => t.outcome),
   ).toEqual(["completed", "cancelled"]);
 });
+
+test("Local diagnostics record process memory and clean shutdown without conversation content", async () => {
+  const workspace = await shell.create("PRIVATE_DIAGNOSTIC_FIXTURE");
+  await shell.newChat(workspace, "codex");
+  await shell.stop();
+  const directory = path.join(shell.data, "diagnostics");
+  const log = await readFile(path.join(directory, "runtime.jsonl"), "utf8");
+  const entries = log
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(entries.some((entry) => entry.event === "start")).toBe(true);
+  const memory = entries.find((entry) => entry.event === "memory");
+  expect(memory.main.rss).toBeGreaterThan(0);
+  expect(memory.processes.length).toBeGreaterThan(0);
+  expect(entries.at(-1).event).toBe("shutdown");
+  expect(log).not.toContain("PRIVATE_DIAGNOSTIC_FIXTURE");
+  expect(
+    JSON.parse(await readFile(path.join(directory, "session.json"), "utf8"))
+      .clean,
+  ).toBe(true);
+});

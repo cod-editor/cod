@@ -75,3 +75,9 @@ On macOS the script signs the bundle ad hoc. `node tests/support/electron/check-
 ## License
 
 Copyright (C) 2026 Mikhail Butvin. GNU GPL version 3 or later; see [LICENSE](LICENSE). Versions preceding the license change were released under the MIT License.
+
+## Local diagnostics
+
+Cod writes a local rotating journal under `diagnostics/` in its data directory (`~/Library/Application Support/Cod/diagnostics` on macOS). `runtime.jsonl` and up to three rotated files contain startup/shutdown, renderer and child-process exits, responsiveness events, and memory samples every 30 seconds. The journal is limited to about 4 MiB. Samples include Electron process memory (in KiB), main-process Node memory (in bytes), and available system memory. Separate provider CLI processes are not included. Chat text, file contents, URLs and arbitrary error messages are not recorded. Nothing is uploaded.
+
+An unfinished session is reported at the next startup; this alone does not distinguish a crash, force quit or system shutdown. A sudden OS kill may leave only the last periodic sample. Restart Cod after updating to enable diagnostics; older runs cannot be reconstructed.
