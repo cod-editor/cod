@@ -187,6 +187,25 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   await app.page.keyboard.press("ArrowRight");
   const nested = tree.getByRole("treeitem", { name: "nested", exact: true });
   await expect(nested).toBeFocused();
+  // Queue entering an unloaded folder, then leave and return before its real
+  // directory request completes. The earlier request must not steal focus.
+  await nested.evaluate((row) => {
+    for (let i = 0; i < 2; i++)
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    (row as HTMLElement).blur();
+    (row as HTMLElement).focus();
+  });
+  await expect(
+    tree.getByRole("treeitem", { name: "first.md", exact: true }),
+  ).toBeVisible();
+  await expect(nested).toBeFocused();
+  await app.page.keyboard.press("ArrowLeft");
   await app.page.keyboard.press("ArrowRight");
   await app.page.keyboard.press("ArrowRight");
   await expect(

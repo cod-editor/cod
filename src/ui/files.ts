@@ -125,7 +125,8 @@ export class FileTree {
     row.setAttribute("aria-owns", children.id);
     group.append(row, children);
     let signature = "",
-      refreshing = false;
+      refreshing = false,
+      enterAfterRefresh = false;
     const workspaceId = this.workspace!.id,
       generation = this.generation;
     const refresh = async () => {
@@ -182,6 +183,16 @@ export class FileTree {
           children.textContent = String(error);
       } finally {
         refreshing = false;
+        const enter = enterAfterRefresh;
+        enterAfterRefresh = false;
+        if (
+          enter &&
+          generation === this.generation &&
+          group.isConnected &&
+          !children.hidden &&
+          document.activeElement === row
+        )
+          children.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
       }
     };
     this.directories.add({ element: group, refresh });
@@ -190,6 +201,7 @@ export class FileTree {
       this.expanded[`${workspaceId}:${path}`] = open;
       writePreference("file-expansion", this.expanded);
       children.hidden = !open;
+      if (!open) enterAfterRefresh = false;
       row.setAttribute("aria-expanded", String(open));
       const nextIcon = icon(open ? "folder-open" : "folder");
       nextIcon.classList.add("folder-state");
@@ -197,13 +209,22 @@ export class FileTree {
       if (open) await refresh();
     };
     row.onclick = () => void toggle();
+    row.addEventListener("blur", () => {
+      enterAfterRefresh = false;
+    });
     row.onkeydown = (e) => {
       if (e.isComposing) return;
       if (e.key === "ArrowRight" || e.key === "Enter") {
         e.preventDefault();
-        if (e.key === "ArrowRight" && !children.hidden)
-          children.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
-        else void toggle(true);
+        if (e.key === "ArrowRight" && !children.hidden) {
+          const first =
+            children.querySelector<HTMLElement>('[role="treeitem"]');
+          if (first) first.focus();
+          else {
+            enterAfterRefresh = true;
+            void refresh();
+          }
+        } else void toggle(true);
       } else if (e.key === "ArrowLeft" && !children.hidden) {
         e.preventDefault();
         void toggle(false);
