@@ -978,6 +978,18 @@ export class ConversationApplicationService {
       case "conversation.reclaim":
         return this.reclaimConversation(requiredString(request, "id"));
 
+      case "conversation.rename":
+        return this.store.change(() => {
+          const conversation = this.store.conversation(
+            requiredString(request, "id"),
+          );
+          const name = requiredString(request, "name").trim();
+          if (!name || name.length > 255)
+            throw new Error("Name must contain 1-255 characters");
+          conversation.displayName = name;
+          return { id: conversation.id, name };
+        });
+
       case "conversation.composer": {
         const textOnly = trustedUi && request.images === undefined;
         const save = textOnly

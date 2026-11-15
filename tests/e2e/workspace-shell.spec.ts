@@ -98,12 +98,12 @@ test("AC2 navigates the panel and opens/dismisses the palette entirely by keyboa
   await expect(shell.row("Alpha keyboard")).toBeFocused();
   await shell.page.keyboard.press("ArrowDown");
   await expect(shell.row("Beta keyboard")).toBeFocused();
-  await shell.page.keyboard.press("Enter");
+  await shell.page.keyboard.press("Space");
   await assertActive(second);
   await shell.page.keyboard.press(`${modifier}+Shift+W`);
   await shell.page.keyboard.press("ArrowUp");
   await expect(shell.row("Alpha keyboard")).toBeFocused();
-  await shell.page.keyboard.press("Enter");
+  await shell.page.keyboard.press("Space");
   await assertActive(first);
   const before = await shell.state();
   await shell.page.keyboard.press(`${modifier}+Shift+P`);

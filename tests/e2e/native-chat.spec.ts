@@ -1416,3 +1416,52 @@ test("Local diagnostics record process memory and clean shutdown without convers
       .clean,
   ).toBe(true);
 });
+
+test("Workspace tree Space opens focused items and Enter renames workspace and chat inline", async () => {
+  const first = await shell.create("First keyboard workspace");
+  const chat = await shell.newChat(first, "codex");
+  const second = await shell.create("Second keyboard workspace");
+  const workspaceRow = () =>
+    shell.page.locator(`[role="treeitem"][data-workspace-id="${first}"]`);
+  const chatRow = () =>
+    shell.page.locator(`[role="treeitem"][data-workspace-id="${chat.id}"]`);
+  await workspaceRow().focus();
+  expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(second);
+  await workspaceRow().press("Space");
+  await expect
+    .poll(async () => (await shell.cli<AppState>("state")).activeWorkspaceId)
+    .toBe(first);
+  await workspaceRow().focus();
+  await workspaceRow().press("Enter");
+  const workspaceName = shell.page.getByRole("textbox", {
+    name: "Workspace name",
+    exact: true,
+  });
+  await expect(workspaceName).toBeFocused();
+  await workspaceName.fill("Renamed workspace");
+  await workspaceName.press("Enter");
+  await expect(workspaceRow()).toContainText("Renamed workspace");
+  await expect(workspaceRow()).toBeFocused();
+  await chatRow().focus();
+  await chatRow().press("Enter");
+  const chatName = shell.page.getByRole("textbox", {
+    name: "Conversation name",
+    exact: true,
+  });
+  await expect(chatName).toBeFocused();
+  await chatName.fill("Cancelled name");
+  await chatName.press("Escape");
+  await expect(chatRow()).not.toContainText("Cancelled name");
+  await expect(chatRow()).toBeFocused();
+  await chatRow().press("Enter");
+  await chatName.fill("Renamed conversation");
+  await chatName.press("Enter");
+  await expect(chatRow()).toContainText("Renamed conversation");
+  await chatRow().press("Space");
+  await expect(shell.pane(chat.paneId)).toBeVisible();
+  expect(await shell.prompts()).toHaveLength(0);
+  await shell.stop();
+  await shell.start();
+  await expect(chatRow()).toContainText("Renamed conversation");
+  await expect(workspaceRow()).toContainText("Renamed workspace");
+});

@@ -34,6 +34,7 @@ export function conversationLabel(
   conversation: ConversationState,
   state: AppState,
 ): string {
+  if (conversation.displayName) return conversation.displayName;
   const first = conversation.messages.find(
     (message) => message.role === "user",
   );

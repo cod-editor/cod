@@ -45,6 +45,7 @@ export const commands = {
   "pane.move": ["workspace", "id", "group", "index?"],
   "conversation.discover": ["workspace", "provider", "cwd?"],
   "conversation.handoff": ["id"],
+  "conversation.rename": ["id", "name"],
   "conversation.reclaim": ["id"],
   "browser.default-status": [],
   "browser.register-default": [],

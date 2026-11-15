@@ -26,6 +26,12 @@ Validate the design as a whole rather than patching each stakeholder comment in 
 5. Inspect rendered screenshots at realistic sizes and exercise keyboard/mouse paths. Combine scenario walkthroughs, reference comparison, model review and behavioral tests.
 6. Iterate until contradictions are resolved or explicitly identified. The stakeholder sets priorities; agents own research, QA and debugging.
 
+Before implementation, compare the complete user task with the chosen reference product and record observable acceptance behavior in the existing spec: keyboard and mouse entry, selection versus activation, rename, cancel, focus return, persistence and recovery. Explicitly identify intentional omissions; do not assume that an unimplemented ordinary action is out of scope. Tests must check the intended task, not merely confirm the bindings or controls the implementation happened to add.
+
+Treat user-adjustable properties as part of the initial feature: identify their defaults, configuration ownership, validation, live application and reset behavior. Extend the shared settings schema and components rather than accumulating isolated preference dialogs.
+
+For input, streaming and persistence paths, verify responsiveness and bounded resource use with representative large histories and attachments as well as empty fixtures. Distinguish correctness tests from performance evidence; a saved final value alone does not prove responsive typing. When fixing a defect, inspect neighboring actions and test the proposed cause directly before declaring it resolved.
+
 Apply established preferences everywhere: compact editor conventions, keyboard-first operation, sparse persistent controls, no redundant labels or explanatory clutter. Every visible control needs a reason to remain visible rather than use a shortcut, context menu or Commands. Minimalism must preserve discoverability and keyboard focus. Do not infer a psychological profile from design preferences.
 
 Use the shared UI primitives in `src/ui/primitives.ts`, behavior helpers in `controls.ts`/`action-feedback.ts`, and the spacing/control tokens in `src/ui/components.css`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.

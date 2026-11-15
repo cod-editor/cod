@@ -40,6 +40,7 @@ interface CommandFeatures {
   navigation: {
     focusWorkspace: (id: string) => Promise<void>;
     renameWorkspace: (id: string) => Promise<void>;
+    renameConversation: (id: string) => Promise<void>;
   };
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
@@ -119,6 +120,12 @@ export function createCommands(
   function conversationActions(
     conversation: import("../types").ConversationState,
   ): MenuAction[] {
+    const rename: MenuAction = {
+      label: "Rename",
+      run: () => {
+        void navigation.renameConversation(conversation.id);
+      },
+    };
     const removalReason = conversationRemovalReason(getState(), conversation);
     const remove: MenuAction = {
       label: "Remove from workspace",
@@ -142,6 +149,7 @@ export function createCommands(
         (t) => t.id === conversation.handoffTerminalId,
       );
       return [
+        rename,
         {
           label: "Open CLI terminal",
           disabled: !terminal,
@@ -165,6 +173,7 @@ export function createCommands(
       ];
     }
     return [
+      rename,
       {
         label: "Session info...",
         run: () =>

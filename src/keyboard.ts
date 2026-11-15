@@ -418,9 +418,21 @@ export const localGestures: readonly {
     aliases: ["arrow", "collapse"],
   },
   {
+    title: "Open selected workspace or conversation",
+    keys: ["Space"],
+    context: "Workspace tree",
+    aliases: ["activate", "select"],
+  },
+  {
+    title: "Rename selected workspace or conversation",
+    keys: ["Enter"],
+    context: "Workspace tree; Enter saves, Escape cancels",
+    aliases: ["name", "rename"],
+  },
+  {
     title: "Open selected item",
     keys: ["Enter"],
-    context: "Trees and search results",
+    context: "File tree and search results",
     aliases: ["activate", "select"],
   },
   {

@@ -143,6 +143,7 @@ export interface PendingPermission {
 }
 
 export interface ConversationState {
+  displayName?: string;
   handoffTerminalId?: string;
   taskStatus?: "working" | "waiting" | "review" | "ready" | "failed";
   taskStatusContext?: string;

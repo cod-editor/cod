@@ -25,6 +25,8 @@ Provider inspection is read-only and reports native capabilities rather than inv
 
 `conversation.move` relocates the existing conversation and its origin-bound reviews without closing its controller or restarting an active turn. Composer text, images and selected skills follow; unrelated tabs stay put. A pristine destination chat placeholder is removed, while populated drafts remain. The focused conversation follows by default; background transfers preserve unrelated focus unless explicitly requested. Native cwd does not change: returned state and inspection retain the actual directory, and agents must use explicit destination paths or tool cwd. Session-bound context resolves current membership on every call rather than trusting startup workspace environment variables. Review sources retain their original authorized roots across relocation.
 
+The workspace tree separates keyboard focus from activation: arrows move focus, Space opens the focused workspace or conversation, and Enter starts inline rename. Enter saves and Escape cancels without starting inference or changing workspace membership. A conversation name is a persistent Cod display label and does not rewrite native history or message content. File-tree and picker activation retain their own Enter behavior.
+
 ## Persistence and lifecycle
 
 Persist layout, resource IDs, open views, composer text/images/provider/selected skills, native-session references, file drafts, review drafts and close/reopen history. Restore records without replaying commands, inference or arbitrary website form submissions.
