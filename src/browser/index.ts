@@ -43,6 +43,7 @@ interface Resource {
   id: string;
   workspaceId: string;
   view: WebContentsView;
+  contents: WebContents;
   visible: boolean;
   error?: string;
   failedUrl?: string;
@@ -157,7 +158,7 @@ export class BrowserService {
   private changed(resource: Resource) {
     if (
       this.resources.get(resource.id) !== resource ||
-      resource.view.webContents.isDestroyed()
+      resource.contents.isDestroyed()
     )
       return;
     this.emit({
@@ -243,10 +244,14 @@ export class BrowserService {
       id: input.id,
       workspaceId: input.workspaceId,
       view,
+      contents: view.webContents,
       visible: true,
       popups: new Set(),
     };
     this.resources.set(input.id, resource);
+    resource.contents.once("destroyed", () =>
+      this.close(resource.id, resource.contents),
+    );
     try {
       this.options.window.contentView.addChildView(view);
       const size = this.options.window.getContentSize();
@@ -325,7 +330,7 @@ export class BrowserService {
     }
   }
   private async load(resource: Resource, url: string) {
-    const contents = resource.view.webContents;
+    const contents = resource.contents;
     try {
       await contents.loadURL(url);
     } catch (error) {
@@ -358,11 +363,11 @@ export class BrowserService {
     return this.snapshot(id);
   }
   back(id: string) {
-    const wc = this.resource(id).view.webContents;
+    const wc = this.resource(id).contents;
     if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
   }
   forward(id: string) {
-    const wc = this.resource(id).view.webContents;
+    const wc = this.resource(id).contents;
     if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
   }
   async recover(id: string) {
@@ -370,7 +375,7 @@ export class BrowserService {
     const target = resource.lastSuccessfulUrl;
     if (!resource.error || !target || target === resource.failedUrl)
       throw new Error("No previous page is available for recovery");
-    const history = resource.view.webContents.navigationHistory;
+    const history = resource.contents.navigationHistory;
     const previous = history.getAllEntries()[history.getActiveIndex() - 1];
     if (history.canGoBack() && previous?.url === target) history.goBack();
     else await this.navigate(id, target);
@@ -379,11 +384,12 @@ export class BrowserService {
     const resource = this.resource(id);
     if (resource.failedUrl) {
       void this.load(resource, resource.failedUrl).catch(() => {});
-    } else resource.view.webContents.reload();
+    } else resource.contents.reload();
   }
   snapshot(id: string): BrowserSnapshot {
     const resource = this.resource(id),
-      wc = resource.view.webContents;
+      wc = resource.contents;
+    if (wc.isDestroyed()) throw new Error("Browser view is closed");
     return {
       id,
       workspaceId: resource.workspaceId,
@@ -400,10 +406,12 @@ export class BrowserService {
     };
   }
   list() {
-    return [...this.resources.keys()].map((id) => this.snapshot(id));
+    return [...this.resources.values()]
+      .filter((resource) => !resource.contents.isDestroyed())
+      .map((resource) => this.snapshot(resource.id));
   }
   getWebContents(id: string) {
-    return this.resource(id).view.webContents;
+    return this.resource(id).contents;
   }
   setBounds(
     id: string,
@@ -436,25 +444,23 @@ export class BrowserService {
     const resource = this.resource(id);
     if (!resource.visible)
       throw new Error("Cannot focus a hidden browser view");
-    resource.view.webContents.focus();
+    resource.contents.focus();
   }
   diagnostics(id: string, action: "start" | "read" | "stop") {
     const resource = this.resource(id);
-    resource.diagnostics ??= new BrowserDiagnostics(
-      resource.view.webContents,
-      () =>
-        resource.restoredFailure && resource.error
-          ? resource.failedUrl
-          : undefined,
+    resource.diagnostics ??= new BrowserDiagnostics(resource.contents, () =>
+      resource.restoredFailure && resource.error
+        ? resource.failedUrl
+        : undefined,
     );
     return resource.diagnostics[action]();
   }
   requestClose(id: string): Promise<boolean> {
     const resource = this.resources.get(id);
-    if (!resource || resource.view.webContents.isDestroyed())
+    if (!resource || resource.contents.isDestroyed())
       return Promise.resolve(true);
     if (resource.closing) return resource.closing;
-    const contents = resource.view.webContents;
+    const contents = resource.contents;
     const pending = new Promise<boolean>((resolve, reject) => {
       const finish = (closed: boolean) => {
         contents.removeListener("destroyed", destroyed);
@@ -511,7 +517,7 @@ export class BrowserService {
       this.options.window.contentView.children.includes(resource.view)
     )
       this.options.window.contentView.removeChildView(resource.view);
-    const target = contents ?? resource.view.webContents;
+    const target = contents ?? resource.contents;
     if (!target.isDestroyed()) target.close({ waitForBeforeUnload: false });
     this.emit({ type: "closed", id, workspaceId: resource.workspaceId });
   }

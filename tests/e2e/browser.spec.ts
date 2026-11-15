@@ -1451,3 +1451,54 @@ test("Guarded workspace close cancels before removing the workspace or its page"
   ).toContain("Workspace draft");
   await expect(shell.row("Protected workspace form")).toBeVisible();
 });
+
+test("File search covers the native browser with the Cod surface and restores its page", async () => {
+  const workspace = await shell.create("File search cover");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    shell.folders[0],
+  );
+  const browser = await open(workspace);
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  await remote(
+    "/one",
+    `document.body.innerHTML = '<input id="retained" value="Invented retained form">'; document.querySelector('input').focus(); void 0;`,
+  );
+  const identity = await remote("/one", "window.identity");
+  // Linux reserves a website's Ctrl+P for printing. Exercise the shared Open
+  // file action through Commands, independent of platform shortcut defaults.
+  await shell.app!.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.focus();
+  });
+  await shell.command("Open file");
+  const search = shell.page.getByRole("dialog", {
+    name: "Open file",
+    exact: true,
+  });
+  await expect(search).toBeVisible();
+  await expect
+    .poll(async () => (await nativeView("/one"))?.visible)
+    .toBe(false);
+  const cover = shell
+    .pane(browser.paneId)
+    .getByRole("region", { name: "Browser content", exact: true });
+  const colors = await cover.evaluate((node) => ({
+    cover: getComputedStyle(node).backgroundColor,
+    panel: getComputedStyle(document.documentElement)
+      .getPropertyValue("--panel")
+      .trim(),
+  }));
+  expect(colors.cover).toBe("rgb(47, 52, 61)");
+  await shell.page.keyboard.press("Escape");
+  await expect.poll(async () => (await nativeView("/one"))?.visible).toBe(true);
+  expect(await remote("/one", "window.identity")).toBe(identity);
+  expect(await remote("/one", `document.querySelector('input').value`)).toBe(
+    "Invented retained form",
+  );
+});

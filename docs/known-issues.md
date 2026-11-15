@@ -1,12 +1,14 @@
 # Known user-experience defects
 
-Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-02, UX-03, UX-04 and UX-05 are implemented and passed focused real-Electron acceptance tests (including draft restart checks); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
+Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-02, UX-03, UX-04, UX-05, UX-17 and UX-18 are implemented and passed focused real-Electron acceptance tests (including draft restart checks); they are awaiting publication through the full CI baseline. All other items below remain open. This is a repair backlog, not a statement that every other workflow is verified. Browser findings were reproduced in isolated Linux Electron; component findings used production UI modules in headless Chromium with invented data and mocked application operations. Reference-product comparisons used official documentation. macOS GUI, live accounts and sustained memory growth were not verified.
 
 ## New reports at the front of the queue
 
-| ID    | Defect and reproduction                                                                                                                     | Acceptance check                                                                                                                                                                                                  | Evidence                                            |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| UX-16 | Ctrl+W is reported again as failing to close the current tab. Identify focused surface and actual OS modifier events before choosing a fix. | The user's configured close shortcut closes the focused file/chat/browser tab exactly once, preserving drafts and honoring page close guards. Test native macOS routing separately from Linux component evidence. | User report; current regression not yet reproduced. |
+| ID    | Defect and reproduction                                                                                                                                                                      | Acceptance check                                                                                                                                                                                                  | Evidence                                                                                                   |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| UX-18 | Main-process exception during tab removal: extension callback lists a view whose native webContents has already been destroyed (`getURL` of undefined).                                      | Closing a browser tab, including extension removal callbacks, never reads destroyed contents or opens an uncaught-exception dialog; other tabs remain usable.                                                     | User screenshot with BrowserService.snapshot/list and extension removeTab stack; lifecycle code confirmed. |
+| UX-17 | Opening file search exposes a white rectangle in place of the browser page.                                                                                                                  | The native-view cover uses the application surface; dismissing search restores the same page, form and focus without reload. A page screenshot beneath the dialog is not part of this fix.                        | White `#fff` cover in `.browser-content`; user report.                                                     |
+| UX-16 | Ctrl+W is reported again as failing to close a chat tab. This is separate from UX-18 (browser destruction). Inspect native shortcut dispatch and chat close execution before choosing a fix. | The user's configured close shortcut closes the focused file/chat/browser tab exactly once, preserving drafts and honoring page close guards. Test native macOS routing separately from Linux component evidence. | User report; current regression not yet reproduced.                                                        |
 
 ## Protect user work first
 
@@ -40,7 +42,7 @@ Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-0
 
 ## Repair and verification order
 
-1. UX-16 takes precedence once the current coherent fix reaches its verification boundary.
+1. UX-18, then UX-17 and UX-16 take precedence once the current coherent fix reaches its verification boundary.
 2. UX-01 through UX-03: prevent silent loss and stale documents.
 3. UX-04 and UX-05: make review changes and pending work intelligible.
 4. UX-06 through UX-08: make browser startup, tabs and return navigation predictable.
@@ -49,3 +51,7 @@ Open defects identified in the user-experience review of 2026-11-15. UX-01, UX-0
 For each repair, test the complete task with keyboard and mouse, interruption, workspace switching and restart where applicable. Use representative histories and attachments for performance checks. Mark an item resolved only after recording the concrete acceptance result in its change/PR; selected passing tests do not replace a passing full CI baseline.
 
 Detailed local probes and screenshots live under ignored `artifacts/ux-audit/`, `artifacts/ux-chat-review/`, `artifacts/ux-navigation-audit/` and `artifacts/ux-browser-audit/`. They are supporting evidence, not required repository inputs.
+
+## Repository maintenance queue
+
+After the user-facing repair queue, reconcile accumulated branches and the oversized PR, then use separate branches for subsequent coherent changes. Preserve unrelated work and publish only through authorized pull requests.

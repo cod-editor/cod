@@ -565,7 +565,7 @@ body {
 .browser-content {
   flex: 1;
   min-height: 1px;
-  background: #fff;
+  background: var(--panel);
 }
 .browser-status {
   font-size: calc(var(--ui-font-size) - 2px);

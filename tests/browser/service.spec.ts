@@ -477,3 +477,44 @@ test("B1 AC5 visibility retains page identity, bounds validate and disposal pres
     ),
   ).toBe(0);
 });
+
+test("Listing tabs during native destruction never reads destroyed WebContents", async () => {
+  await call("open", { id: "closing", workspaceId: "w", url: origin + "/one" });
+  await call("open", {
+    id: "surviving",
+    workspaceId: "w",
+    url: origin + "/two",
+  });
+  await application.evaluate(() => {
+    const { service } = (globalThis as any).browserFixture;
+    Object.assign(globalThis, { destroyedListResult: null });
+    const contents = service.getWebContents("closing");
+    contents.once("destroyed", () => {
+      // Same ordering as an extension tabs.remove callback: the native view may
+      // have lost its .webContents property before Cod's explicit cleanup runs.
+      try {
+        (globalThis as any).destroyedListResult = {
+          ids: service.list().map((item: any) => item.id),
+        };
+      } catch (error) {
+        (globalThis as any).destroyedListResult = { error: String(error) };
+      }
+    });
+    contents.close({ waitForBeforeUnload: false });
+  });
+  await expect
+    .poll(() =>
+      application.evaluate(() => (globalThis as any).destroyedListResult),
+    )
+    .not.toBeNull();
+  const result = await application.evaluate(
+    () => (globalThis as any).destroyedListResult,
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.ids).toContain("surviving");
+  expect(result.ids).not.toContain("closing");
+  await call("close", "closing");
+  expect((await call("list")).map((item: any) => item.id)).toContain(
+    "surviving",
+  );
+});

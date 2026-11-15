@@ -251,13 +251,7 @@ export class BrowserApplicationService {
       denied: (id, permission) => this.browserPermissionDenied(id, permission),
     });
     const browserForContents = (contents: import("electron").WebContents) =>
-      this.store.data.browsers.find(
-        (item) =>
-          this.browserService
-            ?.list()
-            .some((resource) => resource.id === item.id) &&
-          this.browserService?.getWebContents(item.id)?.id === contents.id,
-      );
+      this.store.data.browsers.find((item) => item.nativeTabId === contents.id);
     this.browserAddons = new BrowserAddons({
       directory: path.join(this.store.directory, "browser-addons"),
       session,
