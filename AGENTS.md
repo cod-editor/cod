@@ -10,7 +10,8 @@ Read [the vision](docs/vision.md) and, for implementation, [the contracts](docs/
 2. Make focused changes with clear module boundaries. Keep UI, CLI, persistence and native provider behavior aligned.
 3. Verify observable behavior with appropriate tests. Use real Electron, Git and PTYs with invented fixture data; distinguish protocol fixtures from live compatibility.
 4. Format changes and inspect the diff for unintended edits, secrets and regressions.
-5. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
+5. Publish coherent verified checkpoints periodically and merge their pull requests once required checks pass; this is standing user authorization. Never bypass failing required checks.
+6. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
 
 ## Design
 

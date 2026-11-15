@@ -963,7 +963,13 @@ export function createConversationViews({
       for (const id of views.keys())
         if (
           id.startsWith("chat:")
-            ? !getState().conversations.some((c) => c.id === id.slice(5))
+            ? !getState().workspaces.some((w) =>
+                w.panes.some(
+                  (p) =>
+                    p.kind === "conversation" &&
+                    p.conversationId === id.slice(5),
+                ),
+              )
             : !getState().workspaces.some((w) =>
                 w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
               )
