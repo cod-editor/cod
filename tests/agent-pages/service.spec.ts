@@ -342,3 +342,104 @@ test("Agent page AC6 asset requests require their registered owner and cannot su
   }
   await denied("two");
 });
+
+test("Report evidence links render local JSON, images and JSONL and return through the native menu", async () => {
+  await writeFile(
+    path.join(directory, "evidence.json"),
+    '{"result":"INVENTED_EVIDENCE"}',
+  );
+  await writeFile(
+    path.join(directory, "events.jsonl"),
+    '{"event":"INVENTED_EVENT"}\n',
+  );
+  await writeFile(
+    path.join(directory, "pixel.png"),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
+  await writeFile(
+    path.join(directory, "index.html"),
+    '<h1>Invented report</h1><a href="evidence.json">JSON evidence</a><a href="events.jsonl" target="_blank">Event evidence</a><a href="pixel.png">Image evidence</a>',
+  );
+  const first = await open();
+  await call("setBounds", "one", { x: 0, y: 0, width: 700, height: 500 });
+  await call("setVisible", "one", true);
+  const page = app
+    .context()
+    .pages()
+    .find((p) => p.url() === first.url)!;
+  // Observe the actual right-click handler without leaving a blocking native popup open.
+  await app.evaluate(({ Menu }) => {
+    Menu.prototype.popup = function () {
+      (globalThis as any).lastPageMenu = this;
+    };
+  });
+  await page
+    .getByRole("link", { name: "JSON evidence", exact: true })
+    .click({ button: "right" });
+  expect(
+    await app.evaluate(() =>
+      (globalThis as any).lastPageMenu.items.map((i: any) => ({
+        label: i.label,
+        enabled: i.enabled,
+      })),
+    ),
+  ).toEqual(
+    expect.arrayContaining([
+      { label: "Back", enabled: false },
+      { label: "Reload", enabled: true },
+      { label: "Copy link address", enabled: true },
+    ]),
+  );
+  await app.evaluate(() => {
+    const menu = (globalThis as any).lastPageMenu;
+    menu.items.find((i: any) => i.label === "Copy link address").click();
+    menu.emit("menu-will-close");
+  });
+  expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(
+    new URL("evidence.json", first.url).href,
+  );
+  await page.getByRole("link", { name: "JSON evidence", exact: true }).click();
+  await expect(page.locator("body")).toContainText("INVENTED_EVIDENCE");
+  expect(await page.evaluate(() => typeof (window as any).codPage)).toBe(
+    "undefined",
+  );
+  const back = async () => {
+    await page.locator("body").click({ button: "right" });
+    expect(
+      await app.evaluate(
+        () =>
+          (globalThis as any).lastPageMenu.items.find(
+            (i: any) => i.label === "Back",
+          ).enabled,
+      ),
+    ).toBe(true);
+    await app.evaluate(() => {
+      const menu = (globalThis as any).lastPageMenu;
+      menu.items.find((i: any) => i.label === "Back").click();
+      menu.emit("menu-will-close");
+    });
+    await expect(
+      page.getByRole("heading", { name: "Invented report" }),
+    ).toBeVisible();
+    expect(await page.evaluate(() => typeof (window as any).codPage)).toBe(
+      "object",
+    );
+  };
+  await back();
+  await page.getByRole("link", { name: "Event evidence" }).click();
+  await expect(page.locator("body")).toContainText("INVENTED_EVENT");
+  expect(await page.evaluate(() => typeof (window as any).codPage)).toBe(
+    "undefined",
+  );
+  await back();
+  await page.getByRole("link", { name: "Image evidence" }).click();
+  await expect
+    .poll(() =>
+      page.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth),
+    )
+    .toBe(1);
+  await back();
+});

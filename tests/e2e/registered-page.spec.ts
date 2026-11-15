@@ -227,3 +227,69 @@ test("Artifact busy rejection stays editable and an admitted provider failure st
   await expect(page!.getByLabel("Answer")).not.toBeEditable();
   expect(await shell.prompts()).toHaveLength(2);
 });
+
+test("Registered report links and CLI navigation preserve the origin and isolate linked documents", async () => {
+  const workspace = await shell.create("Invented report task");
+  const origin = await shell.newChat(workspace, "codex");
+  const file = path.join(shell.folders[0], "report.html");
+  await writeFile(
+    file,
+    '<h1>Invented report</h1><a href="evidence.html">Evidence</a>',
+  );
+  await writeFile(
+    path.join(shell.folders[0], "evidence.html"),
+    '<h1>Invented evidence</h1><script src="evidence.js"></script>',
+  );
+  await writeFile(
+    path.join(shell.folders[0], "evidence.js"),
+    'document.body.dataset.loaded="yes"',
+  );
+  const opened = await shell.cli<{ id: string }>(
+    "page",
+    "open",
+    "--workspace",
+    workspace,
+    "--conversation",
+    origin.id,
+    "--path",
+    file,
+  );
+  const record = await shell.cli<{ url: string }>(
+    "browser",
+    "inspect",
+    "--id",
+    opened.id,
+  );
+  let page: Page | undefined;
+  await expect
+    .poll(() => {
+      page = shell
+        .app!.context()
+        .pages()
+        .find((p) => p.url() === record.url);
+      return !!page;
+    })
+    .toBe(true);
+  await page!.getByRole("link", { name: "Evidence", exact: true }).click();
+  await expect(
+    page!.getByRole("heading", { name: "Invented evidence" }),
+  ).toBeVisible();
+  await expect(page!.locator("body")).toHaveAttribute("data-loaded", "yes");
+  expect(await page!.evaluate(() => typeof (window as any).codPage)).toBe(
+    "undefined",
+  );
+  await shell.cli("browser", "back", "--id", opened.id);
+  await expect(
+    page!.getByRole("heading", { name: "Invented report" }),
+  ).toBeVisible();
+  expect(await page!.evaluate(() => typeof (window as any).codPage)).toBe(
+    "object",
+  );
+  await shell.cli("browser", "forward", "--id", opened.id);
+  await expect(
+    page!.getByRole("heading", { name: "Invented evidence" }),
+  ).toBeVisible();
+  await shell.cli("browser", "reload", "--id", opened.id);
+  await expect(page!.locator("body")).toHaveAttribute("data-loaded", "yes");
+  expect(await shell.prompts()).toHaveLength(0);
+});

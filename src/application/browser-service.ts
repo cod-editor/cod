@@ -1255,7 +1255,24 @@ export class BrowserApplicationService {
 
       case "browser.reload": {
         const id = requiredString(request, "id");
-        this.browser(id);
+        const browser = this.browser(id);
+        if (browser.agentPage) {
+          const contents = this.agentPages?.getWebContents(id);
+          if (!contents || contents.isDestroyed())
+            throw new Error("Agent page is not loaded");
+          if (
+            request.op === "browser.back" &&
+            contents.navigationHistory.canGoBack()
+          )
+            contents.navigationHistory.goBack();
+          else if (
+            request.op === "browser.forward" &&
+            contents.navigationHistory.canGoForward()
+          )
+            contents.navigationHistory.goForward();
+          else if (request.op === "browser.reload") contents.reload();
+          return { id };
+        }
         const service = this.requireBrowserService();
         if (request.op === "browser.back") service.back(id);
         else if (request.op === "browser.forward") service.forward(id);

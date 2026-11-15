@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserDownload } from "./download-types";
+import { installPageContextMenu } from "./context-menu";
 import { installScrollbarStyle } from "./scrollbars";
 import {
   WebContentsView,
@@ -181,6 +182,7 @@ export class BrowserService {
     });
   }
   private secure(contents: WebContents, resource: Resource) {
+    installPageContextMenu(contents, this.options.window);
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
     contents.on("will-navigate", (event, url) => {

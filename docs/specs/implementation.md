@@ -83,6 +83,8 @@ Freeze submitted text, anchors, source revision and destination. Sent rounds are
 
 Delivery distinguishes private, queued, sending, acknowledged and uncertain states. A stable packet identity prevents duplicate delivery. An interrupted dispatch must reconcile native history before retry; an immediate send return is not a remote receipt. `review wait` completes on durable submission, not on completion of the agent's next turn. A waiter may reconnect using the review ID.
 
+Registered HTML reports can follow links to files within their registered directory and return with native Back/Forward. JSON, JSONL, text and image evidence must render rather than leave a blank page. Native page context menus expose navigation, selection and clipboard actions. Following a link does not grant the destination the registered form submission bridge; only the exact registered entry has that capability. Ownership, directory boundaries and symlink escape checks still apply.
+
 A registered form response has the same origin and durable admission protection. Reserve the submission before dispatch, reject duplicates, and restore interrupted sending as uncertain. Keep submitted or uncertain forms read-only. A definitely unsent failure remains explainable and retryable; never silently send to another conversation.
 
 ## Browser and terminals
