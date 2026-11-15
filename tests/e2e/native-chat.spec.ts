@@ -1528,3 +1528,40 @@ test("Short composer input with 25 MB state writes only small draft data", async
       .getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue(expected);
 });
+
+test("Enter sends chat, Shift Enter inserts a line and IME and model controls do not send", async () => {
+  await shell.configure({ kimi: { options: true, multipleModels: true } });
+  const workspace = await shell.create("Chat Enter behavior");
+  const chat = await shell.newChat(workspace, "kimi");
+  const host = shell.pane(chat.paneId);
+  const input = host.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("First line");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Second line");
+  await expect(input).toHaveValue("First line\nSecond line");
+  await input.evaluate((node) =>
+    node.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      }),
+    ),
+  );
+  expect(await shell.prompts()).toHaveLength(0);
+  const model = host.getByRole("button", { name: "Model", exact: true });
+  await model.focus();
+  await model.press("Enter");
+  await expect(
+    shell.page.getByRole("dialog", { name: "Actions", exact: true }),
+  ).toBeVisible();
+  expect(await shell.prompts()).toHaveLength(0);
+  await shell.page.keyboard.press("Escape");
+  await input.focus();
+  await input.press("Enter");
+  await expect.poll(() => shell.prompts()).toHaveLength(1);
+  await expect(input).toHaveValue("");
+  await expect(transcript(chat)).toContainText("First line\nSecond line");
+});

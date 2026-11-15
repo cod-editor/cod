@@ -331,3 +331,49 @@ test("Shift+Escape can maximize panes without permitting plain typing shortcuts"
     configureKeymap({}, "darwin");
   }
 });
+
+test("Enter sends only in the composer; Shift Enter and IME retain text editing", () => {
+  configureKeymap({}, "darwin");
+  for (const platform of ["darwin", "linux"] as const) {
+    assert.equal(
+      resolveKeybinding(input("Enter", { code: "Enter" }), platform, "composer")
+        ?.command,
+      "chat.send",
+    );
+    assert.equal(
+      resolveKeybinding(
+        input("Enter", { code: "Enter", repeat: true }),
+        platform,
+        "composer",
+      )?.dispatch,
+      false,
+    );
+    assert.equal(
+      resolveKeybinding(
+        input("Enter", { code: "Enter", shiftKey: true }),
+        platform,
+        "composer",
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveKeybinding(
+        input("Enter", { code: "Enter", isComposing: true }),
+        platform,
+        "composer",
+      ),
+      undefined,
+    );
+    for (const surface of [
+      "shell",
+      "editor",
+      "terminal",
+      "browser",
+      "review",
+    ] as const)
+      assert.equal(
+        resolveKeybinding(input("Enter", { code: "Enter" }), platform, surface),
+        undefined,
+      );
+  }
+});

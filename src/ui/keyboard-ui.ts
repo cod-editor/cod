@@ -16,7 +16,7 @@ export function keyboardSurface(
   element = document.activeElement,
 ): KeyboardSurface {
   if (element?.closest(".terminal-body")) return "terminal";
-  if (element?.closest(".composer")) return "composer";
+  if (element?.matches(".composer textarea")) return "composer";
   if (element?.closest(".review-line, .review-document")) return "review";
   if (element?.closest(".file-editor")) return "editor";
   return "shell";

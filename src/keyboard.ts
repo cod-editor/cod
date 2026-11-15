@@ -167,6 +167,7 @@ export const commands = [
     key("KeyL", { mod: true }, [...cod, "browser"]),
   ]),
   entry("chat.send", "Send message", "Conversation", [
+    key("Enter", {}, ["composer"]),
     key("Enter", { mod: true }, ["composer"]),
   ]),
   entry("text.inc", "Increase text size", "Appearance", [
@@ -434,6 +435,12 @@ export const localGestures: readonly {
     keys: ["Enter"],
     context: "File tree and search results",
     aliases: ["activate", "select"],
+  },
+  {
+    title: "New line in message",
+    keys: ["Shift+Enter"],
+    context: "Chat message field",
+    aliases: ["newline", "line break"],
   },
   {
     title: "Open context menu",

@@ -19,7 +19,7 @@ Dependency install scripts are disabled because the PTY package ships native pre
 
 Development and packaged builds share the default profile: `~/Library/Application Support/Cod` on macOS, `$XDG_CONFIG_HOME/cod` (or `~/.config/cod`) on Linux, and `%APPDATA%/Cod` on Windows.
 
-A new workspace starts with a chat. Cmd/Ctrl+Enter sends; Enter inserts a newline. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses files, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
+A new workspace starts with a chat. Enter sends; Shift+Enter inserts a newline. Cmd/Ctrl+Enter also sends. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses files, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
 Remove from workspace in a session's context menu clears it from the workspace without deleting its native history. Reopen closed tab restores the removed chat and draft; the native session remains available in the provider's CLI. Stop active work and finish pending reviews or form submissions before removing the session.
 
