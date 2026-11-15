@@ -1640,9 +1640,16 @@ test("Ordinary target blank links become managed tabs in the opener group and su
   expect(await remote("/two", "typeof require + ':' + typeof window.cod")).toBe(
     "undefined:undefined",
   );
-  await shell.page.screenshot({
-    path: test.info().outputPath("managed-browser-tab.png"),
-  });
+  await expect.poll(async () => (await nativeView("/two"))?.visible).toBe(true);
+  const screenshot = await shell.app!.evaluate(async ({ BrowserWindow }) =>
+    (await BrowserWindow.getAllWindows()[0].capturePage())
+      .toPNG()
+      .toString("base64"),
+  );
+  await writeFile(
+    test.info().outputPath("managed-browser-tab.png"),
+    Buffer.from(screenshot, "base64"),
+  );
   const identity = await remote("/two", "window.identity");
   await remote(
     "/two",
