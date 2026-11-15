@@ -268,6 +268,10 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
+  onSettings(
+    callback: (state: import("./settings").SettingsState) => void,
+  ): void;
+  openSettings(): Promise<void>;
   getKeymap(): Promise<import("./keyboard").KeymapState>;
   onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
   openKeymap(): Promise<void>;

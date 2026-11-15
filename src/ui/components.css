@@ -173,3 +173,35 @@ dialog .setting-row {
   min-height: 20px;
   padding: 2px;
 }
+
+.appearance-settings {
+  width: min(720px, calc(100vw - 2 * var(--space-4)));
+}
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings-entry .setting-row {
+  flex: 1;
+  grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr);
+}
+.settings-list {
+  max-height: 55vh;
+  overflow: auto;
+}
+@media (max-width: 480px) {
+  .settings-entry .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}
+
+.setting-row.compact,
+dialog .setting-row.compact {
+  margin: var(--space-1) 0;
+}
+.setting-row > input[type="checkbox"] {
+  width: auto;
+  justify-self: start;
+}

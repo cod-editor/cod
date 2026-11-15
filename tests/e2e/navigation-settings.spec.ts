@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 const execute = promisify(execFile);
@@ -513,6 +514,94 @@ test("Workspace and file pickers preserve filtering after arrow navigation", asy
     await app.page.screenshot({
       path: info.outputPath("content-search-top-placement.png"),
     });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Searchable settings apply font, terminal cursor and external edits live and preserve invalid files", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const workspace = await app.create("Settings fixture");
+    const terminal = await app.cli<{ paneId: string }>(
+      "terminal",
+      "open",
+      "--workspace",
+      workspace,
+    );
+    await app.page.keyboard.press(`${modifier}+,`);
+    const dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .fill("cursor");
+    await expect(
+      dialog.getByRole("combobox", { name: "Terminal Cursor shape" }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("spinbutton", { name: "Interface text size" }),
+    ).toBeHidden();
+    await dialog
+      .getByRole("combobox", { name: "Terminal Cursor shape" })
+      .selectOption("bar");
+    await dialog
+      .getByRole("checkbox", { name: "Terminal Blinking cursor" })
+      .check();
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values[
+            "terminal.cursorStyle"
+          ],
+      )
+      .toBe("bar");
+    await dialog.getByRole("searchbox").fill("");
+    await dialog
+      .getByRole("textbox", { name: "Editor Font family" })
+      .fill("monospace");
+    await dialog
+      .getByRole("textbox", { name: "Editor Font family" })
+      .press("Tab");
+    await app.page.screenshot({
+      path: info.outputPath("searchable-settings.png"),
+    });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "terminal.fontSize": 20, "chat.fontFamily": "serif" }),
+    );
+    await expect(
+      app.pane(terminal.paneId).locator(".xterm-screen"),
+    ).toBeVisible();
+    const file = path.join(app.data, "settings.json");
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    expect(saved["terminal.cursorStyle"]).toBe("bar");
+    expect(saved["terminal.cursorBlink"]).toBe(true);
+    await writeFile(
+      file,
+      '{"ui.fontSize":18,"terminal.cursorStyle":"underline"}',
+    );
+    await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
+    await writeFile(file, "broken JSON");
+    await app.page.keyboard.press(`${modifier}+,`);
+    await expect(dialog.getByRole("status")).toContainText("Invalid JSON");
+    await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
+    expect(await readFile(file, "utf8")).toBe("broken JSON");
+    await writeFile(file, JSON.stringify(saved));
+    await expect(dialog.getByRole("status")).toBeEmpty();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.stop();
+    await app.start();
+    expect(
+      (await app.cli<any>("settings", "get")).values["terminal.cursorStyle"],
+    ).toBe("bar");
   } finally {
     await app.cleanup();
   }

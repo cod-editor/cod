@@ -1,3 +1,4 @@
+import { SettingsService } from "./application/settings-service";
 import { IntegrationApplicationService } from "./application/integration-service";
 import { WorkspaceApplicationService } from "./application/workspace-service";
 import { ReviewApplicationService } from "./application/review-service";
@@ -16,6 +17,7 @@ import type {
 } from "./types";
 
 export class ApplicationOperations {
+  readonly settings: SettingsService;
   private readonly integration = new IntegrationApplicationService();
   private readonly files: FileApplicationService;
   private readonly browsers: BrowserApplicationService;
@@ -28,6 +30,7 @@ export class ApplicationOperations {
   onDidTerminal: ((event: TerminalUiEvent) => void) | undefined;
 
   constructor(dataDirectory: string) {
+    this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
     this.files = new FileApplicationService(this.store);
     this.browsers = new BrowserApplicationService(this.store, {
@@ -91,6 +94,7 @@ export class ApplicationOperations {
   }
 
   async initialize(): Promise<void> {
+    await this.settings.load();
     await this.store.load();
     this.conversations.restoreInterrupted();
     await this.files.restoreIdentity();
@@ -117,6 +121,9 @@ export class ApplicationOperations {
     }
     if (request.op.startsWith("review."))
       return this.reviews.handle(request, trustedUi);
+    if (request.op === "settings.get") return this.settings.state;
+    if (request.op === "settings.update")
+      return this.settings.update(request.values, request.reset === true);
     const domain = request.op.split(".")[0];
     if (
       domain === "workspace" ||

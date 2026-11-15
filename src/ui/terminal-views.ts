@@ -1,4 +1,4 @@
-import { terminalTextSize } from "./appearance";
+import { terminalTextSize, appearanceSettings } from "./appearance";
 import { resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
@@ -16,6 +16,17 @@ interface TerminalSession {
   pending: TerminalUiEvent[];
 }
 
+function terminalOptions() {
+  const settings = appearanceSettings();
+  return {
+    fontFamily: settings["terminal.fontFamily"],
+    lineHeight: settings["terminal.lineHeight"],
+    cursorStyle: settings["terminal.cursorStyle"] as
+      "block" | "bar" | "underline",
+    cursorBlink: settings["terminal.cursorBlink"],
+    scrollback: settings["terminal.scrollback"],
+  };
+}
 export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
   const terminalSessions = new Map<string, TerminalSession>();
   function createTerminalSession(
@@ -38,7 +49,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
     const terminal = new Terminal({
       screenReaderMode: true,
       fontSize: terminalTextSize(),
-      fontFamily: "Menlo, ui-monospace, monospace",
+      ...terminalOptions(),
       theme: {
         background: "#282c34",
         foreground: "#abb2bf",
@@ -122,6 +133,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
       if (session.terminal.options.fontSize !== terminalTextSize())
         session.terminal.options.fontSize = terminalTextSize();
+      Object.assign(session.terminal.options, terminalOptions());
       session.fit.fit();
       const record = getState().terminals.find(
         (terminal) => terminal.id === session.id,

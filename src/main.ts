@@ -287,6 +287,10 @@ async function start(): Promise<void> {
     initialized = true;
     await startCommandServer();
     await app.whenReady();
+    operations.settings.onChange = (value) =>
+      mainWindow?.webContents.send("cod:settings", value);
+    operations.settings.watch();
+    app.once("will-quit", () => operations.settings.dispose());
     await reloadKeymap();
     watchFile(keymapPath, { interval: 500, persistent: false }, () => {
       void reloadKeymap();
@@ -300,6 +304,13 @@ async function start(): Promise<void> {
       )
         throw new Error("Untrusted keymap request");
     };
+    ipcMain.handle("cod:settings-open", async (event) => {
+      trustedKeymap(event);
+      if (!operations.settings.state.error)
+        await operations.settings.update({});
+      const error = await shell.openPath(operations.settings.state.path);
+      if (error) throw new Error(error);
+    });
     ipcMain.handle("cod:keymap", (event) => {
       trustedKeymap(event);
       return keymapState;

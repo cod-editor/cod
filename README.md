@@ -81,3 +81,23 @@ Copyright (C) 2026 Mikhail Butvin. GNU GPL version 3 or later; see [LICENSE](LIC
 Cod writes a local rotating journal under `diagnostics/` in its data directory (`~/Library/Application Support/Cod/diagnostics` on macOS). `runtime.jsonl` and up to three rotated files contain startup/shutdown, renderer and child-process exits, responsiveness events, and memory samples every 30 seconds. The journal is limited to about 4 MiB. Samples include Electron process memory (in KiB), main-process Node memory (in bytes), and available system memory. Separate provider CLI processes are not included. Chat text, file contents, URLs and arbitrary error messages are not recorded. Nothing is uploaded.
 
 An unfinished session is reported at the next startup; this alone does not distinguish a crash, force quit or system shutdown. A sudden OS kill may leave only the last periodic sample. Restart Cod after updating to enable diagnostics; older runs cannot be reconstructed.
+
+## Settings
+
+Open Settings from Commands or the platform settings shortcut. Search by area or setting name. Changes apply to open views and persist in `settings.json` beside the data file; Edit settings.json opens it in your system editor. Keyboard shortcuts opens the searchable reference and existing `keymap.json`. Browser settings remain available from the same window. Workspace-specific chat width takes precedence over the global width.
+
+Font family fields accept CSS font-family lists for installed fonts. Font sizes are in pixels; line heights are multipliers. Terminal settings include block/bar/underline cursor, blinking and scrollback. Editor settings include tab display width and long-line wrapping; tab width does not rewrite file indentation. The source editor uses the platform text caret; changing its shape is not supported. Settings currently cover these implemented controls, not the full extension, theme and language configuration surface of VS Code or Zed.
+
+Files use strict JSON with flat keys, for example:
+
+```json
+{
+  "editor.fontFamily": "JetBrains Mono, monospace",
+  "editor.fontSize": 16,
+  "terminal.cursorStyle": "bar",
+  "terminal.cursorBlink": true,
+  "chat.maxWidth": 1000
+}
+```
+
+Invalid settings keep the last working values and display an error in Settings. Repair the file to resume applying changes. Reset restores defaults. Existing text-size preferences are imported once. CLI access uses `codctl settings get` and `codctl settings update --values '{"terminal.cursorStyle":"bar"}'`; `--reset true` resets global settings.

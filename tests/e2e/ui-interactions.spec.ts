@@ -879,7 +879,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     );
     expect(overflow).toBe(false);
     const positions = await settings
-      .locator("input")
+      .locator(".setting-row > input")
       .evaluateAll((nodes) =>
         nodes.map((node) => node.getBoundingClientRect().left),
       );

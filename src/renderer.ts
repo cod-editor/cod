@@ -2,7 +2,7 @@ import { updateLiveActivity } from "./ui/turn-activity";
 import { configureKeymap } from "./keyboard";
 import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
 import { createContentFind } from "./ui/content-find";
-import { applyAppearance } from "./ui/appearance";
+import { applyAppearance, initializeAppearance } from "./ui/appearance";
 import type { OperationName } from "./command-catalog";
 import { createWorkspaceView } from "./ui/workspace-view";
 import { createCommands } from "./ui/commands";
@@ -188,7 +188,7 @@ window.cod.onKeymap((keymap) => {
   updateKeymapStatus(keymap);
   render();
 });
-void keymapReady
+void Promise.all([keymapReady, initializeAppearance()])
   .then(() => invoke<AppState>("state"))
   .then(async (next) => {
     state = next;

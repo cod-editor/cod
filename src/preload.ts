@@ -9,6 +9,12 @@ import type {
 } from "./types";
 
 const bridge: CodBridge = {
+  onSettings(callback) {
+    ipcRenderer.on("cod:settings", (_event, value) => callback(value));
+  },
+  openSettings() {
+    return ipcRenderer.invoke("cod:settings-open");
+  },
   getKeymap() {
     return ipcRenderer.invoke("cod:keymap");
   },

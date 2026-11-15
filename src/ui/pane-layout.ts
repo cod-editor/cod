@@ -139,7 +139,9 @@ export function createPaneLayout(
       );
     document.documentElement.style.setProperty(
       "--chat-max-width",
-      `${settings?.chatMaxWidth ?? 1100}px`,
+      settings?.chatMaxWidth
+        ? `${settings.chatMaxWidth}px`
+        : "var(--chat-default-max-width, 1100px)",
     );
     const signature = JSON.stringify([
       workspace.id,

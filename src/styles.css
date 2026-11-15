@@ -2,7 +2,13 @@
 /* One Dark application chrome. Content surfaces share the same compact scale. */
 :root {
   color-scheme: dark;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(
+    --ui-font-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif
+  );
   --ui-font-size: 14px;
   --editor-font-size: 16px;
   --chat-font-size: 15px;
@@ -392,7 +398,7 @@ body {
 }
 .chat-message {
   margin: 0 0 18px;
-  line-height: 1.65;
+  line-height: var(--chat-line-height, 1.65);
   overflow-wrap: anywhere;
 }
 .message-role {
@@ -654,11 +660,8 @@ hr {
   padding: 20px;
   background: #282c34;
   color: #abb2bf;
-  font:
-    var(--editor-font-size)/1.65 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--editor-font-size)/var(--editor-line-height, 1.65)
+    var(--editor-font-family, ui-monospace, monospace);
 }
 .highlighted-editor {
   position: relative;
@@ -675,14 +678,12 @@ hr {
   width: 100%;
   height: 100%;
   padding: 20px;
-  white-space: pre;
+  white-space: var(--editor-white-space, pre);
+  overflow-wrap: anywhere;
   overflow: auto;
-  font:
-    var(--editor-font-size)/1.65 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  tab-size: 8;
+  font: var(--editor-font-size)/var(--editor-line-height, 1.65)
+    var(--editor-font-family, ui-monospace, monospace);
+  tab-size: var(--editor-tab-size, 8);
   letter-spacing: normal;
 }
 .editor-colors {
@@ -1818,4 +1819,18 @@ browser-action-list::part(action):focus-visible {
   top: 0;
   right: 0;
   background: var(--panel);
+}
+
+.transcript,
+.composer {
+  font-family: var(--chat-font-family);
+}
+.transcript {
+  line-height: var(--chat-line-height, 1.65);
+}
+
+/* Review anchors refer to snapshot lines; source review keeps one visual row per line. */
+.review-document .editor-colors,
+.review-document .file-editor {
+  white-space: pre;
 }

@@ -2,6 +2,8 @@ import type { OperationRequest } from "./types";
 
 // One catalog supplies CLI validation, help and advertised application operations.
 export const commands = {
+  "settings.get": [],
+  "settings.update": ["values?", "reset?"],
   "review.open-document": ["workspace", "path", "conversation?"],
   "review.open-diff": [
     "workspace",
@@ -221,6 +223,7 @@ export function parseArguments(argv: string[]): OperationRequest | undefined {
     throw new Error("Both --base and --head are required");
   for (const name of [
     "settings",
+    "values",
     "images",
     "skills",
     ...(op === "group.resize" ? ["path"] : []),
@@ -232,6 +235,11 @@ export function parseArguments(argv: string[]): OperationRequest | undefined {
         throw new Error(`${name} must be valid JSON`);
       }
     }
+  if (typeof values.reset === "string") {
+    if (!["true", "false"].includes(values.reset))
+      throw new Error("reset must be true or false");
+    values.reset = values.reset === "true";
+  }
   if (typeof values.hidden === "string") {
     if (!["true", "false"].includes(values.hidden))
       throw new Error("hidden must be true or false");
