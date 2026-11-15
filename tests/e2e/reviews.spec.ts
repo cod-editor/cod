@@ -937,3 +937,49 @@ test("Review comments stay beside their anchors without rebuilding or jumping to
   expect(geometry.height).toBeLessThanOrEqual(40);
   await shell.page.screenshot({ path: info.outputPath("anchored-review.png") });
 });
+
+test("Reopening a saved comment preserves its unfinished rewrite and Escape leaves recovery visible", async () => {
+  const workspace = await shell.create("Comment rewrite safety");
+  const review = await open(workspace);
+  const host = pane(review);
+  await source(review).focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = () =>
+    host.getByRole("textbox", { name: "Comment", exact: true });
+  await input().fill("Original saved comment");
+  await host.getByRole("button", { name: "Save comment", exact: true }).click();
+  const card = () => host.getByLabel("Draft comment", { exact: true });
+  await card().click();
+  await input().fill("Carefully rewritten unfinished comment");
+  await card().click();
+  await expect(input()).toHaveValue("Carefully rewritten unfinished comment");
+  await input().press("Escape");
+  await expect(input()).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Save comment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Cancel comment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "Send feedback", exact: true }),
+  ).toBeDisabled();
+  await card().click();
+  await expect(input()).toHaveValue("Carefully rewritten unfinished comment");
+  await shell.stop();
+  await shell.start();
+  const restored = pane(review).getByRole("textbox", {
+    name: "Comment",
+    exact: true,
+  });
+  await expect(restored).toHaveValue("Carefully rewritten unfinished comment");
+  await pane(review)
+    .getByRole("button", { name: "Save comment", exact: true })
+    .click();
+  await expect(
+    pane(review).getByLabel("Draft comment", { exact: true }),
+  ).toContainText("Carefully rewritten unfinished comment");
+  await expect(
+    pane(review).getByRole("button", { name: "Send feedback", exact: true }),
+  ).toBeEnabled();
+});

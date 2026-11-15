@@ -128,14 +128,28 @@ export function reviewPane(
     ),
   );
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      form.hidden = true;
+    if (event.key === "Escape" && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Leave the draft and its actions visible when returning to the document.
+      // Hiding it would leave submission blocked without a recovery affordance.
+      status.textContent = pending?.body.trim()
+        ? "Unfinished comment retained. Save or cancel it before sending feedback."
+        : "";
       focusSelection();
     }
   });
   function openComment(commentId?: string, body = "") {
-    if (pending?.body.trim() && commentId && commentId !== pending.editing) {
-      status.textContent = "Save or cancel the unfinished comment first.";
+    if (pending?.body.trim()) {
+      const sameComment = commentId === pending.editing;
+      status.textContent = sameComment
+        ? ""
+        : "Save or cancel the unfinished comment first.";
+      // Reopening the same comment resumes its editor; the saved card is not
+      // authoritative while a newer, persisted rewrite exists.
+      form.hidden = false;
+      draw();
+      input.focus({ preventScroll: true });
       return;
     }
     if (!commentId && documentView) {
