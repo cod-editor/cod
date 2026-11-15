@@ -100,12 +100,12 @@ test.beforeEach(async () => {
     response.setHeader("Content-Type", "text/html");
     if (route === "/popup") {
       response.end(
-        `<!doctype html><title>Popup fixture</title><script>opener.postMessage('invented-popup-ready','*');onmessage=e=>document.title=e.data;</script><button onclick="window.open('/popup-child')">Nested popup</button>`,
+        `<!doctype html><title>Popup fixture</title><script>opener.postMessage('invented-popup-ready','*');onmessage=e=>document.title=e.data;</script><button onclick="window.open('/popup-child', 'fixture-child', 'popup,width=400,height=400')">Nested popup</button>`,
       );
       return;
     }
     response.end(
-      `<!doctype html><title>${route}</title><h1>${route}</h1><span id="load">${++loads}</span><a href="/two">Next</a><button onclick="window.open('/popup')">Popup</button><form action="/upload" method="post" enctype="multipart/form-data"><input type="file" name="file"><button>Upload</button></form><a href="/download">Download</a><script>window.pageIdentity=crypto.randomUUID();onmessage=e=>{window.popupMessage=e.data;e.source.postMessage('invented-opener-ack','*')};</script>`,
+      `<!doctype html><title>${route}</title><h1>${route}</h1><span id="load">${++loads}</span><a href="/two">Next</a><button onclick="window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')">Popup</button><form action="/upload" method="post" enctype="multipart/form-data"><input type="file" name="file"><button>Upload</button></form><a href="/download">Download</a><script>window.pageIdentity=crypto.randomUUID();onmessage=e=>{window.popupMessage=e.data;e.source.postMessage('invented-opener-ack','*')};</script>`,
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -221,7 +221,10 @@ test("B1 AC3 sandboxed views and recursive popups reject unsafe navigation and p
   await js("one", `window.location.href='file:///etc/passwd'`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await url("one", "/one");
-  await js("one", `void window.open('/popup')`);
+  await js(
+    "one",
+    `void window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')`,
+  );
   await expect
     .poll(() => js("one", "window.popupMessage"))
     .toBe("invented-popup-ready");
@@ -282,7 +285,7 @@ test("B1 AC3 sandboxed views and recursive popups reject unsafe navigation and p
   ).toEqual({ node: "undefined", bridge: "undefined" });
   await application.evaluate(async ({ BrowserWindow }, id) => {
     await BrowserWindow.fromId(id)!.webContents.executeJavaScript(
-      `window.open('/popup-child');void window.open('file:///etc/passwd')`,
+      `window.open('/popup-child', 'fixture-child', 'popup,width=400,height=400');void window.open('file:///etc/passwd')`,
     );
   }, popup.id);
   await expect

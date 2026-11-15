@@ -310,6 +310,52 @@ export class BrowserApplicationService {
       window,
       session,
       downloadDirectory,
+      onTabCreated: (tab, openerId, background) => {
+        // Chromium needs a WebContents synchronously to preserve opener/POST.
+        // Admit its metadata through the same serialized durable mutation as UI operations.
+        void this.store
+          .change(() => {
+            if (this.store.closing) throw new Error("Cod is shutting down");
+            const opener = this.browser(openerId);
+            const workspace = this.store.workspace(opener.workspaceId);
+            const contents = this.browserService?.getWebContents(tab.id);
+            if (!contents || contents.isDestroyed())
+              throw new Error("New tab already closed");
+            const paneId = randomUUID();
+            const snapshot = this.requireBrowserService().snapshot(tab.id);
+            const record: BrowserState = {
+              ...tab,
+              ...snapshot,
+              url: snapshot.url || tab.url,
+              paneId,
+              nativeTabId: contents.id,
+              addons: this.browserAddons?.status(tab.url),
+            };
+            workspace.panes.push({
+              id: paneId,
+              kind: "browser",
+              browserId: record.id,
+            });
+            const group = workspace.groups?.find((item) =>
+              item.paneIds.includes(opener.paneId),
+            );
+            if (group)
+              group.paneIds.splice(
+                group.paneIds.indexOf(opener.paneId) + 1,
+                0,
+                paneId,
+              );
+            if (
+              !background &&
+              workspace.activePaneId === opener.paneId &&
+              workspace.id === this.store.data.activeWorkspaceId
+            )
+              workspace.activePaneId = paneId;
+            this.store.data.browsers.push(record);
+            return record;
+          })
+          .catch(() => this.browserService?.close(tab.id));
+      },
       onViewCreated: (contents, id) => {
         // open() has registered the resource before this callback and has not awaited navigation.
         this.browserService!.setVisible(id, false);
@@ -828,6 +874,15 @@ export class BrowserApplicationService {
       (item) => item.id === event.id,
     );
     if (!record || this.store.closing) return;
+    if (event.type === "closed") {
+      void this.store
+        .change(() => {
+          if (!this.store.closing && this.store.data.browsers.includes(record))
+            this.removeBrowser(record);
+        })
+        .catch(() => undefined);
+      return;
+    }
     if (event.type === "changed") {
       const url =
         event.snapshot.url &&

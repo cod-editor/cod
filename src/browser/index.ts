@@ -61,6 +61,11 @@ interface Options {
   scrollbarCSS?: string;
   isAllowedExtensionUrl?: (url: string) => boolean;
   onViewCreated?: (contents: WebContents, id: string) => void;
+  onTabCreated?: (
+    tab: BrowserSnapshot,
+    openerId: string,
+    background: boolean,
+  ) => void;
 }
 function safeUrl(value: string, extension?: (url: string) => boolean): string {
   if (typeof value !== "string")
@@ -184,24 +189,42 @@ export class BrowserService {
         event.preventDefault();
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
-    contents.setWindowOpenHandler(({ url }) =>
-      allowed(url, this.options.isAllowedExtensionUrl)
-        ? {
-            action: "allow",
-            overrideBrowserWindowOptions: {
-              webPreferences: {
-                session: this.options.session,
-                sandbox: true,
-                contextIsolation: true,
-                nodeIntegration: false,
-                nodeIntegrationInSubFrames: false,
-                webviewTag: false,
-                preload: undefined,
-              },
-            },
-          }
-        : { action: "deny" },
-    );
+    contents.setWindowOpenHandler((details) => {
+      if (!allowed(details.url, this.options.isAllowedExtensionUrl))
+        return { action: "deny" };
+      const webPreferences = {
+        session: this.options.session,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        webviewTag: false,
+        preload: undefined,
+      };
+      if (["foreground-tab", "background-tab"].includes(details.disposition)) {
+        return {
+          action: "allow",
+          outlivesOpener: true,
+          overrideBrowserWindowOptions: { webPreferences },
+          createWindow: (options) => {
+            const tab = this.createResource(
+              { id: randomUUID(), workspaceId: resource.workspaceId },
+              options,
+            );
+            this.options.onTabCreated?.(
+              { ...this.snapshot(tab.id), url: details.url },
+              resource.id,
+              details.disposition === "background-tab",
+            );
+            return tab.contents;
+          },
+        };
+      }
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { webPreferences },
+      };
+    });
     contents.on("did-create-window", (window) => {
       if (this.disposed || !this.resources.has(resource.id)) {
         window.destroy();
@@ -213,31 +236,28 @@ export class BrowserService {
     });
     this.options.onViewCreated?.(contents, resource.id);
   }
-  async open(input: {
-    id: string;
-    workspaceId: string;
-    url: string;
-    restoredFailure?: {
-      url: string;
-      error: string;
-      title?: string;
-      lastSuccessfulUrl?: string;
-    };
-  }) {
+  private createResource(
+    input: { id: string; workspaceId: string },
+    options?: Electron.WebContentsViewConstructorOptions,
+  ): Resource {
     if (this.disposed) throw new Error("Browser service is closed");
     if (!input.id || !input.workspaceId)
       throw new Error("Browser view and workspace IDs are required");
     if (this.resources.has(input.id))
       throw new Error("Browser view ID already exists");
-    const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
+    // createWindow supplies an existing WebContents: adopt it so Chromium can
+    // complete window.open with its original opener and pending POST request.
     const view = new WebContentsView({
+      ...options,
       webPreferences: {
+        ...options?.webPreferences,
         session: this.options.session,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,
         webviewTag: false,
+        preload: undefined,
       },
     });
     const resource: Resource = {
@@ -305,6 +325,26 @@ export class BrowserService {
         },
       );
       view.webContents.on("page-title-updated", changed);
+      return resource;
+    } catch (error) {
+      if (this.resources.get(input.id) === resource) this.close(input.id);
+      throw error;
+    }
+  }
+  async open(input: {
+    id: string;
+    workspaceId: string;
+    url: string;
+    restoredFailure?: {
+      url: string;
+      error: string;
+      title?: string;
+      lastSuccessfulUrl?: string;
+    };
+  }) {
+    const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
+    const resource = this.createResource(input);
+    try {
       await this.load(resource, url);
       if (input.restoredFailure) {
         resource.restoredFailure = true;

@@ -99,6 +99,17 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     requests.push(request.url!);
     const route = new URL(request.url!, "http://fixture").pathname;
+    if (route === "/new-tab-post") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        response.setHeader("Content-Type", "text/html");
+        response.end(
+          `<title>Posted tab fixture</title><body>${request.method}:${Buffer.concat(chunks).toString("utf8")}</body>`,
+        );
+      });
+      return;
+    }
     if (route === "/scrollbars") {
       response.setHeader("Content-Type", "text/html");
       response.end(`<!doctype html><title>Invented scrollbar fixture</title><style>
@@ -178,7 +189,7 @@ test.beforeEach(async () => {
       return;
     }
     response.end(
-      `<!doctype html><title>Fixture ${route}</title><h1>Invented browser page ${route}</h1><input aria-label="Page input"><button onclick="window.open('/popup')">Popup</button><a href="/download">Download</a><form method="post" action="/upload" enctype="multipart/form-data"><input name="file" type="file"><button>Upload</button></form><script>window.identity=crypto.randomUUID();window.onmessage=e=>window.popupResult=e.data;</script>`,
+      `<!doctype html><title>Fixture ${route}</title><h1>Invented browser page ${route}</h1><input aria-label="Page input"><button onclick="window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')">Popup</button><a href="/download">Download</a><form method="post" action="/upload" enctype="multipart/form-data"><input name="file" type="file"><button>Upload</button></form><script>window.identity=crypto.randomUUID();window.onmessage=e=>window.popupResult=e.data;</script>`,
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -582,7 +593,10 @@ test("Browser AC4 real uploads, visible downloads and popup opener work through 
         }),
       ]),
     );
-  await remote("/one", `void window.open('/popup')`);
+  await remote(
+    "/one",
+    `void window.open('/popup', 'fixture-popup', 'popup,width=500,height=500')`,
+  );
   await expect
     .poll(() => remote("/one", "window.popupResult"))
     .toBe("fixture-popup");
@@ -1582,4 +1596,141 @@ test("Quitting while a page-close decision is pending preserves its tab for rest
   expect(saved.browsers.some((item: any) => item.id === browser.id)).toBe(true);
   await shell.start();
   expect((await inspect(browser.id)).paneId).toBe(browser.paneId);
+});
+
+test("Ordinary target blank links become managed tabs in the opener group and survive restart", async () => {
+  const workspace = await shell.create("Managed browser tabs");
+  const parent = await open(workspace);
+  await remote(
+    "/one",
+    `{
+    window.parentIdentity = window.identity;
+    const a = document.createElement('a'); a.target = '_blank'; a.href = '/two'; document.body.append(a); a.click();
+  }`,
+  );
+  const tabs = async () =>
+    (await shell.cli<{ browsers: BrowserRecord[] }>("state")).browsers;
+  await expect
+    .poll(
+      async () =>
+        (await tabs()).filter((item) => item.url === origin + "/two").length,
+    )
+    .toBe(1);
+  await expect.poll(() => nativeView("/two")).not.toBeNull();
+  await expect
+    .poll(() => remote("/two", "document.readyState"))
+    .toBe("complete");
+  const child = (await tabs()).find((item) => item.url === origin + "/two")!;
+  expect((await shell.workspace(workspace)).activePaneId).toBe(child.paneId);
+  expect(
+    await remote("/one", "window.identity === window.parentIdentity"),
+  ).toBe(true);
+  expect(await remote("/two", "window.opener === null")).toBe(true);
+  expect(
+    await shell.app!.evaluate(
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+    ),
+  ).toBe(1);
+  const state = await shell.cli<import("../../src/types").AppState>("state");
+  expect(
+    state.workspaces
+      .find((w) => w.id === workspace)!
+      .groups!.find((g) => g.paneIds.includes(parent.paneId))!.paneIds,
+  ).toContain(child.paneId);
+  expect(await remote("/two", "typeof require + ':' + typeof window.cod")).toBe(
+    "undefined:undefined",
+  );
+  await shell.page.screenshot({
+    path: test.info().outputPath("managed-browser-tab.png"),
+  });
+  const identity = await remote("/two", "window.identity");
+  await remote(
+    "/two",
+    "document.querySelector('input').value = 'invented unsaved form'",
+  );
+  await shell.cli("browser", "close", "--id", parent.id);
+  expect(await remote("/two", "window.identity")).toBe(identity);
+  expect(await remote("/two", "document.querySelector('input').value")).toBe(
+    "invented unsaved form",
+  );
+  await shell.stop();
+  await shell.start();
+  expect((await tabs()).map((item) => item.id)).toEqual(
+    expect.arrayContaining([child.id]),
+  );
+});
+
+test("Unnamed authentication tabs retain opener messaging, POST navigation and page self-close", async () => {
+  const workspace = await shell.create("Tab opener compatibility");
+  const parent = await open(workspace);
+  await remote("/one", `void window.open('/popup')`);
+  await expect
+    .poll(() => remote("/one", "window.popupResult"))
+    .toBe("fixture-popup");
+  const tabs = async () =>
+    (await shell.cli<{ browsers: BrowserRecord[] }>("state")).browsers;
+  await expect
+    .poll(
+      async () =>
+        (await tabs()).filter((item) => item.url === origin + "/popup").length,
+    )
+    .toBe(1);
+  expect(await remote("/popup", "window.opener !== null")).toBe(true);
+  await remote("/popup", "window.close()");
+  await expect
+    .poll(async () =>
+      (await tabs()).some((item) => item.url === origin + "/popup"),
+    )
+    .toBe(false);
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    parent.paneId,
+  );
+  await remote(
+    "/one",
+    `{
+    const form = document.createElement('form'); form.method = 'post'; form.action = '/new-tab-post'; form.target = '_blank';
+    const input = document.createElement('input'); input.name = 'fixture'; input.value = 'invented'; form.append(input); document.body.append(form); form.submit();
+  }`,
+  );
+  await expect.poll(() => nativeView("/new-tab-post")).not.toBeNull();
+  await expect
+    .poll(() => remote("/new-tab-post", "document.body.textContent"))
+    .toBe("POST:fixture=invented");
+  await expect
+    .poll(async () =>
+      (await tabs()).some((item) => item.url === origin + "/new-tab-post"),
+    )
+    .toBe(true);
+  expect(
+    await shell.app!.evaluate(
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+    ),
+  ).toBe(1);
+});
+
+test("New browser tabs opened in a background workspace retain their origin without stealing focus", async () => {
+  const first = await shell.create("Origin workspace");
+  const parent = await open(first);
+  const second = await shell.create("Foreground workspace");
+  const activePane = (await shell.workspace(second)).activePaneId;
+  await remote("/one", "void window.open('/two')");
+  const tabs = async () =>
+    (await shell.cli<{ browsers: BrowserRecord[] }>("state")).browsers;
+  await expect
+    .poll(async () =>
+      (await tabs()).some((item) => item.url === origin + "/two"),
+    )
+    .toBe(true);
+  const child = (await tabs()).find((item) => item.url === origin + "/two")!;
+  expect(child.workspaceId).toBe(first);
+  expect((await shell.state()).activeWorkspaceId).toBe(second);
+  expect((await shell.workspace(second)).activePaneId).toBe(activePane);
+  expect((await shell.workspace(first)).activePaneId).toBe(parent.paneId);
+  await expect.poll(() => nativeView("/two")).not.toBeNull();
+  expect((await nativeView("/two"))?.visible).toBe(false);
 });
