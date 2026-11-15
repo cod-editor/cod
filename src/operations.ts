@@ -97,6 +97,13 @@ export class ApplicationOperations {
   async initialize(): Promise<void> {
     await this.settings.load();
     await this.store.load();
+    if (
+      !this.store.data.workspaces.length &&
+      !this.store.data.closedWorkspaces?.length
+    )
+      await this.store.change(() =>
+        this.workspaces.createWorkspace("Untitled"),
+      );
     this.conversations.restoreInterrupted();
     await this.files.restoreIdentity();
     this.browsers.restoreSubmissions();

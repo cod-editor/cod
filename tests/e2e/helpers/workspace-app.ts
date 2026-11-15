@@ -139,6 +139,7 @@ export class WorkspaceApp {
         return Boolean(page);
       })
       .toBe(true);
+    await this.page.locator('body[data-ready="true"]').waitFor();
     await this.page
       .getByRole("button", { name: "Switch workspace", exact: true })
       .waitFor();

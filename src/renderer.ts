@@ -191,14 +191,19 @@ window.cod.onKeymap((keymap) => {
 });
 void Promise.all([keymapReady, initializeAppearance()])
   .then(() => invoke<AppState>("state"))
-  .then(async (next) => {
+  .then((next) => {
     state = next;
-    if (!next.workspaces.length && !next.closedWorkspaces?.length) {
-      await invoke("workspace.create", { name: "Untitled" });
-      commands.focusComposer();
-      return;
-    }
     render();
+    if (
+      document.activeElement === document.body &&
+      !document.querySelector("dialog[open]")
+    )
+      panes
+        .querySelector<HTMLTextAreaElement>(
+          '[data-active="true"] textarea[aria-label="Message"]',
+        )
+        ?.focus();
+    document.body.dataset.ready = "true";
   })
   .catch(() => undefined);
 

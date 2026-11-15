@@ -19,6 +19,7 @@ export class ApplicationStateStore {
     terminals: [],
     browsers: [],
     pinnedSites: [],
+    browserDownloads: [],
     drafts: {},
   };
   private composerCheckpoint = "initial";

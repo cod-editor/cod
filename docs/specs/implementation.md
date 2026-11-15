@@ -14,6 +14,8 @@ Provider inspection is read-only and reports native capabilities rather than inv
 
 ## Identity, layout and focus
 
+A fresh profile exposes one Untitled workspace with an empty composer before either the GUI or command socket can observe it. Startup initialization must not race later workspace creation or capture focus after the user opens a command or starts typing. A profile with deliberately closed workspaces remains empty. Transient body focus during dialog teardown must not replace the remembered control, caret or selection.
+
 - A workspace owns folders, conversations, saved material and a split tree. A pane group holds tabs; a tab refers to content. Moving or splitting a tab must not create another native controller.
 - New chat remains available with no open workspaces: create a fresh unnamed workspace and empty composer without restoring closed tasks or starting inference. Reuse a pristine empty composer for this global action.
 - New workspaces begin with a chat. Material opens to the left and chats/terminals to the right by default; explicit moves allow mixed tab types and nested horizontal/vertical splits.

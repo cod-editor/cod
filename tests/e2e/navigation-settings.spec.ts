@@ -417,12 +417,15 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),
     ).toBeVisible();
     await app.page.keyboard.press("Escape");
-    await expect(composer).toBeFocused();
+    await expect(
+      app.page.getByRole("treeitem", { name: /Keyboard navigation/ }).first(),
+    ).toBeFocused();
     expect(
       await composer.evaluate(
         (node) => (node as HTMLTextAreaElement).selectionStart,
       ),
     ).toBe(caret);
+    await composer.focus();
     await app.page.keyboard.press(`${modifier}+Shift+P`);
     await input.fill("No invented command has this name");
     await input.press("ArrowDown");

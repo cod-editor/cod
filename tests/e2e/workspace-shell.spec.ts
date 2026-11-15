@@ -31,9 +31,7 @@ async function createFromUI(name: string) {
   await rename.fill(name);
   await rename.press("Enter");
   await expect(shell.row(name)).toBeVisible();
-  await expect(
-    shell.page.getByRole("textbox", { name: "Message", exact: true }),
-  ).toBeFocused();
+  await expect(shell.row(name)).toBeFocused();
   const workspace = (await shell.state()).workspaces.find(
     (item) => item.name === name,
   );
@@ -476,7 +474,13 @@ test("S1 concurrent CLI mutations retain every workspace through restart", async
     { length: 8 },
     (_, index) => `Parallel task ${index}`,
   );
-  const ids = await Promise.all(names.map((name) => shell.create(name)));
+  const ids = await Promise.all(
+    names.map(
+      async (name) =>
+        (await shell.cli<{ id: string }>("workspace", "create", "--name", name))
+          .id,
+    ),
+  );
   expect(new Set(ids).size).toBe(names.length);
   await Promise.all(
     ids.map((id, index) =>

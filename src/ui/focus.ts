@@ -142,7 +142,11 @@ export function createFocusManager(
   let remembered: FocusLocation = {};
   let nativeOrigin = false;
   const remember = () => {
-    if (!document.activeElement?.closest("dialog")) {
+    if (
+      document.activeElement &&
+      document.activeElement !== document.body &&
+      !document.activeElement.closest("dialog")
+    ) {
       nativeOrigin = false;
       remembered = focusLocation();
     }
@@ -159,12 +163,14 @@ export function createFocusManager(
   };
   const capture = (): FocusLocation => {
     if (nativeOrigin) return remembered;
-    const location = focusLocation();
     if (
-      document.activeElement !== document.body &&
-      !document.activeElement?.closest("dialog")
+      !document.activeElement ||
+      document.activeElement === document.body ||
+      document.activeElement.closest("dialog")
     )
-      remembered = location;
+      return remembered;
+    const location = focusLocation();
+    remembered = location;
     return location;
   };
   const restoreAfterClose = () =>
