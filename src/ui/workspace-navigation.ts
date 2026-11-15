@@ -651,5 +651,6 @@ export function createWorkspaceNavigation(
     focusWorkspace,
     renameWorkspace,
     renameConversation,
+    closeWorkspace,
   };
 }

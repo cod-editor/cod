@@ -23,9 +23,20 @@ import { appearanceDialog, changeTextSize } from "./appearance";
 import { inputDialog, confirmAction } from "./dialogs";
 import { actionButton as paneButton, showActionError } from "./action-feedback";
 import { menu, type MenuAction } from "./controls";
-import type { AppState, PaneState } from "../types";
+import type {
+  AppState,
+  PaneState,
+  WorkspaceState,
+  ConversationState,
+} from "../types";
 import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
+type ConversationAction = Exclude<MenuAction, null> & { command?: CommandId };
+interface CommandContext {
+  workspaceId?: string;
+  paneId?: string;
+  conversationId?: string;
+}
 interface CommandFeatures {
   focus: ReturnType<typeof createFocusManager>;
   files: { quickOpen: () => void; search: () => void };
@@ -41,6 +52,7 @@ interface CommandFeatures {
     focusWorkspace: (id: string) => Promise<void>;
     renameWorkspace: (id: string) => Promise<void>;
     renameConversation: (id: string) => Promise<void>;
+    closeWorkspace: (workspace: WorkspaceState) => void;
   };
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
@@ -67,6 +79,7 @@ export function createCommands(
   );
   const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const events = new AbortController();
+  let refreshPalette: (() => void) | undefined;
   const listen = (
     type: "keydown",
     callback: (event: KeyboardEvent) => void,
@@ -78,9 +91,7 @@ export function createCommands(
     });
   const activeWorkspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
-  function moveConversation(
-    conversation: import("../types").ConversationState,
-  ): void {
+  function moveConversation(conversation: ConversationState): void {
     const dialog = document.createElement("dialog");
     dialog.className = "picker search-picker";
     dialog.setAttribute("aria-label", "Move conversation to workspace");
@@ -118,16 +129,18 @@ export function createCommands(
     input.focus();
   }
   function conversationActions(
-    conversation: import("../types").ConversationState,
-  ): MenuAction[] {
-    const rename: MenuAction = {
+    conversation: ConversationState,
+  ): Array<ConversationAction | null> {
+    const rename: ConversationAction = {
+      command: "conversation.rename",
       label: "Rename",
       run: () => {
         void navigation.renameConversation(conversation.id);
       },
     };
     const removalReason = conversationRemovalReason(getState(), conversation);
-    const remove: MenuAction = {
+    const remove: ConversationAction = {
+      command: "conversation.remove",
       label: "Remove from workspace",
       disabled: !!removalReason,
       title:
@@ -152,6 +165,7 @@ export function createCommands(
         rename,
         {
           label: "Open CLI terminal",
+          command: "conversation.openCli",
           disabled: !terminal,
           run: () => {
             if (terminal)
@@ -163,6 +177,7 @@ export function createCommands(
         },
         {
           label: "Return to chat",
+          command: "conversation.reclaim",
           disabled:
             !!terminal && ["running", "starting"].includes(terminal.status),
           run: () =>
@@ -172,23 +187,35 @@ export function createCommands(
         remove,
       ];
     }
+    const handoffReason = conversation.queuedMessages?.length
+      ? "Send or cancel queued messages first"
+      : ["working", "waiting", "starting"].includes(conversation.status) ||
+          conversation.pendingPermissions.length
+        ? "Finish or interrupt the active response first"
+        : undefined;
     return [
       rename,
       {
         label: "Session info...",
+        command: "conversation.info",
         run: () =>
           showProviderCommands({ id: conversation.id, invoke }, "status"),
       },
       {
         label: "Move to workspace...",
+        command: "conversation.move",
         disabled: getState().workspaces.length < 2,
+        title:
+          getState().workspaces.length < 2
+            ? "Create another workspace first"
+            : undefined,
         run: () => moveConversation(conversation),
       },
       {
         label: "Continue in CLI",
-        disabled: ["working", "waiting", "starting"].includes(
-          conversation.status,
-        ),
+        command: "conversation.handoff",
+        disabled: !!handoffReason,
+        title: handoffReason,
         run: () => void invoke("conversation.handoff", { id: conversation.id }),
       },
       null,
@@ -491,10 +518,43 @@ export function createCommands(
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);
   };
+  function focusedTreeId(): string | undefined {
+    return document.activeElement?.closest<HTMLElement>(
+      '[role="treeitem"][data-workspace-id]',
+    )?.dataset.workspaceId;
+  }
+  function conversationTarget(pane = currentPane()) {
+    const treeId = focusedTreeId();
+    const id =
+      treeId ??
+      (pane?.kind === "conversation" ? pane.conversationId : undefined);
+    return getState().conversations.find(
+      (conversation) => conversation.id === id,
+    );
+  }
+  function workspaceTarget(fallback = activeWorkspace()) {
+    const id = focusedTreeId();
+    const owner =
+      getState().conversations.find((item) => item.id === id)?.workspaceId ??
+      getState().reviews?.find((item) => item.id === id)?.workspaceId ??
+      id;
+    return getState().workspaces.find((item) => item.id === owner) ?? fallback;
+  }
+  function conversationCommand(
+    id: CommandId,
+    target: ConversationState | null | undefined,
+  ) {
+    return target
+      ? conversationActions(target).find((action) => action?.command === id)
+      : undefined;
+  }
   function disabledReason(
     id: CommandId,
-    w = activeWorkspace(),
-    pane = currentPane(),
+    w: WorkspaceState | null | undefined = activeWorkspace(),
+    pane: PaneState | null | undefined = currentPane(),
+    conversation: ConversationState | null = conversationTarget(
+      pane ?? undefined,
+    ) ?? null,
   ): string | undefined {
     const group = w?.groups?.find((g) =>
       g.paneIds.includes(pane?.id ?? w.activePaneId),
@@ -519,6 +579,15 @@ export function createCommands(
       ].includes(id)
     )
       return;
+    if (id.startsWith("conversation.")) {
+      if (!conversation) return "Select a conversation first";
+      const action = conversationCommand(id, conversation);
+      if (!action) return "This action is unavailable for this session";
+      return action.disabled
+        ? (action.title ??
+            "This action is unavailable while the native CLI is running")
+        : undefined;
+    }
     if (!w) return "Open a workspace first";
     if (id === "pane.toggleRight") return focusTargets.chatVisibilityReason();
     if (id === "pane.toggleLeft") return layout.paneToggleReason("left");
@@ -588,7 +657,11 @@ export function createCommands(
     )
       return "Select a review first";
   }
-  async function execute(id: CommandId, browserId?: string): Promise<void> {
+  async function execute(
+    id: CommandId,
+    browserId?: string,
+    context?: CommandContext,
+  ): Promise<void> {
     if (browserId) focus.native(browserId);
     if (document.querySelector("dialog[open]")) return;
     const browser = browserId
@@ -598,23 +671,37 @@ export function createCommands(
     const focusedPaneId =
       document.activeElement?.closest<HTMLElement>("[data-pane-id]")?.dataset
         .paneId;
-    const w = browser
+    let w = browser
       ? getState().workspaces.find((w) => w.id === browser.workspaceId)
       : (getState().workspaces.find((w) =>
           w.panes.some((p) => p.id === focusedPaneId),
         ) ?? activeWorkspace());
-    const pane = browser
+    let pane = browser
       ? w?.panes.find((p) => p.id === browser.paneId)
       : (w?.panes.find((p) => p.id === focusedPaneId) ?? currentPane());
+    if (context) {
+      w = getState().workspaces.find((item) => item.id === context.workspaceId);
+      pane = w?.panes.find((item) => item.id === context.paneId);
+    }
+    const conversation = context
+      ? (getState().conversations.find(
+          (item) => item.id === context.conversationId,
+        ) ?? null)
+      : (conversationTarget(pane) ?? null);
     const group = w?.groups?.find((g) =>
       g.paneIds.includes(pane?.id ?? w.activePaneId),
     );
-    const reason = disabledReason(id, w, pane);
+    const reason = disabledReason(id, w ?? null, pane ?? null, conversation);
     if (reason) {
       setStatus(reason);
       return;
     }
     try {
+      const action = conversationCommand(id, conversation);
+      if (action) {
+        action.run();
+        return;
+      }
       const paneNumber = /^pane\.focus([1-9])$/.exec(id);
       if (paneNumber) {
         await keys.spatial(Number(paneNumber[1]) - 1, w?.id);
@@ -651,9 +738,16 @@ export function createCommands(
         case "workspace.new":
           workspaceDialog("create");
           break;
-        case "workspace.rename":
-          workspaceDialog("rename");
+        case "workspace.rename": {
+          const target = context ? w : workspaceTarget(w);
+          if (target) await navigation.renameWorkspace(target.id);
           break;
+        }
+        case "workspace.close": {
+          const target = context ? w : workspaceTarget(w);
+          if (target) navigation.closeWorkspace(target);
+          break;
+        }
         case "workspace.focusTree":
           await focusTargets.toggle("workspaces");
           break;
@@ -926,6 +1020,13 @@ export function createCommands(
   function commandPalette(): void {
     if (document.querySelector("dialog[open]")) return;
     const returnFocus = focus.capture();
+    const workspace = workspaceTarget();
+    const conversation = conversationTarget();
+    const context: CommandContext = {
+      workspaceId: workspace?.id,
+      paneId: conversation?.paneId ?? workspace?.activePaneId,
+      conversationId: conversation?.id,
+    };
     let performed = false;
     const dialog = document.createElement("dialog");
     dialog.setAttribute("aria-label", "Command palette");
@@ -937,6 +1038,7 @@ export function createCommands(
     const definitions = commandDefinitions.filter(
       (command) => command.id !== "palette",
     );
+    const buttons = new Map<CommandId, HTMLButtonElement>();
     for (const definition of definitions) {
       const name = definition.title;
       const button = document.createElement("button");
@@ -950,15 +1052,6 @@ export function createCommands(
         hint.setAttribute("aria-hidden", "true");
         button.append(hint);
       }
-      const reason = disabledReason(definition.id);
-      button.disabled = !!reason;
-      if (reason) {
-        button.title = reason;
-        const hint = document.createElement("small");
-        hint.className = "command-disabled-reason";
-        hint.textContent = reason;
-        button.append(hint);
-      }
       button.dataset.command =
         `${name} ${definition.aliases.join(" ")}`.toLowerCase();
       button.addEventListener("click", () => {
@@ -967,12 +1060,54 @@ export function createCommands(
         // The next dialog must inherit the original invoker, not the palette
         // or a transient native focus restoration while close is dispatched.
         focus.restore(returnFocus);
-        void execute(definition.id);
+        void execute(definition.id, undefined, context);
       });
+      buttons.set(definition.id, button);
       list.append(button);
     }
     const selection = createSearchList(input, list);
     selection.update();
+    const refresh = () => {
+      const workspace = getState().workspaces.find(
+        (item) => item.id === context.workspaceId,
+      );
+      const pane = workspace?.panes.find((item) => item.id === context.paneId);
+      const conversation =
+        getState().conversations.find(
+          (item) => item.id === context.conversationId,
+        ) ?? null;
+      const previous = document.getElementById(
+        input.getAttribute("aria-activedescendant") ?? "",
+      ) as HTMLButtonElement | null;
+      let changed = false;
+      for (const [id, button] of buttons) {
+        const reason = disabledReason(
+          id,
+          workspace ?? null,
+          pane ?? null,
+          conversation,
+        );
+        if (button.disabled === !!reason && button.title === (reason ?? ""))
+          continue;
+        changed = true;
+        button.disabled = !!reason;
+        button.title = reason ?? "";
+        let hint = button.querySelector<HTMLElement>(
+          ".command-disabled-reason",
+        );
+        if (reason) {
+          if (!hint) {
+            hint = document.createElement("small");
+            hint.className = "command-disabled-reason";
+            button.append(hint);
+          }
+          hint.textContent = reason;
+        } else hint?.remove();
+      }
+      if (changed) selection.update(previous ?? undefined);
+    };
+    refreshPalette = refresh;
+    refresh();
     input.addEventListener("input", () => {
       for (const button of list.querySelectorAll<HTMLButtonElement>("button")) {
         button.hidden = !button.dataset.command!.includes(
@@ -986,6 +1121,7 @@ export function createCommands(
     document.body.append(dialog);
     dialog.addEventListener("close", () => {
       dialog.remove();
+      if (refreshPalette === refresh) refreshPalette = undefined;
       if (!performed) focus.restore(returnFocus);
     });
     dialog.showModal();
@@ -1117,7 +1253,9 @@ export function createCommands(
   return {
     settings: () => execute("settings"),
     execute,
+    refresh: () => refreshPalette?.(),
     dispose: () => {
+      refreshPalette = undefined;
       events.abort();
       focusTargets.dispose();
     },

@@ -172,6 +172,7 @@ window.cod.onCommand(({ command, browserId }) => {
 let pendingStateRender = false;
 window.cod.onState((next) => {
   state = next;
+  commands.refresh();
   if (pendingStateRender) return;
   pendingStateRender = true;
   requestAnimationFrame(() => {
