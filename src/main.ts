@@ -48,6 +48,7 @@ registerAgentPageScheme([
 ]);
 
 const dataDirectory = defaultDataDirectory();
+let runtimeJournal: DiagnosticJournal | undefined;
 let operations: ApplicationOperations;
 let initialized = false;
 const keyboardPlatform = process.platform === "darwin" ? "darwin" : "linux";
@@ -448,7 +449,24 @@ async function start(): Promise<void> {
       ) {
         throw new Error("Operation rejected from an untrusted renderer");
       }
-      return operations.dispatch(request, true);
+      const tracked = request.op === "pane.close";
+      const started = Date.now();
+      if (tracked) runtimeJournal?.record("close-tab-request");
+      try {
+        const result = await operations.dispatch(request, true);
+        if (tracked)
+          runtimeJournal?.record("close-tab-result", {
+            elapsedMs: Date.now() - started,
+            closed: (result as { closed?: boolean })?.closed !== false,
+          });
+        return result;
+      } catch (error) {
+        if (tracked)
+          runtimeJournal?.record("close-tab-error", {
+            elapsedMs: Date.now() - started,
+          });
+        throw error;
+      }
     });
     const settingsItem: Electron.MenuItemConstructorOptions = {
       id: "settings",
@@ -502,6 +520,7 @@ async function start(): Promise<void> {
 
 if (ownsInstance) {
   const journal = new DiagnosticJournal(dataDirectory);
+  runtimeJournal = journal;
   journal.start(app.getVersion());
   const sample = () => {
     try {
@@ -531,6 +550,31 @@ if (ownsInstance) {
     });
   });
   app.on("web-contents-created", (_event, contents) => {
+    contents.on("before-input-event", (_event, input) => {
+      // Only the close chord, never arbitrary text or URLs.
+      if (
+        input.type !== "keyDown" ||
+        input.isAutoRepeat ||
+        (!input.meta && !input.control) ||
+        (input.code !== "KeyW" && input.key.toLowerCase() !== "w")
+      )
+        return;
+      journal.record("close-tab-key", {
+        id: contents.id,
+        type: contents.getType(),
+        meta: input.meta,
+        control: input.control,
+        shift: input.shift,
+        alt: input.alt,
+        composing: !!input.isComposing,
+        command:
+          resolveKeybinding(
+            nativeKeyInput(input),
+            process.platform === "darwin" ? "darwin" : "linux",
+            "shell",
+          )?.command ?? null,
+      });
+    });
     contents.on("render-process-gone", (_event, details) => {
       journal.record("renderer-gone", {
         id: contents.id,

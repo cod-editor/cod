@@ -1240,6 +1240,20 @@ test("Close tab shortcut closes the focused chat and preserves its session", asy
     ),
   ).toBe(true);
   await session.detach();
+  await expect
+    .poll(async () => {
+      const journal = await readFile(
+        path.join(shell.data, "diagnostics", "runtime.jsonl"),
+        "utf8",
+      );
+      return journal.includes('"event":"close-tab-result"');
+    })
+    .toBe(true);
+  const journal = await readFile(
+    path.join(shell.data, "diagnostics", "runtime.jsonl"),
+    "utf8",
+  );
+  expect(journal).not.toContain("Keep this draft when closing the tab.");
   const state = await shell.cli<AppState>("state");
   expect(state.conversations.some((c) => c.id === second.id)).toBe(true);
   expect(
