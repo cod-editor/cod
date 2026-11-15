@@ -1371,6 +1371,7 @@ test("Optional bookmarks edit in place and stay separate from home pins", async 
       ),
     )
     .toBe(true);
+  await expect(dialog()).toHaveCount(0);
   await shell.command("Bookmarks");
   await dialog().getByRole("button", { name: "Remove", exact: true }).click();
   await expect(dialog()).toContainText("No bookmarks");
