@@ -12,8 +12,14 @@ import {
 import { mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { BrowserDiagnostics } from "./diagnostics";
+import {
+  navigationWindow,
+  normalizeNavigation,
+  type BrowserNavigation,
+} from "./navigation";
 
 export interface BrowserSnapshot {
+  navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
   url: string;
@@ -40,6 +46,7 @@ export type BrowserEvent =
       download: BrowserDownload;
     };
 interface Resource {
+  navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
   view: WebContentsView;
@@ -313,6 +320,18 @@ export class BrowserService {
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
       const committed = (_event: Electron.Event, committedUrl: string) => {
+        const history = resource.contents.navigationHistory;
+        const index = history.getActiveIndex();
+        const { start, end } = navigationWindow(history.length(), index);
+        const entries = [];
+        for (let i = start; i < end; i++) {
+          const entry = history.getEntryAtIndex(i);
+          entries.push({ url: entry.url, title: entry.title });
+        }
+        resource.navigation = normalizeNavigation({
+          entries,
+          index: index - start,
+        });
         if (/^https?:\/\//.test(committedUrl))
           resource.lastSuccessfulUrl = committedUrl;
         changed();
@@ -335,17 +354,30 @@ export class BrowserService {
     id: string;
     workspaceId: string;
     url: string;
+    deferNavigation?: boolean;
     restoredFailure?: {
       url: string;
       error: string;
       title?: string;
       lastSuccessfulUrl?: string;
+      navigation?: BrowserNavigation;
     };
   }) {
     const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
     const resource = this.createResource(input);
     try {
-      await this.load(resource, url);
+      const saved = normalizeNavigation(input.restoredFailure?.navigation);
+      const previous = saved?.entries.filter(
+        (entry) =>
+          entry.url !== input.restoredFailure?.url &&
+          entry.url !== "about:blank",
+      );
+      if (input.restoredFailure && previous?.length)
+        await this.restoreNavigation(input.id, {
+          entries: [...previous, { url: "about:blank", title: "" }],
+          index: previous.length,
+        });
+      else if (!input.deferNavigation) await this.load(resource, url);
       if (input.restoredFailure) {
         resource.restoredFailure = true;
         resource.restoredTitle =
@@ -402,6 +434,16 @@ export class BrowserService {
     await this.load(resource, safeUrl(url, this.options.isAllowedExtensionUrl));
     return this.snapshot(id);
   }
+  async restoreNavigation(id: string, value: BrowserNavigation) {
+    const resource = this.resource(id);
+    const navigation = normalizeNavigation(value);
+    if (!navigation) throw new Error("Saved browser history is invalid");
+    resource.navigation = navigation;
+    await resource.contents.navigationHistory.restore(navigation);
+    if (this.resources.get(id) !== resource)
+      throw new Error("Browser view closed during restoration");
+    return this.snapshot(id);
+  }
   back(id: string) {
     const wc = this.resource(id).contents;
     if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
@@ -440,6 +482,7 @@ export class BrowserService {
       loading: !resource.error && wc.isLoading(),
       error: resource.error,
       lastSuccessfulUrl: resource.lastSuccessfulUrl,
+      navigation: resource.navigation,
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
       visible: resource.visible,

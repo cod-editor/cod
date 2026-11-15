@@ -5,6 +5,7 @@ import {
   type SitePermission,
 } from "../browser/permission-types";
 import { BrowserLibrary } from "../browser/library";
+import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
 import { resolveAddress } from "../browser/address";
 import {
@@ -732,12 +733,14 @@ export class BrowserApplicationService {
     return structuredClone(this.browser(record.id));
   }
   async restoreBrowser(record: BrowserState): Promise<void> {
-    if (!record.error) return this.loadBrowser(record, record.url);
+    if (!record.error)
+      return this.loadBrowser(record, record.url, record.navigation);
     const restoredFailure = {
       url: record.url,
       error: record.error,
       title: record.title,
       lastSuccessfulUrl: record.lastSuccessfulUrl,
+      navigation: record.navigation,
     };
     const snapshot = await this.requireBrowserService().open({
       id: record.id,
@@ -761,8 +764,18 @@ export class BrowserApplicationService {
     );
     return structuredClone(this.browser(id));
   }
-  async loadBrowser(record: BrowserState, url: string): Promise<void> {
+  async loadBrowser(
+    record: BrowserState,
+    url: string,
+    navigation?: import("../browser/navigation").BrowserNavigation,
+  ): Promise<void> {
     const service = this.requireBrowserService();
+    const savedNavigation = normalizeNavigation(navigation);
+    const restore =
+      savedNavigation?.entries[savedNavigation.index]?.url === url &&
+      !service.list().some((item) => item.id === record.id)
+        ? savedNavigation
+        : undefined;
     if (!this.store.data.browsers.some((item) => item.id === record.id))
       throw new Error("Browser closed");
     const generation = (this.browserLoads.get(record.id) ?? 0) + 1;
@@ -789,6 +802,7 @@ export class BrowserApplicationService {
           id: record.id,
           workspaceId: record.workspaceId,
           url: "about:blank",
+          deferNavigation: Boolean(restore),
         });
         this.browserInitializations.set(record.id, initialization);
         void initialization
@@ -802,7 +816,9 @@ export class BrowserApplicationService {
       await this.browserAddons?.whenReady(admission.signal);
       if (!current())
         throw new Error("Browser navigation superseded or closed");
-      const snapshot = await service.navigate(record.id, url);
+      const snapshot = restore
+        ? await service.restoreNavigation(record.id, restore)
+        : await service.navigate(record.id, url);
       if (!current())
         throw new Error("Browser navigation superseded or closed");
       Object.assign(this.browser(record.id), snapshot);

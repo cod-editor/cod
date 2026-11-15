@@ -98,6 +98,8 @@ test.beforeEach(async () => {
   slowResponse = undefined;
   server = createServer((request, response) => {
     requests.push(request.url!);
+    // Network-count assertions must observe loads rather than HTTP cache hits.
+    response.setHeader("Cache-Control", "no-store");
     const route = new URL(request.url!, "http://fixture").pathname;
     if (route === "/new-tab-post") {
       const chunks: Buffer[] = [];
@@ -1528,6 +1530,10 @@ test("Restart loads only visible browser tabs and leaves inactive workspace page
   await shell.stop();
   requests = [];
   await shell.start();
+  await expect.poll(() => nativeView("/one")).not.toBeNull();
+  await expect
+    .poll(() => remote("/one", "document.querySelector('h1')?.textContent"))
+    .toBe("Invented browser page /one");
   await expect.poll(() => requests.some((url) => url === "/one")).toBe(true);
   // A read-only inspection and unrelated state notification must not wake it.
   expect((await inspect(inactive.id)).url).toBe(origin + "/two");
@@ -1743,4 +1749,148 @@ test("New browser tabs opened in a background workspace retain their origin with
   expect((await shell.workspace(first)).activePaneId).toBe(parent.paneId);
   await expect.poll(() => nativeView("/two")).not.toBeNull();
   expect((await nativeView("/two"))?.visible).toBe(false);
+});
+
+test("Reopening a browser tab restores Back and Forward without extra history requests or form payloads", async () => {
+  const workspace = await shell.create("Tab navigation history");
+  const record = await open(workspace);
+  for (const route of ["/two", "/three"])
+    await shell.cli(
+      "browser",
+      "navigate",
+      "--id",
+      record.id,
+      "--url",
+      origin + route,
+    );
+  await shell.cli("browser", "back", "--id", record.id);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/two");
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    record.paneId,
+  );
+  requests = [];
+  await shell.cli("pane", "reopen", "--workspace", workspace);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/two");
+  await expect.poll(() => nativeView("/two")).not.toBeNull();
+  await expect
+    .poll(() => remote("/two", "document.querySelector('h1')?.textContent"))
+    .toBe("Invented browser page /two");
+  expect(
+    requests.filter((route) => ["/one", "/two", "/three"].includes(route)),
+  ).toEqual(["/two"]);
+  const state = await shell.cli<import("../../src/types").AppState>("state");
+  const restored = state.browsers.find((item) => item.id === record.id)!;
+  expect(restored.canGoBack).toBe(true);
+  expect(restored.canGoForward).toBe(true);
+  expect(restored.navigation?.entries.map((item) => item.url)).toEqual(
+    ["/one", "/two", "/three"].map((route) => origin + route),
+  );
+  expect(restored.navigation?.index).toBe(1);
+  for (const [operation, destination] of [
+    ["back", "/one"],
+    ["forward", "/two"],
+    ["forward", "/three"],
+  ]) {
+    await shell.cli("browser", operation, "--id", record.id);
+    await expect
+      .poll(async () => (await inspect(record.id)).url)
+      .toBe(origin + destination);
+  }
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  await expect.poll(() => nativeView("/three")).not.toBeNull();
+  await shell.cli("browser", "back", "--id", record.id);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/two");
+});
+
+test("Restoring tab history never resubmits a POST form", async () => {
+  const workspace = await shell.create("POST-safe history");
+  const record = await open(workspace);
+  await remote(
+    "/one",
+    `{
+    const form = document.createElement('form'); form.method = 'post'; form.action = '/new-tab-post';
+    const input = document.createElement('input'); input.name = 'fixture'; input.value = 'private-form-value';
+    form.append(input); document.body.append(form); form.submit();
+  }`,
+  );
+  await expect.poll(() => nativeView("/new-tab-post")).not.toBeNull();
+  await expect
+    .poll(() => remote("/new-tab-post", "document.body.textContent"))
+    .toBe("POST:fixture=private-form-value");
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    record.paneId,
+  );
+  const saved = await readFile(path.join(shell.data, "state.json"), "utf8");
+  expect(saved).not.toContain("private-form-value");
+  expect(saved).not.toContain('"pageState"');
+  await shell.cli("pane", "reopen", "--workspace", workspace);
+  await expect
+    .poll(() => remote("/new-tab-post", "document.body.textContent"))
+    .toBe("GET:");
+  await shell.cli("browser", "back", "--id", record.id);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/one");
+});
+
+test("Failed tab restoration keeps navigation passive and explicit recovery retains older Back entries", async () => {
+  const workspace = await shell.create("Failed page history");
+  const record = await open(workspace);
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    origin + "/two",
+  );
+  const failed = await shell.raw(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    origin + "/recoverable",
+  );
+  expect(failed.code).not.toBe(0);
+  await expect
+    .poll(async () => Boolean((await inspect(record.id)).error))
+    .toBe(true);
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  await expect(
+    shell.pane(record.paneId).locator(".browser-failure"),
+  ).toBeVisible();
+  expect(
+    requests.filter((route) =>
+      ["/one", "/two", "/recoverable"].includes(route),
+    ),
+  ).toEqual([]);
+  await shell.cli("browser", "recover", "--id", record.id);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/two");
+  await shell.cli("browser", "back", "--id", record.id);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + "/one");
 });

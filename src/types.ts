@@ -33,6 +33,7 @@ export interface BrowserPane {
   browserId: string;
 }
 export interface BrowserState {
+  navigation?: import("./browser/navigation").BrowserNavigation;
   permissionRequests?: import("./browser/permission-types").SiteRequest[];
   permissionDenied?: string;
   agentPage?: {
