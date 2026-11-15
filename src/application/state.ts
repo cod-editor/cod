@@ -73,6 +73,8 @@ export class ApplicationStateStore {
           addons: undefined,
           visible: false,
           loading: false,
+          canGoBack: false,
+          canGoForward: false,
         })),
       });
     } catch (error) {

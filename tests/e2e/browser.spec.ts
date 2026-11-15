@@ -513,6 +513,7 @@ test("Browser AC3 background views preserve focus and shared cookies survive res
   await shell.start();
   for (const record of [one, two, extra])
     expect((await inspect(record.id)).paneId).toBe(record.paneId);
+  await expect.poll(async () => Boolean(await nativeView("/two"))).toBe(true);
   await expect
     .poll(() => remote("/two", "document.cookie"))
     .toContain("fixture_login=present");
@@ -1501,4 +1502,84 @@ test("File search covers the native browser with the Cod surface and restores it
   expect(await remote("/one", `document.querySelector('input').value`)).toBe(
     "Invented retained form",
   );
+});
+
+test("Restart loads only visible browser tabs and leaves inactive workspace pages dormant", async () => {
+  const first = await shell.create("Visible browser workspace");
+  const active = await open(first, "/one");
+  const second = await shell.create("Dormant browser workspace");
+  const inactive = await open(second, "/two");
+  await shell.cli("workspace", "focus", "--id", first);
+  await expect.poll(async () => (await nativeView("/one"))?.visible).toBe(true);
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  await expect.poll(() => requests.some((url) => url === "/one")).toBe(true);
+  // A read-only inspection and unrelated state notification must not wake it.
+  expect((await inspect(inactive.id)).url).toBe(origin + "/two");
+  await shell.cli(
+    "workspace",
+    "rename",
+    "--id",
+    first,
+    "--name",
+    "Still visible",
+  );
+  await expect(shell.row("Still visible")).toBeVisible();
+  expect(requests.some((url) => url === "/two")).toBe(false);
+  expect(await nativeView("/two")).toBeNull();
+  await shell.cli("workspace", "focus", "--id", second);
+  await expect.poll(async () => (await nativeView("/two"))?.visible).toBe(true);
+  expect(requests.filter((url) => url === "/two")).toHaveLength(1);
+  const identity = await remote("/two", "window.identity");
+  await remote(
+    "/two",
+    `document.body.innerHTML = '<input value="Retained workspace form">'; void 0;`,
+  );
+  await shell.cli("workspace", "focus", "--id", first);
+  await shell.cli("workspace", "focus", "--id", second);
+  await expect.poll(async () => (await nativeView("/two"))?.visible).toBe(true);
+  expect(await remote("/two", "window.identity")).toBe(identity);
+  expect(await remote("/two", `document.querySelector('input').value`)).toBe(
+    "Retained workspace form",
+  );
+  expect(requests.filter((url) => url === "/two")).toHaveLength(1);
+  expect((await inspect(active.id)).url).toBe(origin + "/one");
+});
+
+test("Quitting while a page-close decision is pending preserves its tab for restart", async () => {
+  const workspace = await shell.create("Pending close during quit");
+  const browser = await open(workspace);
+  await expect
+    .poll(async () => (await inspect(browser.id)).loading)
+    .toBe(false);
+  await remote(
+    "/one",
+    `document.body.innerHTML = '<input value="Invented unsaved form">'; document.querySelector('input').focus(); window.onbeforeunload = () => false; void 0;`,
+  );
+  await pageKey("/one", "A");
+  await shell.app!.evaluate(({ dialog }) => {
+    Object.assign(globalThis, { pendingCloseShown: false });
+    Object.assign(dialog, {
+      showMessageBox: () => {
+        (globalThis as any).pendingCloseShown = true;
+        return new Promise(() => {});
+      },
+    });
+  });
+  await pageKey("/one", "W", [
+    process.platform === "darwin" ? "meta" : "control",
+  ]);
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(() => (globalThis as any).pendingCloseShown),
+    )
+    .toBe(true);
+  await shell.stop();
+  const saved = JSON.parse(
+    await readFile(path.join(shell.data, "state.json"), "utf8"),
+  );
+  expect(saved.browsers.some((item: any) => item.id === browser.id)).toBe(true);
+  await shell.start();
+  expect((await inspect(browser.id)).paneId).toBe(browser.paneId);
 });

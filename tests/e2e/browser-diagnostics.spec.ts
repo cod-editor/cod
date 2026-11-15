@@ -68,7 +68,7 @@ test.beforeEach(async () => {
       );
     });
   }, secret);
-  const workspace = (await app.state()).workspaces[0].id;
+  const workspace = await app.create("Browser diagnostics fixture");
   browser = await app.cli(
     "browser",
     "open",

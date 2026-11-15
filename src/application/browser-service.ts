@@ -56,7 +56,8 @@ export class BrowserApplicationService {
   async toggleBlocking(id: string, enabled: boolean): Promise<void> {
     if (!this.browserAddons) throw new Error("Browser add-ons unavailable");
     await this.browserAddons.toggle(this.browser(id).url, enabled);
-    this.requireBrowserService().reload(id);
+    const service = this.requireBrowserService();
+    if (service.list().some((view) => view.id === id)) service.reload(id);
   }
   async shutdown(): Promise<void> {
     for (const controller of this.browserAdmissions.values())
@@ -288,11 +289,14 @@ export class BrowserApplicationService {
           .catch(() => undefined);
       },
       removeTab: (contents) => {
+        // Shutdown destroys native views but must retain their persisted tabs.
+        if (this.store.closing) return;
         const browser = browserForContents(contents);
         if (browser)
           void this.store
             .change(async () => {
-              if (await this.requestClose(browser)) this.removeBrowser(browser);
+              if (!this.store.closing && (await this.requestClose(browser)))
+                this.removeBrowser(browser);
             })
             .catch(() => undefined);
       },
@@ -336,10 +340,6 @@ export class BrowserApplicationService {
       },
     });
     this.browserService.onEvent((event) => this.browserEvent(event));
-    for (const browser of this.store.data.browsers.filter(
-      (item) => !item.agentPage,
-    ))
-      void this.restoreBrowser(browser).catch(() => undefined);
   }
   private syncNativeFocus(contents: Electron.WebContents, id: string): void {
     if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
@@ -516,6 +516,34 @@ export class BrowserApplicationService {
     const active = this.store.data.workspaces.find(
       (item) => item.id === this.store.data.activeWorkspaceId,
     );
+    const [width, height] = window.getContentSize();
+    // A restored record is inert until an actual visible viewport requests it.
+    // Existing views stay alive across workspace switches to retain forms/media.
+    for (const rect of rectangles) {
+      if (
+        !rect ||
+        ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
+        rect.x < 0 ||
+        rect.y < 0 ||
+        rect.width < 1 ||
+        rect.height < 1 ||
+        rect.x + rect.width > width + 1 ||
+        rect.y + rect.height > height + 1
+      )
+        continue;
+      const record = this.store.data.browsers.find(
+        (item) =>
+          item.id === rect.id &&
+          item.workspaceId === active?.id &&
+          !item.agentPage,
+      );
+      if (
+        record &&
+        !service.list().some((item) => item.id === record.id) &&
+        !this.browserInitializations.has(record.id)
+      )
+        void this.restoreBrowser(record).catch(() => undefined);
+    }
     const browser =
       this.store.data.browsers.find(
         (item) =>
@@ -535,7 +563,6 @@ export class BrowserApplicationService {
         this.selectBrowserContents(contents);
       }
     }
-    const [width, height] = window.getContentSize();
     for (const item of [
       ...service.list(),
       ...(this.agentPages?.list() ?? []),
@@ -747,8 +774,10 @@ export class BrowserApplicationService {
     }
   }
   async requestClose(record: BrowserState): Promise<boolean> {
+    if (this.store.closing) return false;
     if (record.agentPage) return true;
-    return (await this.browserService?.requestClose(record.id)) ?? true;
+    const closed = (await this.browserService?.requestClose(record.id)) ?? true;
+    return closed && !this.store.closing;
   }
   removeBrowser(record: BrowserState): void {
     this.store.data.browsers = this.store.data.browsers.filter(
@@ -1089,6 +1118,12 @@ export class BrowserApplicationService {
           throw new Error("Diagnostics action must be start, read or stop");
         if (record.agentPage || !this.browserService)
           throw new Error("Diagnostics require an external browser view");
+        if (!this.browserService.list().some((view) => view.id === id)) {
+          if (action === "start" && record.error)
+            await this.restoreBrowser(record);
+          else
+            throw new Error("Open the browser tab before starting diagnostics");
+        }
         return this.browserService.diagnostics(id, action);
       }
 
@@ -1133,6 +1168,12 @@ export class BrowserApplicationService {
           throw new Error(
             "Registered agent pages cannot recover browser navigation",
           );
+        if (
+          !this.requireBrowserService()
+            .list()
+            .some((view) => view.id === id)
+        )
+          await this.restoreBrowser(this.browser(id));
         await this.requireBrowserService().recover(id);
         return { id };
       }
