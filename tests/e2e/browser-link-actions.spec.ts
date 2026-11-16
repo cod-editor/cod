@@ -37,7 +37,14 @@ test.beforeEach(async () => {
         defaultHandler: false,
         externalFailure: false,
         pageActionErrors: [],
-        nativeMenu: { labels: [], enabled: [], closed: true },
+        nativeMenu: {
+          labels: [],
+          enabled: [],
+          shown: false,
+          closed: true,
+          clicked: [],
+        },
+        nativePopupDelay: 0,
       });
       shell.openExternal = async (url) => {
         (globalThis as any).externalUrls.push(url);
@@ -57,19 +64,35 @@ test.beforeEach(async () => {
       });
       const popup = Menu.prototype.popup;
       Menu.prototype.popup = function (options) {
-        Object.assign(globalThis, {
-          nativeMenu: {
-            labels: this.items.map((i) => i.label),
-            enabled: this.items
-              .filter((i) => i.type !== "separator" && i.enabled)
-              .map((i) => i.label),
-            closed: false,
-          },
+        const state = {
+          labels: this.items.map((i) => i.label),
+          enabled: this.items
+            .filter((i) => i.type !== "separator" && i.enabled)
+            .map((i) => i.label),
+          shown: false,
+          closed: false,
+          clicked: [] as string[],
+        };
+        Object.assign(globalThis, { nativeMenu: state });
+        this.once("menu-will-show", () => {
+          state.shown = true;
         });
         this.once("menu-will-close", () => {
-          (globalThis as any).nativeMenu.closed = true;
+          state.closed = true;
         });
-        popup.call(this, options);
+        for (const item of this.items) {
+          const click = item.click;
+          item.click = (...args: unknown[]) => {
+            state.clicked.push(item.label);
+            return click.apply(item, args);
+          };
+        }
+        // The native request can precede presentation. The controlled fixture
+        // exercises that gap while the zero-delay path keeps the real call intact.
+        const show = () => popup.call(this, options);
+        const delay = (globalThis as any).nativePopupDelay;
+        if (delay > 0) setTimeout(show, delay);
+        else show();
       };
     },
   );
@@ -163,6 +186,11 @@ async function nativeContext(
     },
     { url, selector, keyboard },
   );
+  await expect
+    .poll(() => app.app!.evaluate(() => (globalThis as any).nativeMenu.shown), {
+      message: "Native context menu reached menu-will-show",
+    })
+    .toBe(true);
 }
 async function chooseNative(label: string) {
   const enabled = await app.app!.evaluate(
@@ -181,6 +209,9 @@ async function chooseNative(label: string) {
   await expect
     .poll(() => app.app!.evaluate(() => (globalThis as any).nativeMenu.closed))
     .toBe(true);
+  await expect
+    .poll(() => app.app!.evaluate(() => (globalThis as any).nativeMenu.clicked))
+    .toEqual([label]);
 }
 async function command(label: string) {
   await app.page.keyboard.press(`${modifier}+Shift+p`);
@@ -310,6 +341,24 @@ test("Native keyboard context handoff and current-page Commands use the exact va
   expect(await pageValue("document.querySelector('#field').value")).toBe(
     "Retain this form",
   );
+});
+
+test("Native keyboard handoff waits for deferred popup presentation before selecting the requested action", async () => {
+  await openBrowser();
+  for (const delay of [40, 120]) {
+    await app.app!.evaluate((_electron, delay) => {
+      Object.assign(globalThis, { nativePopupDelay: delay, externalUrls: [] });
+    }, delay);
+    await nativeContext("#target", true);
+    await chooseNative("Open link in system browser");
+    await expect
+      .poll(handoffs)
+      .toEqual([origin + "/destination?q=one%26two#part"]);
+    expect(await browserRecords()).toHaveLength(1);
+    expect(await pageValue("document.querySelector('#field').value")).toBe(
+      "Retain this form",
+    );
+  }
 });
 
 test("Native editable menus retain clipboard/select/selection focus, reject unsafe links and close with the owner", async () => {
