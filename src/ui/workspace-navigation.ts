@@ -203,13 +203,9 @@ export function createWorkspaceNavigation(
       saving: false,
     };
     renderTree();
-    requestAnimationFrame(() => {
-      const input = tree.querySelector<HTMLInputElement>(
-        ".workspace-name-input",
-      );
-      input?.focus();
-      input?.select();
-    });
+    const input = tree.querySelector<HTMLInputElement>(".workspace-name-input");
+    input?.focus();
+    input?.select();
   }
   async function renameConversation(id: string): Promise<void> {
     const conversation = getState().conversations.find((c) => c.id === id);
@@ -225,13 +221,9 @@ export function createWorkspaceNavigation(
       saving: false,
     };
     renderTree();
-    requestAnimationFrame(() => {
-      const input = tree.querySelector<HTMLInputElement>(
-        ".workspace-name-input",
-      );
-      input?.focus();
-      input?.select();
-    });
+    const input = tree.querySelector<HTMLInputElement>(".workspace-name-input");
+    input?.focus();
+    input?.select();
   }
   function renameInput(
     id: string,
