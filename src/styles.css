@@ -1045,7 +1045,7 @@ dialog .form-field {
 }
 .session-picker form {
   display: flex;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .session-picker form input {
   min-width: 0;
@@ -1054,11 +1054,14 @@ dialog .form-field {
 .session-picker form button {
   white-space: nowrap;
 }
+.session-picker > input {
+  margin-top: var(--space-2);
+}
 .session-picker details {
-  margin: 14px 0;
+  margin: var(--space-3) 0;
 }
 .session-picker details input {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
 }
 .structured-message summary {
   cursor: pointer;

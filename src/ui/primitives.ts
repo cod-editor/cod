@@ -49,3 +49,15 @@ export function settingEntry(
   row.append(label, reset);
   return { row, input, reset };
 }
+
+/** Secondary context using shared button geometry. */
+export function describeButton(button: HTMLButtonElement, description: string) {
+  const label = document.createElement("span");
+  label.className = "ui-button-label";
+  label.append(...button.childNodes);
+  const detail = document.createElement("small");
+  detail.className = "ui-button-description";
+  detail.textContent = description;
+  button.append(label, detail);
+  return button;
+}

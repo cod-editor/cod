@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import { WorkspaceApp, modifier, tabTo } from "./helpers/workspace-app";
 
 interface Terminal {
@@ -209,6 +210,120 @@ test("T1 AC4 keyboard Ctrl-C interrupts foreground work and global shortcuts wor
   await tabTo(shell.page, input(terminal.paneId));
   await shell.page.keyboard.press(`${modifier}+Shift+W`);
   await expect(shell.row("Keyboard terminal")).toBeFocused();
+});
+
+async function deferPaletteClose() {
+  await shell.page.evaluate(() => {
+    let released = false;
+    document.addEventListener(
+      "close",
+      (event) => {
+        const dialog = event.target;
+        if (
+          released ||
+          !(dialog instanceof HTMLDialogElement) ||
+          !dialog.classList.contains("command-palette")
+        )
+          return;
+        event.stopImmediatePropagation();
+        Object.assign(window, {
+          releasePaletteClose: () => {
+            released = true;
+            dialog.dispatchEvent(new Event("close"));
+          },
+        });
+      },
+      true,
+    );
+  });
+}
+
+test("Delayed palette cancellation preserves newer workspace focus and the terminal input line", async () => {
+  const workspace = await shell.create("Delayed palette fixture");
+  const terminal = await open(workspace);
+  await tabTo(shell.page, input(terminal.paneId));
+  const tag = marker();
+  await shell.page.keyboard.type(`printf '${tag}\\n'`);
+  // Native close delivery is asynchronous. Hold that event until a newer real
+  // keyboard action has selected another control, without changing dialog.close.
+  await deferPaletteClose();
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await expect(
+    shell.page.getByRole("dialog", { name: "Command palette" }),
+  ).toBeVisible();
+  await shell.page.keyboard.press("Escape");
+  await expect
+    .poll(() =>
+      shell.page.evaluate(() => typeof (window as any).releasePaletteClose),
+    )
+    .toBe("function");
+  await tabTo(shell.page, input(terminal.paneId));
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(shell.row("Delayed palette fixture")).toBeFocused();
+  await shell.page.evaluate(() => (window as any).releasePaletteClose());
+  await shell.page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(shell.row("Delayed palette fixture")).toBeFocused();
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(input(terminal.paneId)).toBeFocused();
+  await shell.page.keyboard.press("Enter");
+  await output(terminal.id, new RegExp(tag));
+});
+
+test("Palette cancellation restores the editor caret before late cleanup and preserves newer input in that invoker", async () => {
+  const workspace = await shell.create("Palette caret fixture");
+  const file = path.join(shell.folders[0], "caret.txt");
+  await writeFile(file, "alpha beta gamma delta");
+  await shell.cli("file", "open", "--workspace", workspace, "--path", file);
+  const editor = shell.page.getByRole("textbox", {
+    name: "File contents",
+    exact: true,
+  });
+  await tabTo(shell.page, editor);
+  await shell.page.keyboard.press(`${modifier}+Home`);
+  for (let i = 0; i < 3; ++i) await shell.page.keyboard.press("ArrowRight");
+  for (let i = 0; i < 6; ++i)
+    await shell.page.keyboard.press("Shift+ArrowRight");
+  const range = () =>
+    editor.evaluate((e) => [
+      (e as HTMLTextAreaElement).selectionStart,
+      (e as HTMLTextAreaElement).selectionEnd,
+    ]);
+  await expect.poll(range).toEqual([3, 9]);
+  await deferPaletteClose();
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  await expect(
+    shell.page.getByRole("dialog", { name: "Command palette" }),
+  ).toBeVisible();
+  await shell.page.keyboard.press("Escape");
+  await expect
+    .poll(() =>
+      shell.page.evaluate(() => typeof (window as any).releasePaletteClose),
+    )
+    .toBe("function");
+  await expect(editor).toBeFocused();
+  await expect.poll(range).toEqual([3, 9]);
+  await shell.page.keyboard.press("End");
+  await shell.page.keyboard.type(" appended");
+  for (let i = 0; i < 4; ++i)
+    await shell.page.keyboard.press("Shift+ArrowLeft");
+  const newer = await range();
+  expect(newer).not.toEqual([3, 9]);
+  const value = await editor.inputValue();
+  await shell.page.evaluate(() => (window as any).releasePaletteClose());
+  await shell.page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue(value);
+  expect(await range()).toEqual(newer);
 });
 
 test("T1 AC5 pane and workspace close stop owned foreground jobs while another terminal survives", async () => {
