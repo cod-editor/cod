@@ -14,7 +14,7 @@ test.beforeEach(async () => {
     response.setHeader("Content-Type", "text/html");
     const send = () =>
       response.end(
-        '<title>Invented link page</title><h1>Link actions</h1><a id="target" href="/destination?q=one%26two#part">Destination</a><input id="field" value="Retain this form"><select id="choice"><option>First</option><option>Second</option></select><a id="unsafe" href="javascript:void(0)">Unsupported link</a><script>window.identity=crypto.randomUUID()</script>',
+        '<title>Invented link page</title><h1>Link actions</h1><div id="neutral" style="position:fixed;top:4px;left:4px;width:12px;height:12px;cursor:default"></div><a id="target" href="/destination?q=one%26two#part">Destination</a><input id="field" value="Retain this form"><select id="choice"><option>First</option><option>Second</option></select><a id="unsafe" href="javascript:void(0)">Unsupported link</a><script>window.identity=crypto.randomUUID()</script>',
       );
     if (_request.url === "/slow") setTimeout(send, 2000);
     else send();
@@ -70,6 +70,7 @@ test.beforeEach(async () => {
             .filter((i) => i.type !== "separator" && i.enabled)
             .map((i) => i.label),
           shown: false,
+          closing: false,
           closed: false,
           clicked: [] as string[],
         };
@@ -78,7 +79,7 @@ test.beforeEach(async () => {
           state.shown = true;
         });
         this.once("menu-will-close", () => {
-          state.closed = true;
+          state.closing = true;
         });
         for (const item of this.items) {
           const click = item.click;
@@ -89,7 +90,17 @@ test.beforeEach(async () => {
         }
         // The native request can precede presentation. The controlled fixture
         // exercises that gap while the zero-delay path keeps the real call intact.
-        const show = () => popup.call(this, options);
+        const show = () =>
+          popup.call(this, {
+            ...options,
+            callback: () => {
+              try {
+                options?.callback?.();
+              } finally {
+                state.closed = true;
+              }
+            },
+          });
         const delay = (globalThis as any).nativePopupDelay;
         if (delay > 0) setTimeout(show, delay);
         else show();
@@ -97,7 +108,28 @@ test.beforeEach(async () => {
     },
   );
 });
-test.afterEach(async () => {
+test.afterEach(async ({}, info) => {
+  if (app?.app && info.status !== info.expectedStatus) {
+    try {
+      console.error(
+        "Native context input state",
+        JSON.stringify(
+          await app.app.evaluate(({ BrowserWindow }) => ({
+            menu: (globalThis as any).nativeMenu,
+            request: (globalThis as any).nativeContextSerial,
+            pointer: (globalThis as any).nativePointerProof,
+            kind: (globalThis as any).nativeContextKind,
+            windows: BrowserWindow.getAllWindows().map((w) => ({
+              focused: w.isFocused(),
+              visible: w.isVisible(),
+            })),
+          })),
+        ),
+      );
+    } catch {
+      console.error("Native context input state unavailable");
+    }
+  }
   await app?.cleanup();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -142,55 +174,99 @@ async function nativeContext(
   keyboard = false,
   url = origin + "/source",
 ) {
-  await app.app!.evaluate(
-    async ({ webContents }, { url, selector, keyboard }) => {
+  await expect
+    .poll(
+      () =>
+        app.app!.evaluate(({ BrowserWindow, webContents }, url) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((c) => c.getURL() === url);
+          const view = BrowserWindow.getAllWindows()
+            .flatMap((w) => w.contentView.children)
+            .find((v) => (v as any).webContents?.id === contents?.id);
+          return (
+            !!view?.getVisible() &&
+            view.getBounds().width > 0 &&
+            view.getBounds().height > 0
+          );
+        }, url),
+      { message: "Native page has an actual visible viewport" },
+    )
+    .toBe(true);
+  const point = await app.app!.evaluate(
+    async (
+      { webContents, BrowserWindow, screen },
+      { url, selector, keyboard },
+    ) => {
       const contents = webContents
         .getAllWebContents()
         .find((c) => c.getURL() === url)!;
-      const point = await contents.executeJavaScript(
+      const window = BrowserWindow.getAllWindows().find((w) =>
+        w.contentView.children.some(
+          (v) => (v as any).webContents?.id === contents.id,
+        ),
+      )!;
+      const view = window.contentView.children.find(
+        (v) => (v as any).webContents?.id === contents.id,
+      )!;
+      const local = await contents.executeJavaScript(
         `(()=>{const e=document.querySelector(${JSON.stringify(selector)});${keyboard ? "e.focus();" : ""}const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
       );
-      const ready = new Promise<void>((resolve) =>
-        contents.once("context-menu", (_event, params) => {
-          Object.assign(globalThis, { nativeLinkURL: params.linkURL });
-          setImmediate(resolve);
+      const viewport = view.getBounds(),
+        desktop = window.getContentBounds();
+      const point = {
+        x: desktop.x + viewport.x + local.x,
+        y: desktop.y + viewport.y + local.y,
+      };
+      const serial = ((globalThis as any).nativeContextSerial ?? 0) + 1;
+      contents.once("context-menu", (_event, params) =>
+        Object.assign(globalThis, {
+          nativeContextSerial: serial,
+          nativeLinkURL: params.linkURL,
+          nativeContextKind: params.menuSourceType,
+          nativePointerProof: {
+            expected: point,
+            actual: screen.getCursorScreenPoint(),
+          },
         }),
       );
+      window.focus();
       contents.focus();
-      if (keyboard) {
-        contents.sendInputEvent({
-          type: "keyDown",
-          keyCode: "F10",
-          modifiers: ["shift"],
-        });
-        contents.sendInputEvent({
-          type: "keyUp",
-          keyCode: "F10",
-          modifiers: ["shift"],
-        });
-      } else {
-        contents.sendInputEvent({
-          type: "mouseDown",
-          button: "right",
-          clickCount: 1,
-          ...point,
-        });
-        contents.sendInputEvent({
-          type: "mouseUp",
-          button: "right",
-          clickCount: 1,
-          ...point,
-        });
-      }
-      await ready;
+      return { ...point, serial };
     },
     { url, selector, keyboard },
   );
+  // Use one OS input path. Synthetic WebContents mouse events leave the real
+  // pointer elsewhere, while the native popup and keyboard use desktop state.
+  if (keyboard)
+    await execute("xdotool", ["key", "--clearmodifiers", "shift+F10"]);
+  else
+    await execute("xdotool", [
+      "mousemove",
+      "--sync",
+      String(point.x),
+      String(point.y),
+      "click",
+      "--clearmodifiers",
+      "3",
+    ]);
+  await expect
+    .poll(
+      () => app.app!.evaluate(() => (globalThis as any).nativeContextSerial),
+      { message: "The native page received the OS context action" },
+    )
+    .toBe(point.serial);
   await expect
     .poll(() => app.app!.evaluate(() => (globalThis as any).nativeMenu.shown), {
       message: "Native context menu reached menu-will-show",
     })
     .toBe(true);
+  if (!keyboard) {
+    const pointer = await app.app!.evaluate(
+      () => (globalThis as any).nativePointerProof,
+    );
+    expect(pointer.actual).toEqual(pointer.expected);
+  }
 }
 async function chooseNative(label: string) {
   const enabled = await app.app!.evaluate(
@@ -361,6 +437,17 @@ test("Native keyboard handoff waits for deferred popup presentation before selec
   }
 });
 
+test("Native mouse context input moves the physical pointer to its target before OS keyboard selection", async () => {
+  await openBrowser();
+  await execute("xdotool", ["mousemove", "--sync", "1", "1"]);
+  await nativeContext("#target");
+  await chooseNative("Open link in system browser");
+  await expect
+    .poll(handoffs)
+    .toEqual([origin + "/destination?q=one%26two#part"]);
+  expect(await browserRecords()).toHaveLength(1);
+});
+
 test("Native editable menus retain clipboard/select/selection focus, reject unsafe links and close with the owner", async () => {
   const source = await openBrowser();
   await pageValue(
@@ -374,6 +461,9 @@ test("Native editable menus retain clipboard/select/selection focus, reject unsa
     expect.arrayContaining(["Cut", "Copy", "Paste", "Select all"]),
   );
   await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
+  await expect
+    .poll(() => app.app!.evaluate(() => (globalThis as any).nativeMenu.closed))
+    .toBe(true);
   expect(
     await pageValue(
       "(()=>{const e=document.querySelector('#field');return[e.value,e.selectionStart,e.selectionEnd,document.activeElement===e,document.querySelector('select').value]})()",
@@ -395,7 +485,7 @@ test("Native editable menus retain clipboard/select/selection focus, reject unsa
       const bounds = view.getBounds(),
         content = window.getContentBounds();
       const relative = await contents.executeJavaScript(
-        "['#target','#field','#choice'].map(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})",
+        "['#target','#field','#choice','#neutral'].map(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})",
       );
       return relative.map((p: { x: number; y: number }) => ({
         x: content.x + bounds.x + p.x,
@@ -404,6 +494,20 @@ test("Native editable menus retain clipboard/select/selection focus, reject unsa
     },
     origin + "/source",
   );
+  await pageValue(
+    "window.nativeMouseTarget='';document.addEventListener('mousemove',e=>window.nativeMouseTarget=e.target.id||e.target.tagName);void 0",
+  );
+  // Establish a different hover target before observing cursor-changed. The
+  // pointer may already be over the link after an earlier native interaction.
+  await execute("xdotool", [
+    "mousemove",
+    "--sync",
+    String(points[3].x),
+    String(points[3].y),
+  ]);
+  await expect
+    .poll(() => pageValue("window.nativeMouseTarget"))
+    .toBe("neutral");
   await execute("xdotool", [
     "mousemove",
     "--sync",
