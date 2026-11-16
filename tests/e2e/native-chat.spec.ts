@@ -447,22 +447,42 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
         provider === "codex" ? "threadId" : "sessionId"
       ],
     ).toBe(chat.nativeId);
+    const promptsAfterResume = await shell.prompts();
+    const bindingsBeforeRefocus = records.filter(
+      (record) =>
+        record.message?.method ===
+        (provider === "codex" ? "thread/resume" : "session/load"),
+    ).length;
+    const refocused = await shell.cli<{
+      id: string;
+      paneId: string;
+      nativeId: string;
+    }>(
+      "conversation",
+      "resume",
+      "--workspace",
+      workspace,
+      "--provider",
+      provider,
+      "--cwd",
+      shell.folders[0],
+      "--native-id",
+      chat.nativeId,
+    );
+    expect(refocused).toEqual({
+      id: chat.id,
+      paneId: chat.paneId,
+      nativeId: chat.nativeId,
+    });
+    expect((await shell.cli<AppState>("state")).conversations).toHaveLength(1);
     expect(
-      (
-        await shell.raw(
-          "conversation",
-          "resume",
-          "--workspace",
-          workspace,
-          "--provider",
-          provider,
-          "--cwd",
-          shell.folders[0],
-          "--native-id",
-          chat.nativeId,
-        )
-      ).code,
-    ).not.toBe(0);
+      (await shell.records()).filter(
+        (record) =>
+          record.message?.method ===
+          (provider === "codex" ? "thread/resume" : "session/load"),
+      ),
+    ).toHaveLength(bindingsBeforeRefocus);
+    expect(await shell.prompts()).toEqual(promptsAfterResume);
   });
 }
 
