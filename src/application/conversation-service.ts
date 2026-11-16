@@ -873,7 +873,7 @@ export class ConversationApplicationService {
   }
 
   providerEvent(id: string, event: ProviderEvent): void {
-    if (this.store.closing) return;
+    if (this.store.closing || event.type === "diagnostic") return;
     const conversation = this.store.data.conversations.find(
       (item) => item.id === id,
     );
@@ -1016,8 +1016,7 @@ export class ConversationApplicationService {
         );
         break;
       case "history":
-      case "diagnostic":
-        break;
+        return;
     }
     this.store.notify(true);
     this.store.schedulePersist(

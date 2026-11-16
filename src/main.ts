@@ -113,7 +113,7 @@ async function openExternalUrl(raw: string): Promise<void> {
     return;
   }
   try {
-    let workspace = operations.snapshot().activeWorkspaceId;
+    let workspace = operations.activeWorkspaceId;
     if (!workspace)
       workspace = (
         (await operations.dispatch(
@@ -258,19 +258,26 @@ async function startCommandServer(): Promise<void> {
   commandServer = createServer((connection) => {
     connection.on("error", () => undefined);
     connection.setEncoding("utf8");
-    let input = "";
-    connection.on("data", (chunk) => {
-      input += chunk;
-      if (Buffer.byteLength(input) > 32 * 1024 * 1024) {
+    let input: string[] = [];
+    let bytes = 0;
+    let received = false;
+    connection.on("data", (chunk: string) => {
+      if (received) return;
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 32 * 1024 * 1024) {
+        received = true;
+        input = [];
         connection.end(
           `${JSON.stringify({ ok: false, error: "Request too large" })}\n`,
         );
         return;
       }
-      const newline = input.indexOf("\n");
+      const newline = chunk.indexOf("\n");
+      input.push(newline < 0 ? chunk : chunk.slice(0, newline));
       if (newline < 0) return;
-      const line = input.slice(0, newline);
-      input = "";
+      received = true;
+      const line = input.join("");
+      input = [];
       void (async () => {
         try {
           const request = JSON.parse(line) as OperationRequest;

@@ -1805,3 +1805,72 @@ test("Interrupted sends pause remaining queued messages and restart never repeat
     .toContain("DONE Last queued request");
   expect((await shell.prompts()).length).toBe(3);
 });
+
+test("A fragmented large composer request preserves its text and image through restart", async () => {
+  const workspace = await shell.create("Large request fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const image = {
+    reference: 1,
+    mimeType: "image/png",
+    name: "Invented large image",
+    data: Buffer.concat([png, Buffer.alloc(10 * 1024 * 1024)]).toString(
+      "base64",
+    ),
+  };
+  const wire = Buffer.from(
+    JSON.stringify({
+      op: "conversation.composer",
+      workspace,
+      paneId: chat.paneId,
+      text: "Invented large request [Image 1]",
+      images: [image],
+    }) + "\n",
+  );
+  const reply = await new Promise<{ ok: boolean; error?: string }>(
+    (resolve, reject) => {
+      const connection = createConnection(shell.socket);
+      let text = "";
+      connection.setEncoding("utf8");
+      connection.setTimeout(15000, () =>
+        connection.destroy(new Error("Fixture request deadline")),
+      );
+      connection.on("error", reject);
+      connection.on("data", (chunk) => {
+        text += chunk;
+        if (text.includes("\n")) {
+          resolve(JSON.parse(text));
+          connection.destroy();
+        }
+      });
+      connection.on("connect", () => {
+        void (async () => {
+          for (let start = 0; start < wire.length; start += 4093) {
+            if (!connection.write(wire.subarray(start, start + 4093)))
+              await new Promise<void>((resolve) =>
+                connection.once("drain", resolve),
+              );
+          }
+        })();
+      });
+    },
+  );
+  expect(reply.ok, reply.error).toBe(true);
+  const input = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input()).toHaveValue("Invented large request [Image 1]");
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+  await shell.stop();
+  await shell.start();
+  await expect(input()).toHaveValue("Invented large request [Image 1]");
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-images img"),
+  ).toHaveCount(1);
+});
