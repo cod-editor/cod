@@ -1,3 +1,5 @@
+import { isUtf8 } from "node:buffer";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   realpath,
@@ -21,9 +23,53 @@ import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
 import { leaf, replaceLeaf } from "./layout";
 
+async function readTextFile(file: string): Promise<string> {
+  const bytes = await readFile(file);
+  if (bytes.includes(0) || !isUtf8(bytes))
+    throw new Error("Binary files cannot be opened or saved as text");
+  return bytes.toString("utf8");
+}
+
 export class FileApplicationService {
-  constructor(private readonly store: ApplicationStateStore) {}
+  constructor(
+    private readonly store: ApplicationStateStore,
+    private readonly openBrowser: (
+      request: OperationRequest,
+    ) => Promise<{ paneId: string }>,
+  ) {}
   async openFile(request: OperationRequest): Promise<{ paneId: string }> {
+    const workspace = this.store.workspace(
+      requiredString(request, "workspace"),
+    );
+    const filePath = await realpath(
+      path.resolve(requiredString(request, "path")),
+    );
+    if (/\.(png|jpe?g|gif|webp|bmp|ico|avif|apng|svg)$/i.test(filePath)) {
+      if (!(await stat(filePath)).isFile())
+        throw new Error("Image path is not a file");
+      const url = pathToFileURL(filePath).href;
+      const existing = this.store.data.browsers.find(
+        (b) => !b.agentPage && b.workspaceId === workspace.id && b.url === url,
+      );
+      if (existing)
+        return this.store.change(() => {
+          const current = this.store.workspace(workspace.id);
+          if (!current.panes.some((pane) => pane.id === existing.paneId))
+            throw new Error("Image tab was closed while opening");
+          current.activePaneId = existing.paneId;
+          return { paneId: existing.paneId };
+        });
+      return this.openBrowser({
+        op: "browser.open",
+        workspace: workspace.id,
+        url,
+      });
+    }
+    return this.store.change(() => this.openTextFile(request));
+  }
+  private async openTextFile(
+    request: OperationRequest,
+  ): Promise<{ paneId: string }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
@@ -34,7 +80,7 @@ export class FileApplicationService {
       throw new Error("line must be a positive integer");
     if (!(await stat(filePath)).isFile())
       throw new Error("File path is not a regular file");
-    await readFile(filePath, "utf8");
+    await readTextFile(filePath);
     const existing = workspace.panes.find(
       (pane) =>
         pane.kind === "document" && pane.canonicalPath === canonicalPath,
@@ -293,7 +339,7 @@ export class FileApplicationService {
     try {
       canonical = await realpath(pane.filePath!);
       const version = (await this.fileVersion(request)).version;
-      const content = await readFile(canonical, "utf8"),
+      const content = await readTextFile(canonical),
         draft = this.store.data.drafts[canonical];
       return {
         content,
@@ -323,7 +369,7 @@ export class FileApplicationService {
       throw new Error("content and expectedContent must be strings");
     }
     const targetPath = await realpath(pane.filePath!);
-    const current = await readFile(targetPath, "utf8");
+    const current = await readTextFile(targetPath);
     if (current !== expectedContent) return { saved: false, conflict: true };
     const mode = (await stat(targetPath)).mode;
     const temporary = `${targetPath}.cod-${randomUUID()}.tmp`;
@@ -343,7 +389,7 @@ export class FileApplicationService {
   ): Promise<unknown> {
     switch (request.op) {
       case "file.open":
-        return this.store.change(async () => this.openFile(request));
+        return this.openFile(request);
 
       case "project.list":
         return this.projects(request).list(
@@ -383,7 +429,7 @@ export class FileApplicationService {
         return {
           content:
             this.store.data.drafts[canonical]?.content ??
-            (await readFile(canonical, "utf8")),
+            (await readTextFile(canonical)),
         };
       }
 

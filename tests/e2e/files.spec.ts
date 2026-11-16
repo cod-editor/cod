@@ -228,6 +228,9 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   await expect(
     app.page.getByRole("textbox", { name: "File contents", exact: true }),
   ).toHaveValue("# Guide leaf\n");
+  await expect(
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toBeFocused();
   await focusTreeItem(leaf);
   await app.page.keyboard.press("Shift+F10");
   await expect(
@@ -914,4 +917,143 @@ test("HTML chat references open the browser while explicit file opening retains 
   await expect(editor(document)).toBeFocused();
   await expect(document.locator(".editor-colors")).toBeHidden();
   await expect(editor(document)).toHaveValue(source);
+});
+
+test("Image files open as images from CLI, tree and chat without creating editable binary text", async ({}, info) => {
+  await app.stop();
+  const recording = path.join(app.temporary, "image-provider.jsonl");
+  await writeFile(recording, "");
+  app.environment.COD_CODEX_EXECUTABLE = process.execPath;
+  app.environment.COD_CODEX_ARGS = JSON.stringify([
+    path.join(app.root, "tests/e2e/helpers/chat-fixture/provider.mjs"),
+    "codex",
+    recording,
+  ]);
+  await app.start();
+  const images = await app.app!.evaluate(({ nativeImage }) => {
+    const image = nativeImage.createFromBitmap(
+      Buffer.alloc(128 * 80 * 4, 150),
+      { width: 128, height: 80 },
+    );
+    return {
+      png: image.toPNG().toString("base64"),
+      jpeg: image.toJPEG(90).toString("base64"),
+    };
+  });
+  const file = path.join(app.folders[0], "fixture #100%.PNG");
+  const jpeg = path.join(app.folders[0], "fixture.jpg");
+  const bytes = Buffer.from(images.png, "base64");
+  await writeFile(file, bytes);
+  await writeFile(jpeg, Buffer.from(images.jpeg, "base64"));
+  const first = await app.cli<{ id: string; paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+  );
+  const imagePage = async (file: string) => {
+    const url = (await import("node:url")).pathToFileURL(file).href;
+    await expect
+      .poll(() =>
+        app
+          .app!.context()
+          .pages()
+          .some((p) => p.url() === url),
+      )
+      .toBe(true);
+    const page = app
+      .app!.context()
+      .pages()
+      .find((p) => p.url() === url)!;
+    await expect(page.locator("img")).toBeVisible();
+    await expect
+      .poll(() =>
+        page
+          .locator("img")
+          .evaluate((image: HTMLImageElement) => [
+            image.naturalWidth,
+            image.naturalHeight,
+          ]),
+      )
+      .toEqual([128, 80]);
+    return page;
+  };
+  await imagePage(file);
+  expect(
+    await app.pane(first.paneId).locator("textarea.file-editor").count(),
+  ).toBe(0);
+  expect(
+    await app.cli("file", "open", "--workspace", workspace, "--path", file),
+  ).toMatchObject({ paneId: first.paneId });
+  const save = await app.raw(
+    "file",
+    "save",
+    "--workspace",
+    workspace,
+    "--pane-id",
+    first.paneId,
+    "--content",
+    "DO_NOT_WRITE",
+    "--expected-content",
+    "",
+  );
+  expect(save.code).not.toBe(0);
+  expect(save.stderr).toContain("Pane has no open file");
+  expect(await readFile(file)).toEqual(bytes);
+  const tree = app.page.getByRole("tree", { name: "File tree", exact: true });
+  const row = tree.getByRole("treeitem", { name: "fixture.jpg", exact: true });
+  await focusTreeItem(row);
+  await app.page.keyboard.press("Enter");
+  await imagePage(jpeg);
+  const chat = await app.cli<{ id: string; paneId: string }>(
+    "conversation",
+    "create",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--cwd",
+    app.folders[0],
+  );
+  await app.cli(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Open `fixture #100%.PNG`",
+  );
+  const transcript = app
+    .pane(chat.paneId)
+    .getByRole("region", { name: "Conversation transcript", exact: true });
+  await transcript
+    .getByRole("button", { name: "fixture #100%.PNG", exact: true })
+    .first()
+    .click();
+  await expect(app.pane(first.paneId)).toBeVisible();
+  const content = await imagePage(file);
+  await content.screenshot({ path: info.outputPath("local-png-viewer.png") });
+  expect(await readFile(file)).toEqual(bytes);
+  const binary = path.join(app.folders[0], "unknown.bin");
+  const original = Buffer.from([0, 255, 1, 2, 3]);
+  await writeFile(binary, original);
+  const denied = await app.raw(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    binary,
+  );
+  expect(denied.code).not.toBe(0);
+  expect(denied.stderr).toContain("Binary files cannot");
+  expect(await readFile(binary)).toEqual(original);
+  await app.stop();
+  await app.start();
+  await imagePage(file);
+  expect(
+    await app.pane(first.paneId).locator("textarea.file-editor").count(),
+  ).toBe(0);
 });
