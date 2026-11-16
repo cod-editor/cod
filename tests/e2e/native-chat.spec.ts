@@ -2124,3 +2124,682 @@ test("Native handoff waits for an already accepted review mutation before checki
   expect(await status(chat.id)).toBe("ready");
   expect(await shell.prompts()).toHaveLength(0);
 });
+
+async function nativeSessionPicker(source = shell.page) {
+  if (source === shell.page) await source.keyboard.press(`${modifier}+Shift+p`);
+  else
+    await shell.app!.evaluate(({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === url)!;
+      contents.focus();
+      const modifiers: Array<"control" | "meta" | "shift"> = [
+        process.platform === "darwin" ? "meta" : "control",
+        "shift",
+      ];
+      contents.sendInputEvent({ type: "keyDown", keyCode: "P", modifiers });
+      contents.sendInputEvent({ type: "keyUp", keyCode: "P", modifiers });
+    }, source.url());
+  const command = shell.page
+    .getByRole("dialog", { name: "Command palette", exact: true })
+    .getByRole("textbox", { name: "Filter commands", exact: true });
+  await command.fill("Open existing native session");
+  await command.press("Enter");
+  const picker = shell.page.getByRole("dialog", {
+    name: "Open existing session",
+    exact: true,
+  });
+  await expect(picker).toBeVisible();
+  await expect(
+    picker.getByRole("textbox", { name: "Filter sessions", exact: true }),
+  ).toBeFocused();
+  return picker;
+}
+
+for (const provider of ["codex", "kimi"] as const)
+  test(`Native session picker ${provider}: search, resume and refocus retain identity without inference`, async ({}, info) => {
+    const factory =
+      provider === "codex" ? createCodexAdapter : createKimiAdapter;
+    const native: Array<{ nativeId: string; cwd: string }> = [];
+    for (const prompt of [
+      "First invented native history",
+      "Second invented native history",
+    ]) {
+      const adapter = factory({
+        cwd: shell.folders[0],
+        executable: process.execPath,
+        args: JSON.parse(
+          shell.environment[`COD_${provider.toUpperCase()}_ARGS`],
+        ),
+        env: shell.environment,
+      });
+      try {
+        const session = await adapter.create();
+        await adapter.send(prompt);
+        native.push(session);
+      } finally {
+        await adapter.dispose();
+      }
+    }
+    await shell.configure({
+      [provider]: {
+        sessions: native.map((session, index) => ({
+          nativeId: session.nativeId,
+          cwd: session.cwd,
+          name: `Catalog choice ${index + 1}`,
+          preview: index
+            ? "Invented alpine evidence"
+            : "Invented coastal evidence",
+        })),
+      },
+    });
+    const workspace = await shell.create("Native catalog task");
+    await shell.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      shell.folders[0],
+    );
+    const original = await shell.newChat(workspace, provider);
+    // The CLI reply precedes the renderer snapshot. Target the conversation,
+    // rather than typing into its still-visible empty-chat placeholder.
+    await expect(shell.pane(original.paneId)).toHaveAttribute(
+      "aria-label",
+      `${provider} conversation`,
+    );
+    const input = shell
+      .pane(original.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("Preserve the catalog invoker draft");
+    await input.evaluate((node) =>
+      (node as HTMLTextAreaElement).setSelectionRange(3, 9),
+    );
+    let picker = await nativeSessionPicker();
+    if (provider === "kimi")
+      await picker
+        .getByRole("combobox", { name: "Provider", exact: true })
+        .selectOption(provider);
+    await expect(
+      picker.getByRole("button", { name: /Catalog choice 1/ }),
+    ).toBeVisible();
+    const before = (await shell.records()).filter((record) =>
+      ["thread/list", "session/list"].includes(record.message?.method ?? ""),
+    ).length;
+    const filter = picker.getByRole("textbox", {
+      name: "Filter sessions",
+      exact: true,
+    });
+    await filter.fill("NO SUCH CATALOG ENTRY");
+    await expect(picker.getByRole("status")).toHaveText(
+      "No matching sessions.",
+    );
+    await filter.fill("ALPINE");
+    await expect(
+      picker.getByRole("button", { name: /Catalog choice 2/ }),
+    ).toBeVisible();
+    await expect(
+      picker.getByRole("button", { name: /Catalog choice 1/ }),
+    ).toBeHidden();
+    expect(
+      (await shell.records()).filter((record) =>
+        ["thread/list", "session/list"].includes(record.message?.method ?? ""),
+      ).length,
+    ).toBe(before);
+    await filter.press("ArrowDown");
+    expect((await shell.cli<AppState>("state")).conversations).toHaveLength(1);
+    expect(await shell.prompts()).toHaveLength(2);
+    await filter.press("Escape");
+    await expect(input).toBeFocused();
+    expect(
+      await input.evaluate((node) => [
+        (node as HTMLTextAreaElement).selectionStart,
+        (node as HTMLTextAreaElement).selectionEnd,
+      ]),
+    ).toEqual([3, 9]);
+    picker = await nativeSessionPicker();
+    if (provider === "kimi")
+      await picker
+        .getByRole("combobox", { name: "Provider", exact: true })
+        .selectOption(provider);
+    const query = picker.getByRole("textbox", {
+      name: "Filter sessions",
+      exact: true,
+    });
+    await query.fill(
+      `${native[1].nativeId.slice(-8)} ${path.basename(shell.folders[0])}`,
+    );
+    const row = picker.getByRole("button", { name: /Catalog choice 2/ });
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("title", new RegExp(native[1].nativeId));
+    await picker.screenshot({
+      path: info.outputPath("native-session-search.png"),
+    });
+    if (provider === "codex") await query.press("Enter");
+    else await row.click();
+    await expect(picker).toHaveCount(0);
+    await expect
+      .poll(
+        async () => (await shell.cli<AppState>("state")).conversations.length,
+      )
+      .toBe(2);
+    const state = await shell.cli<AppState>("state");
+    const attached = state.conversations.find(
+      (conversation) => conversation.nativeId === native[1].nativeId,
+    )!;
+    expect(
+      state.workspaces.find((item) => item.id === workspace)?.chatDrafts?.[
+        original.paneId
+      ]?.text,
+    ).toBe("Preserve the catalog invoker draft");
+    expect(attached.cwd).toBe(shell.folders[0]);
+    const attachedInput = shell
+      .pane(attached.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await expect(attachedInput).toBeFocused();
+    await expect(transcript(attached)).toContainText(
+      "DONE Second invented native history",
+    );
+    await attachedInput.fill("Unsent message in the attached history");
+    await expect
+      .poll(
+        async () =>
+          (await shell.cli<AppState>("state")).workspaces.find(
+            (w) => w.id === workspace,
+          )?.chatDrafts?.[attached.paneId]?.text,
+      )
+      .toBe("Unsent message in the attached history");
+    const elsewhere = await shell.create("Another native catalog task");
+    const records = await shell.records();
+    const duplicate = await shell.cli<{
+      id: string;
+      paneId: string;
+      nativeId: string;
+    }>(
+      "conversation",
+      "resume",
+      "--workspace",
+      elsewhere,
+      "--provider",
+      provider,
+      "--cwd",
+      shell.folders[1],
+      "--native-id",
+      native[1].nativeId,
+    );
+    expect(duplicate.id).toBe(attached.id);
+    expect(duplicate.paneId).toBe(attached.paneId);
+    const ownership = (items: typeof records) =>
+      items.filter(
+        (record) =>
+          record.event === "started" ||
+          [
+            "thread/start",
+            "thread/resume",
+            "session/new",
+            "session/load",
+          ].includes(record.message?.method ?? ""),
+      );
+    expect(ownership(await shell.records())).toEqual(ownership(records));
+    expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(
+      workspace,
+    );
+    await attachedInput.focus();
+    await attachedInput.evaluate((node) =>
+      (node as HTMLTextAreaElement).setSelectionRange(2, 8),
+    );
+    picker = await nativeSessionPicker();
+    if (provider === "kimi")
+      await picker
+        .getByRole("combobox", { name: "Provider", exact: true })
+        .selectOption(provider);
+    if (provider === "codex") {
+      await tabTo(shell.page, picker.locator("summary"));
+      await shell.page.keyboard.press("Enter");
+    } else
+      await picker.getByText("Open by session ID", { exact: true }).click();
+    const manual = picker.getByRole("textbox", {
+      name: "Native session ID",
+      exact: true,
+    });
+    await manual.fill(native[1].nativeId);
+    await manual.dispatchEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      isComposing: true,
+    });
+    await manual.dispatchEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 229,
+    });
+    await expect(picker).toBeVisible();
+    const bindingsBefore = (await shell.records()).filter((record) =>
+      ["thread/resume", "session/load"].includes(record.message?.method ?? ""),
+    ).length;
+    await manual.press("Enter");
+    await expect(picker).toHaveCount(0);
+    await expect(attachedInput).toBeFocused();
+    await expect(attachedInput).toHaveValue(
+      "Unsent message in the attached history",
+    );
+    expect(
+      await attachedInput.evaluate((node) => [
+        (node as HTMLTextAreaElement).selectionStart,
+        (node as HTMLTextAreaElement).selectionEnd,
+      ]),
+    ).toEqual([2, 8]);
+    expect(
+      (await shell.records()).filter((record) =>
+        ["thread/resume", "session/load"].includes(
+          record.message?.method ?? "",
+        ),
+      ).length,
+    ).toBe(bindingsBefore);
+    expect((await shell.cli<AppState>("state")).conversations).toHaveLength(2);
+    expect(await shell.prompts()).toHaveLength(2);
+  });
+
+test("Native session picker ignores superseded results and errors, recovers from failure and preserves focus on cancel", async ({}, info) => {
+  const workspace = await shell.create("Read-only native catalog");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    shell.folders[0],
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  await expect(shell.pane(chat.paneId)).toHaveAttribute(
+    "aria-label",
+    "codex conversation",
+  );
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Keep this unsent message and selection");
+  await input.evaluate((node) =>
+    (node as HTMLTextAreaElement).setSelectionRange(4, 12),
+  );
+  const entry = {
+    nativeId: "invented-native-catalog-id",
+    cwd: shell.folders[0],
+    name: "Fresh recovered session with a deliberately long invented title and repeated context. ".repeat(
+      4,
+    ),
+    preview: "Searchable recovery evidence",
+  };
+  await shell.configure({
+    codex: { discoveryError: true, discoveryDelayMs: 300 },
+    kimi: { sessions: [entry] },
+  });
+  await shell.app!.evaluate(({ ipcMain }) => {
+    const handler = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+    (globalThis as any).pickerDiscoverySettled = { codex: 0, kimi: 0 };
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      try {
+        return await handler(event, request);
+      } finally {
+        if (request.op === "conversation.discover")
+          (globalThis as any).pickerDiscoverySettled[request.provider]++;
+      }
+    });
+    (globalThis as any).restorePickerHandler = () => {
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", handler);
+    };
+  });
+  let picker = await nativeSessionPicker();
+  await expect
+    .poll(
+      async () =>
+        (await shell.records()).filter(
+          (record) => record.message?.method === "thread/list",
+        ).length,
+    )
+    .toBe(1);
+  await picker
+    .getByRole("combobox", { name: "Provider", exact: true })
+    .selectOption("kimi");
+  await expect(
+    picker.getByRole("button", { name: /Fresh recovered session/ }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        () => (globalThis as any).pickerDiscoverySettled.codex,
+      ),
+    )
+    .toBe(1);
+  await shell.page.evaluate(() => window.cod.invoke({ op: "capabilities" }));
+  await expect(picker.getByRole("status")).toHaveText("");
+  await expect(
+    picker.getByRole("textbox", { name: "Filter sessions", exact: true }),
+  ).toBeFocused();
+  await picker
+    .getByRole("combobox", { name: "Provider", exact: true })
+    .selectOption("codex");
+  await expect
+    .poll(
+      async () =>
+        (await shell.records()).filter(
+          (record) => record.message?.method === "thread/list",
+        ).length,
+    )
+    .toBe(2);
+  await shell.page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  expect(
+    await input.evaluate((node) => [
+      (node as HTMLTextAreaElement).selectionStart,
+      (node as HTMLTextAreaElement).selectionEnd,
+    ]),
+  ).toEqual([4, 12]);
+  await shell.configure({ codex: { sessions: [entry] } });
+  picker = await nativeSessionPicker();
+  await expect(
+    picker.getByRole("button", { name: /Fresh recovered session/ }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        () => (globalThis as any).pickerDiscoverySettled.codex,
+      ),
+    )
+    .toBe(3);
+  await shell.page.evaluate(() => window.cod.invoke({ op: "capabilities" }));
+  await expect(picker.getByRole("status")).toHaveText("");
+  await expect(
+    picker.getByRole("textbox", { name: "Filter sessions", exact: true }),
+  ).toBeFocused();
+  await shell.configure({ codex: { discoveryError: true } });
+  await picker
+    .getByRole("button", { name: "Find sessions", exact: true })
+    .click();
+  await expect(picker.getByRole("alert")).toContainText(
+    "Invented discovery failure",
+  );
+  const catalog = [
+    entry,
+    ...Array.from({ length: 999 }, (_, index) => ({
+      nativeId: `invented-catalog-${index}`,
+      cwd: shell.folders[0],
+      name: index ? `Invented metadata session ${index}` : "",
+      preview: index ? "Metadata-only fixture" : "",
+    })),
+  ];
+  await shell.configure({ codex: { sessions: catalog } });
+  await picker
+    .getByRole("textbox", { name: "Filter sessions", exact: true })
+    .fill("recovery");
+  await picker
+    .getByRole("textbox", { name: "Working directory", exact: true })
+    .press("Enter");
+  await expect(
+    picker.getByRole("button", { name: /Fresh recovered session/ }),
+  ).toBeVisible();
+  const filter = picker.getByRole("textbox", {
+    name: "Filter sessions",
+    exact: true,
+  });
+  await filter.fill("");
+  await expect(picker.locator(".command-list button")).toHaveCount(1000);
+  await expect(
+    picker.getByRole("button", { name: /invented-catalog-0/ }),
+  ).toBeVisible();
+  await filter.evaluate((node) => {
+    (window as any).catalogInputFrames = [];
+    node.addEventListener(
+      "input",
+      () => {
+        const started = performance.now();
+        requestAnimationFrame(() =>
+          (window as any).catalogInputFrames.push(performance.now() - started),
+        );
+      },
+      { capture: true },
+    );
+  });
+  await filter.pressSequentially("recovery");
+  const samples = await filter.evaluate(async () => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    return (window as any).catalogInputFrames as number[];
+  });
+  expect(samples).toHaveLength(8);
+  const sorted = [...samples].sort((left, right) => left - right);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)];
+  const performanceFile = info.outputPath(
+    "native-session-search-performance.json",
+  );
+  await writeFile(
+    performanceFile,
+    JSON.stringify({ catalogSize: 1000, samples, p95Ms: p95 }),
+  );
+  await info.attach("native-session-search-performance", {
+    path: performanceFile,
+    contentType: "application/json",
+  });
+  expect(p95).toBeLessThan(200);
+  await shell.page.setViewportSize({ width: 400, height: 650 });
+  expect((await picker.boundingBox())!.width).toBeLessThanOrEqual(400);
+  expect(
+    await picker.evaluate((node) => node.scrollWidth - node.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  await picker.screenshot({
+    path: info.outputPath("native-session-search-narrow.png"),
+  });
+  await picker.getByRole("button", { name: "Cancel", exact: true }).click();
+  await shell.page.setViewportSize({ width: 1280, height: 800 });
+  await expect(picker).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this unsent message and selection");
+  expect(
+    await input.evaluate((node) => [
+      (node as HTMLTextAreaElement).selectionStart,
+      (node as HTMLTextAreaElement).selectionEnd,
+    ]),
+  ).toEqual([4, 12]);
+  expect(await shell.prompts()).toHaveLength(0);
+  expect(
+    (await shell.records()).filter((record) =>
+      ["thread/resume", "session/load"].includes(record.message?.method ?? ""),
+    ),
+  ).toHaveLength(0);
+  await shell.app!.evaluate(() => (globalThis as any).restorePickerHandler());
+});
+
+for (const provider of ["codex", "kimi"] as const)
+  test(`Concurrent native resume ${provider} creates one controller after delayed directory checks`, async () => {
+    const factory =
+      provider === "codex" ? createCodexAdapter : createKimiAdapter;
+    const adapter = factory({
+      cwd: shell.folders[0],
+      executable: process.execPath,
+      args: JSON.parse(shell.environment[`COD_${provider.toUpperCase()}_ARGS`]),
+      env: shell.environment,
+    });
+    let nativeId: string;
+    try {
+      nativeId = (await adapter.create()).nativeId;
+      await adapter.send("Invented native concurrency history");
+    } finally {
+      await adapter.dispose();
+    }
+    const first = await shell.create("First resume destination");
+    const second = await shell.create("Second resume destination");
+    await shell.app!.evaluate(({}, directory) => {
+      const fs = process.getBuiltinModule("fs/promises") as any;
+      const stat = fs.stat;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      (globalThis as any).resumeDirectoryChecks = 0;
+      fs.stat = async (...args: any[]) => {
+        if (
+          args[0] === directory &&
+          (globalThis as any).resumeDirectoryChecks < 2
+        ) {
+          (globalThis as any).resumeDirectoryChecks++;
+          await gate;
+        }
+        return stat.apply(fs, args);
+      };
+      (globalThis as any).releaseResumeDirectoryChecks = () => {
+        fs.stat = stat;
+        release();
+      };
+    }, shell.folders[0]);
+    const requests = [first, second].map((workspace) =>
+      shell.cli<{ id: string; paneId: string; nativeId: string }>(
+        "conversation",
+        "resume",
+        "--workspace",
+        workspace,
+        "--provider",
+        provider,
+        "--cwd",
+        shell.folders[0],
+        "--native-id",
+        nativeId,
+      ),
+    );
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(() => (globalThis as any).resumeDirectoryChecks),
+      )
+      .toBe(2);
+    await shell.app!.evaluate(() =>
+      (globalThis as any).releaseResumeDirectoryChecks(),
+    );
+    const results = await Promise.all(requests);
+    expect(results[0]).toEqual(results[1]);
+    const state = await shell.cli<AppState>("state");
+    expect(state.conversations).toHaveLength(1);
+    expect(state.conversations[0].nativeId).toBe(nativeId);
+    expect(state.conversations[0].cwd).toBe(shell.folders[0]);
+    expect(
+      state.workspaces
+        .flatMap((workspace) => workspace.panes)
+        .filter((pane) => pane.kind === "conversation"),
+    ).toHaveLength(1);
+    expect(
+      (await shell.records()).filter((record) =>
+        ["thread/resume", "session/load"].includes(
+          record.message?.method ?? "",
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(await shell.prompts()).toHaveLength(1);
+  });
+
+test("Native session picker returns to native browser input on cancel and focuses the attached chat on selection", async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end(
+      '<!doctype html><title>Native picker invoker</title><textarea aria-label="Native invoker">Native selected message</textarea>',
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Fixture server address unavailable");
+    const url = `http://127.0.0.1:${address.port}`;
+    const workspace = await shell.create("Native browser picker task");
+    await shell.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      shell.folders[0],
+    );
+    const chat = await shell.newChat(workspace, "codex");
+    await shell.configure({
+      codex: {
+        sessions: [
+          {
+            nativeId: chat.nativeId,
+            cwd: shell.folders[0],
+            name: "Already attached native chat",
+          },
+        ],
+      },
+    });
+    const browser = await shell.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
+    await shell.page
+      .locator(`[role=tab][data-tab-id="${browser.paneId}"]`)
+      .click();
+    let nativePage: typeof shell.page | undefined;
+    await expect
+      .poll(() => {
+        nativePage = shell
+          .app!.context()
+          .pages()
+          .find((page) => page.url().startsWith(url));
+        return !!nativePage;
+      })
+      .toBe(true);
+    const input = nativePage!.getByRole("textbox", {
+      name: "Native invoker",
+      exact: true,
+    });
+    await input.click();
+    await input.evaluate((node) =>
+      (node as HTMLTextAreaElement).setSelectionRange(3, 10),
+    );
+    let picker = await nativeSessionPicker(nativePage!);
+    await picker
+      .getByRole("textbox", { name: "Filter sessions", exact: true })
+      .press("Escape");
+    await expect
+      .poll(() => nativePage!.evaluate(() => document.hasFocus()))
+      .toBe(true);
+    await expect(input).toBeFocused();
+    expect(
+      await input.evaluate((node) => [
+        (node as HTMLTextAreaElement).selectionStart,
+        (node as HTMLTextAreaElement).selectionEnd,
+      ]),
+    ).toEqual([3, 10]);
+    picker = await nativeSessionPicker(nativePage!);
+    await picker
+      .getByRole("textbox", { name: "Filter sessions", exact: true })
+      .fill("Already attached");
+    await expect(
+      picker.getByRole("button", { name: /Already attached native chat/ }),
+    ).toBeVisible();
+    await picker
+      .getByRole("textbox", { name: "Filter sessions", exact: true })
+      .press("Enter");
+    await expect(picker).toHaveCount(0);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await expect
+      .poll(() => shell.page.evaluate(() => document.hasFocus()))
+      .toBe(true);
+    expect((await shell.workspace(workspace)).activePaneId).toBe(chat.paneId);
+    expect((await shell.cli<AppState>("state")).conversations).toHaveLength(1);
+    expect(await shell.prompts()).toHaveLength(0);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

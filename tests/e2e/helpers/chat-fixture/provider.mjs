@@ -237,6 +237,36 @@ function receive(message, external = false) {
     return;
   }
   if (message.method === "initialized") return;
+  if (["thread/list", "session/list"].includes(message.method)) {
+    const config = configuration();
+    const respond = () => {
+      if (config.discoveryError) {
+        write({
+          id: message.id,
+          error: { code: -32000, message: "Invented discovery failure" },
+        });
+        return;
+      }
+      const rows = (config.sessions ?? []).map((session) => ({
+        ...(provider === "codex"
+          ? { id: session.nativeId }
+          : { sessionId: session.nativeId }),
+        cwd: session.cwd,
+        name: session.name,
+        preview: session.preview,
+      }));
+      reply(
+        message,
+        provider === "codex"
+          ? { data: rows, nextCursor: null }
+          : { sessions: rows, nextCursor: null },
+      );
+    };
+    if (config.discoveryDelayMs) later(respond, config.discoveryDelayMs);
+    else respond();
+    return;
+  }
+
   if (message.method === "session/set_config_option" && provider === "kimi") {
     later(() => {
       if (configuration().optionError)
