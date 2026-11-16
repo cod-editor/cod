@@ -5,6 +5,7 @@ import {
   createCodexAdapter,
   createKimiAdapter,
 } from "../../src/providers/index.ts";
+import { RpcTransport } from "../../src/providers/transport.ts";
 import type { ProviderEvent, ProviderId } from "../../src/providers/types.ts";
 const fixture = fileURLToPath(new URL("./fake-provider.mjs", import.meta.url));
 function setup(provider: ProviderId, mode = "normal") {
@@ -494,3 +495,67 @@ test("Kimi empty native completion is an actionable failure rather than a succes
     await adapter.dispose();
   }
 });
+
+for (const mode of ["large", "unicode", "overlong"])
+  test(`Provider framing handles ${mode} fragmented lines and consecutive frames`, async () => {
+    const notices: unknown[] = [];
+    const failures: Error[] = [];
+    const transport = new RpcTransport(
+      {
+        cwd: process.cwd(),
+        executable: process.execPath,
+        args: [
+          "--input-type=module",
+          "-e",
+          `
+        import { createInterface } from 'node:readline';
+        createInterface({input:process.stdin}).on('line',async line=>{
+          const request=JSON.parse(line);
+          const mode=request.params.mode;
+          if(mode==='overlong'){process.stdout.write('x'.repeat(4*1024*1024+1));return;}
+          const text=mode==='large'?'x'.repeat(3*1024*1024):'Пример 🧭'.repeat(40);
+          const wire=Buffer.from('\\n'+JSON.stringify({id:request.id,result:{text}})+'\\n'+JSON.stringify({method:'fixture/notice',params:{ok:true}})+'\\n');
+          const step=mode==='unicode'?1:8191;
+          for(let start=0;start<wire.length;start+=step){
+            if(!process.stdout.write(wire.subarray(start,start+step))) await new Promise(resolve=>process.stdout.once('drain',resolve));
+            if(mode==='unicode')await new Promise(resolve=>setImmediate(resolve));
+          }
+        });
+      `,
+        ],
+        requestTimeoutMs: 5000,
+      },
+      "unused",
+      [],
+      (message) => notices.push(message),
+      (error) => failures.push(error),
+      () => {},
+    );
+    try {
+      if (mode === "overlong") {
+        await assert.rejects(
+          transport.request("fixture/framing", { mode }),
+          /line exceeded size limit/,
+        );
+        assert.ok(
+          failures.some((error) =>
+            error.message.includes("line exceeded size limit"),
+          ),
+        );
+      } else {
+        const result = (await transport.request("fixture/framing", {
+          mode,
+        })) as { text: string };
+        assert.equal(
+          result.text,
+          mode === "large"
+            ? "x".repeat(3 * 1024 * 1024)
+            : "Пример 🧭".repeat(40),
+        );
+        await until(() => notices.length === 1);
+        assert.equal(failures.length, 0);
+      }
+    } finally {
+      await transport.close();
+    }
+  });

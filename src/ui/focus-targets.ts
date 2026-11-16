@@ -12,7 +12,10 @@ export function createFocusTargets(
 ) {
   const returns = new Map<string, ReturnType<typeof focus.capture>>();
   const recent = new Map<string, string>();
-  const pending = new Map<string, Promise<void>>();
+  const pending = new Map<
+    string,
+    { promise: Promise<void>; intent: AbortController }
+  >();
   const workspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
   const isChat = (p: PaneState) =>
@@ -47,7 +50,10 @@ export function createFocusTargets(
       candidates[0]
     );
   }
-  async function restore(origin: ReturnType<typeof focus.capture>) {
+  async function restore(
+    origin: ReturnType<typeof focus.capture>,
+    intent: AbortController,
+  ) {
     const browser = origin.browserId
       ? getState().browsers.find((b) => b.id === origin.browserId)
       : undefined;
@@ -63,29 +69,44 @@ export function createFocusTargets(
       !origin.browserId &&
       !origin.tabId
     ) {
-      await keys.focusPane(id);
+      await keys.focusPane(id, intent);
       return;
     }
     if (owner && id) await invoke("pane.focus", { workspace: owner.id, id });
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-    focus.restore(origin);
+    if (
+      await keys.whenRendered(() => {
+        if (owner && workspace()?.id !== owner.id) return false;
+        return owner && id
+          ? workspace()?.activePaneId === id || undefined
+          : true;
+      }, intent.signal)
+    )
+      focus.restore(origin);
   }
-  function toggle(target: Target): Promise<void> {
+  function toggle(target: Target, intent = keys.beginFocus()): Promise<void> {
     const key = `${workspace()?.id}:${target}`;
     const existing = pending.get(key);
-    if (existing) return existing;
-    const action = performToggle(target).finally(() => pending.delete(key));
-    pending.set(key, action);
+    if (existing && !existing.intent.signal.aborted) return existing.promise;
+    const action = performToggle(target, intent).finally(() => {
+      if (pending.get(key)?.promise === action) pending.delete(key);
+    });
+    pending.set(key, { promise: action, intent });
     return action;
   }
-  async function performToggle(target: Target): Promise<void> {
+  async function performToggle(
+    target: Target,
+    intent: AbortController,
+  ): Promise<void> {
     // Accepted state can still be awaiting its batched DOM render. Capture both
     // the destination and return control after that frame, never from an old tree.
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
+    const requestedWorkspace = workspace()?.id;
+    if (
+      !(await keys.whenRendered(
+        () => workspace()?.id === requestedWorkspace,
+        intent.signal,
+      ))
+    )
+      return;
     const w = workspace();
     if (!w) return;
     const active = document.activeElement as HTMLElement | null;
@@ -104,7 +125,7 @@ export function createFocusTargets(
     const origin = returns.get(key);
     if (within && origin) {
       returns.delete(key);
-      await restore(origin);
+      await restore(origin, intent);
       return;
     }
     if (!within) {
@@ -136,9 +157,16 @@ export function createFocusTargets(
           id: w.id,
           settings: { [setting]: true },
         });
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => resolve()),
-        );
+        if (
+          !(await keys.whenRendered(
+            () =>
+              workspace()?.id !== w.id
+                ? false
+                : workspace()?.settings?.[setting] === true || undefined,
+            intent.signal,
+          ))
+        )
+          return;
       }
       const host = document.querySelector<HTMLElement>(
         target === "files" ? "#project-panel" : "#workspace-tree",
@@ -174,7 +202,7 @@ export function createFocusTargets(
     }
     if (pane) {
       recent.set(key, pane.id);
-      await keys.focusPane(pane.id);
+      await keys.focusPane(pane.id, intent);
     }
   }
   return {

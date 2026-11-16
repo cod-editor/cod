@@ -712,6 +712,21 @@ export function createConversationViews({
     return host;
   }
 
+  const historyCounts = new Map<string, number>();
+  function recentCount(
+    entries: Array<{ type: "message" | "tool"; message?: { text: string } }>,
+  ): number {
+    let characters = 0,
+      count = 0;
+    for (let index = entries.length - 1; index >= 0 && count < 60; index--) {
+      const size = entries[index].message?.text.length ?? 0;
+      if (count && characters + size > 256 * 1024) break;
+      characters += size;
+      count++;
+    }
+    return count;
+  }
+
   function renderConversation(
     conversation: import("../types").ConversationState,
   ): HTMLElement {
@@ -734,7 +749,60 @@ export function createConversationViews({
         tool,
       })),
     ].sort((a, b) => a.order - b.order);
-    for (const entry of timeline) {
+    const count = Math.max(
+      historyCounts.get(conversation.id) ?? 0,
+      recentCount(timeline),
+    );
+    historyCounts.set(conversation.id, count);
+    const start = Math.max(0, timeline.length - count);
+    const earlier = (all = false) => {
+      const current = getState().conversations.find(
+        (item) => item.id === conversation.id,
+      );
+      if (!current) return;
+      const entries = [
+        ...current.messages.map((message) => ({
+          type: "message" as const,
+          order: message.order,
+          message,
+        })),
+        ...current.tools.map((tool) => ({
+          type: "tool" as const,
+          order: tool.order,
+        })),
+      ].sort((a, b) => a.order - b.order);
+      const previous =
+        historyCounts.get(conversation.id) ?? recentCount(entries);
+      if (previous >= entries.length) return;
+      const old = views
+        .get("chat:" + conversation.id)
+        ?.querySelector<HTMLElement>(".transcript");
+      const height = old?.scrollHeight ?? 0;
+      const top = old?.scrollTop ?? 0;
+      const prefix = entries.slice(0, Math.max(0, entries.length - previous));
+      historyCounts.set(
+        conversation.id,
+        all ? entries.length : previous + recentCount(prefix),
+      );
+      invalidate();
+      if (!all && old)
+        requestAnimationFrame(() => {
+          old.scrollTop = top + old.scrollHeight - height;
+        });
+    };
+    transcript.onscroll = (event) => {
+      if ((event.currentTarget as HTMLElement).scrollTop < 100) earlier();
+    };
+    transcript.addEventListener("cod:show-complete-history", () =>
+      earlier(true),
+    );
+    if (start) {
+      const button = uiButton("Earlier messages", "quiet");
+      button.onclick = () => earlier();
+      button.dataset.historyNavigation = "true";
+      transcript.append(button);
+    }
+    for (const entry of timeline.slice(start)) {
       if (entry.type === "message") {
         if (
           entry.message.role === "system" &&
@@ -1222,8 +1290,10 @@ export function createConversationViews({
             : !getState().workspaces.some((w) =>
                 w.panes.some((p) => p.id === id.slice(id.indexOf(":") + 1)),
               )
-        )
+        ) {
           views.delete(id);
+          historyCounts.delete(id.slice(id.indexOf(":") + 1));
+        }
     },
   };
 }

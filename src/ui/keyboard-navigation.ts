@@ -1,6 +1,6 @@
 import { focusReadyEditor } from "./document-views";
 import type { AppState, PaneState } from "../types";
-import type { Invoke } from "./contracts";
+import type { Invoke, WhenRendered } from "./contracts";
 import { paneRegions } from "./pane-layout";
 
 /** Region traversal belongs to the shell; Tab continues to navigate local controls. */
@@ -11,14 +11,37 @@ export function createKeyboardNavigation(
   tree: HTMLElement,
   nativeFocus: (id: string) => void,
   focusNativeView: (id: string) => void,
+  whenRendered: WhenRendered,
 ) {
   const workspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
   const visible = (element: HTMLElement | null): element is HTMLElement =>
     !!element && element.getClientRects().length > 0;
-  const nextFrame = () =>
-    new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  async function content(pane: PaneState): Promise<void> {
+  let pendingFocus: AbortController | undefined;
+  const events = new AbortController();
+  function cancelFocus() {
+    pendingFocus?.abort();
+  }
+  function beginFocus() {
+    cancelFocus();
+    return (pendingFocus = new AbortController());
+  }
+  window.addEventListener("blur", cancelFocus, { signal: events.signal });
+  document.addEventListener("pointerdown", cancelFocus, {
+    capture: true,
+    signal: events.signal,
+  });
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Tab" || event.key === "Escape") cancelFocus();
+    },
+    { capture: true, signal: events.signal },
+  );
+  async function content(
+    pane: PaneState,
+    intent?: AbortController,
+  ): Promise<void> {
     const host = panes.querySelector<HTMLElement>(
       `[data-pane-id="${pane.id}"]`,
     );
@@ -51,41 +74,56 @@ export function createKeyboardNavigation(
       target instanceof HTMLTextAreaElement &&
       target.classList.contains("file-editor")
     )
-      focusReadyEditor(target, () => workspace()?.activePaneId === pane.id);
+      focusReadyEditor(
+        target,
+        () => workspace()?.activePaneId === pane.id,
+        intent,
+      );
     else if (target) target.focus({ preventScroll: true });
     else {
       host.tabIndex = 0;
       host.focus({ preventScroll: true });
     }
   }
-  /** Focus a completed mutation's selected content without issuing a new selection. */
-  async function focusActiveContent(id: string): Promise<void> {
-    await nextFrame();
-    const active = workspace();
-    const pane = active?.panes.find((pane) => pane.id === id);
-    if (active?.activePaneId !== id || !pane) return;
-    if (pane.kind === "conversation") {
+  /** Operation replies are not acknowledgements of the renderer's state or DOM. */
+  async function focusActiveContent(
+    id: string,
+    intent = beginFocus(),
+  ): Promise<void> {
+    const expectedWorkspace = workspace()?.id;
+    if (!expectedWorkspace) return;
+    const existed = workspace()?.panes.some((pane) => pane.id === id);
+    const ready = () => {
+      const active = workspace();
+      if (
+        active?.id !== expectedWorkspace ||
+        document.querySelector("dialog[open]")
+      )
+        return false;
+      const pane = active?.panes.find((pane) => pane.id === id);
+      if (!pane && existed) return false;
+      if (!pane || active?.activePaneId !== id) return undefined;
+      return visible(panes.querySelector<HTMLElement>(`[data-pane-id="${id}"]`))
+        ? true
+        : undefined;
+    };
+    if (!(await whenRendered(ready, intent.signal))) return;
+    const pane = workspace()?.panes.find((pane) => pane.id === id);
+    if (pane?.kind === "conversation") {
       await invoke("conversation.acknowledge", { id: pane.conversationId });
-      await nextFrame();
+      if (!(await whenRendered(ready, intent.signal))) return;
     }
-    const current = workspace();
-    const selected = current?.panes.find((pane) => pane.id === id);
-    if (
-      current?.id === active.id &&
-      current.activePaneId === id &&
-      selected &&
-      !document.querySelector("dialog[open]")
-    )
-      await content(selected);
+    const selected = workspace()?.panes.find((pane) => pane.id === id);
+    if (selected && !intent.signal.aborted) await content(selected, intent);
   }
-  async function focusPane(id: string): Promise<void> {
+  async function focusPane(id: string, intent = beginFocus()): Promise<void> {
     const w = getState().workspaces.find((w) =>
-        w.panes.some((p) => p.id === id),
-      ),
-      pane = w?.panes.find((p) => p.id === id);
-    if (!w || !pane) return;
+      w.panes.some((p) => p.id === id),
+    );
+    if (!w || intent.signal.aborted) return;
     await invoke("pane.focus", { workspace: w.id, id });
-    await focusActiveContent(id);
+    if (workspace()?.id !== w.id) return;
+    await focusActiveContent(id, intent);
   }
   async function spatial(index: number, workspaceId?: string): Promise<void> {
     const w = workspaceId
@@ -222,6 +260,12 @@ export function createKeyboardNavigation(
     await regions[(index + delta + regions.length) % regions.length].run();
   }
   return {
+    beginFocus,
+    whenRendered,
+    dispose() {
+      cancelFocus();
+      events.abort();
+    },
     focusPane,
     focusActiveContent,
     spatial,
