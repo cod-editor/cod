@@ -1,3 +1,4 @@
+import { tabInsertionIndex } from "../tab-order";
 import type { Invoke } from "./contracts";
 import type { WorkspaceState } from "../types";
 
@@ -71,6 +72,12 @@ export function createTabDrag(invoke: Invoke) {
         return x < rect.left + rect.width / 2;
       });
       if (index < 0) index = others.length;
+      index = tabInsertionIndex(
+        workspace,
+        others.map((tab) => tab.dataset.tabId!),
+        dragged!.id,
+        index,
+      );
       const before = others[index];
       const rect = (before ?? others.at(-1))?.getBoundingClientRect();
       const bounds = bar.getBoundingClientRect();

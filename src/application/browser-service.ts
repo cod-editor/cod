@@ -303,7 +303,11 @@ export class BrowserApplicationService {
         if (browser)
           void this.store
             .change(async () => {
-              if (!this.store.closing && (await this.requestClose(browser)))
+              if (
+                !this.store.closing &&
+                !this.isPinned(browser) &&
+                (await this.requestClose(browser))
+              )
                 this.removeBrowser(browser);
             })
             .catch(() => undefined);
@@ -703,6 +707,7 @@ export class BrowserApplicationService {
       if (paneId === active.id)
         workspace.panes[workspace.panes.indexOf(active)] = {
           id: paneId,
+          pinned: active.pinned,
           kind: "browser",
           browserId: id,
         };
@@ -857,6 +862,11 @@ export class BrowserApplicationService {
       throw error;
     }
   }
+  private isPinned(record: BrowserState): boolean {
+    return !!this.store.data.workspaces
+      .find((workspace) => workspace.id === record.workspaceId)
+      ?.panes.find((pane) => pane.id === record.paneId)?.pinned;
+  }
   async requestClose(record: BrowserState): Promise<boolean> {
     if (this.store.closing) return false;
     if (record.agentPage) return true;
@@ -915,8 +925,17 @@ export class BrowserApplicationService {
     if (event.type === "closed") {
       void this.store
         .change(() => {
-          if (!this.store.closing && this.store.data.browsers.includes(record))
-            this.removeBrowser(record);
+          if (
+            !this.store.closing &&
+            this.store.data.browsers.includes(record)
+          ) {
+            if (this.isPinned(record)) {
+              record.visible = false;
+              record.loading = false;
+              record.error =
+                "The page closed itself. Reload to open this pinned tab again.";
+            } else this.removeBrowser(record);
+          }
         })
         .catch(() => undefined);
       return;
@@ -1251,15 +1270,6 @@ export class BrowserApplicationService {
 
       case "browser.inspect":
         return structuredClone(this.browser(requiredString(request, "id")));
-
-      case "browser.close":
-        return this.store.change(async () => {
-          const record = this.browser(requiredString(request, "id"));
-          if (!(await this.requestClose(record)))
-            return { id: record.id, closed: false };
-          this.removeBrowser(record);
-          return { id: record.id, closed: true };
-        });
 
       case "browser.recover": {
         const id = requiredString(request, "id");

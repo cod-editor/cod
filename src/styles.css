@@ -315,6 +315,7 @@ body {
   width: 14px;
   height: 14px;
 }
+.tab-close.tab-pin,
 .tab:hover .tab-close,
 .tab:focus-within .tab-close,
 .tab:focus-visible .tab-close {

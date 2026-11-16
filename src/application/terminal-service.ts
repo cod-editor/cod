@@ -128,7 +128,12 @@ export class TerminalApplicationService {
       (active.kind === "empty" && active.launcher)
     ) {
       const index = workspace.panes.indexOf(active);
-      workspace.panes[index] = { id: active.id, kind: "terminal", terminalId };
+      workspace.panes[index] = {
+        id: active.id,
+        pinned: active.pinned,
+        kind: "terminal",
+        terminalId,
+      };
       workspace.activePaneId = active.id;
       return active.id;
     }
@@ -170,16 +175,6 @@ export class TerminalApplicationService {
     )
       this.syncTerminal(terminal);
     return terminal;
-  }
-
-  async closeTerminal(id: string): Promise<{ id: string }> {
-    const terminal = this.terminal(id);
-    if (terminal.status !== "failed" && terminal.pid !== 0)
-      await this.processes.close(id);
-    this.removeTerminalRecord(terminal);
-    await this.store.persist();
-    this.store.notify();
-    return { id };
   }
 
   removeTerminalRecord(terminal: TerminalState): void {
@@ -253,11 +248,6 @@ export class TerminalApplicationService {
       case "terminal.inspect":
         return structuredClone(
           this.inspectTerminal(requiredString(request, "id")),
-        );
-
-      case "terminal.close":
-        return this.store.serialize(() =>
-          this.closeTerminal(requiredString(request, "id")),
         );
 
       default:

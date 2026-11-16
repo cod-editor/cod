@@ -572,7 +572,7 @@ export function createWorkspaceNavigation(
             id: browser.paneId,
           });
         };
-        const close = async () => {
+        const close = async (includePinned = false) => {
           const rows = [
             ...tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
           ];
@@ -584,6 +584,7 @@ export function createWorkspaceNavigation(
           const result = await invoke<{ closed?: boolean }>("pane.close", {
             workspace: workspace.id,
             id: browser.paneId,
+            includePinned,
           });
           if (result.closed === false) return;
           requestAnimationFrame(() => {
@@ -613,7 +614,21 @@ export function createWorkspaceNavigation(
               run: () => void invoke("browser.reload", { id: browser.id }),
             },
             null,
-            { label: "Close tab", run: () => void close() },
+            {
+              label: workspace.panes.find((pane) => pane.id === browser.paneId)
+                ?.pinned
+                ? "Unpin tab"
+                : "Pin tab",
+              run: () =>
+                void invoke("pane.pin", {
+                  workspace: workspace.id,
+                  id: browser.paneId,
+                  pinned: !workspace.panes.find(
+                    (pane) => pane.id === browser.paneId,
+                  )?.pinned,
+                }),
+            },
+            { label: "Close tab", run: () => void close(true) },
           ]);
         };
         nextTree.append(item);

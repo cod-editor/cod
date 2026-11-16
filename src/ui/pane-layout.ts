@@ -452,7 +452,8 @@ export function createPaneLayout(
       tab.setAttribute("aria-selected", String(id === group.activePaneId));
       tab.tabIndex = id === group.activePaneId ? 0 : -1;
       tab.dataset.tabId = id;
-      tab.title = paneLabel(pane);
+      tab.title = paneLabel(pane) + (pane.pinned ? " - Pinned tab" : "");
+      tab.dataset.pinned = String(!!pane.pinned);
       const iconKind =
         pane.kind === "document" && !pane.filePath
           ? "conversation"
@@ -476,10 +477,18 @@ export function createPaneLayout(
         document.createElement("button");
       close.type = "button";
       close.tabIndex = -1;
-      close.setAttribute("aria-label", `Close ${paneLabel(pane)}`);
+      close.setAttribute(
+        "aria-label",
+        `${pane.pinned ? "Unpin" : "Close"} ${paneLabel(pane)}`,
+      );
       close.className = "tab-close";
-      if (!close.childElementCount) close.append(icon("close"));
-      close.title = shortcutTitle("tab.close");
+      close.classList.toggle("tab-pin", !!pane.pinned);
+      const endIcon = pane.pinned ? "pin" : "close";
+      if (close.dataset.icon !== endIcon) {
+        close.replaceChildren(icon(endIcon));
+        close.dataset.icon = endIcon;
+      }
+      close.title = pane.pinned ? "Unpin tab" : shortcutTitle("tab.close");
       close.onpointerdown = () => {
         // A page title may change while the mouse is held. Keep the close target
         // in place until release rather than moving it under the pointer.
@@ -500,7 +509,9 @@ export function createPaneLayout(
       };
       close.onclick = (e) => {
         e.stopPropagation();
-        void invoke("pane.close", { workspace: workspace.id, id });
+        void (pane.pinned
+          ? invoke("pane.pin", { workspace: workspace.id, id, pinned: false })
+          : invoke("pane.close", { workspace: workspace.id, id }));
       };
       if (close.parentNode !== tab) tab.append(close);
       tab.onclick = () => {
@@ -545,20 +556,67 @@ export function createPaneLayout(
             .catch(() => undefined);
         }
       };
+      tab.onauxclick = (event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        if (!pane.pinned)
+          void invoke("pane.close", { workspace: workspace.id, id });
+      };
       tab.draggable = true;
       tab.ondragstart = (e) => drag.start(e, tab, workspace.id, id);
       tab.ondragend = drag.end;
       const actions: MenuAction[] = [
         {
-          label: "Close tab",
-          run: () => void invoke("pane.close", { workspace: workspace.id, id }),
+          label: pane.pinned ? "Unpin tab" : "Pin tab",
+          run: () =>
+            void invoke("pane.pin", {
+              workspace: workspace.id,
+              id,
+              pinned: !pane.pinned,
+            }),
         },
+        {
+          label: "Close tab",
+          run: () =>
+            void invoke("pane.close", {
+              workspace: workspace.id,
+              id,
+              includePinned: true,
+            }),
+        },
+        ...(["others", "left", "right", "all"] as const).map((scope) => ({
+          label: {
+            others: "Close other tabs",
+            left: "Close tabs to the left",
+            right: "Close tabs to the right",
+            all: "Close all tabs",
+          }[scope],
+          disabled: !group.paneIds.some(
+            (other, index) =>
+              !workspace.panes.find((tab) => tab.id === other)?.pinned &&
+              (scope === "all" ||
+                (scope === "others"
+                  ? other !== id
+                  : scope === "left"
+                    ? index < group.paneIds.indexOf(id)
+                    : index > group.paneIds.indexOf(id))),
+          ),
+          run: () =>
+            void invoke("pane.close-many", {
+              workspace: workspace.id,
+              group: group.id,
+              id,
+              scope,
+            }),
+        })),
         ...([-1, 1] as const).map((delta) => ({
           label: delta < 0 ? "Move tab left" : "Move tab right",
           disabled:
-            delta < 0
-              ? group.paneIds.indexOf(id) === 0
-              : group.paneIds.indexOf(id) === group.paneIds.length - 1,
+            !group.paneIds[group.paneIds.indexOf(id) + delta] ||
+            !!workspace.panes.find(
+              (tab) =>
+                tab.id === group.paneIds[group.paneIds.indexOf(id) + delta],
+            )?.pinned !== !!pane.pinned,
           run: () =>
             void invoke("pane.move", {
               workspace: workspace.id,

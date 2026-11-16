@@ -995,11 +995,36 @@ export function createCommands(
         case "tab.previous":
           await keys.cycleTab(-1, w?.id, pane?.id);
           break;
+        case "tab.togglePin":
+          if (w && pane)
+            await invoke("pane.pin", {
+              workspace: w.id,
+              id: pane.id,
+              pinned: !pane.pinned,
+            });
+          break;
+        case "tab.closeOthers":
+        case "tab.closeAll":
+          if (w && pane && group)
+            await invoke("pane.close-many", {
+              workspace: w.id,
+              group: group.id,
+              id: pane.id,
+              scope: id === "tab.closeAll" ? "all" : "others",
+            });
+          break;
         case "tab.close":
           if (w && pane) {
-            await invoke("pane.close", { workspace: w.id, id: pane.id });
+            const result = await invoke<{ closed?: boolean }>("pane.close", {
+              workspace: w.id,
+              id: pane.id,
+            });
             const next = activeWorkspace();
-            if (next) await keys.focusPane(next.activePaneId);
+            if (
+              next &&
+              !(result.closed === false && next.activePaneId === pane.id)
+            )
+              await keys.focusPane(next.activePaneId);
           }
           break;
         case "tab.reopen":
@@ -1012,9 +1037,14 @@ export function createCommands(
               workspace: w.id,
               id: pane.id,
               group: group.id,
-              index:
-                group.paneIds.indexOf(pane.id) +
-                (id === "tab.reorderLeft" ? -1 : 1),
+              index: Math.max(
+                0,
+                Math.min(
+                  group.paneIds.length - 1,
+                  group.paneIds.indexOf(pane.id) +
+                    (id === "tab.reorderLeft" ? -1 : 1),
+                ),
+              ),
             });
           break;
         case "tab.moveToPane":
