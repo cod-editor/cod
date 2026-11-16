@@ -267,3 +267,32 @@ button:is(.selected, :focus-visible) .ui-button-description {
 .command-list .icon-button:not(:disabled):active {
   background: var(--control-pressed);
 }
+
+/* Compound picker rows have one surface, including disclosure and actions.
+   Controls stay on the first text line when a readable label wraps. */
+.command-list .ui-picker-row {
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  padding-left: calc(var(--space-2) + var(--picker-row-indent, 0px));
+}
+.command-list .ui-picker-row:is(:hover, :has(.selected), :has(:focus-visible)) {
+  background: var(--control-hover);
+}
+.command-list .ui-picker-row:has(.selected) {
+  background: #454b57;
+  color: #d7dae0;
+}
+.command-list .ui-picker-row > .ui-picker-row-main {
+  align-items: flex-start;
+  padding: var(--space-1) 0;
+  border-radius: 0;
+  background: transparent;
+}
+.ui-picker-row-main > .icon {
+  flex: none;
+  margin-top: max(0px, calc((1em * var(--ui-line-height) - 16px) / 2));
+}
+.ui-picker-row > .icon-button {
+  margin-top: var(--space-1);
+}
