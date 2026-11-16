@@ -1,10 +1,15 @@
 #!/bin/sh
 # Run real Electron acceptance on an isolated virtual display, never the host desktop.
 set -eu
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+freeze_only=false
+if [ "${1:-}" = "--freeze-only" ]; then
+  freeze_only=true
+  shift
+fi
+repo_dir=$(CDPATH= cd -- "${COD_TEST_SOURCE_DIR:-$(dirname -- "$0")/..}" && pwd)
 mkdir -p "$repo_dir/artifacts/verification/npm-cache"
 image_ref=${COD_LINUX_TEST_IMAGE:-cod-test-electron:local}
-if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
+if [ "$freeze_only" = false ] && ! docker image inspect "$image_ref" >/dev/null 2>&1; then
   echo "Test image unavailable: $image_ref. Build the default with: docker build -t cod-test-electron:local tests/support/electron" >&2
   exit 2
 fi
@@ -13,12 +18,18 @@ mkdir -p "$repo_dir/artifacts/verification/electron-cache"
 run_dir=$(mktemp -d "$repo_dir/artifacts/verification/electron-XXXXXX")
 mkdir "$run_dir/input" "$run_dir/output"
 for input in package.json package-lock.json playwright.config.ts tsconfig.json src scripts tests runtime-skills runtime-plugins assets; do
-  (cd "$repo_dir" && tar --exclude='*/artifacts' --exclude='*/node_modules' --exclude='*/test-results' -cf - "$input") | (cd "$run_dir/input" && tar -xf -)
+  (cd "$repo_dir" && tar --exclude='*/artifacts' --exclude='*/node_modules' --exclude='*/test-results' --exclude='*/reports' --exclude='*/.git' --exclude='*/.env' --exclude='*/.env.*' -cf - "$input") | (cd "$run_dir/input" && tar -xf -)
 done
 cp "$repo_dir/tests/support/electron/run.sh" "$run_dir/input/run-electron.sh"
 cp "$repo_dir/tests/support/electron/check-sandbox.mjs" "$run_dir/input/check-sandbox.mjs"
-(cd "$run_dir/input" && find . -type f -exec shasum -a 256 '{}' \;) > "$run_dir/input-sha256.txt"
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$run_dir/input" && find . -type f -exec sha256sum '{}' +) > "$run_dir/input-sha256.txt"
+else
+  command -v shasum >/dev/null 2>&1 || { echo 'A SHA-256 tool is required' >&2; exit 2; }
+  (cd "$run_dir/input" && find . -type f -exec shasum -a 256 '{}' +) > "$run_dir/input-sha256.txt"
+fi
 printf 'Frozen input and evidence: %s\n' "$run_dir"
+if [ "$freeze_only" = true ]; then exit 0; fi
 set +e
 docker run --rm --init --shm-size=1g --cpus=2 --memory=3g \
   --security-opt seccomp=unconfined \
