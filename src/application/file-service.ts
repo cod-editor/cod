@@ -66,6 +66,7 @@ export class FileApplicationService {
     if (existing && existing.kind === "document") {
       existing.line = line;
       if (opening.kind === "empty" && opening.launcher) {
+        if (opening.pinned) existing.pinned = true;
         workspace.panes = workspace.panes.filter(
           (pane) => pane.id !== opening.id,
         );
@@ -79,6 +80,7 @@ export class FileApplicationService {
     if (pane.kind === "empty" && pane.launcher) {
       const document: PaneState = {
         id: pane.id,
+        pinned: pane.pinned,
         kind: "document",
         filePath,
         canonicalPath,
@@ -163,6 +165,7 @@ export class FileApplicationService {
         if (existing.kind === "preview" && resource.kind === "preview")
           existing.format = resource.format;
         if (opening.kind === "empty" && opening.launcher) {
+          if (opening.pinned) existing.pinned = true;
           workspace.panes = workspace.panes.filter(
             (pane) => pane.id !== opening.id,
           );
@@ -177,6 +180,7 @@ export class FileApplicationService {
       if (launcher) {
         workspace.panes[workspace.panes.indexOf(launcher)] = {
           id: launcher.id,
+          pinned: launcher.pinned,
           ...resource,
         };
         workspace.activePaneId = launcher.id;

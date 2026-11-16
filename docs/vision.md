@@ -38,6 +38,8 @@ A conversation can move to another workspace without becoming a new native sessi
 
 Users can remove an idle conversation from a workspace without deleting its native provider session or history. Removal clears its workspace row and open chat view; the existing reopen-closed-tab action restores an accidentally removed conversation and its draft. Closing a tab alone keeps the conversation in the workspace. Active work and pending review or form submissions must not be silently abandoned.
 
+Pinned tabs protect important chats, pages and other views from routine and bulk closure. Pin state follows the tab across moves and recovery; explicit context closure remains available.
+
 A task often corresponds to one workspace, but this is a workflow convention, not a built-in dependency on a tracker.
 The expected daily use includes 2-4 parallel tasks plus temporary conversations and browsing.
 

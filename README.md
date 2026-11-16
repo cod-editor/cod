@@ -56,12 +56,15 @@ New browser tabs show pinned sites shared across workspaces. Use the `+` tile to
 
 Downloads are available in Commands and from the browser toolbar once a file has been downloaded. Pause, resume, cancel, retry, open and reveal files there. Closing a tab keeps its download running. Download history survives restart; interrupted transfers require an explicit retry. Removing an entry does not delete the file.
 
+Pin important views through the tab context menu or Commands > Toggle pin tab. Pinned tabs stay first, replace their close button with an unpin icon and survive ordinary or bulk closure. Explicit Close tab in the context menu still closes them; Reopen closed tab restores their pin. Moves and restart retain pins. Optional shortcuts use the existing keymap settings.
+
 ## Development
 
 Read [AGENTS.md](AGENTS.md), [the requirements](docs/vision.md) and [implementation contracts](docs/specs/implementation.md).
 
 - `npm run build`: bundle the application and CLI.
 - `npm run check`: formatting and TypeScript checks.
+- `npm run test:unit`: unit and CLI protocol checks; run `npm run build` first.
 - `npm run test:providers`: provider subprocess tests, without live accounts.
 - `npm run test:integration`: status-plugin tests using temporary profiles.
 - `npm run test:isolated`: real Electron acceptance in Docker/Xvfb. It requires the configured Linux test image; see [test environments](tests/README.md).

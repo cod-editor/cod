@@ -7,6 +7,8 @@
   --space-6: 24px;
   --radius: 3px;
   --control-height: 28px;
+  --compact-icon-button-size: 20px;
+  --compact-icon-size: 14px;
   --toolbar-height: 36px;
   --font-small: calc(var(--ui-font-size) - 2px);
   --ui-line-height: 1.4;
@@ -92,8 +94,11 @@ select:focus-visible {
 }
 .icon-button {
   padding: 5px;
-  width: 28px;
-  height: 28px;
+  --icon-button-size: var(--control-height);
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  min-width: var(--icon-button-size);
+  min-height: var(--icon-button-size);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -102,9 +107,12 @@ select:focus-visible {
   color: #9da5b4;
   flex: none;
 }
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
   background: var(--control-hover);
   color: #d7dae0;
+}
+.icon-button:not(:disabled):active {
+  background: var(--control-pressed);
 }
 
 dialog {
@@ -168,10 +176,12 @@ dialog .setting-row {
   width: 100%;
 }
 .icon-button.compact {
-  width: 20px;
-  height: 20px;
-  min-height: 20px;
+  --icon-button-size: var(--compact-icon-button-size);
   padding: 2px;
+}
+.icon-button.compact .icon {
+  width: var(--compact-icon-size);
+  height: var(--compact-icon-size);
 }
 
 .appearance-settings {

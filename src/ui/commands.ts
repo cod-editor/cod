@@ -303,14 +303,21 @@ export function createCommands(
     const w = activeWorkspace();
     if (!w) return;
     const closed = w.closedTabs?.at(-1);
+    const reopen = async (newShell = false) => {
+      const result = await invoke<{ paneId: string }>("pane.reopen", {
+        workspace: w.id,
+        ...(newShell ? { newShell: true } : {}),
+      });
+      await keys.focusActiveContent(result.paneId);
+    };
     if (closed?.terminal)
       confirmAction(
         "Start a new shell?",
         `Start a new shell in ${closed.terminal.cwd}? The previous process has ended; commands will not be replayed.`,
         "Start shell",
-        () => invoke("pane.reopen", { workspace: w.id, newShell: true }),
+        () => reopen(true),
       );
-    else void invoke("pane.reopen", { workspace: w.id });
+    else void reopen();
   }
   function reopenWorkspace(): void {
     const closed = getState().closedWorkspaces?.at(-1);
@@ -954,7 +961,7 @@ export function createCommands(
             requestAnimationFrame(() => resolve()),
           );
           const active = activeWorkspace();
-          if (active) await keys.focusPane(active.activePaneId);
+          if (active) await keys.focusActiveContent(active.activePaneId);
           break;
         }
         case "pane.next":
@@ -995,11 +1002,36 @@ export function createCommands(
         case "tab.previous":
           await keys.cycleTab(-1, w?.id, pane?.id);
           break;
+        case "tab.togglePin":
+          if (w && pane)
+            await invoke("pane.pin", {
+              workspace: w.id,
+              id: pane.id,
+              pinned: !pane.pinned,
+            });
+          break;
+        case "tab.closeOthers":
+        case "tab.closeAll":
+          if (w && pane && group)
+            await invoke("pane.close-many", {
+              workspace: w.id,
+              group: group.id,
+              id: pane.id,
+              scope: id === "tab.closeAll" ? "all" : "others",
+            });
+          break;
         case "tab.close":
           if (w && pane) {
-            await invoke("pane.close", { workspace: w.id, id: pane.id });
+            const result = await invoke<{ closed?: boolean }>("pane.close", {
+              workspace: w.id,
+              id: pane.id,
+            });
             const next = activeWorkspace();
-            if (next) await keys.focusPane(next.activePaneId);
+            if (
+              next &&
+              !(result.closed === false && next.activePaneId === pane.id)
+            )
+              await keys.focusActiveContent(next.activePaneId);
           }
           break;
         case "tab.reopen":
@@ -1012,9 +1044,14 @@ export function createCommands(
               workspace: w.id,
               id: pane.id,
               group: group.id,
-              index:
-                group.paneIds.indexOf(pane.id) +
-                (id === "tab.reorderLeft" ? -1 : 1),
+              index: Math.max(
+                0,
+                Math.min(
+                  group.paneIds.length - 1,
+                  group.paneIds.indexOf(pane.id) +
+                    (id === "tab.reorderLeft" ? -1 : 1),
+                ),
+              ),
             });
           break;
         case "tab.moveToPane":
