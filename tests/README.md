@@ -21,6 +21,18 @@ Docker is required. The checked-in Dockerfile builds the default `cod-test-elect
 
 The OrbStack test environment uses an outer Docker seccomp exception for Chromium user namespaces; Chromium's own sandbox stays enabled. The runner checks actual renderer isolation. An unavailable image, display or sandbox is an environment blocker, not permission to add `--no-sandbox`.
 
+## Private SSH test machine
+
+`node scripts/verify-electron-remote.mjs -- tests/e2e/files.spec.ts` runs selected checks on a configured Linux machine without local Docker, builds or GUI windows. Set `COD_TEST_SSH_HOST` to an existing SSH alias, or use `--host` / `--config` with a private JSON file containing a `host` property. Keep personal destinations/configuration in ignored local files, never in the repository or public issue content. Known-host verification is required and agent forwarding is disabled.
+
+The remote machine needs Node.js 24 or newer, rsync, Docker, flock, tar and an existing systemd user manager; the helper does not change system configuration or enable lingering. It creates only its owned `.cod-electron-tests` directory and finite transient user units, not a daemon or public CI runner. Its Docker image is built task-locally when missing. One suite runs at a time with the existing runner's CPU/memory limits, virtual display and Chromium sandbox. A run expires after 45 minutes, including queue time.
+
+The helper reuses `verify-electron-linux.sh --freeze-only`, transfers that immutable allowlisted source incrementally and keeps package/Electron caches remotely. Uncommitted application/test inputs are included; Git metadata, profiles, private artifacts, reports and environment files are not. Source symlinks and inputs over 64 MiB are rejected. Only use public Cod source and invented fixtures. To run a different worktree through an external copy of the helper, pass `--source SOURCE_DIRECTORY`; source identity is verified again against the actual remote frozen input.
+
+`--no-wait` returns after remote acceptance. Reconnect with the same helper, destination and `--result RUN_ID`; this retrieves the existing result and never starts the test again. Closing the client/SSH wait does not stop an accepted remote job. If transfer fails before acceptance, the prepared ID and private local request record identify the incomplete staging area; do not assume a test ran. At most four jobs may be pending/staged.
+
+Results are retrieved to ignored `artifacts/remote-verification/RUN_ID`: exit status, input SHA-256 manifest, a log tail and bounded test artifacts/screenshots. Collection retains at most 100 files / 64 MiB plus a 1 MiB log tail and reports omissions. Raw output copies are discarded after collection. Keep three completed runs locally and remotely, preserving active jobs; each owned npm/Electron cache is reset before a run if it exceeds 2 GiB. Keep the current and one recent owned Docker image, preserving images in use. Global Docker/builder caches and unrelated workloads are never pruned; insufficient free space is an explicit failure rather than permission to delete other data.
+
 ## Official Bitwarden flow
 
 ```sh
