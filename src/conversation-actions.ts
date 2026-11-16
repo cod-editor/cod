@@ -41,12 +41,12 @@ export function conversationHandoffReason(
   if (conversation.handoffTerminalId)
     return "Conversation is already handed off";
   if (conversation.queuedMessages?.length)
-    return "Send or cancel queued messages before continuing in CLI.";
+    return "Send or cancel queued messages first";
   if (
     ["starting", "working", "waiting"].includes(conversation.status) ||
     conversation.pendingPermissions.length
   )
-    return "Finish or interrupt the active response before continuing in CLI.";
+    return "Finish or interrupt the active response first";
   const feedback = pendingFeedback(state, conversation);
   if (feedback === "review")
     return "Finish the pending review before continuing its originating chat in CLI.";
