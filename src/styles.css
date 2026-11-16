@@ -299,21 +299,7 @@ body {
   white-space: nowrap;
 }
 .tab-close {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   opacity: 0;
-  flex: none;
-}
-.tab-close .icon {
-  width: 14px;
-  height: 14px;
 }
 .tab-close.tab-pin,
 .tab:hover .tab-close,
@@ -1146,13 +1132,6 @@ button[aria-busy="true"] {
   cursor: progress;
 }
 
-.tab-close:not(:disabled):hover {
-  background: var(--control-hover);
-  color: #e5e9ef;
-}
-.tab-close:not(:disabled):active {
-  background: var(--control-pressed);
-}
 .composer-actions button:not(:disabled):hover {
   background: var(--control-hover);
   color: #d7dae0;

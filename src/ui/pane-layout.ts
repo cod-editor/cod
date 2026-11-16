@@ -474,14 +474,14 @@ export function createPaneLayout(
       if (label.parentNode !== tab) tab.append(label);
       const close =
         tab.querySelector<HTMLButtonElement>(".tab-close") ??
-        document.createElement("button");
+        iconButton("close", "Close tab", () => {});
       close.type = "button";
       close.tabIndex = -1;
       close.setAttribute(
         "aria-label",
         `${pane.pinned ? "Unpin" : "Close"} ${paneLabel(pane)}`,
       );
-      close.className = "tab-close";
+      close.classList.add("compact", "tab-close");
       close.classList.toggle("tab-pin", !!pane.pinned);
       const endIcon = pane.pinned ? "pin" : "close";
       if (close.dataset.icon !== endIcon) {
@@ -524,6 +524,7 @@ export function createPaneLayout(
           .catch(() => undefined);
       };
       tab.onkeydown = (e) => {
+        if ((e.target as Element).closest("button")) return;
         if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
