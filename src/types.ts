@@ -73,7 +73,7 @@ export interface EmptyPane {
   kind: "empty";
   launcher?: boolean;
 }
-export type PaneState =
+export type PaneState = (
   | EmptyPane
   | DocumentPane
   | ConversationPane
@@ -81,7 +81,8 @@ export type PaneState =
   | BrowserPane
   | PreviewPane
   | DiffPane
-  | ReviewPane;
+  | ReviewPane
+) & { pinned?: boolean };
 
 export interface ReviewPane {
   id: string;
@@ -231,6 +232,8 @@ export interface WorkspaceSettings {
 export interface WorkspaceState {
   closedTabs?: Array<{
     pane: PaneState;
+    groupId?: string;
+    index?: number;
     browser?: BrowserState;
     terminal?: TerminalState;
     conversation?: ConversationState;

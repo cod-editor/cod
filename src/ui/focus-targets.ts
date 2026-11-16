@@ -55,6 +55,17 @@ export function createFocusTargets(
     const owner = id
       ? getState().workspaces.find((w) => w.panes.some((p) => p.id === id))
       : undefined;
+    if (
+      owner &&
+      id &&
+      !origin.element &&
+      !origin.label &&
+      !origin.browserId &&
+      !origin.tabId
+    ) {
+      await keys.focusPane(id);
+      return;
+    }
     if (owner && id) await invoke("pane.focus", { workspace: owner.id, id });
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => resolve()),
@@ -70,6 +81,11 @@ export function createFocusTargets(
     return action;
   }
   async function performToggle(target: Target): Promise<void> {
+    // Accepted state can still be awaiting its batched DOM render. Capture both
+    // the destination and return control after that frame, never from an old tree.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
     const w = workspace();
     if (!w) return;
     const active = document.activeElement as HTMLElement | null;
@@ -91,7 +107,24 @@ export function createFocusTargets(
       await restore(origin);
       return;
     }
-    if (!within) returns.set(key, focus.capture());
+    if (!within) {
+      const captured = focus.capture();
+      const browser = getState().browsers.find(
+        (browser) => browser.id === captured.browserId,
+      );
+      const originId = browser?.paneId ?? captured.paneId ?? captured.tabId;
+      const originWorkspace = originId
+        ? getState().workspaces.find((workspace) =>
+            workspace.panes.some((pane) => pane.id === originId),
+          )
+        : undefined;
+      returns.set(
+        key,
+        originWorkspace && originWorkspace.id !== w.id
+          ? { paneId: w.activePaneId }
+          : captured,
+      );
+    }
     if (target === "files" || target === "workspaces") {
       const setting = target === "files" ? "filesVisible" : "workspacesVisible";
       const visible =

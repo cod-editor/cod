@@ -17,6 +17,7 @@ export const icons: Record<string, string> = {
     '<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>',
   diff: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><path d="M6 7v10M18 17V9c0-4-8-1-8-5"/>',
   plus: '<path d="M12 4v16M4 12h16"/>',
+  pin: '<path d="m16 3 5 5-3 1-4 4v4l-2 2-7-7 2-2h4l4-4zM8 16l-5 5"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   maximize: '<path d="M14 3h7v7M21 3l-7 7M3 14v7h7M3 21l7-7"/>',
   restore: '<path d="M14 3v7h7M14 10l7-7M3 14h7v7M10 14l-7 7"/>',

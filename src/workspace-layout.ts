@@ -54,7 +54,11 @@ export function normalizeGroups(workspace: WorkspaceState): void {
     if (group.paneIds.length < 2) continue;
     const emptyIds = group.paneIds.filter((id) =>
       workspace.panes.some(
-        (pane) => pane.id === id && pane.kind === "empty" && !pane.launcher,
+        (pane) =>
+          pane.id === id &&
+          pane.kind === "empty" &&
+          !pane.launcher &&
+          !pane.pinned,
       ),
     );
     if (emptyIds.length === group.paneIds.length) continue;
@@ -67,6 +71,16 @@ export function normalizeGroups(workspace: WorkspaceState): void {
         paneId: group.paneIds[0]!,
       };
     }
+  }
+  for (const group of workspace.groups) {
+    group.paneIds = [
+      ...group.paneIds.filter(
+        (id) => workspace.panes.find((pane) => pane.id === id)?.pinned,
+      ),
+      ...group.paneIds.filter(
+        (id) => !workspace.panes.find((pane) => pane.id === id)?.pinned,
+      ),
+    ];
   }
   for (const group of [...workspace.groups]) {
     if (!group.paneIds.length && workspace.groups.length > 1) {
