@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import type { BuildInfo } from "./build-info";
 
 /** Bounded local metadata journal. Callers must never pass content or arbitrary errors. */
 export class DiagnosticJournal {
@@ -42,7 +43,7 @@ export class DiagnosticJournal {
       console.error("Cod local diagnostics unavailable");
     }
   }
-  start(version: string): void {
+  start(version: string, build: Readonly<BuildInfo> | null = null): void {
     try {
       const previous = JSON.parse(
         readFileSync(path.join(this.directory, "session.json"), "utf8"),
@@ -59,6 +60,7 @@ export class DiagnosticJournal {
     this.record("start", {
       pid: process.pid,
       version,
+      build,
       platform: process.platform,
       arch: process.arch,
     });
