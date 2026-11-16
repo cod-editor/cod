@@ -429,6 +429,7 @@ export class ConversationApplicationService {
       const index = workspace.panes.indexOf(active);
       workspace.panes[index] = {
         id: active.id,
+        pinned: active.pinned,
         kind: "conversation",
         conversationId,
       };

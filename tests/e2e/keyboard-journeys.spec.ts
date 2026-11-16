@@ -1517,6 +1517,17 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
         .pane(first.paneId)
         .getByRole("textbox", { name: "Message", exact: true }),
     ).toBeFocused();
+    const restoredComposer = app
+      .pane(first.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await expect(restoredComposer).toHaveValue("Keep left chat draft");
+    await expect
+      .poll(() => app.page.evaluate(() => document.hasFocus()))
+      .toBe(true);
+    await app.page.keyboard.type(" after native hide");
+    await expect(restoredComposer).toHaveValue(
+      "Keep left chat draft after native hide",
+    );
     await app.page.keyboard.press("Alt+2");
     await expect(app.pane(browser.paneId)).toBeVisible();
     await expect

@@ -5,6 +5,17 @@ export function conversationRemovalReason(
   state: AppState,
   conversation: ConversationState,
 ): string | undefined {
+  if (
+    state.workspaces.some((workspace) =>
+      workspace.panes.some(
+        (pane) =>
+          pane.kind === "conversation" &&
+          pane.conversationId === conversation.id &&
+          pane.pinned,
+      ),
+    )
+  )
+    return "Unpin this chat before removing it from the workspace.";
   if (conversation.queuedMessages?.length)
     return "Send or cancel queued messages before removing this chat.";
   if (conversation.handoffTerminalId)

@@ -1,3 +1,4 @@
+import { tabInsertionIndex } from "../tab-order";
 import { conversationRemovalReason } from "../conversation-actions";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -86,6 +87,7 @@ export class WorkspaceApplicationService {
         op: "pane.close",
         workspace: id,
         id: browser.paneId,
+        includePinned: true,
       });
       if (result.closed === false) return { id, closed: false };
     }
@@ -203,7 +205,11 @@ export class WorkspaceApplicationService {
         throw new Error("Tab index must be within the destination group");
       for (const group of workspace.groups!)
         group.paneIds = group.paneIds.filter((pane) => pane !== id);
-      target.paneIds.splice(index, 0, id);
+      target.paneIds.splice(
+        tabInsertionIndex(workspace, remaining, id, index),
+        0,
+        id,
+      );
       target.activePaneId = id;
       target.hidden = false;
       workspace.activePaneId = id;
@@ -356,12 +362,44 @@ export class WorkspaceApplicationService {
     );
     const pane = this.store.pane(workspace, requiredString(request, "id"));
     if (
+      request.includePinned !== undefined &&
+      ![true, false, "true", "false"].includes(request.includePinned as boolean)
+    )
+      throw new Error("includePinned must be true or false");
+    if (
+      pane.pinned &&
+      request.includePinned !== true &&
+      request.includePinned !== "true"
+    ) {
+      normalizeGroups(workspace);
+      const owner = workspace.groups!.find((group) =>
+        group.paneIds.includes(pane.id),
+      );
+      const candidates = [
+        owner,
+        ...workspace.groups!.filter(
+          (group) => group !== owner && !group.hidden,
+        ),
+      ].filter(Boolean);
+      const next = candidates
+        .flatMap((group) => group!.paneIds)
+        .find((id) => !this.store.pane(workspace, id).pinned);
+      if (workspace.activePaneId === pane.id && next)
+        workspace.activePaneId = next;
+      return { paneId: pane.id, closed: false };
+    }
+    if (
       pane.kind === "browser" &&
       !(await this.browsers.requestClose(this.browsers.browser(pane.browserId)))
     )
       return { paneId: pane.id, closed: false };
     workspace.closedTabs ??= [];
+    const group = workspace.groups?.find((group) =>
+      group.paneIds.includes(pane.id),
+    );
     workspace.closedTabs.push({
+      groupId: group?.id,
+      index: group?.paneIds.indexOf(pane.id),
       pane: structuredClone(pane),
       ...(pane.kind === "browser"
         ? { browser: structuredClone(this.browsers.browser(pane.browserId)) }
@@ -495,6 +533,9 @@ export class WorkspaceApplicationService {
       });
       await this.store.change(() => {
         workspace.closedTabs!.pop();
+        const pane = this.store.pane(workspace, opened.paneId);
+        pane.pinned = closed.pane.pinned;
+        this.restoreTabPosition(workspace, pane.id, closed);
       });
       return { paneId: opened.paneId };
     }
@@ -542,8 +583,38 @@ export class WorkspaceApplicationService {
       if (closed.browser?.agentPage)
         this.store.data.browsers.push(closed.browser);
       workspace.activePaneId = closed.pane.id;
+      this.restoreTabPosition(workspace, closed.pane.id, closed);
       return { paneId: closed.pane.id };
     });
+  }
+
+  private restoreTabPosition(
+    workspace: import("../types").WorkspaceState,
+    id: string,
+    closed: NonNullable<
+      import("../types").WorkspaceState["closedTabs"]
+    >[number],
+  ): void {
+    normalizeGroups(workspace);
+    const target = workspace.groups!.find(
+      (group) => group.id === closed.groupId,
+    );
+    if (!target) return;
+    for (const group of workspace.groups!)
+      group.paneIds = group.paneIds.filter((other) => other !== id);
+    target.paneIds.splice(
+      tabInsertionIndex(
+        workspace,
+        target.paneIds,
+        id,
+        Math.min(closed.index ?? target.paneIds.length, target.paneIds.length),
+      ),
+      0,
+      id,
+    );
+    target.activePaneId = id;
+    target.hidden = false;
+    workspace.activeGroupId = target.id;
   }
 
   resizePane(request: OperationRequest): {
@@ -701,6 +772,7 @@ export class WorkspaceApplicationService {
           const draft = destination.chatDrafts?.[pane.id];
           return !(
             pane.kind === "document" &&
+            !pane.pinned &&
             pane.draftChat &&
             !pane.filePath &&
             !draft?.text &&
@@ -928,6 +1000,7 @@ export class WorkspaceApplicationService {
                   const draft = workspace.chatDrafts?.[pane.id];
                   return (
                     pane.kind === "document" &&
+                    !pane.pinned &&
                     pane.draftChat &&
                     !pane.filePath &&
                     !draft?.text &&
@@ -941,6 +1014,7 @@ export class WorkspaceApplicationService {
           if (launcher)
             workspace.panes[workspace.panes.indexOf(launcher)] = {
               id,
+              pinned: launcher.pinned,
               kind: "document",
               draftChat: true,
             };
@@ -1083,6 +1157,76 @@ export class WorkspaceApplicationService {
 
       case "pane.reopen":
         return this.reopenPane(request);
+
+      case "pane.pin":
+        return this.store.change(() => {
+          const workspace = this.store.workspace(
+            requiredString(request, "workspace"),
+          );
+          const pane = this.store.pane(
+            workspace,
+            requiredString(request, "id"),
+          );
+          if (
+            ![true, false, "true", "false"].includes(request.pinned as boolean)
+          )
+            throw new Error("pinned must be true or false");
+          normalizeGroups(workspace);
+          const pinned = request.pinned === true || request.pinned === "true";
+          if (!!pane.pinned === pinned) return { paneId: pane.id, pinned };
+          const group = workspace.groups!.find((group) =>
+            group.paneIds.includes(pane.id),
+          )!;
+          group.paneIds = group.paneIds.filter((id) => id !== pane.id);
+          pane.pinned = pinned;
+          if (pinned && pane.kind === "empty") pane.launcher = true;
+          const boundary = group.paneIds.filter(
+            (id) => this.store.pane(workspace, id).pinned,
+          ).length;
+          group.paneIds.splice(boundary, 0, pane.id);
+          return { paneId: pane.id, pinned };
+        });
+
+      case "pane.close-many":
+        return this.store.change(async () => {
+          const workspace = this.store.workspace(
+            requiredString(request, "workspace"),
+          );
+          normalizeGroups(workspace);
+          const group = workspace.groups!.find(
+            (group) => group.id === requiredString(request, "group"),
+          );
+          if (!group) throw new Error("Group not found");
+          const scope = requiredString(request, "scope");
+          if (!["all", "others", "left", "right"].includes(scope))
+            throw new Error("scope must be all, others, left or right");
+          const id =
+            typeof request.id === "string" ? request.id : group.activePaneId;
+          const index = group.paneIds.indexOf(id);
+          if (scope !== "all" && index < 0)
+            throw new Error("Anchor tab not found in this pane");
+          const targets = group.paneIds.filter(
+            (other, position) =>
+              !this.store.pane(workspace, other).pinned &&
+              (scope === "all" ||
+                (scope === "others"
+                  ? other !== id
+                  : scope === "left"
+                    ? position < index
+                    : position > index)),
+          );
+          const closed: string[] = [];
+          for (const target of targets) {
+            const result = await this.closePane({
+              op: "pane.close",
+              workspace: workspace.id,
+              id: target,
+            });
+            if (result.closed === false) return { closed, cancelled: target };
+            closed.push(target);
+          }
+          return { closed };
+        });
 
       case "pane.close":
         return this.store.change(() => this.closePane(request));

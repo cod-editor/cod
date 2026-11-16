@@ -153,6 +153,22 @@ export class ApplicationOperations {
       }
       return result;
     }
+    if (request.op === "browser.close" || request.op === "terminal.close") {
+      const resource =
+        request.op === "browser.close"
+          ? this.browsers.browser(String(request.id))
+          : this.terminals.terminal(String(request.id));
+      const result = (await this.workspaces.handle(
+        {
+          op: "pane.close",
+          workspace: resource.workspaceId,
+          id: resource.paneId,
+          includePinned: request.includePinned,
+        },
+        trustedUi,
+      )) as { closed?: boolean };
+      return { id: resource.id, closed: result.closed !== false };
+    }
     const domain = request.op.split(".")[0];
     if (
       domain === "workspace" ||
