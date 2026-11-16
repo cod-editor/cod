@@ -303,14 +303,21 @@ export function createCommands(
     const w = activeWorkspace();
     if (!w) return;
     const closed = w.closedTabs?.at(-1);
+    const reopen = async (newShell = false) => {
+      const result = await invoke<{ paneId: string }>("pane.reopen", {
+        workspace: w.id,
+        ...(newShell ? { newShell: true } : {}),
+      });
+      await keys.focusActiveContent(result.paneId);
+    };
     if (closed?.terminal)
       confirmAction(
         "Start a new shell?",
         `Start a new shell in ${closed.terminal.cwd}? The previous process has ended; commands will not be replayed.`,
         "Start shell",
-        () => invoke("pane.reopen", { workspace: w.id, newShell: true }),
+        () => reopen(true),
       );
-    else void invoke("pane.reopen", { workspace: w.id });
+    else void reopen();
   }
   function reopenWorkspace(): void {
     const closed = getState().closedWorkspaces?.at(-1);
@@ -954,7 +961,7 @@ export function createCommands(
             requestAnimationFrame(() => resolve()),
           );
           const active = activeWorkspace();
-          if (active) await keys.focusPane(active.activePaneId);
+          if (active) await keys.focusActiveContent(active.activePaneId);
           break;
         }
         case "pane.next":
@@ -1024,7 +1031,7 @@ export function createCommands(
               next &&
               !(result.closed === false && next.activePaneId === pane.id)
             )
-              await keys.focusPane(next.activePaneId);
+              await keys.focusActiveContent(next.activePaneId);
           }
           break;
         case "tab.reopen":

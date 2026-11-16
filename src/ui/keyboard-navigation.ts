@@ -58,6 +58,26 @@ export function createKeyboardNavigation(
       host.focus({ preventScroll: true });
     }
   }
+  /** Focus a completed mutation's selected content without issuing a new selection. */
+  async function focusActiveContent(id: string): Promise<void> {
+    await nextFrame();
+    const active = workspace();
+    const pane = active?.panes.find((pane) => pane.id === id);
+    if (active?.activePaneId !== id || !pane) return;
+    if (pane.kind === "conversation") {
+      await invoke("conversation.acknowledge", { id: pane.conversationId });
+      await nextFrame();
+    }
+    const current = workspace();
+    const selected = current?.panes.find((pane) => pane.id === id);
+    if (
+      current?.id === active.id &&
+      current.activePaneId === id &&
+      selected &&
+      !document.querySelector("dialog[open]")
+    )
+      await content(selected);
+  }
   async function focusPane(id: string): Promise<void> {
     const w = getState().workspaces.find((w) =>
         w.panes.some((p) => p.id === id),
@@ -65,10 +85,7 @@ export function createKeyboardNavigation(
       pane = w?.panes.find((p) => p.id === id);
     if (!w || !pane) return;
     await invoke("pane.focus", { workspace: w.id, id });
-    if (pane.kind === "conversation")
-      await invoke("conversation.acknowledge", { id: pane.conversationId });
-    await nextFrame();
-    await content(pane);
+    await focusActiveContent(id);
   }
   async function spatial(index: number, workspaceId?: string): Promise<void> {
     const w = workspaceId
@@ -206,6 +223,7 @@ export function createKeyboardNavigation(
   }
   return {
     focusPane,
+    focusActiveContent,
     spatial,
     cyclePane,
     selectTab,

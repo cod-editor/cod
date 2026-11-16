@@ -850,3 +850,69 @@ test("Workspace panel shortcut uses the selected workspace when its tree render 
   await shell.page.keyboard.press("ArrowDown");
   await expect(shell.row("Beta current render")).toBeFocused();
 });
+
+test("Reopening a tab wins over a delayed focus continuation from the preceding close", async () => {
+  const workspace = await shell.create("Close and reopen");
+  const first = (await shell.workspace(workspace)).activePaneId;
+  const composer = () =>
+    shell.page.getByRole("textbox", { name: "Message", exact: true });
+  await composer().fill("First retained draft");
+  await shell.page.keyboard.press(`${modifier}+n`);
+  await expect(composer()).toHaveValue("");
+  await composer().fill("Second retained draft");
+  const second = (await shell.workspace(workspace)).activePaneId;
+  expect(second).not.toBe(first);
+  await shell.app!.evaluate(({ ipcMain }, first) => {
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+      }
+    )._invokeHandlers;
+    const original = handlers.get("cod:invoke")!;
+    const pending: Array<() => Promise<void>> = [];
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", (event, request) => {
+      if (request.op === "pane.focus" && request.id === first)
+        return new Promise((resolve, reject) => {
+          pending.push(async () => {
+            try {
+              resolve(await original(event, request));
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      return original(event, request);
+    });
+    Object.assign(globalThis, {
+      releaseCloseFocus: async () => {
+        ipcMain.removeHandler("cod:invoke");
+        ipcMain.handle("cod:invoke", original);
+        const count = pending.length;
+        await Promise.all(pending.splice(0).map((resume) => resume()));
+        return count;
+      },
+    });
+  }, first);
+  await composer().press(`${modifier}+w`);
+  await expect(composer()).toHaveValue("First retained draft");
+  // Allow the accepted close response to reach any pending UI continuation.
+  await shell.page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
+  await shell.page.keyboard.press(`${modifier}+Shift+t`);
+  await expect(composer()).toHaveValue("Second retained draft");
+  await shell.app!.evaluate(async () =>
+    (
+      globalThis as unknown as { releaseCloseFocus: () => Promise<number> }
+    ).releaseCloseFocus(),
+  );
+  await expect
+    .poll(async () => (await shell.workspace(workspace)).activePaneId)
+    .toBe(second);
+  await expect(composer()).toHaveValue("Second retained draft");
+  await expect(composer()).toBeFocused();
+  await shell.page.keyboard.type(" while reopened");
+  await expect(composer()).toHaveValue("Second retained draft while reopened");
+});
