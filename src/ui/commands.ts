@@ -45,6 +45,7 @@ interface CommandFeatures {
     split: (direction: "right" | "down") => void;
     zoom: () => void;
     togglePane: (side: "left" | "right") => Promise<void>;
+    sidePane: (side: "left" | "right") => Promise<string | undefined>;
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
   chat: { send: (id: string) => Promise<void>; integration: () => void };
@@ -589,7 +590,7 @@ export function createCommands(
         : undefined;
     }
     if (!w) return "Open a workspace first";
-    if (id === "pane.toggleRight") return focusTargets.chatVisibilityReason();
+    if (id === "pane.toggleRight") return layout.paneToggleReason("right");
     if (id === "pane.toggleLeft") return layout.paneToggleReason("left");
     if (
       ["chat.send", "chat.stop"].includes(id) &&
@@ -896,22 +897,22 @@ export function createCommands(
         case "focus.terminal":
           await focusTargets.toggle("terminal");
           break;
-        case "pane.toggleRight":
-          await focusTargets.toggleChatArea();
+        case "pane.focusLeft":
+        case "pane.focusRight": {
+          const target = await layout.sidePane(
+            id === "pane.focusLeft" ? "left" : "right",
+          );
+          if (target) await keys.focusPane(target);
           break;
+        }
+        case "pane.toggleRight":
         case "pane.toggleLeft": {
-          const focused = document.activeElement;
-          await layout.togglePane("left");
+          await layout.togglePane(id === "pane.toggleLeft" ? "left" : "right");
           await new Promise<void>((resolve) =>
             requestAnimationFrame(() => resolve()),
           );
-          if (
-            browserId ||
-            (focused instanceof HTMLElement && !focused.getClientRects().length)
-          ) {
-            const active = activeWorkspace();
-            if (active) await keys.focusPane(active.activePaneId);
-          }
+          const active = activeWorkspace();
+          if (active) await keys.focusPane(active.activePaneId);
           break;
         }
         case "pane.next":

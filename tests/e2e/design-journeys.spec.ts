@@ -1024,7 +1024,7 @@ test("Header participates in keyboard area traversal and its controls remain seq
   ).toBeFocused();
   await shell.page.keyboard.press("Tab");
   await expect(
-    header.getByRole("button", { name: "Show left pane", exact: true }),
+    header.getByRole("button", { name: "Show right pane", exact: true }),
   ).toBeFocused();
   await shell.page.keyboard.press("Control+Alt+Shift+F6");
   await expect(composer).toBeFocused();

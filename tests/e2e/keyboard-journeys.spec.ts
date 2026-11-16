@@ -969,7 +969,9 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
       )
       .not.toBe(splitBefore);
     await expect(divider).toBeFocused();
-    // Traversing to the separator may activate a neighboring pane; choose the tab to move.
+    // Traversing to the separator may activate a neighboring pane. Return to
+    // the top-right group with its pane shortcut before choosing the tab.
+    await app.page.keyboard.press("Alt+2");
     await reach(
       app.page,
       app.pane(last).getByRole("textbox", { name: "Message", exact: true }),
@@ -993,9 +995,9 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
         .panes.filter((pane) => pane.id === last),
     ).toHaveLength(1);
     await command(app.page, "Move tab left");
-    await command(app.page, "Toggle material area");
+    await command(app.page, "Toggle left pane");
     await expect(editor()).toHaveCount(0);
-    await command(app.page, "Toggle material area");
+    await command(app.page, "Toggle left pane");
     await expect(editor()).toBeVisible();
     await app.page.keyboard.press("Alt+1");
     await expect(editor()).toBeFocused();
@@ -1327,6 +1329,249 @@ test("Invalid custom shortcuts fall back safely and repaired shortcuts reload in
     await expect(
       app.page.getByRole("dialog", { name: "Command palette" }),
     ).toBeVisible();
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Positional pane commands ignore tab content and restore hidden sides without losing drafts", async ({}, info) => {
+  const app = new ChatApp();
+  await prepareKeyboardProfile(app);
+  const config = path.join(app.data, "keymap.json");
+  const bindings = JSON.parse(
+    await (await import("node:fs/promises")).readFile(config, "utf8"),
+  );
+  Object.assign(bindings, {
+    "pane.toggleLeft": ["Mod+E"],
+    "pane.toggleRight": ["Mod+J"],
+    "pane.focus1": [],
+    "pane.focus2": [],
+    "pane.focusLeft": ["Alt+1"],
+    "pane.focusRight": ["Alt+2"],
+  });
+  await writeFile(config, JSON.stringify(bindings));
+  try {
+    await app.start();
+    const workspace = await app.create("Universal pane positions");
+    const first = await app.newChat(workspace, "codex");
+    await app.newChat(workspace, "codex");
+    const file = await app.cli<{ paneId: string }>(
+      "file",
+      "open",
+      "--workspace",
+      workspace,
+      "--path",
+      app.file,
+    );
+    const other = path.join(app.folders[0], "second.txt");
+    await writeFile(other, "Second fixture");
+    await app.cli("file", "open", "--workspace", workspace, "--path", other);
+    let w = (await app.cli<AppState>("state")).workspaces.find(
+      (w) => w.id === workspace,
+    )!;
+    const left = w.groups!.find((g) => g.paneIds.includes(file.paneId))!;
+    const right = w.groups!.find((g) => g.paneIds.includes(first.paneId))!;
+    await app.cli(
+      "pane",
+      "move",
+      "--workspace",
+      workspace,
+      "--id",
+      file.paneId,
+      "--group",
+      right.id,
+    );
+    await app.cli(
+      "pane",
+      "move",
+      "--workspace",
+      workspace,
+      "--id",
+      first.paneId,
+      "--group",
+      left.id,
+    );
+    const composer = app
+      .pane(first.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    const editor = app
+      .pane(file.paneId)
+      .getByRole("textbox", { name: "File contents", exact: true });
+    await app.page.keyboard.press("Alt+1");
+    await expect(composer).toBeFocused();
+    await composer.fill("Keep left chat draft");
+    await app.page.keyboard.press("Alt+2");
+    await expect(editor).toBeFocused();
+    await editor.fill("Keep right file draft");
+    await app.page.keyboard.press(`${modifier}+J`);
+    await expect(app.pane(file.paneId)).toBeHidden();
+    await expect(composer).toBeFocused();
+    await app.page.keyboard.press("Alt+2");
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Keep right file draft");
+    await app.page.keyboard.press(`${modifier}+E`);
+    await expect(app.pane(first.paneId)).toBeHidden();
+    await expect(editor).toBeFocused();
+    await app.page.keyboard.press(`${modifier}+J`);
+    await expect(editor).toBeFocused();
+    await expect(
+      app.page.getByRole("button", { name: "Hide right pane", exact: true }),
+    ).toBeDisabled();
+    await app.page.keyboard.press("Alt+1");
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue("Keep left chat draft");
+    w = (await app.cli<AppState>("state")).workspaces.find(
+      (w) => w.id === workspace,
+    )!;
+    expect(w.groups!.find((g) => g.id === left.id)!.paneIds).toContain(
+      first.paneId,
+    );
+    expect(w.groups!.find((g) => g.id === right.id)!.paneIds).toContain(
+      file.paneId,
+    );
+    await app.page.screenshot({
+      path: info.outputPath("positional-pane-focus.png"),
+    });
+    await app.page.keyboard.press(`${modifier}+J`);
+    await app.stop();
+    await app.start();
+    await app.page.keyboard.press("Alt+2");
+    await expect
+      .poll(() =>
+        app.page.evaluate(() => {
+          const e = document.activeElement as HTMLElement | null;
+          return {
+            pane: e?.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId,
+            label: e?.getAttribute("aria-label"),
+            focused: document.hasFocus(),
+            tag: e?.tagName,
+            disabled: e instanceof HTMLTextAreaElement ? e.disabled : null,
+          };
+        }),
+      )
+      .toMatchObject({
+        pane: file.paneId,
+        label: "File contents",
+        focused: true,
+        disabled: false,
+      });
+    await expect(
+      app
+        .pane(file.paneId)
+        .getByRole("textbox", { name: "File contents", exact: true }),
+    ).toBeFocused();
+    await expect(
+      app
+        .pane(file.paneId)
+        .getByRole("textbox", { name: "File contents", exact: true }),
+    ).toHaveValue("Keep right file draft");
+    const html = path.join(app.folders[0], "keyboard.html");
+    await writeFile(
+      html,
+      "<!doctype html><title>Native pane fixture</title><h1>Native pane</h1>",
+    );
+    const url = (await import("node:url")).pathToFileURL(html).href;
+    const browser = await app.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
+    await app.cli(
+      "pane",
+      "move",
+      "--workspace",
+      workspace,
+      "--id",
+      browser.paneId,
+      "--group",
+      right.id,
+    );
+    await app.page.keyboard.press("Alt+2");
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          ({ webContents }, url) =>
+            webContents
+              .getAllWebContents()
+              .some((w) => w.getURL() === url && w.isFocused()),
+          url,
+        ),
+      )
+      .toBe(true);
+    await app.app!.evaluate(({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((w) => w.getURL() === url)!;
+      const modifiers: Array<"meta" | "control"> = [
+        process.platform === "darwin" ? "meta" : "control",
+      ];
+      contents.sendInputEvent({ type: "keyDown", keyCode: "J", modifiers });
+      contents.sendInputEvent({ type: "keyUp", keyCode: "J", modifiers });
+    }, url);
+    await expect(app.pane(browser.paneId)).toBeHidden();
+    await expect(
+      app
+        .pane(first.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await app.page.keyboard.press("Alt+2");
+    await expect(app.pane(browser.paneId)).toBeVisible();
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          ({ webContents }, url) =>
+            webContents
+              .getAllWebContents()
+              .some((w) => w.getURL() === url && w.isFocused()),
+          url,
+        ),
+      )
+      .toBe(true);
+    const nativeKey = async (keyCode: string, alt: boolean) =>
+      app.app!.evaluate(
+        ({ webContents }, { url, keyCode, alt }) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((w) => w.getURL() === url)!;
+          const modifiers: Array<"meta" | "control" | "alt"> = alt
+            ? ["alt"]
+            : [process.platform === "darwin" ? "meta" : "control"];
+          contents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+          contents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+        },
+        { url, keyCode, alt },
+      );
+    await nativeKey("1", true);
+    await expect(
+      app
+        .pane(first.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await app.page.keyboard.press("Alt+2");
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          ({ webContents }, url) =>
+            webContents
+              .getAllWebContents()
+              .some((w) => w.getURL() === url && w.isFocused()),
+          url,
+        ),
+      )
+      .toBe(true);
+    await nativeKey("E", false);
+    await expect(app.pane(first.paneId)).toBeHidden();
+    await expect(app.pane(browser.paneId)).toBeVisible();
+    await nativeKey("1", true);
+    await expect(
+      app
+        .pane(first.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    expect(await app.prompts()).toHaveLength(0);
   } finally {
     await app.cleanup();
   }

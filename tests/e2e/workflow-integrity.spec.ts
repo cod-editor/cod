@@ -371,7 +371,7 @@ test("Native session commands inspect without inference and invoke only the sele
   }
 });
 
-test("Fresh workspace exposes both pane controls and opens material without duplicating its chat", async ({}, info) => {
+test("Fresh workspace opens an empty right pane without duplicating its existing chat", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -380,18 +380,18 @@ test("Fresh workspace exposes both pane controls and opens material without dupl
     const workspace = initial.workspaces[0];
     const draft = workspace.activePaneId;
     const left = app.page.getByRole("button", {
-      name: "Show left pane",
+      name: "Hide left pane",
       exact: true,
     });
     const right = app.page.getByRole("button", {
-      name: "Hide right pane",
+      name: "Show right pane",
       exact: true,
     });
     await expect(left).toBeVisible();
-    await expect(left).toBeEnabled();
+    await expect(left).toBeDisabled();
     await expect(right).toBeVisible();
-    await expect(right).toBeDisabled();
-    await expect(right).toHaveAttribute(
+    await expect(right).toBeEnabled();
+    await expect(left).toHaveAttribute(
       "title",
       "At least one pane must remain open",
     );
@@ -402,7 +402,7 @@ test("Fresh workspace exposes both pane controls and opens material without dupl
     await app.page.screenshot({
       path: info.outputPath("fresh-visible-pane-controls.png"),
     });
-    await left.click();
+    await right.click();
     await expect(
       app.page.getByRole("button", { name: "Hide left pane", exact: true }),
     ).toBeVisible();
@@ -411,16 +411,16 @@ test("Fresh workspace exposes both pane controls and opens material without dupl
     await expect(app.pane(draft).locator(".composer textarea")).toHaveValue(
       "Keep the only conversation draft.",
     );
-    await right.click();
+    await left.click();
     await expect(app.pane(draft)).toBeHidden();
     await expect(
-      app.page.getByRole("button", { name: "Hide left pane", exact: true }),
+      app.page.getByRole("button", { name: "Hide right pane", exact: true }),
     ).toBeDisabled();
     await app.stop();
     await app.start();
     await expect(app.pane(draft)).toBeHidden();
     await app.page
-      .getByRole("button", { name: "Show right pane", exact: true })
+      .getByRole("button", { name: "Show left pane", exact: true })
       .click();
     await expect(app.pane(draft).locator(".composer textarea")).toHaveValue(
       "Keep the only conversation draft.",
