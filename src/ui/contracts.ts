@@ -5,3 +5,9 @@ export type Invoke = <T>(
   values?: Record<string, unknown>,
   options?: { reportError?: boolean },
 ) => Promise<T>;
+
+/** A decision after the latest accepted snapshot has actually rendered. */
+export type WhenRendered = (
+  check: () => boolean | undefined,
+  signal: AbortSignal,
+) => Promise<boolean>;

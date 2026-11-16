@@ -29,7 +29,7 @@ import type {
   WorkspaceState,
   ConversationState,
 } from "../types";
-import type { Invoke } from "./contracts";
+import type { Invoke, WhenRendered } from "./contracts";
 import type { createFocusManager } from "./focus";
 type ConversationAction = Exclude<MenuAction, null> & { command?: CommandId };
 interface CommandContext {
@@ -39,13 +39,14 @@ interface CommandContext {
   conversationId?: string;
 }
 interface CommandFeatures {
+  whenRendered: WhenRendered;
   focus: ReturnType<typeof createFocusManager>;
   files: { quickOpen: () => void; search: () => void };
   layout: {
     toggle: (key: "filesVisible" | "workspacesVisible") => void;
     split: (direction: "right" | "down") => void;
     zoom: () => void;
-    togglePane: (side: "left" | "right") => Promise<void>;
+    togglePane: (side: "left" | "right", signal?: AbortSignal) => Promise<void>;
     sidePane: (side: "left" | "right") => Promise<string | undefined>;
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
@@ -78,6 +79,7 @@ export function createCommands(
     tree,
     focus.native,
     features.focusNativeView,
+    features.whenRendered,
   );
   const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const events = new AbortController();
@@ -300,23 +302,23 @@ export function createCommands(
     return result;
   }
 
-  function reopenTab(): void {
+  function reopenTab(intent = keys.beginFocus()): void {
     const w = activeWorkspace();
     if (!w) return;
     const closed = w.closedTabs?.at(-1);
-    const reopen = async (newShell = false) => {
+    const reopen = async (newShell = false, focusIntent = intent) => {
       const result = await invoke<{ paneId: string }>("pane.reopen", {
         workspace: w.id,
         ...(newShell ? { newShell: true } : {}),
       });
-      await keys.focusActiveContent(result.paneId);
+      await keys.focusActiveContent(result.paneId, focusIntent);
     };
     if (closed?.terminal)
       confirmAction(
         "Start a new shell?",
         `Start a new shell in ${closed.terminal.cwd}? The previous process has ended; commands will not be replayed.`,
         "Start shell",
-        () => reopen(true),
+        () => reopen(true, keys.beginFocus()),
       );
     else void reopen();
   }
@@ -699,6 +701,7 @@ export function createCommands(
     browserId?: string,
     context?: CommandContext,
   ): Promise<void> {
+    const focusIntent = keys.beginFocus();
     if (browserId) focus.native(browserId);
     if (document.querySelector("dialog[open]")) return;
     const browser = browserId
@@ -786,7 +789,7 @@ export function createCommands(
           break;
         }
         case "workspace.focusTree":
-          await focusTargets.toggle("workspaces");
+          await focusTargets.toggle("workspaces", focusIntent);
           break;
         case "workspace.reopen":
           reopenWorkspace();
@@ -945,30 +948,31 @@ export function createCommands(
           layout.toggle("workspacesVisible");
           break;
         case "focus.files":
-          await focusTargets.toggle("files");
+          await focusTargets.toggle("files", focusIntent);
           break;
         case "focus.composer":
-          await focusTargets.toggle("chat");
+          await focusTargets.toggle("chat", focusIntent);
           break;
         case "focus.terminal":
-          await focusTargets.toggle("terminal");
+          await focusTargets.toggle("terminal", focusIntent);
           break;
         case "pane.focusLeft":
         case "pane.focusRight": {
           const target = await layout.sidePane(
             id === "pane.focusLeft" ? "left" : "right",
           );
-          if (target) await keys.focusPane(target);
+          if (target) await keys.focusPane(target, focusIntent);
           break;
         }
         case "pane.toggleRight":
         case "pane.toggleLeft": {
-          await layout.togglePane(id === "pane.toggleLeft" ? "left" : "right");
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
+          await layout.togglePane(
+            id === "pane.toggleLeft" ? "left" : "right",
+            focusIntent.signal,
           );
           const active = activeWorkspace();
-          if (active) await keys.focusActiveContent(active.activePaneId);
+          if (active)
+            await keys.focusActiveContent(active.activePaneId, focusIntent);
           break;
         }
         case "pane.next":
@@ -1033,16 +1037,27 @@ export function createCommands(
               workspace: w.id,
               id: pane.id,
             });
+            if (
+              result.closed !== false &&
+              !(await features.whenRendered(() => {
+                const current = activeWorkspace();
+                if (current?.id !== w.id) return false;
+                return current.panes.some((item) => item.id === pane.id)
+                  ? undefined
+                  : true;
+              }, focusIntent.signal))
+            )
+              break;
             const next = activeWorkspace();
             if (
               next &&
               !(result.closed === false && next.activePaneId === pane.id)
             )
-              await keys.focusActiveContent(next.activePaneId);
+              await keys.focusActiveContent(next.activePaneId, focusIntent);
           }
           break;
         case "tab.reopen":
-          reopenTab();
+          reopenTab(focusIntent);
           break;
         case "tab.reorderLeft":
         case "tab.reorderRight":
@@ -1345,6 +1360,7 @@ export function createCommands(
       refreshPalette = undefined;
       events.abort();
       focusTargets.dispose();
+      keys.dispose();
     },
     palette: commandPalette,
     focusPanel,
