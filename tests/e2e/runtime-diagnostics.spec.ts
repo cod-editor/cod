@@ -2,9 +2,11 @@ import { test, expect } from "@playwright/test";
 import { createServer } from "node:http";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 
-test("Runtime diagnostics correlate real renderer PIDs with tabs, popups and workspace IDs without content", async () => {
+test("Runtime diagnostics correlate real renderer PIDs with tabs, popups and workspace IDs without content", async ({}, info) => {
   test.setTimeout(65_000);
   const shell = new ChatApp();
   await shell.prepare();
@@ -120,11 +122,23 @@ test("Runtime diagnostics correlate real renderer PIDs with tabs, popups and wor
     expect(
       memory.processes.some((p: any) => p.pid === native.pid && p.memory),
     ).toBe(true);
-    await shell.app!.evaluate(
-      ({ webContents }, id) =>
-        webContents.fromId(id)!.forcefullyCrashRenderer(),
-      native.id,
-    );
+    await shell.app!.evaluate(({ app, webContents }, target) => {
+      const contents = webContents.fromId(target.id);
+      // Require an actual exit instead of relying on hidden-view crash IPC.
+      // Signal only this isolated Electron's current, positively identified Tab.
+      if (
+        !contents ||
+        contents.isDestroyed() ||
+        contents.getOSProcessId() !== target.pid ||
+        target.pid <= 1 ||
+        target.pid === process.pid ||
+        !app
+          .getAppMetrics()
+          .some((metric) => metric.pid === target.pid && metric.type === "Tab")
+      )
+        throw new Error("Fixture renderer ownership changed before injection");
+      process.kill(target.pid, "SIGKILL");
+    }, native);
     await expect
       .poll(async () =>
         (await journal()).find(
@@ -157,7 +171,93 @@ test("Runtime diagnostics correlate real renderer PIDs with tabs, popups and wor
     expect(recovered.pid).toBeGreaterThan(0);
     expect(JSON.stringify(await journal())).not.toContain(secret);
   } finally {
+    // Retain bounded metadata before fixture cleanup, including on failed assertions.
+    await readFile(path.join(shell.data, "diagnostics/runtime.jsonl"))
+      .then((body) =>
+        info.attach("runtime-events", {
+          body,
+          contentType: "application/x-ndjson",
+        }),
+      )
+      .catch(() => {});
     await shell.cleanup();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("The live entry keeps its captured build identity when dist is rebuilt, and restart adopts the new build", async ({}, info) => {
+  test.setTimeout(90_000);
+  const execute = promisify(execFile);
+  const shell = new ChatApp();
+  await shell.prepare();
+  try {
+    await shell.start();
+    type Build = {
+      id: string;
+      sourceHash: string;
+      revision: string | null;
+      dirty: boolean | null;
+      version: string;
+    };
+    const caps = () =>
+      shell.cli<{ runtime: { build: Build | null } }>("capabilities");
+    const initial = (await caps()).runtime.build;
+    expect(initial?.id).toMatch(/^[a-f0-9-]{36}$/);
+    const journal = JSON.parse(
+      (
+        await readFile(
+          path.join(shell.data, "diagnostics/runtime.jsonl"),
+          "utf8",
+        )
+      )
+        .split("\n")
+        .find((line) => JSON.parse(line).event === "start")!,
+    );
+    expect(journal.build).toEqual(initial);
+    // This is an isolated fixture build, never the user's checkout or running app.
+    await execute(process.execPath, ["scripts/build.mjs"], {
+      cwd: shell.root,
+      timeout: 60_000,
+      maxBuffer: 1024 * 1024,
+    });
+    const rebuilt = JSON.parse(
+      await readFile(path.join(shell.root, "dist/build-info.json"), "utf8"),
+    ).build;
+    expect(rebuilt.id).not.toBe(initial!.id);
+    expect(rebuilt.sourceHash).toBe(initial!.sourceHash);
+    expect((await caps()).runtime.build).toEqual(initial);
+    const status = JSON.parse(
+      (
+        await execute(
+          process.execPath,
+          [
+            "scripts/delivery-status.mjs",
+            "--offline",
+            "--json",
+            "--socket",
+            shell.socket,
+          ],
+          { cwd: shell.root, timeout: 10_000, maxBuffer: 65536 },
+        )
+      ).stdout,
+    );
+    expect(status.built.build.id).toBe(rebuilt.id);
+    expect(status.running.build.id).toBe(initial!.id);
+    expect(status.actions).toEqual({
+      fetch: "UNKNOWN",
+      build: "NO",
+      restart: "YES",
+    });
+    expect(JSON.stringify(status)).not.toContain(shell.temporary);
+    await shell.stop();
+    await shell.start();
+    const restarted = (await caps()).runtime.build;
+    expect(restarted?.id).toBe(rebuilt.id);
+    await writeFile(
+      info.outputPath("delivery-status.json"),
+      JSON.stringify({ initial, rebuilt, status, restarted }, null, 2),
+    );
+  } finally {
+    await shell.cleanup();
   }
 });
