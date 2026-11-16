@@ -68,6 +68,8 @@ interface Options {
   downloadDirectory: string;
   scrollbarCSS?: string;
   isAllowedExtensionUrl?: (url: string) => boolean;
+  openLink?: (id: string, url: string) => Promise<unknown>;
+  openExternal?: (url: string) => Promise<unknown>;
   onViewCreated?: (contents: WebContents, id: string) => void;
   onTabCreated?: (
     tab: BrowserSnapshot,
@@ -184,7 +186,13 @@ export class BrowserService {
     });
   }
   private secure(contents: WebContents, resource: Resource) {
-    installPageContextMenu(contents, this.options.window, true);
+    installPageContextMenu(contents, this.options.window, {
+      inspect: true,
+      openLink: this.options.openLink
+        ? (url) => this.options.openLink!(resource.id, url)
+        : undefined,
+      openExternal: this.options.openExternal,
+    });
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
     const navigable = (url: string) =>
@@ -275,7 +283,7 @@ export class BrowserService {
       workspaceId: input.workspaceId,
       view,
       contents: view.webContents,
-      visible: true,
+      visible: false,
       popups: new Set(),
     };
     this.resources.set(input.id, resource);
@@ -283,6 +291,9 @@ export class BrowserService {
       this.close(resource.id, resource.contents),
     );
     try {
+      // New native views stay inert until the renderer supplies their viewport.
+      // Attaching a visible full-window view can steal focus from a background opener.
+      view.setVisible(false);
       this.options.window.contentView.addChildView(view);
       const size = this.options.window.getContentSize();
       view.setBounds({

@@ -112,6 +112,8 @@ export const commands = {
   "browser.blocking-retry": ["id"],
   "browser.diagnostics": ["id", "action"],
   "browser.blocking": ["id", "enabled"],
+  "browser.open-external": ["url"],
+  "browser.open-link": ["id", "url"],
   "browser.open": ["workspace", "url", "replace-pane?"],
   "browser.navigate": ["id", "url"],
   "browser.bookmarks": ["query?"],
