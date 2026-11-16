@@ -1,6 +1,6 @@
 # Implementation contracts
 
-[The vision](../vision.md) defines product scope. This document records the shared behavior that UI, CLI, persistence and tests must preserve. Supported features and current limitations belong in the root README; test-run histories stay local.
+[The vision](../vision.md) defines product scope. This document records the shared behavior that UI, CLI, persistence and tests must preserve. Supported features are summarized in the root README; detailed usage and current limitations belong in [the usage guide](../usage.md). Test-run histories stay local.
 
 ## Architecture and trust
 
