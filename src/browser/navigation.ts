@@ -28,8 +28,9 @@ export function normalizeNavigation(
       else continue;
     }
     if (
-      (!["http:", "https:"].includes(url.protocol) &&
+      (!["http:", "https:", "file:"].includes(url.protocol) &&
         url.href !== "about:blank") ||
+      (url.protocol === "file:" && !!url.host) ||
       url.username ||
       url.password ||
       url.href.length > 8192

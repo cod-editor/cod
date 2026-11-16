@@ -699,6 +699,10 @@ hr {
   background: #85b7ff55;
   color: transparent;
 }
+.highlighted-editor[data-highlighted="false"] .highlight-overlay,
+.highlighted-editor[data-highlighted="false"] .highlight-overlay::selection {
+  color: #abb2bf;
+}
 .hljs-keyword,
 .hljs-selector-tag {
   color: #c678dd;

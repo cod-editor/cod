@@ -806,6 +806,13 @@ async function removalMenu(id: string) {
       .evaluate((node) => node.contains(document.activeElement)))
   )
     await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect
+    .poll(() =>
+      shell.page
+        .locator("#workspace-tree")
+        .evaluate((node) => node.contains(document.activeElement)),
+    )
+    .toBe(true);
   await shell.page.keyboard.press("Home");
   for (let step = 0; step < 20; step++) {
     if (await row.evaluate((node) => node === document.activeElement)) break;

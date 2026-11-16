@@ -671,10 +671,12 @@ export class BrowserApplicationService {
   browserUrl(url: string): string {
     const parsed = new URL(url);
     if (
-      !["http:", "https:"].includes(parsed.protocol) &&
+      !["http:", "https:", "file:"].includes(parsed.protocol) &&
       parsed.href !== "about:blank"
     )
       throw new Error("Unsupported browser URL protocol");
+    if (parsed.protocol === "file:" && parsed.host)
+      throw new Error("Only local file addresses are supported");
     return parsed.href;
   }
   async openBrowser(

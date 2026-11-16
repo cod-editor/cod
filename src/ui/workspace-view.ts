@@ -1,3 +1,4 @@
+import { localFileAddress } from "../browser/address";
 import { actionButton as paneButton } from "./action-feedback";
 import { reviewPane, updateReview } from "../review-pane";
 import { previewPane, diffPane } from "../resource-panes";
@@ -48,95 +49,110 @@ export function createWorkspaceView(
     string,
     { start: number; end: number; top: number; left: number }
   >();
+  let rendering = false;
   function render(): void {
-    const activeElement = document.activeElement as HTMLElement | null;
-    const scrolls = viewScrolls;
-    for (const input of panes.querySelectorAll<HTMLTextAreaElement>(
-      "textarea",
-    )) {
-      const id = input.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
-      if (id)
-        editorSelections.set(id + ":" + input.getAttribute("aria-label"), {
-          start: input.selectionStart,
-          end: input.selectionEnd,
-          top: input.scrollTop,
-          left: input.scrollLeft,
-        });
-    }
-    for (const element of panes.querySelectorAll<HTMLElement>(".transcript")) {
-      const id = element.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
-      if (id)
-        scrolls.set(id, {
-          top: element.scrollTop,
-          bottom:
-            element.scrollHeight - element.clientHeight - element.scrollTop <
-            60,
-        });
-    }
-    browsers.reconcile();
-    const returnFocus = focus.capture();
-    chats.reconcile();
-    documents.reconcile();
-    layout.reconcile();
-    terminals.reconcile();
-    navigation.render();
-    const workspace = activeWorkspace();
-    projects.update(workspace);
-    for (const id of resourcePanes.keys())
-      if (
-        !getState().workspaces.some((workspace) =>
-          workspace.panes.some((pane) => pane.id === id),
-        )
-      )
-        resourcePanes.delete(id);
-    workspaceName.textContent = workspace?.name ?? "No workspace";
-    if (!workspace) {
-      layout.applySettings();
-      const empty = document.createElement("div");
-      empty.className = "empty-workspace";
-      const content = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = "Cod";
-      const text = document.createElement("p");
-      text.append(paneButton("New workspace", async () => createWorkspace()));
-      content.append(title, text);
-      empty.append(content);
-      panes.replaceChildren(empty);
-    } else {
-      layout.applySettings(workspace);
-      const content = layout.render(workspace);
-      if (panes.firstElementChild !== content) panes.replaceChildren(content);
-    }
-    for (const element of panes.querySelectorAll<HTMLElement>(".transcript")) {
-      const id = element.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
-      const saved = id ? scrolls.get(id) : undefined;
-      element.scrollTop =
-        saved && !saved.bottom ? saved.top : element.scrollHeight;
-    }
-    for (const input of panes.querySelectorAll<HTMLTextAreaElement>(
-      "textarea",
-    )) {
-      const id = input.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
-      const saved = id
-        ? editorSelections.get(id + ":" + input.getAttribute("aria-label"))
-        : undefined;
-      if (saved) {
-        input.setSelectionRange(saved.start, saved.end);
-        input.scrollTop = saved.top;
-        input.scrollLeft = saved.left;
-        if (input.classList.contains("file-editor"))
-          input.dispatchEvent(new Event("scroll"));
+    rendering = true;
+    try {
+      const activeElement = document.activeElement as HTMLElement | null;
+      const scrolls = viewScrolls;
+      for (const input of panes.querySelectorAll<HTMLTextAreaElement>(
+        "textarea",
+      )) {
+        const id = input.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+        if (id)
+          editorSelections.set(id + ":" + input.getAttribute("aria-label"), {
+            start: input.selectionStart,
+            end: input.selectionEnd,
+            top: input.scrollTop,
+            left: input.scrollLeft,
+          });
       }
+      for (const element of panes.querySelectorAll<HTMLElement>(
+        ".transcript",
+      )) {
+        const id =
+          element.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+        if (id)
+          scrolls.set(id, {
+            top: element.scrollTop,
+            bottom:
+              element.scrollHeight - element.clientHeight - element.scrollTop <
+              60,
+          });
+      }
+      browsers.reconcile();
+      const returnFocus = focus.capture();
+      chats.reconcile();
+      documents.reconcile();
+      layout.reconcile();
+      terminals.reconcile();
+      navigation.render();
+      const workspace = activeWorkspace();
+      projects.update(workspace);
+      for (const id of resourcePanes.keys())
+        if (
+          !getState().workspaces.some((workspace) =>
+            workspace.panes.some((pane) => pane.id === id),
+          )
+        )
+          resourcePanes.delete(id);
+      workspaceName.textContent = workspace?.name ?? "No workspace";
+      if (!workspace) {
+        layout.applySettings();
+        const empty = document.createElement("div");
+        empty.className = "empty-workspace";
+        const content = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = "Cod";
+        const text = document.createElement("p");
+        text.append(paneButton("New workspace", async () => createWorkspace()));
+        content.append(title, text);
+        empty.append(content);
+        panes.replaceChildren(empty);
+      } else {
+        layout.applySettings(workspace);
+        const content = layout.render(workspace);
+        if (panes.firstElementChild !== content) panes.replaceChildren(content);
+      }
+      for (const element of panes.querySelectorAll<HTMLElement>(
+        ".transcript",
+      )) {
+        const id =
+          element.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+        const saved = id ? scrolls.get(id) : undefined;
+        element.scrollTop =
+          saved && !saved.bottom ? saved.top : element.scrollHeight;
+      }
+      for (const input of panes.querySelectorAll<HTMLTextAreaElement>(
+        "textarea",
+      )) {
+        const id = input.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+        const saved = id
+          ? editorSelections.get(id + ":" + input.getAttribute("aria-label"))
+          : undefined;
+        if (saved) {
+          input.setSelectionRange(saved.start, saved.end);
+          input.scrollTop = saved.top;
+          input.scrollLeft = saved.left;
+          if (input.classList.contains("file-editor"))
+            input.dispatchEvent(new Event("scroll"));
+        }
+      }
+      // Native views retain their own focus and selection across renderer updates.
+      // Restoring an old native origin here can undo an explicit tab switch before
+      // its new layout has been applied. Only modal cancellation restores it.
+      if (!returnFocus.browserId) {
+        focus.restore(returnFocus);
+        if (
+          activeElement?.isConnected &&
+          activeElement.closest("[data-pane-id]")
+        )
+          activeElement.focus({ preventScroll: true });
+      }
+      browsers.layout();
+    } finally {
+      rendering = false;
     }
-    // Native views retain their own focus and selection across renderer updates.
-    // Restoring an old native origin here can undo an explicit tab switch before
-    // its new layout has been applied. Only modal cancellation restores it.
-    if (!returnFocus.browserId) {
-      focus.restore(returnFocus);
-      if (activeElement?.isConnected && activeElement.closest("[data-pane-id]"))
-        activeElement.focus({ preventScroll: true });
-    }
-    browsers.layout();
   }
 
   function renderPane(workspace: WorkspaceState, pane: PaneState): HTMLElement {
@@ -151,6 +167,9 @@ export function createWorkspaceView(
       container.dataset.paneId = pane.id;
       container.dataset.viewKind = kind;
       container.addEventListener("focusin", () => {
+        // Reattaching views and restoring their controls is not a new navigation
+        // request. Echoing it to the backend can undo an explicit pane command.
+        if (rendering) return;
         const current = getState().workspaces.find((w) =>
           w.panes.some((item) => item.id === pane.id),
         );
@@ -235,11 +254,13 @@ export function createWorkspaceView(
       line?: number;
     }>("file.resolve", { workspace, path: reference });
     const open = (path: string) =>
-      invoke("file.open", {
-        workspace,
-        path,
-        ...(result.line ? { line: result.line } : {}),
-      });
+      /\.html?$/i.test(path) && !result.line
+        ? invoke("browser.open", { workspace, url: localFileAddress(path) })
+        : invoke("file.open", {
+            workspace,
+            path,
+            ...(result.line ? { line: result.line } : {}),
+          });
     if (!result.candidates.length) {
       setStatus(`File not found in workspace folders: ${reference}`);
       return;

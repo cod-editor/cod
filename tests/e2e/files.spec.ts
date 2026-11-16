@@ -228,6 +228,9 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   await expect(
     app.page.getByRole("textbox", { name: "File contents", exact: true }),
   ).toHaveValue("# Guide leaf\n");
+  await expect(
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toBeFocused();
   await focusTreeItem(leaf);
   await app.page.keyboard.press("Shift+F10");
   await expect(
@@ -839,4 +842,79 @@ test("Open source refreshes external changes and protects dirty text until expli
   await expect(
     app.page.getByRole("textbox", { name: "File contents", exact: true }),
   ).toHaveValue("# Another external revision\n");
+});
+
+test("HTML chat references open the browser while explicit file opening retains the source", async ({}, info) => {
+  await app.stop();
+  const recording = path.join(app.temporary, "html-provider.jsonl");
+  await writeFile(recording, "");
+  app.environment.COD_CODEX_EXECUTABLE = process.execPath;
+  app.environment.COD_CODEX_ARGS = JSON.stringify([
+    path.join(app.root, "tests/e2e/helpers/chat-fixture/provider.mjs"),
+    "codex",
+    recording,
+  ]);
+  await app.start();
+  const file = path.join(app.folders[0], "report.html");
+  const source =
+    "<!doctype html><title>Chat report</title><h1>Report from chat</h1><!--" +
+    "x".repeat(2_100_000) +
+    "-->";
+  await writeFile(file, source);
+  const chat = await app.cli<{ id: string; paneId: string }>(
+    "conversation",
+    "create",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--cwd",
+    app.folders[0],
+  );
+  await app.cli(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Open `report.html`",
+  );
+  const transcript = app
+    .pane(chat.paneId)
+    .getByRole("region", { name: "Conversation transcript", exact: true });
+  await transcript
+    .getByRole("button", { name: "report.html", exact: true })
+    .first()
+    .click();
+  await expect(
+    app.page.getByRole("textbox", { name: "Address", exact: true }),
+  ).toHaveValue(/file:.*report\.html$/);
+  await expect
+    .poll(() =>
+      app
+        .app!.context()
+        .pages()
+        .some((p) => p.url().endsWith("/report.html")),
+    )
+    .toBe(true);
+  const content = app
+    .app!.context()
+    .pages()
+    .find((p) => p.url().endsWith("/report.html"))!;
+  await expect(
+    content.getByRole("heading", { name: "Report from chat" }),
+  ).toBeVisible();
+  const document = await open(file);
+  await expect(editor(document)).toHaveValue(source);
+  await expect(document.locator(".editor-colors")).toBeHidden();
+  await expect(editor(document)).toHaveCSS("color", "rgb(171, 178, 191)");
+  await document.screenshot({ path: info.outputPath("large-html-source.png") });
+  await editor(document).fill("<html><h1>Short source</h1></html>");
+  await expect(editor(document)).toBeFocused();
+  await expect(document.locator(".editor-colors")).toBeVisible();
+  await expect(document.locator("[data-syntax-token]").first()).toBeVisible();
+  await editor(document).fill(source);
+  await expect(editor(document)).toBeFocused();
+  await expect(document.locator(".editor-colors")).toBeHidden();
+  await expect(editor(document)).toHaveValue(source);
 });

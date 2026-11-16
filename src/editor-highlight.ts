@@ -63,7 +63,15 @@ export function highlightedEditor(
   editor.wrap = "off";
   editor.classList.add("highlight-overlay");
   const paint = () => {
-    code.innerHTML = highlight(editor.value, language) + "\n";
+    // Large single-line HTML can exceed Chromium's preformatted text painting
+    // limits. Let the native editor draw it instead of hiding its text under an
+    // empty overlay; also avoid a second full-size DOM copy.
+    const highlighted = editor.value.length <= 200_000;
+    wrapper.dataset.highlighted = String(highlighted);
+    code.hidden = !highlighted;
+    code.innerHTML = highlighted
+      ? highlight(editor.value, language) + "\n"
+      : "";
     for (const token of code.querySelectorAll("span"))
       token.setAttribute("data-syntax-token", token.className);
     sync();

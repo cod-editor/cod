@@ -80,11 +80,13 @@ function safeUrl(value: string, extension?: (url: string) => boolean): string {
     throw new Error("Browser URL must be a string");
   const parsed = new URL(value);
   if (
-    !["http:", "https:"].includes(parsed.protocol) &&
+    !["http:", "https:", "file:"].includes(parsed.protocol) &&
     parsed.href !== "about:blank" &&
     !extension?.(parsed.href)
   )
     throw new Error("Unsupported browser URL protocol");
+  if (parsed.protocol === "file:" && parsed.host)
+    throw new Error("Only local file addresses are supported");
   return parsed.href;
 }
 function allowed(value: string, extension?: (url: string) => boolean) {
@@ -185,22 +187,21 @@ export class BrowserService {
     installPageContextMenu(contents, this.options.window);
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
+    const navigable = (url: string) =>
+      allowed(url, this.options.isAllowedExtensionUrl) &&
+      (!/^file:/i.test(url) || /^file:/i.test(contents.getURL()));
     contents.on("will-navigate", (event, url) => {
-      if (!allowed(url, this.options.isAllowedExtensionUrl))
-        event.preventDefault();
+      if (!navigable(url)) event.preventDefault();
     });
     contents.on("will-redirect", (event, url) => {
-      if (!allowed(url, this.options.isAllowedExtensionUrl))
-        event.preventDefault();
+      if (!navigable(url)) event.preventDefault();
     });
     contents.on("will-frame-navigate", (event) => {
-      if (!allowed(event.url, this.options.isAllowedExtensionUrl))
-        event.preventDefault();
+      if (!navigable(event.url)) event.preventDefault();
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.setWindowOpenHandler((details) => {
-      if (!allowed(details.url, this.options.isAllowedExtensionUrl))
-        return { action: "deny" };
+      if (!navigable(details.url)) return { action: "deny" };
       const webPreferences = {
         session: this.options.session,
         sandbox: true,
