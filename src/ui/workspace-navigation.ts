@@ -184,11 +184,16 @@ export function createWorkspaceNavigation(
     if (
       active &&
       (active.settings?.workspacesVisible === false || active.zoomedGroupId)
-    )
+    ) {
       await invoke("workspace.settings", {
         id: active.id,
         settings: { workspacesVisible: true },
       });
+      // Apply the revealed panel layout before creating and focusing its editor.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    }
   }
   async function renameWorkspace(id: string): Promise<void> {
     const workspace = getState().workspaces.find((item) => item.id === id);
