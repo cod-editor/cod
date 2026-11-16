@@ -4,6 +4,7 @@ export function addressSuggestions(
   invoke: Invoke,
   navigate: (url: string) => void,
   layout: () => void,
+  currentUrl: () => string,
 ) {
   const list = document.createElement("div");
   list.className = "browser-suggestions";
@@ -14,7 +15,8 @@ export function addressSuggestions(
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", list.id);
   let revision = 0,
-    selected = -1;
+    selected = -1,
+    composing = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   function close() {
     revision++;
@@ -37,12 +39,19 @@ export function addressSuggestions(
       rows[index].scrollIntoView({ block: "nearest" });
     } else input.removeAttribute("aria-activedescendant");
   }
-  async function refresh() {
+  async function refresh(explicit = false) {
+    if (composing) return;
+    const query = input.value.trim();
+    const unchanged = query === currentUrl();
+    if (unchanged && !explicit) {
+      close();
+      return;
+    }
     const generation = ++revision;
     try {
-      const items = await invoke<Array<{ url: string; title: string }>>(
+      const results = await invoke<Array<{ url: string; title: string }>>(
         "browser.suggest",
-        { query: input.value },
+        { query: unchanged ? "" : query },
         { reportError: false },
       );
       if (
@@ -51,6 +60,7 @@ export function addressSuggestions(
         !input.isConnected
       )
         return;
+      const items = results.filter((item) => item.url !== currentUrl());
       list.replaceChildren();
       selected = -1;
       items.forEach((item, i) => {
@@ -76,29 +86,48 @@ export function addressSuggestions(
       list.hidden = !items.length;
       input.setAttribute("aria-expanded", String(!!items.length));
       input.removeAttribute("aria-activedescendant");
+      if (explicit && items.length) select(0);
       layout();
     } catch {
       if (generation === revision) close();
     }
   }
-  input.addEventListener("input", () => {
+  function edited() {
     close();
-    timer = setTimeout(() => void refresh(), 80);
+    if (!composing && input.value.trim() !== currentUrl())
+      timer = setTimeout(() => void refresh(), 80);
+  }
+  input.addEventListener("input", edited);
+  input.addEventListener("compositionstart", () => {
+    composing = true;
+    close();
   });
-  input.addEventListener("focus", () => void refresh());
+  input.addEventListener("compositionend", () => {
+    composing = false;
+    edited();
+  });
+  input.addEventListener("focus", close);
   input.addEventListener("blur", close);
   input.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     const rows = list.querySelectorAll<HTMLButtonElement>("button");
-    if (
+    if (event.key === "ArrowDown" && list.hidden) {
+      event.preventDefault();
+      clearTimeout(timer);
+      void refresh(true);
+    } else if (
       (event.key === "ArrowDown" || event.key === "ArrowUp") &&
       rows.length &&
       !list.hidden
     ) {
       event.preventDefault();
       select(
-        (selected + (event.key === "ArrowDown" ? 1 : -1) + rows.length) %
-          rows.length,
+        selected < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : rows.length - 1
+          : (selected + (event.key === "ArrowDown" ? 1 : -1) + rows.length) %
+              rows.length,
       );
     } else if (event.key === "Enter" && selected >= 0 && !list.hidden) {
       event.preventDefault();

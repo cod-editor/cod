@@ -2033,3 +2033,160 @@ test("Local HTML uses ordinary browser navigation, recovery and persisted histor
     path: info.outputPath("local-report-browser.png"),
   });
 });
+
+test("Selecting an address stays quiet; explicit suggestions exclude the current page and preserve navigation", async ({}, info) => {
+  const workspace = await shell.create("Quiet address fixture");
+  const other = await open(workspace, "/quiet-alternative");
+  await remote("/quiet-alternative", "document.title");
+  const current = await open(workspace, "/quiet-current");
+  await remote("/quiet-current", "document.title");
+  const address = shell
+    .pane(current.paneId)
+    .getByRole("textbox", { name: "Address", exact: true });
+  const results = shell
+    .pane(current.paneId)
+    .getByRole("listbox", { name: "Address suggestions" });
+  await pageKey("/quiet-current", "L", [
+    process.platform === "darwin" ? "meta" : "control",
+  ]);
+  await expect(address).toBeFocused();
+  expect(
+    await address.evaluate((input: HTMLInputElement) => [
+      input.selectionStart,
+      input.selectionEnd,
+    ]),
+  ).toEqual([0, (origin + "/quiet-current").length]);
+  await address.press(`${modifier}+c`);
+  expect(
+    await shell.app!.evaluate(({ clipboard }) => clipboard.readText()),
+  ).toBe(origin + "/quiet-current");
+  await shell.page.waitForTimeout(160);
+  await expect(results).toBeHidden();
+  await shell
+    .pane(current.paneId)
+    .getByRole("button", { name: "Reload", exact: true })
+    .focus();
+  await address.click();
+  await address.press(`${modifier}+a`);
+  await shell.page.waitForTimeout(120);
+  await expect(results).toBeHidden();
+  await address.press("ArrowDown");
+  await expect(results.getByRole("option")).toContainText("quiet-alternative");
+  await expect(results).not.toContainText(origin + "/quiet-current");
+  await expect(results.getByRole("option").first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await address.press("Escape");
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue(origin + "/quiet-current");
+  await expect(results).toBeHidden();
+  await address.fill("quiet");
+  await expect(results.getByRole("option")).toContainText("quiet-alternative");
+  await expect(results).not.toContainText(origin + "/quiet-current");
+  await address.fill(origin + "/quiet-current");
+  await expect(results).toBeHidden();
+  await address.fill("quiet-alternative");
+  await expect(results.getByRole("option")).toContainText("quiet-alternative");
+  await address.press("ArrowDown");
+  await address.press("Enter");
+  await expect
+    .poll(async () => (await inspect(current.id)).url)
+    .toBe(origin + "/quiet-alternative");
+  await remote("/quiet-alternative", "document.title");
+  await address.focus();
+  await address.fill(origin + "/quiet-alternative");
+  await shell.page.waitForTimeout(160);
+  await expect(results).toBeHidden();
+  await shell.page.screenshot({
+    path: info.outputPath("quiet-address-selection.png"),
+  });
+  expect((await inspect(other.id)).url).toBe(origin + "/quiet-alternative");
+});
+
+test("Address suggestions discard dismissed and superseded replies and wait for committed composition", async () => {
+  const workspace = await shell.create("Delayed address fixture");
+  await open(workspace, "/delayed-alternative");
+  await remote("/delayed-alternative", "document.title");
+  const current = await open(workspace, "/delayed-current");
+  await remote("/delayed-current", "document.title");
+  await shell.app!.evaluate(({ ipcMain }) => {
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+      }
+    )._invokeHandlers;
+    const original = handlers.get("cod:invoke")!;
+    Object.assign(globalThis, {
+      suggestionQueries: [] as string[],
+      releaseSuggestion: undefined,
+    });
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      if (request.op !== "browser.suggest") return original(event, request);
+      const state = globalThis as unknown as {
+        suggestionQueries: string[];
+        releaseSuggestion?: () => void;
+      };
+      state.suggestionQueries.push(request.query);
+      const response = await original(event, request);
+      if (request.query === "delayed")
+        await new Promise<void>((resolve) => {
+          state.releaseSuggestion = resolve;
+        });
+      return response;
+    });
+  });
+  const address = shell
+    .pane(current.paneId)
+    .getByRole("textbox", { name: "Address", exact: true });
+  const results = shell
+    .pane(current.paneId)
+    .getByRole("listbox", { name: "Address suggestions" });
+  const queries = () =>
+    shell.app!.evaluate(
+      () =>
+        (globalThis as unknown as { suggestionQueries: string[] })
+          .suggestionQueries,
+    );
+  const release = () =>
+    shell.app!.evaluate(() =>
+      (
+        globalThis as unknown as { releaseSuggestion?: () => void }
+      ).releaseSuggestion?.(),
+    );
+  await address.focus();
+  await shell.page.waitForTimeout(160);
+  expect(await queries()).toEqual([]);
+  await address.fill("delayed");
+  await expect.poll(() => queries()).toEqual(["delayed"]);
+  await address.press("Escape");
+  await release();
+  await shell.page.waitForTimeout(120);
+  await expect(results).toBeHidden();
+  await address.fill("delayed");
+  await expect.poll(() => queries()).toEqual(["delayed", "delayed"]);
+  await address.fill("no-matching-fixture");
+  await expect.poll(() => queries()).toContain("no-matching-fixture");
+  await release();
+  await shell.page.waitForTimeout(120);
+  await expect(results).toBeHidden();
+  const before = (await queries()).length;
+  await address.dispatchEvent("compositionstart");
+  await address.fill("delayed-alternative");
+  await shell.page.waitForTimeout(160);
+  expect((await queries()).length).toBe(before);
+  await expect(results).toBeHidden();
+  await address.dispatchEvent("compositionend");
+  await expect(results.getByRole("option")).toContainText(
+    "delayed-alternative",
+  );
+  await shell
+    .pane(current.paneId)
+    .getByRole("button", { name: "Reload", exact: true })
+    .focus();
+  await expect(results).toBeHidden();
+  await address.focus();
+  await shell.page.waitForTimeout(120);
+  await expect(results).toBeHidden();
+});
