@@ -1,3 +1,5 @@
+import { createWorkspaceOverview } from "./workspace-overview";
+import type { createWorkspaceNavigation } from "./workspace-navigation";
 import { browserBookmarks } from "./browser-bookmarks";
 import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
@@ -15,6 +17,7 @@ import {
   keyboardPlatform,
   keyboardSurface,
   showKeyboardShortcuts,
+  shortcutTitle,
 } from "./keyboard-ui";
 import { createKeyboardNavigation } from "./keyboard-navigation";
 import { paneRegions } from "./pane-layout";
@@ -51,12 +54,7 @@ interface CommandFeatures {
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
   chat: { send: (id: string) => Promise<void>; integration: () => void };
-  navigation: {
-    focusWorkspace: (id: string) => Promise<void>;
-    renameWorkspace: (id: string) => Promise<void>;
-    renameConversation: (id: string) => Promise<void>;
-    closeWorkspace: (workspace: WorkspaceState) => void;
-  };
+  navigation: ReturnType<typeof createWorkspaceNavigation>;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
   find: { open: (pane: import("../types").PaneState) => void };
@@ -82,6 +80,65 @@ export function createCommands(
     features.whenRendered,
   );
   const focusTargets = createFocusTargets(getState, invoke, focus, keys);
+  const overview = createWorkspaceOverview(
+    getState,
+    invoke,
+    navigation,
+    focus,
+    async (item) => {
+      const intent = keys.beginFocus();
+      await navigation.open(item, intent.signal);
+      if (intent.signal.aborted) return;
+      const ready = await features.whenRendered(
+        () =>
+          getState().activeWorkspaceId === item.workspaceId ? true : undefined,
+        intent.signal,
+      );
+      if (!ready) return;
+      const workspace = getState().workspaces.find(
+        (w) => w.id === item.workspaceId,
+      );
+      const pane =
+        navigation.items().find((row) => row.key === item.key)?.paneId ??
+        workspace?.activePaneId;
+      if (pane) await keys.focusPane(pane, intent);
+    },
+    {
+      newConversation: async (workspace) => {
+        const intent = keys.beginFocus();
+        const result = await invoke<{ paneId: string }>("conversation.draft", {
+          workspace,
+        });
+        if (
+          await features.whenRendered(
+            () =>
+              getState().activeWorkspaceId === workspace &&
+              activeWorkspace()?.activePaneId === result.paneId
+                ? true
+                : undefined,
+            intent.signal,
+          )
+        )
+          await keys.focusActiveContent(result.paneId, intent);
+      },
+      openPane: async (workspace, pane) => {
+        const intent = keys.beginFocus();
+        await invoke("pane.focus", { workspace, id: pane });
+        if (
+          await features.whenRendered(
+            () =>
+              getState().activeWorkspaceId === workspace &&
+              activeWorkspace()?.activePaneId === pane
+                ? true
+                : undefined,
+            intent.signal,
+          )
+        )
+          await keys.focusActiveContent(pane, intent);
+      },
+    },
+  );
+
   const events = new AbortController();
   let refreshPalette: (() => void) | undefined;
   const listen = (
@@ -134,12 +191,14 @@ export function createCommands(
   }
   function conversationActions(
     conversation: ConversationState,
+    renameOverride?: () => void,
   ): Array<ConversationAction | null> {
     const rename: ConversationAction = {
       command: "conversation.rename",
       label: "Rename",
       run: () => {
-        void navigation.renameConversation(conversation.id);
+        if (renameOverride) renameOverride();
+        else void navigation.renameConversation(conversation.id);
       },
     };
     const removalReason = conversationRemovalReason(getState(), conversation);
@@ -521,22 +580,28 @@ export function createCommands(
   }
 
   let choosingFolder = false;
-  function folderDialog(workspaceId = activeWorkspace()?.id): void {
+  function folderDialog(
+    workspaceId = activeWorkspace()?.id,
+    restoreFocus?: () => void,
+  ): void {
     if (!workspaceId || choosingFolder) return;
     choosingFolder = true;
     const returnFocus = focus.capture();
+    const surface =
+      document.activeElement?.closest("dialog") ??
+      panes.querySelector("[data-pane-id]") ??
+      panes;
     void window.cod
       .chooseDirectory()
       .then(async (path) => {
         if (path !== null)
           await localInvoke("workspace.add-folder", { id: workspaceId, path });
       })
-      .catch((error) =>
-        showActionError(error, panes.querySelector("[data-pane-id]") ?? panes),
-      )
+      .catch((error) => showActionError(error, surface))
       .finally(() => {
         choosingFolder = false;
-        focus.restore(returnFocus);
+        if (restoreFocus) restoreFocus();
+        else focus.restore(returnFocus);
       });
   }
   function workspaceDialog(mode: "create" | "rename"): void {
@@ -605,6 +670,7 @@ export function createCommands(
         "shortcuts.openFile",
         "settings",
         "workspace.new",
+        "workspace.overview",
         "chat.new",
         "integration.install",
         "browser.default",
@@ -703,6 +769,10 @@ export function createCommands(
   ): Promise<void> {
     const focusIntent = keys.beginFocus();
     if (browserId) focus.native(browserId);
+    if (id === "workspace.overview") {
+      overview.toggle();
+      return;
+    }
     if (document.querySelector("dialog[open]")) return;
     const browser = browserId
       ? getState().browsers.find((b) => b.id === browserId)
@@ -1248,52 +1318,24 @@ export function createCommands(
     else focus();
   }
 
-  document.querySelector("#workspace-selector")!.addEventListener(
-    "click",
+  const workspaceSelector = document.querySelector<HTMLButtonElement>(
+    "#workspace-selector",
+  )!;
+  workspaceSelector.setAttribute("aria-label", "Overview");
+  workspaceSelector.setAttribute("aria-haspopup", "dialog");
+  workspaceSelector.setAttribute("aria-expanded", "false");
+  workspaceSelector.title = shortcutTitle("workspace.overview");
+  document.addEventListener(
+    "cod:keymap-changed",
     () => {
-      const dialog = document.createElement("dialog");
-      dialog.className = "workspace-picker picker";
-      dialog.setAttribute("aria-label", "Switch workspace");
-      const input = document.createElement("input");
-      input.placeholder = "Search workspaces...";
-      input.setAttribute("aria-label", "Search workspaces");
-      const list = document.createElement("div");
-      list.className = "command-list";
-      const selection = createSearchList(input, list);
-      const fill = () => {
-        list.replaceChildren();
-        let current: HTMLButtonElement | undefined;
-        for (const w of getState().workspaces.filter((w) =>
-          w.name.toLowerCase().includes(input.value.toLowerCase()),
-        )) {
-          const button = document.createElement("button");
-          button.textContent = w.name;
-          if (w.id === getState().activeWorkspaceId) current = button;
-          button.onclick = () => {
-            dialog.close();
-            void navigation.focusWorkspace(w.id);
-          };
-          list.append(button);
-        }
-        const create = document.createElement("button");
-        create.textContent = "New workspace";
-        create.onclick = () => {
-          dialog.close();
-          workspaceDialog("create");
-        };
-        list.append(document.createElement("hr"), create);
-        selection.update(input.value ? undefined : current);
-      };
-      input.oninput = fill;
-      dialog.append(input, list);
-      document.body.append(dialog);
-      dialog.onclose = () => dialog.remove();
-      fill();
-      dialog.showModal();
-      input.focus();
+      workspaceSelector.title = shortcutTitle("workspace.overview");
+      refreshPalette?.();
     },
     { signal: events.signal },
   );
+  workspaceSelector.addEventListener("click", () => overview.toggle(), {
+    signal: events.signal,
+  });
   listen(
     "keydown",
     (event) => {
@@ -1313,6 +1355,7 @@ export function createCommands(
           !event.altKey)
       ) {
         const target = document.activeElement;
+        if (target?.closest(".workspace-overview")) return;
         if (target instanceof HTMLElement) {
           event.preventDefault();
           event.stopPropagation();
@@ -1328,7 +1371,9 @@ export function createCommands(
         }
         return;
       }
-      if (document.querySelector("dialog[open]")) return;
+      const openDialog = [...document.querySelectorAll("dialog[open]")].at(-1);
+      if (openDialog && !openDialog.classList.contains("workspace-overview"))
+        return;
       const match = resolveKeybinding(
         {
           ...event,
@@ -1345,7 +1390,8 @@ export function createCommands(
         keyboardPlatform,
         keyboardSurface(),
       );
-      if (!match) return;
+      if (!match || (openDialog && match.command !== "workspace.overview"))
+        return;
       event.preventDefault();
       event.stopPropagation();
       if (match.dispatch) void execute(match.command);
@@ -1355,9 +1401,14 @@ export function createCommands(
   return {
     settings: () => execute("settings"),
     execute,
-    refresh: () => refreshPalette?.(),
+    refresh: () => {
+      refreshPalette?.();
+      overview.refresh();
+      workspaceSelector.title = shortcutTitle("workspace.overview");
+    },
     dispose: () => {
       refreshPalette = undefined;
+      overview.dispose();
       events.abort();
       focusTargets.dispose();
       keys.dispose();

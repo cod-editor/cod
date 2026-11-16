@@ -47,7 +47,7 @@ test("New task stays a compact bottom-composer chat at normal and wide window si
     await expect(shell.page.locator("footer")).toHaveCount(0);
     const header = shell.page.locator(".app-header");
     const selector = header.getByRole("button", {
-      name: "Switch workspace",
+      name: "Overview",
       exact: true,
     });
     const selectorBox = (await selector.boundingBox())!;
@@ -1020,7 +1020,7 @@ test("Header participates in keyboard area traversal and its controls remain seq
   ).toBeFocused();
   await shell.page.keyboard.press("Tab");
   await expect(
-    header.getByRole("button", { name: "Switch workspace", exact: true }),
+    header.getByRole("button", { name: "Overview", exact: true }),
   ).toBeFocused();
   await shell.page.keyboard.press("Tab");
   await expect(

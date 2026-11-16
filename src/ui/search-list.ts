@@ -1,7 +1,14 @@
 let sequence = 0;
 
 /** Search keeps keyboard focus; selection belongs to the results. */
-export function createSearchList(input: HTMLInputElement, list: HTMLElement) {
+export function createSearchList(
+  input: HTMLInputElement,
+  list: HTMLElement,
+  options: {
+    selector?: string;
+    onSelect?: (row: HTMLButtonElement | undefined) => void;
+  } = {},
+) {
   let selected: HTMLButtonElement | undefined;
   const prefix = `search-results-${++sequence}`;
   list.id ||= prefix;
@@ -9,17 +16,17 @@ export function createSearchList(input: HTMLInputElement, list: HTMLElement) {
   input.setAttribute("aria-controls", list.id);
   const rows = () => [
     ...list.querySelectorAll<HTMLButtonElement>(
-      "button:not([hidden]):not(:disabled)",
+      options.selector ?? "button:not([hidden]):not(:disabled)",
     ),
   ];
   function select(button: HTMLButtonElement | undefined, scroll = false): void {
+    if (selected === button && button?.classList.contains("selected")) return;
+    selected?.classList.remove("selected");
+    selected?.removeAttribute("aria-current");
     selected = button;
-    for (const row of rows()) {
-      const active = row === selected;
-      row.classList.toggle("selected", active);
-      if (active) row.setAttribute("aria-current", "true");
-      else row.removeAttribute("aria-current");
-    }
+    selected?.classList.add("selected");
+    selected?.setAttribute("aria-current", "true");
+    options.onSelect?.(selected);
     if (selected) {
       input.setAttribute("aria-activedescendant", selected.id);
       if (scroll) selected.scrollIntoView({ block: "nearest" });
@@ -28,13 +35,14 @@ export function createSearchList(input: HTMLInputElement, list: HTMLElement) {
   function update(preferred?: HTMLButtonElement): void {
     const visible = rows();
     for (const [index, row] of [
-      ...list.querySelectorAll<HTMLButtonElement>("button"),
+      ...list.querySelectorAll<HTMLButtonElement>(options.selector ?? "button"),
     ].entries()) {
       row.id ||= `${prefix}-${index}`;
       row.tabIndex = -1;
       row.classList.remove("selected");
       row.removeAttribute("aria-current");
     }
+    selected = undefined;
     select(preferred && visible.includes(preferred) ? preferred : visible[0]);
   }
   input.addEventListener("keydown", (event) => {
@@ -73,5 +81,5 @@ export function createSearchList(input: HTMLInputElement, list: HTMLElement) {
   list.addEventListener("mousedown", (event) => {
     if ((event.target as Element).closest("button")) event.preventDefault();
   });
-  return { update };
+  return { update, select, selected: () => selected };
 }

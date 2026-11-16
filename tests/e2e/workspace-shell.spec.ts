@@ -825,7 +825,7 @@ test("Workspace panel shortcut uses the selected workspace when its tree render 
     )
     .toBeGreaterThan(0);
   await expect(
-    shell.page.getByRole("button", { name: "Switch workspace", exact: true }),
+    shell.page.getByRole("button", { name: "Overview", exact: true }),
   ).toHaveText("Beta current render");
   await shell.page.keyboard.press(`${modifier}+Shift+W`);
   await shell.page.evaluate(() =>
