@@ -47,6 +47,12 @@ test("Long conversations open a recent window, preserve earlier messages and sea
       .poll(() => pane.locator(".chat-message").count())
       .toBeGreaterThan(initial);
     await expect(input).toHaveValue("Invented unsent message");
+    expect(
+      await input.evaluate((node: HTMLTextAreaElement) => [
+        node.selectionStart,
+        node.selectionEnd,
+      ]),
+    ).toEqual([4, 11]);
     await input.focus();
     await app.page.keyboard.press(
       process.platform === "darwin" ? "Meta+f" : "Control+f",

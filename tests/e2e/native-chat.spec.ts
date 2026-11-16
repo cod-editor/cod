@@ -82,7 +82,14 @@ test("Collapsed tool history does not materialize output until expanded", async 
     )
     .toBe(400);
   const pane = shell.pane(chat.paneId);
-  await expect(pane.locator(".tool-activity")).toHaveCount(400);
+  await expect(pane.locator(".tool-activity")).toHaveCount(60);
+  await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
+  await pane
+    .getByRole("button", { name: "Earlier messages", exact: true })
+    .click();
+  await expect
+    .poll(() => pane.locator(".tool-activity").count())
+    .toBeGreaterThan(60);
   await expect(pane.locator(".tool-activity pre")).toHaveCount(0);
   await expandActivity(pane);
   const tool = pane.locator(".tool-activity").first();
