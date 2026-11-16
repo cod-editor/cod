@@ -212,7 +212,7 @@ test("B1 AC3 sandboxed views and recursive popups reject unsafe navigation and p
     await js("one", `({node:typeof require,bridge:typeof window.cod})`),
   ).toEqual({ node: "undefined", bridge: "undefined" });
   for (const unsafe of [
-    "file:///etc/passwd",
+    "file://remote-server/etc/passwd",
     'javascript:document.title="unsafe"',
     "cod://private",
     "chrome://settings",

@@ -17,7 +17,10 @@ test("Navigation restoration strips form state, bounds history and preserves the
 });
 test("Navigation restoration rejects privileged active URLs and ignores the initial blank entry", () => {
   assert.equal(
-    normalizeNavigation({ entries: [{ url: "file:///etc/passwd" }], index: 0 }),
+    normalizeNavigation({
+      entries: [{ url: "cod-artifact://unowned/file" }],
+      index: 0,
+    }),
     undefined,
   );
   assert.equal(
@@ -36,5 +39,23 @@ test("Navigation restoration rejects privileged active URLs and ignores the init
       index: 1,
     }),
     { entries: [{ url: "https://example.invalid/", title: "Home" }], index: 0 },
+  );
+});
+
+test("Local report navigation survives normalization without Chromium form state", () => {
+  const entries = [
+    { url: "file:///tmp/report.html", title: "Report" },
+    { url: "file:///tmp/evidence.txt", title: "Evidence" },
+  ];
+  assert.deepEqual(normalizeNavigation({ entries, index: 1 }), {
+    entries,
+    index: 1,
+  });
+  assert.equal(
+    normalizeNavigation({
+      entries: [{ url: "file://remote-share/file" }],
+      index: 0,
+    }),
+    undefined,
   );
 });

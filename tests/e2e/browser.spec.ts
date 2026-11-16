@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
@@ -432,7 +433,7 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
         "--id",
         record.id,
         "--url",
-        "file:///etc/passwd",
+        "file://remote-server/etc/passwd",
       )
     ).code,
   ).not.toBe(0);
@@ -1905,4 +1906,126 @@ test("Failed tab restoration keeps navigation passive and explicit recovery reta
   await expect
     .poll(async () => (await inspect(record.id)).url)
     .toBe(origin + "/one");
+});
+
+test("Local HTML uses ordinary browser navigation, recovery and persisted history", async ({}, info) => {
+  const workspace = await shell.create("Local reports");
+  const folder = path.join(shell.folders[0], "reports");
+  await mkdir(folder);
+  const file = path.join(folder, "report #1%.html");
+  const evidence = path.join(shell.folders[0], "evidence.txt");
+  await writeFile(evidence, "INVENTED_LOCAL_EVIDENCE");
+  await writeFile(
+    path.join(folder, "theme.css"),
+    "h1 { color: rgb(12, 34, 56); }",
+  );
+  await writeFile(
+    file,
+    `<!doctype html><title>Local fixture report</title><link rel="stylesheet" href="theme.css"><h1>Local report</h1><a href="../evidence.txt">Evidence</a><a href="missing.html">Missing evidence</a><form><input aria-label="Local answer"></form><!--${"x".repeat(2_100_000)}-->`,
+  );
+  const url = pathToFileURL(file).href;
+  const opened = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    url,
+  );
+  const pane = shell.pane(opened.paneId);
+  const address = pane.getByRole("textbox", { name: "Address", exact: true });
+  await expect(address).toHaveValue(url);
+  const page = async () => {
+    await expect
+      .poll(() =>
+        shell
+          .app!.context()
+          .pages()
+          .some((p) => p.url() === url),
+      )
+      .toBe(true);
+    return shell
+      .app!.context()
+      .pages()
+      .find((p) => p.url() === url)!;
+  };
+  let content = await page();
+  await expect(
+    content.getByRole("heading", { name: "Local report" }),
+  ).toBeVisible();
+  expect(
+    await content
+      .getByRole("heading")
+      .evaluate((e) => getComputedStyle(e).color),
+  ).toBe("rgb(12, 34, 56)");
+  expect(
+    await content.evaluate(() => ({
+      cod: typeof window.cod,
+      node: typeof (window as any).require,
+      bridge: typeof (window as any).codPage,
+    })),
+  ).toEqual({ cod: "undefined", node: "undefined", bridge: "undefined" });
+  await content.getByRole("link", { name: "Evidence", exact: true }).click();
+  await expect(content.locator("body")).toContainText(
+    "INVENTED_LOCAL_EVIDENCE",
+  );
+  await pane.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(
+    content.getByRole("heading", { name: "Local report" }),
+  ).toBeVisible();
+  await pane.getByRole("button", { name: "Forward", exact: true }).click();
+  await expect(content.locator("body")).toContainText(
+    "INVENTED_LOCAL_EVIDENCE",
+  );
+  await shell.stop();
+  await shell.start();
+  await expect(
+    shell
+      .pane(opened.paneId)
+      .getByRole("textbox", { name: "Address", exact: true }),
+  ).toHaveValue(pathToFileURL(evidence).href);
+  await shell
+    .pane(opened.paneId)
+    .getByRole("button", { name: "Back", exact: true })
+    .click();
+  content = await page();
+  await expect(
+    content.getByRole("heading", { name: "Local report" }),
+  ).toBeVisible();
+  await content
+    .getByRole("link", { name: "Missing evidence", exact: true })
+    .click();
+  await expect(
+    shell
+      .pane(opened.paneId)
+      .getByRole("region", { name: "Page could not load", exact: true }),
+  ).toBeVisible();
+  await shell
+    .pane(opened.paneId)
+    .getByRole("button", { name: "Back", exact: true })
+    .click();
+  await expect(
+    (await page()).getByRole("heading", { name: "Local report" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(({ BrowserWindow }, url) => {
+        const view = BrowserWindow.getAllWindows()
+          .flatMap((w) => w.contentView.children)
+          .find((v) => (v as any).webContents?.getURL() === url);
+        return (
+          !!view &&
+          view.getVisible() &&
+          view.getBounds().width > 100 &&
+          view.getBounds().height > 100
+        );
+      }, url),
+    )
+    .toBe(true);
+  await (
+    await page()
+  ).screenshot({ path: info.outputPath("local-report-content.png") });
+  await shell.page.screenshot({
+    path: info.outputPath("local-report-browser.png"),
+  });
 });

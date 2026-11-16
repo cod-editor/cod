@@ -122,7 +122,8 @@ export function createBrowserViews(
     let displayUrl = "Requested page";
     try {
       const url = new URL(record.url);
-      if (url.protocol === "http:" || url.protocol === "https:")
+      if (url.protocol === "file:") displayUrl = decodeURI(url.pathname);
+      else if (url.protocol === "http:" || url.protocol === "https:")
         displayUrl = `${url.origin}${url.pathname === "/" ? "" : url.pathname}`;
     } catch {
       /* Never echo an unparsed address containing credentials or tokens. */

@@ -1,3 +1,4 @@
+import { localFileAddress } from "../browser/address";
 import { actionButton as paneButton } from "./action-feedback";
 import { reviewPane, updateReview } from "../review-pane";
 import { previewPane, diffPane } from "../resource-panes";
@@ -235,11 +236,13 @@ export function createWorkspaceView(
       line?: number;
     }>("file.resolve", { workspace, path: reference });
     const open = (path: string) =>
-      invoke("file.open", {
-        workspace,
-        path,
-        ...(result.line ? { line: result.line } : {}),
-      });
+      /\.html?$/i.test(path) && !result.line
+        ? invoke("browser.open", { workspace, url: localFileAddress(path) })
+        : invoke("file.open", {
+            workspace,
+            path,
+            ...(result.line ? { line: result.line } : {}),
+          });
     if (!result.candidates.length) {
       setStatus(`File not found in workspace folders: ${reference}`);
       return;

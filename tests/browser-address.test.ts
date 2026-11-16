@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveAddress } from "../src/browser/address.ts";
+import { resolveAddress, localFileAddress } from "../src/browser/address.ts";
 
 test("Address input recognizes websites and local development servers", () => {
   for (const [input, expected] of [
@@ -27,9 +27,24 @@ test("Search encodes text and operators without navigating or executing them", (
     "",
     "  ",
     "javascript:alert(1)",
-    "file:///tmp/x",
+    "file://remote-server/tmp/x",
     "data:text/html,hello",
     "ftp://example.com",
   ])
     assert.throws(() => resolveAddress(input));
+});
+
+test("Local file addresses preserve native filename punctuation", () => {
+  assert.equal(
+    localFileAddress("/tmp/отчёт #1%?.html"),
+    "file:///tmp/%D0%BE%D1%82%D1%87%D1%91%D1%82%20%231%25%3F.html",
+  );
+  assert.equal(
+    resolveAddress("file:///tmp/report%20one.html"),
+    "file:///tmp/report%20one.html",
+  );
+  assert.equal(
+    localFileAddress("C:\\reports\\one.html"),
+    "file:///C:/reports/one.html",
+  );
 });
