@@ -122,11 +122,23 @@ test("Runtime diagnostics correlate real renderer PIDs with tabs, popups and wor
     expect(
       memory.processes.some((p: any) => p.pid === native.pid && p.memory),
     ).toBe(true);
-    await shell.app!.evaluate(
-      ({ webContents }, id) =>
-        webContents.fromId(id)!.forcefullyCrashRenderer(),
-      native.id,
-    );
+    await shell.app!.evaluate(({ app, webContents }, target) => {
+      const contents = webContents.fromId(target.id);
+      // Require an actual exit instead of relying on hidden-view crash IPC.
+      // Signal only this isolated Electron's current, positively identified Tab.
+      if (
+        !contents ||
+        contents.isDestroyed() ||
+        contents.getOSProcessId() !== target.pid ||
+        target.pid <= 1 ||
+        target.pid === process.pid ||
+        !app
+          .getAppMetrics()
+          .some((metric) => metric.pid === target.pid && metric.type === "Tab")
+      )
+        throw new Error("Fixture renderer ownership changed before injection");
+      process.kill(target.pid, "SIGKILL");
+    }, native);
     await expect
       .poll(async () =>
         (await journal()).find(
