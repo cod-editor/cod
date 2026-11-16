@@ -58,7 +58,7 @@ Downloads are available in Commands and from the browser toolbar once a file has
 
 Pin important views through the tab context menu or Commands > Toggle pin tab. Pinned tabs stay first, replace their close button with an unpin icon and survive ordinary or bulk closure. Explicit Close tab in the context menu still closes them; Reopen closed tab restores their pin. Moves and restart retain pins. Optional shortcuts use the existing keymap settings.
 
-Manual Developer Tools are available with F12 or Commands > Toggle Developer Tools. The inspector follows the focused surface: Cod UI controls/chat/files inspect Cod, native page content inspects that exact page. Ordinary browser context menus also offer Inspect element. The alternate shortcut is Command+Option+I on macOS and Ctrl+Shift+I on Linux; optional overrides use the shared keymap.
+Manual Developer Tools are available with F12 or Commands > Toggle Developer Tools. The inspector follows the focused surface: Cod UI controls/chat/files inspect Cod, native page content inspects that exact page. Ordinary browser context menus also offer Inspect element. The alternate shortcut is Command+Option+I on macOS and Ctrl+Shift+I on Linux; optional overrides use the shared keymap. Close the detached inspector with its native controls, or toggle it again from the inspected surface.
 
 ## Development
 

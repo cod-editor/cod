@@ -1,4 +1,4 @@
-import { toggleDevTools, installDevToolsKeys } from "./devtools";
+import { toggleDevTools } from "./devtools";
 import os from "node:os";
 import { DiagnosticJournal } from "./diagnostics";
 import { watchFile, unwatchFile } from "node:fs";
@@ -173,7 +173,6 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  installDevToolsKeys(mainWindow.webContents, "shell");
   // Own native macOS close-tab and settings accelerators before DOM/menu
   // dispatch. Prevent the DOM duplicate, including when a preview frame has focus.
   // Linux Ctrl+W remains surface-specific (terminal readline owns that key).

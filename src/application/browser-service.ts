@@ -1,4 +1,4 @@
-import { toggleDevTools, installDevToolsKeys } from "../devtools";
+import { toggleDevTools } from "../devtools";
 import { SitePermissions, webOrigin } from "../browser/permissions";
 import {
   sitePermissionNames,
@@ -444,7 +444,6 @@ export class BrowserApplicationService {
     id: string,
     surface: "browser" | "agent-page",
   ): void {
-    installDevToolsKeys(contents, surface);
     contents.on("found-in-page", (_event, result) => {
       this.browserWindow?.webContents.send("cod:browser-find", {
         browserId: id,

@@ -46,7 +46,7 @@ async function nativeKey(
     { url, key, modifiers },
   );
 }
-async function closeInspector(url = app.page.url(), shortcut = "F12") {
+async function closeInspector(url = app.page.url()) {
   const state = await owner(url);
   if (!state.open) return;
   await expect
@@ -59,22 +59,6 @@ async function closeInspector(url = app.page.url(), shortcut = "F12") {
       }, state.tools),
     )
     .toBe("complete");
-  // Detached DevTools is a native Chromium window, not an Electron BrowserWindow.
-  const windows = await execute("xdotool", [
-    "search",
-    "--onlyvisible",
-    "--name",
-    "DevTools",
-  ]);
-  const inspectorWindow = windows.stdout.trim().split(/\s+/).at(-1)!;
-  await execute("xdotool", ["windowfocus", "--sync", inspectorWindow]);
-  await expect
-    .poll(() =>
-      app.app!.evaluate(
-        ({ webContents }) => webContents.getFocusedWebContents()?.id,
-      ),
-    )
-    .toBe(state.tools);
   const capture = await app.app!.evaluate(
     async ({ webContents }, id) =>
       (await webContents.fromId(id!)!.capturePage()).toPNG().toString("base64"),
@@ -84,7 +68,17 @@ async function closeInspector(url = app.page.url(), shortcut = "F12") {
     test.info().outputPath(`inspector-${state.id}.png`),
     Buffer.from(capture, "base64"),
   );
-  await execute("xdotool", ["key", "--clearmodifiers", shortcut]);
+  // Xvfb has no window manager. Invoke the inspector frontend's own native Close
+  // action; entry and exact target selection are exercised through actual keys/menu.
+  await app.app!.evaluate(
+    ({ webContents }, id) =>
+      webContents
+        .fromId(id!)!
+        .executeJavaScript(
+          "setTimeout(() => InspectorFrontendHost.closeWindow(), 0); true",
+        ),
+    state.tools,
+  );
   await expect.poll(() => owner(url).then((s) => s.open)).toBe(false);
 }
 async function page(name: string) {
@@ -126,7 +120,7 @@ async function command() {
     .click();
 }
 
-test("F12 and the platform alias toggle Cod's inspector, including from its own window, without changing draft or restart state", async () => {
+test("F12 and the platform alias toggle Cod's inspector, with native inspector close, without changing draft or restart state", async () => {
   await app.newChat(workspace, "codex");
   const input = app.page.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("Preserve my inspector draft");
@@ -136,6 +130,12 @@ test("F12 and the platform alias toggle Cod's inspector, including from its own 
   await expect.poll(() => owner().then((s) => s.open)).toBe(true);
   await closeInspector();
   await expect(input).toHaveValue("Preserve my inspector draft");
+  await input.focus();
+  await input.press("F12");
+  await expect.poll(() => owner().then((s) => s.open)).toBe(true);
+  await input.focus();
+  await input.press("F12");
+  await expect.poll(() => owner().then((s) => s.open)).toBe(false);
   await input.focus();
   await app.page.keyboard.press(
     process.platform === "darwin" ? `${modifier}+Alt+i` : `${modifier}+Shift+i`,
@@ -360,7 +360,7 @@ test("Keymap remapping, live reset and restart preserve exact inspector authorit
   await expect
     .poll(() => owner(remappedPage.url).then((s) => s.open))
     .toBe(true);
-  await closeInspector(remappedPage.url, "alt+F12");
+  await closeInspector(remappedPage.url);
   await app.stop();
   await app.start();
   await nativeKey(app.page.url(), "F12", ["alt"]);
