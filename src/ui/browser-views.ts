@@ -196,6 +196,12 @@ export function createBrowserViews(
         void invoke("browser.navigate", { id: record.id, url }).catch(() => {});
       },
       scheduleBrowserLayout,
+      () => {
+        const url = getState().browsers.find(
+          (item) => item.id === record.id,
+        )?.url;
+        return url === "about:blank" ? "" : (url ?? "");
+      },
     );
     const blocking = paneButton("Ad blocking", async () => {
       const dialog = document.createElement("dialog");
