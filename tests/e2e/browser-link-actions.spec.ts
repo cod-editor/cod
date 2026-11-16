@@ -171,6 +171,8 @@ async function chooseNative(label: string) {
   expect(enabled).toContain(label);
   await execute("xdotool", [
     "key",
+    "--delay",
+    "80",
     "--clearmodifiers",
     "Home",
     ...Array(enabled.indexOf(label)).fill("Down"),

@@ -411,6 +411,40 @@ export class BrowserApplicationService {
     const owner = this.store.data.workspaces.find(
       (item) => item.id === current?.workspaceId,
     );
+    if (current && !current.visible) {
+      // Chromium can focus a newly created hidden WebContents during navigation.
+      // Wait until that native focus dispatch finishes, then restore the selected
+      // surface only while the hidden contents still owns focus.
+      setImmediate(() => {
+        if (
+          contents.isDestroyed() ||
+          !contents.isFocused() ||
+          this.store.closing
+        )
+          return;
+        const hidden = this.store.data.browsers.find((b) => b.id === id);
+        const active = this.store.data.workspaces.find(
+          (w) => w.id === this.store.data.activeWorkspaceId,
+        );
+        if (!hidden || hidden.visible || active?.activePaneId === hidden.paneId)
+          return;
+        const selected = this.store.data.browsers.find(
+          (b) =>
+            b.workspaceId === active?.id && b.paneId === active?.activePaneId,
+        );
+        try {
+          const target = selected?.visible
+            ? selected.agentPage
+              ? this.agentPages?.getWebContents(selected.id)
+              : this.browserService?.getWebContents(selected.id)
+            : this.browserWindow?.webContents;
+          if (target && !target.isDestroyed()) target.focus();
+        } catch {
+          /* The selected native page closed during delivery. */
+        }
+      });
+      return;
+    }
     if (
       !current ||
       !current.visible ||
