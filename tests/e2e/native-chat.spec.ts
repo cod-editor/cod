@@ -1896,3 +1896,231 @@ test("A fragmented large composer request preserves its text and image through r
     shell.pane(chat.paneId).locator(".composer-images img"),
   ).toHaveCount(1);
 });
+
+for (const provider of ["codex", "kimi"] as const)
+  test(`Native handoff ${provider}: pending review and form guards preserve the controller and unsent message`, async ({}, info) => {
+    const workspace = await shell.create("Handoff feedback fixture");
+    await shell.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      shell.folders[0],
+    );
+    const reviewChat = await shell.newChat(workspace, provider);
+    await shell.cli(
+      "review",
+      "open-document",
+      "--workspace",
+      workspace,
+      "--path",
+      shell.file,
+      "--conversation",
+      reviewChat.id,
+    );
+    async function handoffAction(id: string) {
+      await removalMenu(id);
+      return shell.page
+        .getByRole("dialog", { name: "Actions", exact: true })
+        .getByRole("button", { name: "Continue in CLI", exact: true });
+    }
+    const beforeReview = await shell.cli<AppState>("state");
+    let action = await handoffAction(reviewChat.id);
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAttribute("title", /pending review/);
+    await shell.page.keyboard.press("Escape");
+    const reviewResult = await shell.raw(
+      "conversation",
+      "handoff",
+      "--id",
+      reviewChat.id,
+    );
+    expect(reviewResult.code).not.toBe(0);
+    expect(reviewResult.stderr).toContain("pending review");
+    expect((await shell.cli<AppState>("state")).reviews).toEqual(
+      beforeReview.reviews,
+    );
+    expect((await shell.inspect(reviewChat.id)).nativeId).toBe(
+      reviewChat.nativeId,
+    );
+    expect(await status(reviewChat.id)).toBe("ready");
+
+    const chat = await shell.newChat(workspace, provider);
+    const unsent = "Keep my next message while handing off";
+    await shell.cli(
+      "conversation",
+      "composer",
+      "--workspace",
+      workspace,
+      "--pane-id",
+      chat.paneId,
+      "--text",
+      unsent,
+    );
+    const file = path.join(shell.folders[0], "handoff-form.html");
+    await writeFile(
+      file,
+      '<!doctype html><title>Invented handoff form</title><form><input name="answer"><button>Submit</button></form>',
+    );
+    const page = await shell.cli<{ id: string }>(
+      "page",
+      "open",
+      "--workspace",
+      workspace,
+      "--conversation",
+      chat.id,
+      "--path",
+      file,
+    );
+    action = await handoffAction(chat.id);
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAttribute("title", /interactive page/);
+    await shell.page.screenshot({
+      path: info.outputPath("guarded-handoff.png"),
+    });
+    await shell.page.keyboard.press("Escape");
+    const formResult = await shell.raw(
+      "conversation",
+      "handoff",
+      "--id",
+      chat.id,
+    );
+    expect(formResult.code).not.toBe(0);
+    expect(formResult.stderr).toContain("interactive page");
+    let state = await shell.cli<AppState>("state");
+    expect(state.terminals).toHaveLength(0);
+    expect(
+      state.conversations.find((c) => c.id === chat.id)?.handoffTerminalId,
+    ).toBeUndefined();
+    expect(state.browsers.some((b) => b.id === page.id)).toBe(true);
+    expect(
+      state.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[
+        chat.paneId
+      ]?.text,
+    ).toBe(unsent);
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    expect(await status(chat.id)).toBe("ready");
+    expect(await shell.prompts()).toHaveLength(0);
+    await shell.cli("browser", "close", "--id", page.id);
+    action = await handoffAction(chat.id);
+    await expect(action).toBeEnabled();
+    await tabTo(shell.page, action);
+    await shell.page.keyboard.press("Enter");
+    await expect
+      .poll(
+        async () =>
+          ((await shell.inspect(chat.id)) as unknown as ConversationState)
+            .handoffTerminalId,
+      )
+      .toBeTruthy();
+    const handed = await shell.cli<AppState>("state");
+    const terminalId = handed.conversations.find(
+      (c) => c.id === chat.id,
+    )!.handoffTerminalId!;
+    expect(handed.terminals.find((t) => t.id === terminalId)?.cwd).toBe(
+      shell.folders[0],
+    );
+    await shell.cli("terminal", "close", "--id", terminalId);
+    await shell.cli("conversation", "reclaim", "--id", chat.id);
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue(unsent);
+    expect(await shell.prompts()).toHaveLength(0);
+    await shell.stop();
+    await shell.start();
+    await shell.cli("conversation", "show", "--id", chat.id);
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue(unsent);
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    expect(await shell.prompts()).toHaveLength(0);
+  });
+
+test("Native handoff waits for an already accepted review mutation before checking its guard", async () => {
+  const workspace = await shell.create("Ordered handoff fixture");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    shell.folders[0],
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.app!.evaluate(({ ipcMain }, file) => {
+    const fs = process.getBuiltinModule("fs/promises") as any;
+    const open = fs.open;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (globalThis as any).reviewReadHeld = false;
+    (globalThis as any).handoffEntered = false;
+    fs.open = async (...args: any[]) => {
+      if (args[0] === file && !(globalThis as any).reviewReadHeld) {
+        (globalThis as any).reviewReadHeld = true;
+        await gate;
+      }
+      return open.apply(fs, args);
+    };
+    const handler = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", (event, request) => {
+      if (request.op === "conversation.handoff")
+        (globalThis as any).handoffEntered = true;
+      return handler(event, request);
+    });
+    (globalThis as any).releaseReviewRead = () => {
+      fs.open = open;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", handler);
+      release();
+    };
+  }, shell.file);
+  await shell.page.evaluate(
+    ({ workspace, id, file }) => {
+      (window as any).orderedReview = window.cod.invoke({
+        op: "review.open-document",
+        workspace,
+        conversation: id,
+        path: file,
+      });
+    },
+    { workspace, id: chat.id, file: shell.file },
+  );
+  await expect
+    .poll(() => shell.app!.evaluate(() => (globalThis as any).reviewReadHeld))
+    .toBe(true);
+  await shell.page.evaluate((id) => {
+    (window as any).orderedHandoff = window.cod
+      .invoke({ op: "conversation.handoff", id })
+      .then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, error: String(error) }),
+      );
+  }, chat.id);
+  await expect
+    .poll(() => shell.app!.evaluate(() => (globalThis as any).handoffEntered))
+    .toBe(true);
+  await shell.app!.evaluate(() => (globalThis as any).releaseReviewRead());
+  await shell.page.evaluate(() => (window as any).orderedReview);
+  const result = await shell.page.evaluate(
+    () => (window as any).orderedHandoff,
+  );
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("pending review");
+  const state = await shell.cli<AppState>("state");
+  expect(state.terminals).toHaveLength(0);
+  expect(
+    state.reviews?.some((review) => review.originConversationId === chat.id),
+  ).toBe(true);
+  expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+  expect(await status(chat.id)).toBe("ready");
+  expect(await shell.prompts()).toHaveLength(0);
+});

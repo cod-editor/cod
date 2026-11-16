@@ -3,7 +3,10 @@ import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
 import { browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
-import { conversationRemovalReason } from "../conversation-actions";
+import {
+  conversationRemovalReason,
+  conversationHandoffReason,
+} from "../conversation-actions";
 import { createFocusTargets } from "./focus-targets";
 import {
   commands as commandDefinitions,
@@ -191,12 +194,7 @@ export function createCommands(
         remove,
       ];
     }
-    const handoffReason = conversation.queuedMessages?.length
-      ? "Send or cancel queued messages first"
-      : ["working", "waiting", "starting"].includes(conversation.status) ||
-          conversation.pendingPermissions.length
-        ? "Finish or interrupt the active response first"
-        : undefined;
+    const handoffReason = conversationHandoffReason(getState(), conversation);
     return [
       rename,
       {
