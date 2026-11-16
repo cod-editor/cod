@@ -157,11 +157,29 @@ export class WorkspaceApp {
   }
 
   async cleanup() {
-    await this.stop();
-    await new Promise<void>((resolve) =>
-      this.filterServer ? this.filterServer.close(() => resolve()) : resolve(),
-    );
-    await rm(this.temporary, { recursive: true, force: true });
+    let phase = "Electron exit";
+    const started = Date.now();
+    // A hook timeout alone cannot identify which owned resource is still open.
+    // Report only the stage and elapsed time, never fixture paths or page data.
+    const stalled = setInterval(() => {
+      console.error(
+        `Fixture cleanup waiting for ${phase} (${Date.now() - started} ms)`,
+      );
+    }, 5000);
+    stalled.unref();
+    try {
+      await this.stop();
+      phase = "filter server close";
+      await new Promise<void>((resolve) =>
+        this.filterServer
+          ? this.filterServer.close(() => resolve())
+          : resolve(),
+      );
+      phase = "temporary file removal";
+      await rm(this.temporary, { recursive: true, force: true });
+    } finally {
+      clearInterval(stalled);
+    }
   }
 
   async raw(...args: string[]): Promise<CliResult> {
