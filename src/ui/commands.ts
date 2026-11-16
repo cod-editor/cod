@@ -1,3 +1,4 @@
+import { focusedWebLink, webLink, webLinkMenu } from "./web-links";
 import { browserBookmarks } from "./browser-bookmarks";
 import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
@@ -36,6 +37,7 @@ import type { Invoke, WhenRendered } from "./contracts";
 import type { createFocusManager } from "./focus";
 type ConversationAction = Exclude<MenuAction, null> & { command?: CommandId };
 interface CommandContext {
+  linkUrl?: string;
   devtoolsBrowserId?: string;
   workspaceId?: string;
   paneId?: string;
@@ -86,6 +88,33 @@ export function createCommands(
   );
   const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const events = new AbortController();
+  document.addEventListener(
+    "contextmenu",
+    (event) => {
+      const editor = (event.target as Element).closest<HTMLTextAreaElement>(
+        "textarea.file-editor",
+      );
+      if (!editor) return;
+      const url = focusedWebLink(editor);
+      const paneId =
+        editor.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+      const owner = getState().workspaces.find((w) =>
+        w.panes.some((p) => p.id === paneId),
+      );
+      if (
+        url &&
+        owner &&
+        webLinkMenu(
+          { x: event.clientX, y: event.clientY },
+          url,
+          owner.id,
+          invoke,
+        )
+      )
+        event.preventDefault();
+    },
+    { signal: events.signal },
+  );
   let refreshPalette: (() => void) | undefined;
   const listen = (
     type: "keydown",
@@ -591,7 +620,19 @@ export function createCommands(
     conversation: ConversationState | null = conversationTarget(
       pane ?? undefined,
     ) ?? null,
+    linkUrl = focusedWebLink(document.activeElement),
   ): string | undefined {
+    if (id === "link.open")
+      return linkUrl && w ? undefined : "Place the caret on a web link first";
+    if (id === "browser.openExternal") {
+      const current =
+        pane?.kind === "browser"
+          ? getState().browsers.find((item) => item.id === pane.browserId)
+          : undefined;
+      return linkUrl || webLink(current?.url ?? "")
+        ? undefined
+        : "Select a web link or browser page first";
+    }
     const group = w?.groups?.find((g) =>
       g.paneIds.includes(pane?.id ?? w.activePaneId),
     );
@@ -729,7 +770,16 @@ export function createCommands(
     const group = w?.groups?.find((g) =>
       g.paneIds.includes(pane?.id ?? w.activePaneId),
     );
-    const reason = disabledReason(id, w ?? null, pane ?? null, conversation);
+    const linkUrl =
+      context?.linkUrl ??
+      (browserId ? undefined : focusedWebLink(document.activeElement));
+    const reason = disabledReason(
+      id,
+      w ?? null,
+      pane ?? null,
+      conversation,
+      linkUrl,
+    );
     if (reason) {
       setStatus(reason);
       return;
@@ -751,6 +801,19 @@ export function createCommands(
         return;
       }
       switch (id) {
+        case "link.open":
+          await invoke("browser.open", { workspace: w!.id, url: linkUrl! });
+          break;
+        case "browser.openExternal": {
+          const current =
+            pane?.kind === "browser"
+              ? getState().browsers.find((item) => item.id === pane.browserId)
+              : undefined;
+          await invoke("browser.open-external", {
+            url: linkUrl ?? current?.url,
+          });
+          break;
+        }
         case "devtools.toggle":
           await window.cod.toggleDevTools(
             browserId ?? context?.devtoolsBrowserId,
@@ -1118,6 +1181,9 @@ export function createCommands(
     const workspace = workspaceTarget();
     const conversation = conversationTarget();
     const context: CommandContext = {
+      linkUrl: returnFocus.browserId
+        ? undefined
+        : focusedWebLink(returnFocus.element ?? document.activeElement),
       devtoolsBrowserId: returnFocus.browserId,
       workspaceId: workspace?.id,
       paneId:
@@ -1186,6 +1252,7 @@ export function createCommands(
           workspace ?? null,
           pane ?? null,
           conversation,
+          context.linkUrl,
         );
         if (button.disabled === !!reason && button.title === (reason ?? ""))
           continue;

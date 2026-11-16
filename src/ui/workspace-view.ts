@@ -1,3 +1,4 @@
+import { webLinkMenu } from "./web-links";
 import { localFileAddress } from "../browser/address";
 import { actionButton as paneButton } from "./action-feedback";
 import { reviewPane, updateReview } from "../review-pane";
@@ -313,7 +314,9 @@ export function createWorkspaceView(
     "message",
     (event) => {
       if (
-        event.data?.type !== "cod-preview-link" ||
+        !["cod-preview-link", "cod-preview-link-menu"].includes(
+          event.data?.type,
+        ) ||
         typeof event.data.href !== "string"
       )
         return;
@@ -323,6 +326,26 @@ export function createWorkspaceView(
           const frame = resourcePanes.get(pane.id)?.querySelector("iframe");
           if (frame?.contentWindow !== event.source) continue;
           const href = event.data.href;
+          if (event.data.type === "cod-preview-link-menu") {
+            const rect = frame.getBoundingClientRect();
+            const x = Number.isFinite(event.data.x) ? event.data.x : 0;
+            const y = Number.isFinite(event.data.y) ? event.data.y : 0;
+            webLinkMenu(
+              { x: rect.x + x, y: rect.y + y },
+              href,
+              workspace.id,
+              invoke,
+              () => {
+                if (!frame.isConnected) return;
+                frame.focus();
+                frame.contentWindow?.postMessage(
+                  { type: "cod-preview-link-restore" },
+                  "*",
+                );
+              },
+            );
+            return;
+          }
           if (/^https?:\/\//.test(href))
             void invoke("browser.open", {
               workspace: workspace.id,

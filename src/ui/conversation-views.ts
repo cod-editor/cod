@@ -1,3 +1,4 @@
+import { webLinkMenu } from "./web-links";
 import { actionRow, uiButton } from "./primitives";
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
@@ -343,6 +344,20 @@ export function createConversationViews({
         occurrence++,
         reference,
       ]);
+      element.oncontextmenu = (event) => {
+        const owner =
+          getState().conversations.find((item) => item.id === conversationId)
+            ?.workspaceId ?? workspace;
+        if (
+          webLinkMenu(
+            { x: event.clientX, y: event.clientY },
+            reference,
+            owner,
+            invoke,
+          )
+        )
+          event.preventDefault();
+      };
       element.onclick = (event) => {
         event.preventDefault();
         const owner =

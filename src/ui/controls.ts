@@ -68,6 +68,7 @@ export type MenuAction = {
 export function menu(
   anchor: HTMLElement | { x: number; y: number },
   items: MenuAction[],
+  options: { restoreFocus?: () => void } = {},
 ): void {
   document.querySelector(".context-menu")?.remove();
   const previous = document.activeElement as HTMLElement | null;
@@ -131,8 +132,10 @@ export function menu(
     dialog.remove();
     // A native close event may arrive after a newer click or focus command.
     // Restore abandoned menu focus without taking it from the new target.
-    if (!performed && previous?.isConnected && restoreFocus)
-      previous.focus({ preventScroll: true });
+    if (!performed && restoreFocus) {
+      if (options.restoreFocus) options.restoreFocus();
+      else if (previous?.isConnected) previous.focus({ preventScroll: true });
+    }
   };
   dialog.onkeydown = (event) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;

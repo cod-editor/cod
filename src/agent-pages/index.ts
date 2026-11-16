@@ -50,6 +50,8 @@ export interface BoundSubmission {
   payload: unknown;
 }
 interface Options {
+  openLink?: (id: string, url: string) => Promise<unknown>;
+  openExternal?: (url: string) => Promise<unknown>;
   window: BrowserWindow;
   session: Session;
   preloadPath: string;
@@ -372,7 +374,12 @@ export class AgentPageService {
     contents.once("destroyed", () => this.owners.delete(contentsId));
     this.options.window.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
-    installPageContextMenu(contents, this.options.window);
+    installPageContextMenu(contents, this.options.window, {
+      openLink: this.options.openLink
+        ? (url) => this.options.openLink!(input.id, url)
+        : undefined,
+      openExternal: this.options.openExternal,
+    });
     contents.setWindowOpenHandler(({ url }) => {
       const target = new URL(url);
       if (target.protocol === SCHEME + ":" && target.host === host)
