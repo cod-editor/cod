@@ -197,6 +197,7 @@ test("Overview uses one compact selection surface with first-line controls at no
         .querySelector(".overview-actions")!
         .getBoundingClientRect();
       return {
+        rowHeight: row.getBoundingClientRect().height,
         labelTop: label.top,
         iconTop: icon.top,
         actionsTop: actions.top,
@@ -205,6 +206,7 @@ test("Overview uses one compact selection surface with first-line controls at no
         overflow: row.scrollWidth > row.clientWidth,
       };
     });
+    if (!narrow) expect(geometry.rowHeight).toBeLessThanOrEqual(28);
     expect(Math.abs(geometry.iconTop - geometry.labelTop)).toBeLessThan(8);
     expect(Math.abs(geometry.actionsTop - geometry.labelTop)).toBeLessThan(8);
     expect(geometry.buttonBackground).toBe("rgba(0, 0, 0, 0)");

@@ -294,7 +294,12 @@ button:is(.selected, :focus-visible) .ui-button-description {
   margin-top: max(0px, calc((1em * var(--ui-line-height) - 16px) / 2));
 }
 .ui-picker-row > .icon-button {
-  margin-top: var(--space-1);
+  margin-top: max(
+    0px,
+    calc(
+      var(--space-1) + (1em * var(--ui-line-height) - var(--control-height)) / 2
+    )
+  );
 }
 
 .command-list .ui-picker-row > button:focus-visible {
