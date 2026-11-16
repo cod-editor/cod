@@ -487,7 +487,11 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
     process.platform === "darwin" ? "meta" : "control",
     "shift",
   ]);
-  await expect(shell.row("Browser layout")).toBeFocused();
+  const browserRow = shell.page.locator(
+    `[role=treeitem][data-browser-id="${browser.id}"]`,
+  );
+  await expect(browserRow).toBeFocused();
+  await expect(browserRow).toHaveAttribute("aria-selected", "true");
   await shell.command("Settings...");
   await expect
     .poll(async () => (await nativeView("/one"))?.visible)
