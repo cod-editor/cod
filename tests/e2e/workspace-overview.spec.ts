@@ -934,3 +934,97 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
   ).toBeLessThanOrEqual(baselineNodes + 5);
   expect((await app.prompts()).length).toBe(1);
 });
+
+test("A pending Overview rename cannot block or replace a newer search", async () => {
+  const first = await app.create("Invented Alpha rename");
+  const second = await app.create("Invented Beta search");
+  await app.app!.evaluate(({ ipcMain }, id) => {
+    const handlers = (ipcMain as any)._invokeHandlers;
+    const original = handlers.get("cod:invoke");
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      const result = await original(event, request);
+      if (request.op === "workspace.rename" && request.id === id) {
+        (globalThis as any).renameHeld = true;
+        await new Promise<void>((resolve) => {
+          (globalThis as any).releaseRename = resolve;
+        });
+      }
+      return result;
+    });
+  }, first);
+  await show();
+  await search().fill("Alpha");
+  await action("workspace", first, "Rename workspace");
+  await overview()
+    .getByRole("textbox", { name: "Workspace name" })
+    .fill("Invented unrelated title");
+  await search().fill("Beta");
+  await expect
+    .poll(() => app.app!.evaluate(() => (globalThis as any).renameHeld))
+    .toBe(true);
+  await expect(row("workspace", second)).toBeVisible();
+  await expect(row("workspace", first)).toHaveCount(0);
+  await app.app!.evaluate(() => (globalThis as any).releaseRename());
+  await expect(search()).toHaveValue("Beta");
+  await expect(search()).toBeFocused();
+  await expect(row("workspace", first)).toHaveCount(0);
+});
+
+test("Overview cancellation uses the current pane when its original pane was removed", async () => {
+  const workspace = await app.create("Invented removed origin");
+  const first = await app.newChat(workspace, "codex");
+  await app
+    .pane(first.paneId)
+    .getByRole("textbox", { name: "Message", exact: true })
+    .focus();
+  await show();
+  const second = await app.newChat(workspace, "codex");
+  await app.cli(
+    "pane",
+    "close",
+    "--id",
+    first.paneId,
+    "--workspace",
+    workspace,
+  );
+  await expect(row("conversation", second.id)).toBeVisible();
+  await search().press("Escape");
+  await expect(
+    app
+      .pane(second.paneId)
+      .getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeFocused();
+});
+
+test("Overview opens from a Markdown preview and returns to its focused link", async () => {
+  const workspace = await app.create("Invented preview origin");
+  const file = path.join(app.folders[0], "overview-preview.md");
+  await writeFile(
+    file,
+    "# Invented preview\n\n[Example](https://example.invalid/)\n",
+  );
+  await app.cli("file", "open", "--workspace", workspace, "--path", file);
+  await app.page
+    .getByRole("button", { name: "Preview Markdown", exact: true })
+    .click();
+  const frame = app.page
+    .getByRole("region", { name: "Markdown preview", exact: true })
+    .locator("iframe")
+    .contentFrame();
+  const link = frame.getByRole("link", { name: "Example" });
+  await link.focus();
+  await app.app!.evaluate(({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents;
+    contents.focus();
+    const modifiers: ("meta" | "control" | "shift")[] = [
+      process.platform === "darwin" ? "meta" : "control",
+      "shift",
+    ];
+    contents.sendInputEvent({ type: "keyDown", keyCode: "O", modifiers });
+    contents.sendInputEvent({ type: "keyUp", keyCode: "O", modifiers });
+  });
+  await expect(search()).toBeFocused();
+  await search().press("Escape");
+  await expect(link).toBeFocused();
+});

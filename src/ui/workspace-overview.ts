@@ -24,6 +24,7 @@ export function createWorkspaceOverview(
   destinations: {
     newConversation: (workspace: string) => Promise<void>;
     openPane: (workspace: string, pane: string) => Promise<void>;
+    fallback: () => Promise<void>;
   },
 ) {
   let current:
@@ -72,6 +73,7 @@ export function createWorkspaceOverview(
         collapsed.add(item.key);
     let selectedKey = active?.key;
     let retainedKey: string | undefined;
+    let queryVersion = 0;
     let visible: NavigationItem[] = [];
     let signature = "";
     const rowCache = new Map<string, { signature: string; row: HTMLElement }>();
@@ -121,6 +123,9 @@ export function createWorkspaceOverview(
         document.body.append(dialog);
         current = { dialog, refresh, cancel };
         dialog.showModal();
+        document
+          .querySelector("#workspace-selector")
+          ?.setAttribute("aria-expanded", "true");
         showActionError(error, dialog);
         input.focus();
         refresh();
@@ -141,6 +146,7 @@ export function createWorkspaceOverview(
         endEdit(restore);
         return;
       }
+      const version = queryVersion;
       pending.saving = true;
       dialog.querySelector(".action-error")?.remove();
       dialog.querySelector(".overview-name")?.removeAttribute("aria-invalid");
@@ -152,7 +158,7 @@ export function createWorkspaceOverview(
           { id: item.id, name },
         );
         if (edit === pending) {
-          retainedKey = pending.key;
+          if (version === queryVersion) retainedKey = pending.key;
           endEdit(restore);
         }
       } catch (error) {
@@ -221,7 +227,10 @@ export function createWorkspaceOverview(
     function refresh() {
       if (!dialog.open) return;
       items = navigation.items();
-      if (edit && list.querySelector(".overview-name")) {
+      if (
+        edit &&
+        list.querySelector(".overview-name") === document.activeElement
+      ) {
         if (items.some((item) => item.key === edit?.key)) {
           for (const row of list.querySelectorAll<HTMLElement>(
             ".overview-row",
@@ -391,6 +400,7 @@ export function createWorkspaceOverview(
       empty.hidden = !!visible.length;
     }
     input.addEventListener("input", () => {
+      queryVersion++;
       retainedKey = undefined;
       const searching = !!input.value.trim();
       if (searching && !wasSearching) unfilteredScroll = list.scrollTop;
@@ -431,40 +441,20 @@ export function createWorkspaceOverview(
       }
     });
     function restoreOrigin() {
-      if (
-        origin.browserId &&
-        !getState().browsers.some((browser) => browser.id === origin.browserId)
-      ) {
-        const workspace = getState().workspaces.find(
-          (w) => w.id === getState().activeWorkspaceId,
-        );
-        const pane = workspace?.panes.find(
-          (p) => p.id === workspace.activePaneId,
-        );
-        if (
-          pane?.kind === "browser" &&
-          !getState().browsers.find((browser) => browser.id === pane.browserId)
-            ?.error
-        ) {
-          focus.restore({ browserId: pane.browserId });
-          return;
-        }
-        const host =
-          pane &&
-          document.querySelector<HTMLElement>(`[data-pane-id="${pane.id}"]`);
-        const control = host?.querySelector<HTMLElement>(
-          '.composer textarea, .file-editor, .xterm-helper-textarea, .review-line[tabindex="0"], .review-markdown, input, button, [tabindex="0"]',
-        );
-        if (control) {
-          control.focus({ preventScroll: true });
-          return;
-        }
-        document.querySelector<HTMLElement>("#workspace-selector")?.focus();
-        return;
-      }
-      focus.restore(origin);
-      if (!origin.browserId && document.activeElement === document.body)
-        document.querySelector<HTMLElement>("#workspace-selector")?.focus();
+      const workspace = getState().workspaces.find(
+        (w) => w.id === getState().activeWorkspaceId,
+      );
+      const pane = workspace?.panes.find(
+        (p) => p.id === workspace.activePaneId,
+      );
+      const valid = origin.browserId
+        ? pane?.kind === "browser" &&
+          pane.browserId === origin.browserId &&
+          !getState().browsers.find((b) => b.id === origin.browserId)?.error
+        : !origin.paneId || pane?.id === origin.paneId;
+      if (valid && focus.restore(origin)) return;
+      document.querySelector<HTMLElement>("#workspace-selector")?.focus();
+      void destinations.fallback();
     }
     function cancel() {
       if (!dialog.open) return;

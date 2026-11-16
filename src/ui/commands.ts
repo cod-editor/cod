@@ -109,6 +109,30 @@ export function createCommands(
       if (pane) await keys.focusPane(pane, intent);
     },
     {
+      fallback: async () => {
+        const intent = keys.beginFocus();
+        const pane = activeWorkspace()?.panes.find(
+          (p) => p.id === activeWorkspace()?.activePaneId,
+        );
+        if (
+          pane &&
+          (await features.whenRendered(
+            () =>
+              document.querySelector(`[data-pane-id="${pane.id}"]`)
+                ? true
+                : undefined,
+            intent.signal,
+          ))
+        ) {
+          if (
+            intent.signal.aborted ||
+            activeWorkspace()?.activePaneId !== pane.id ||
+            document.querySelector("dialog[open]")
+          )
+            return;
+          await keys.content(pane, intent);
+        }
+      },
       newConversation: async (workspace) => {
         const intent = keys.beginFocus();
         const result = await invoke<{ paneId: string }>("conversation.draft", {

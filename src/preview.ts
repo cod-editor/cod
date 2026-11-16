@@ -1,6 +1,17 @@
 import { renderMarkdown } from "./markdown-view";
 let revision = 0;
 let linkReturn: { element: HTMLElement; range?: Range } | undefined;
+function rememberFocus() {
+  const selection = window.getSelection();
+  linkReturn = {
+    element: document.activeElement as HTMLElement,
+    range: selection?.rangeCount
+      ? selection.getRangeAt(0).cloneRange()
+      : undefined,
+  };
+}
+// The parent can return focus after a modal without discarding the inner target.
+window.addEventListener("blur", rememberFocus);
 window.addEventListener("message", (event) => {
   if (
     event.source === parent &&
@@ -8,9 +19,10 @@ window.addEventListener("message", (event) => {
   ) {
     const origin = linkReturn;
     linkReturn = undefined;
-    if (origin?.element.isConnected)
+    if (document.hasFocus() && origin?.element.isConnected)
       origin.element.focus({ preventScroll: true });
     if (
+      document.hasFocus() &&
       origin?.range?.startContainer.isConnected &&
       origin.range.endContainer.isConnected
     ) {
@@ -51,13 +63,7 @@ document.addEventListener("contextmenu", (event) => {
   const href = link?.getAttribute("href") ?? "";
   if (!/^https?:\/\//i.test(href)) return;
   event.preventDefault();
-  const selection = window.getSelection();
-  linkReturn = {
-    element: document.activeElement as HTMLElement,
-    range: selection?.rangeCount
-      ? selection.getRangeAt(0).cloneRange()
-      : undefined,
-  };
+  rememberFocus();
   parent.postMessage(
     { type: "cod-preview-link-menu", href, x: event.clientX, y: event.clientY },
     "*",
