@@ -33,6 +33,7 @@ import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 type ConversationAction = Exclude<MenuAction, null> & { command?: CommandId };
 interface CommandContext {
+  devtoolsBrowserId?: string;
   workspaceId?: string;
   paneId?: string;
   conversationId?: string;
@@ -597,6 +598,7 @@ export function createCommands(
     if (
       [
         "palette",
+        "devtools.toggle",
         "shortcuts",
         "shortcuts.openFile",
         "settings",
@@ -748,6 +750,11 @@ export function createCommands(
         return;
       }
       switch (id) {
+        case "devtools.toggle":
+          await window.cod.toggleDevTools(
+            browserId ?? context?.devtoolsBrowserId,
+          );
+          break;
         case "palette":
           commandPalette();
           break;
@@ -1098,6 +1105,7 @@ export function createCommands(
     const workspace = workspaceTarget();
     const conversation = conversationTarget();
     const context: CommandContext = {
+      devtoolsBrowserId: returnFocus.browserId,
       workspaceId: workspace?.id,
       paneId:
         getState().browsers.find((item) => item.id === focusedTreeId())

@@ -65,6 +65,18 @@ const entry = <T extends string>(
   overrideSurfaces?: readonly KeyboardSurface[],
 ) => ({ id, title, category, bindings, aliases, overrideSurfaces });
 export const commands = [
+  entry(
+    "devtools.toggle",
+    "Toggle Developer Tools",
+    "Developer",
+    [
+      key("F12"),
+      key("KeyI", { mod: true, alt: true, platform: "darwin" }),
+      key("KeyI", { mod: true, shift: true, platform: "linux" }),
+    ],
+    ["inspect", "console", "debugger"],
+    all,
+  ),
   entry("shortcuts.openFile", "Open keyboard shortcuts file", "Application"),
   entry(
     "palette",
@@ -576,7 +588,11 @@ function parseShortcut(
   const shiftedEscape = binding.shift && binding.code === "Escape";
   if (
     !binding.code ||
-    (!binding.mod && !binding.ctrl && !binding.alt && !shiftedEscape)
+    (!binding.mod &&
+      !binding.ctrl &&
+      !binding.alt &&
+      !shiftedEscape &&
+      !/^F(?:[1-9]|1[0-2])$/.test(binding.code))
   )
     throw new Error(`Invalid shortcut: ${shortcut}`);
   return binding;
