@@ -19,7 +19,8 @@ Before publishing an issue, comment, PR or attachment, inspect its exact content
 3. Verify observable behavior with appropriate tests. Use real Electron, Git and PTYs with invented fixture data; distinguish protocol fixtures from live compatibility.
 4. Format changes and inspect the diff for unintended edits, secrets and regressions.
 5. Publish coherent verified checkpoints periodically and merge their pull requests once required checks pass; this is standing user authorization. Never bypass failing required checks.
-6. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
+6. Before marking a delivered checkpoint done, perform the [workflow skill delivery cleanup](.agents/skills/cod-implement/SKILL.md#delivery-cleanup), preserving active owners, source changes and useful private evidence.
+7. Report the result and limitations concisely. Never claim an untested capability works. Commit coherent completed changes with imperative subjects and no AI attribution.
 
 ## Design
 
