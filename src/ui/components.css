@@ -224,6 +224,27 @@ dialog .setting-row.compact {
   gap: var(--space-2);
 }
 
+.ui-button-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-button-description {
+  display: block;
+  min-width: 0;
+  max-width: 50%;
+  color: var(--muted);
+  font-size: var(--font-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button:is(.selected, :focus-visible) .ui-button-description {
+  color: inherit;
+}
+
 /* Shared spacious picker variant; features arrange rows without resizing controls. */
 .search-picker.picker-wide {
   width: min(880px, calc(100vw - 40px));

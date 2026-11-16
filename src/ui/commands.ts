@@ -1,3 +1,9 @@
+import {
+  uiButton,
+  actionRow,
+  dialogSurface,
+  describeButton,
+} from "./primitives";
 import { createWorkspaceOverview } from "./workspace-overview";
 import type { createWorkspaceNavigation } from "./workspace-navigation";
 import { focusedWebLink, webLink, webLinkMenu } from "./web-links";
@@ -504,9 +510,9 @@ export function createCommands(
   function resumeConversationDialog(): void {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    const dialog = document.createElement("dialog");
+    const returnFocus = focus.capture();
+    const dialog = dialogSurface("Open existing session");
     dialog.className = "session-picker";
-    dialog.setAttribute("aria-label", "Open existing session");
     const heading = document.createElement("h2");
     heading.textContent = "Open existing session";
     const form = document.createElement("form");
@@ -517,95 +523,232 @@ export function createCommands(
     cwd.setAttribute("aria-label", "Working directory");
     cwd.placeholder = "Working directory";
     cwd.value = workspace.folders[0] ?? "";
-    const search = document.createElement("button");
+    const search = uiButton("Find sessions");
     search.type = "submit";
-    search.textContent = "Find sessions";
     form.append(provider, cwd, search);
+    const filter = document.createElement("input");
+    filter.setAttribute("aria-label", "Filter sessions");
+    filter.placeholder = "Search sessions...";
     const status = document.createElement("div");
     status.setAttribute("role", "status");
     const list = document.createElement("div");
     list.className = "command-list";
+    const selection = createSearchList(filter, list);
     const manual = document.createElement("details");
     const summary = document.createElement("summary");
     summary.textContent = "Open by session ID";
     const nativeId = document.createElement("input");
     nativeId.setAttribute("aria-label", "Native session ID");
     nativeId.placeholder = "Native session ID";
+    let generation = 0;
+    let loading = false;
+    let discoveryError = "";
+    let opening = false;
+    let performed = false;
     const resume = async (
       id: string,
       directory?: string,
       selectedProvider = provider.value,
     ) => {
+      if (opening || !dialog.isConnected || !dialog.open) return;
+      opening = true;
+      const intent = keys.beginFocus();
       status.textContent = "Opening session...";
       try {
-        await localInvoke("conversation.resume", {
-          workspace: workspace.id,
-          provider: selectedProvider,
-          nativeId: id,
-          ...(directory
-            ? { cwd: directory }
-            : cwd.value
-              ? { cwd: cwd.value }
-              : {}),
-        });
+        const result = await localInvoke<{ id: string; paneId: string }>(
+          "conversation.resume",
+          {
+            workspace: workspace.id,
+            provider: selectedProvider,
+            nativeId: id,
+            ...(directory
+              ? { cwd: directory }
+              : cwd.value
+                ? { cwd: cwd.value }
+                : {}),
+          },
+        );
+        if (!dialog.isConnected || !dialog.open) return;
+        performed = true;
         dialog.close();
+        // Native close can reset the old caret. Preserve it without focusing
+        // that pane again after the requested conversation was selected.
+        const invoker = returnFocus.element;
+        if (
+          (invoker instanceof HTMLTextAreaElement ||
+            invoker instanceof HTMLInputElement) &&
+          returnFocus.selectionStart !== undefined &&
+          returnFocus.selectionEnd !== undefined
+        ) {
+          invoker.setSelectionRange(
+            returnFocus.selectionStart,
+            returnFocus.selectionEnd,
+          );
+          invoker.scrollTop = returnFocus.scrollTop ?? 0;
+          invoker.scrollLeft = returnFocus.scrollLeft ?? 0;
+        }
+        const rendered = await features.whenRendered(() => {
+          const state = getState();
+          const conversation = state.conversations.find(
+            (item) => item.id === result.id,
+          );
+          if (!conversation) return undefined;
+          return state.activeWorkspaceId === conversation.workspaceId
+            ? true
+            : undefined;
+        }, intent.signal);
+        if (rendered) await keys.focusActiveContent(result.paneId, intent);
       } catch (error) {
-        status.textContent = String(error);
+        if (dialog.isConnected && dialog.open)
+          status.textContent = String(error);
+      } finally {
+        opening = false;
       }
     };
     const open = paneButton("Open session", async () => {
       if (nativeId.value.trim()) await resume(nativeId.value.trim());
     });
-    manual.append(summary, nativeId, open);
-    const cancel = paneButton("Cancel", async () => dialog.close());
-    dialog.append(heading, form, status, list, manual, cancel);
-    document.body.append(dialog);
-    dialog.onclose = () => dialog.remove();
-    let generation = 0;
-    provider.onchange = () => {
-      ++generation;
-      list.replaceChildren();
-      form.requestSubmit();
+    nativeId.onkeydown = (event) => {
+      if (
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.getModifierState("AltGraph")
+      )
+        return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (!event.repeat) open.click();
+      }
     };
+    manual.append(summary, nativeId, open);
+    const cancelPicker = () => {
+      dialog.close();
+      // Native dialog restoration focuses the invoker but resets its selection.
+      // Restore at cancellation, before a later close event can race new focus.
+      focus.restore(returnFocus);
+    };
+    const cancel = paneButton("Cancel", async () => cancelPicker());
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      cancelPicker();
+    });
+    dialog.append(
+      heading,
+      form,
+      filter,
+      status,
+      list,
+      manual,
+      actionRow(cancel),
+    );
+    document.body.append(dialog);
+    dialog.onclose = () => {
+      ++generation;
+      const restore =
+        dialog.contains(document.activeElement) ||
+        document.activeElement === document.body;
+      dialog.remove();
+      if (!performed && restore) focus.restore(returnFocus);
+    };
+    const filterRows = () => {
+      const terms = filter.value
+        .toLowerCase()
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      let matches = 0;
+      const rows = list.querySelectorAll<HTMLButtonElement>("button");
+      for (const button of rows) {
+        button.hidden = !terms.every((term) =>
+          button.dataset.search?.includes(term),
+        );
+        if (!button.hidden) ++matches;
+      }
+      selection.update();
+      status.textContent =
+        discoveryError ||
+        (loading
+          ? "Finding sessions..."
+          : matches
+            ? ""
+            : rows.length
+              ? "No matching sessions."
+              : "No sessions found in this directory.");
+      status.setAttribute("role", discoveryError ? "alert" : "status");
+    };
+    filter.oninput = filterRows;
+    provider.onchange = () => form.requestSubmit();
     form.onsubmit = (event) => {
       event.preventDefault();
       const current = ++generation;
+      const selectedProvider = provider.value;
+      loading = true;
+      discoveryError = "";
+      list.replaceChildren();
       search.disabled = true;
-      status.textContent = "Finding sessions...";
+      filterRows();
       void localInvoke<import("../providers/types").Conversation[]>(
         "conversation.discover",
         {
           workspace: workspace.id,
-          provider: provider.value,
+          provider: selectedProvider,
           ...(cwd.value ? { cwd: cwd.value } : {}),
         },
       )
         .then((sessions) => {
-          if (current !== generation) return;
-          list.replaceChildren();
-          status.textContent = sessions.length
-            ? ""
-            : "No sessions found in this directory.";
+          if (current !== generation || !dialog.isConnected || !dialog.open)
+            return;
+          loading = false;
+          const rows = document.createDocumentFragment();
           for (const session of sessions) {
             const metadata = session.metadata as Record<string, unknown> | null;
-            const label = String(
-              metadata?.name ??
-                metadata?.title ??
-                metadata?.preview ??
-                session.nativeId,
+            const label =
+              [metadata?.name, metadata?.title, metadata?.preview].find(
+                (value): value is string =>
+                  typeof value === "string" && !!value.trim(),
+              ) ?? session.nativeId;
+            const button = describeButton(
+              paneButton(label.slice(0, 500), () =>
+                resume(session.nativeId, session.cwd, session.provider),
+              ),
+              typeof metadata?.preview === "string" &&
+                metadata.preview !== label
+                ? metadata.preview.slice(0, 200)
+                : session.cwd,
             );
-            const button = paneButton(label, () =>
-              resume(session.nativeId, session.cwd, session.provider),
+            button.title = `${label.slice(0, 2000)}\n${session.nativeId}\n${session.cwd}`;
+            button.setAttribute(
+              "aria-description",
+              `${session.nativeId}\n${session.cwd}`,
             );
-            button.title = `${session.nativeId}\n${session.cwd}`;
-            list.append(button);
+            button.dataset.search = [
+              label,
+              metadata?.preview,
+              session.nativeId,
+              session.cwd,
+            ]
+              .filter((value) => typeof value === "string")
+              .join("\n")
+              .toLowerCase();
+            rows.append(button);
           }
+          list.replaceChildren(rows);
+          filterRows();
         })
-        .catch((error) => (status.textContent = String(error)))
-        .finally(() => (search.disabled = false));
+        .catch((error) => {
+          if (current !== generation || !dialog.isConnected || !dialog.open)
+            return;
+          loading = false;
+          discoveryError = String(error);
+          filterRows();
+        })
+        .finally(() => {
+          if (current === generation && dialog.isConnected && dialog.open)
+            search.disabled = false;
+        });
     };
     dialog.showModal();
-    provider.focus();
+    filter.focus();
     form.requestSubmit();
   }
 
@@ -1380,10 +1523,20 @@ export function createCommands(
     dialog.classList.add("picker", "command-palette", "search-picker");
     dialog.append(input, list);
     document.body.append(dialog);
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      dialog.close();
+      // Restore the invoker's caret now; the native close event may arrive
+      // after a newer focus command or another edit in that same control.
+      if (!performed) focus.restore(returnFocus);
+    });
     dialog.addEventListener("close", () => {
+      const restore =
+        dialog.contains(document.activeElement) ||
+        document.activeElement === document.body;
       dialog.remove();
       if (refreshPalette === refresh) refreshPalette = undefined;
-      if (!performed) focus.restore(returnFocus);
+      if (!performed && restore) focus.restore(returnFocus);
     });
     dialog.showModal();
     input.focus();

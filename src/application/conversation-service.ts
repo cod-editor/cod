@@ -290,18 +290,29 @@ export class ConversationApplicationService {
         ? request.cwd
         : (workspace.folders[0] ?? process.env.HOME ?? process.cwd()),
     );
-    if (!(await stat(cwd)).isDirectory())
-      throw new Error("Working directory is not a directory");
-    if (!this.store.data.workspaces.includes(workspace))
-      throw new Error("Workspace was closed");
     const nativeId = resume ? requiredString(request, "nativeId") : "";
-    if (
-      resume &&
-      this.store.data.conversations.some(
-        (item) => item.provider === provider && item.nativeId === nativeId,
-      )
-    ) {
-      throw new Error("That native conversation is already controlled by Cod");
+    const attached = () =>
+      resume
+        ? this.store.data.conversations.find(
+            (item) => item.provider === provider && item.nativeId === nativeId,
+          )
+        : undefined;
+    let existing = attached();
+    if (!existing) {
+      if (!(await stat(cwd)).isDirectory())
+        throw new Error("Working directory is not a directory");
+      if (!this.store.data.workspaces.includes(workspace))
+        throw new Error("Workspace was closed");
+      // Another request may have attached it while this directory was checked.
+      existing = attached();
+    }
+    if (existing) {
+      await this.views.show(existing.id);
+      return {
+        id: existing.id,
+        paneId: existing.paneId,
+        nativeId: existing.nativeId,
+      };
     }
     if (typeof request.paneId === "string") {
       const target = this.store.pane(workspace, request.paneId);
