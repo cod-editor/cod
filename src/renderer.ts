@@ -35,6 +35,8 @@ const workspaceName =
   document.querySelector<HTMLHeadingElement>("#workspace-name")!;
 const status = document.querySelector<HTMLElement>("#status")!;
 const focus = createFocusManager(panes, tree, (id) => browsers.focusNative(id));
+let renderedState: AppState | undefined;
+const renderWaiters = new Set<() => void>();
 let state: AppState = {
   workspaces: [],
   activeWorkspaceId: null,
@@ -63,6 +65,7 @@ const chats = createConversationViews({
   actionButton: paneButton,
 });
 const layout = createPaneLayout(() => state, invoke, {
+  whenRendered,
   renderPane: (workspace, pane) => workspaceView.pane(workspace, pane),
   saveFile: documents.save,
   conversationActions: (c) => commands.conversationActions(c),
@@ -88,6 +91,7 @@ const finder = createContentFind(
 );
 const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
   focus,
+  whenRendered,
   files: projects,
   layout,
   chat: chats,
@@ -127,6 +131,30 @@ const workspaceView = createWorkspaceView(
 function render() {
   workspaceView.render();
   finder.reconcile();
+  renderedState = state;
+  for (const complete of [...renderWaiters]) complete();
+}
+function whenRendered(
+  check: () => boolean | undefined,
+  signal: AbortSignal,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (ready: boolean) => {
+      renderWaiters.delete(complete);
+      signal.removeEventListener("abort", cancelled);
+      resolve(ready);
+    };
+    const cancelled = () => finish(false);
+    const complete = () => {
+      if (signal.aborted) return finish(false);
+      if (renderedState !== state) return;
+      const decision = check();
+      if (decision !== undefined) finish(decision);
+    };
+    renderWaiters.add(complete);
+    signal.addEventListener("abort", cancelled, { once: true });
+    complete();
+  });
 }
 
 function activeWorkspace(): WorkspaceState | undefined {
