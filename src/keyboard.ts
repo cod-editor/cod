@@ -62,7 +62,8 @@ const entry = <T extends string>(
   category: string,
   bindings: KeyBinding[] = [],
   aliases: readonly string[] = [],
-) => ({ id, title, category, bindings, aliases });
+  overrideSurfaces?: readonly KeyboardSurface[],
+) => ({ id, title, category, bindings, aliases, overrideSurfaces });
 export const commands = [
   entry("shortcuts.openFile", "Open keyboard shortcuts file", "Application"),
   entry(
@@ -114,8 +115,8 @@ export const commands = [
   entry("files.save", "Save file", "Files", [
     key("KeyS", { mod: true }, ["editor"]),
   ]),
-  entry("pane.toggleLeft", "Toggle material area", "Layout"),
-  entry("pane.toggleRight", "Toggle chat area", "Layout", [
+  entry("pane.toggleLeft", "Toggle left pane", "Layout", [], [], all),
+  entry("pane.toggleRight", "Toggle right pane", "Layout", [
     key("KeyJ", { mod: true, platform: "darwin" }),
     key("KeyJ", { mod: true, platform: "linux" }, [
       ...cod,
@@ -123,6 +124,8 @@ export const commands = [
       "agent-page",
     ]),
   ]),
+  entry("pane.focusLeft", "Focus left pane", "Navigation", [], [], all),
+  entry("pane.focusRight", "Focus right pane", "Navigation", [], [], all),
   entry("pane.zoom", "Maximize / restore pane", "Layout", [
     key("Enter", { mod: true, shift: true }, all),
   ]),
@@ -595,8 +598,10 @@ export function configureKeymap(
     const surfaces = [
       ...new Set(inherited.flatMap((binding) => binding.surfaces)),
     ];
-    // Palette-only commands stay within Cod; overrides cannot grant page authority.
-    const scope = surfaces.length ? surfaces : cod;
+    // Overrides use explicitly declared authority. Other palette-only commands
+    // remain within Cod instead of acquiring access to native surfaces.
+    const scope =
+      command.overrideSurfaces ?? (surfaces.length ? surfaces : cod);
     const bindings = (shortcuts ?? []).map((shortcut: string) => {
       const parsed = parseShortcut(shortcut, platform);
       const terminalConflict =

@@ -377,3 +377,64 @@ test("Enter sends only in the composer; Shift Enter and IME retain text editing"
       );
   }
 });
+
+test("Positional pane overrides retain declared native authority and terminal editing", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    try {
+      configureKeymap(
+        {
+          "pane.toggleLeft": ["Mod+E"],
+          "pane.toggleRight": ["Mod+J"],
+          "pane.focus1": [],
+          "pane.focus2": [],
+          "pane.focusLeft": ["Alt+1"],
+          "pane.focusRight": ["Alt+2"],
+        },
+        platform,
+      );
+      for (const surface of [
+        "shell",
+        "editor",
+        "composer",
+        "browser",
+        "agent-page",
+        "review",
+        "terminal",
+      ] as const) {
+        for (const [key, code, command] of [
+          ["e", "KeyE", "pane.toggleLeft"],
+          ["j", "KeyJ", "pane.toggleRight"],
+        ] as const) {
+          assert.equal(
+            resolveKeybinding(
+              input(key, {
+                code,
+                metaKey: platform === "darwin",
+                ctrlKey: platform === "linux",
+              }),
+              platform,
+              surface,
+            )?.command,
+            platform === "linux" && surface === "terminal"
+              ? undefined
+              : command,
+          );
+        }
+        for (const [digit, command] of [
+          ["1", "pane.focusLeft"],
+          ["2", "pane.focusRight"],
+        ] as const)
+          assert.equal(
+            resolveKeybinding(
+              input(digit, { code: `Digit${digit}`, altKey: true }),
+              platform,
+              surface,
+            )?.command,
+            command,
+          );
+      }
+    } finally {
+      configureKeymap({}, platform);
+    }
+  }
+});

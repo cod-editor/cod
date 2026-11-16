@@ -144,59 +144,8 @@ export function createFocusTargets(
       await keys.focusPane(pane.id);
     }
   }
-  function chatVisibilityReason() {
-    const w = workspace();
-    if (!w) return "Open a workspace first";
-    const pane = targetPane(w, "chat"),
-      group = w.groups?.find((g) => g.paneIds.includes(pane?.id ?? ""));
-    if (
-      group &&
-      !group.hidden &&
-      (!w.zoomedGroupId || w.zoomedGroupId === group.id) &&
-      (w.groups?.filter((g) => !g.hidden).length ?? 0) <= 1
-    )
-      return "At least one pane must remain open";
-  }
-  async function toggleChatArea(): Promise<void> {
-    const w = workspace();
-    if (!w) return;
-    const pane = targetPane(w, "chat");
-    if (!pane) {
-      await invoke("conversation.draft", { workspace: w.id });
-      return;
-    }
-    const group = w.groups?.find((g) => g.paneIds.includes(pane.id));
-    if (!group) return;
-    const visible =
-      !group.hidden && (!w.zoomedGroupId || w.zoomedGroupId === group.id);
-    if (visible) {
-      if (chatVisibilityReason()) return;
-      const inside =
-        document.activeElement?.closest<HTMLElement>("[data-group-id]")?.dataset
-          .groupId === group.id;
-      await invoke("group.visibility", {
-        workspace: w.id,
-        id: group.id,
-        hidden: true,
-      });
-      if (inside) {
-        const active = workspace();
-        if (active) await keys.focusPane(active.activePaneId);
-      }
-    } else {
-      await invoke("group.visibility", {
-        workspace: w.id,
-        id: group.id,
-        hidden: false,
-      });
-      if (w.zoomedGroupId)
-        await invoke("group.zoom", { workspace: w.id, id: w.zoomedGroupId });
-    }
-  }
   return {
     toggle,
-    toggleChatArea,
-    chatVisibilityReason,
     dispose: () => document.removeEventListener("focusin", remember),
   };
 }
