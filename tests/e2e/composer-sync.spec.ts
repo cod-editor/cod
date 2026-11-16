@@ -299,8 +299,13 @@ for (const queued of [false, true])
     ).toHaveValue("My follow-up message");
   });
 
-for (const fails of [false, true])
-  test(`Typing during ${fails ? "failed" : "pending"} admission keeps the next message and attachments`, async ({}, info) => {
+for (const { fails, addsImage } of [
+  { fails: false, addsImage: false },
+  { fails: true, addsImage: false },
+  { fails: false, addsImage: true },
+  { fails: true, addsImage: true },
+])
+  test(`Typing during ${fails ? "failed" : "pending"} admission keeps the next message and attachments${addsImage ? " added during admission" : ""}`, async ({}, info) => {
     const workspace = await shell.create("Admission fixture");
     const chat = await shell.newChat(workspace, "codex");
     const input = shell
@@ -344,16 +349,43 @@ for (const fails of [false, true])
       )
       .toBe(true);
     await input.fill("Follow-up evidence [Image 1]");
+    if (addsImage) {
+      await input.evaluate((node, data) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File(
+            [
+              Uint8Array.from(atob(data), (character) =>
+                character.charCodeAt(0),
+              ),
+            ],
+            "next-evidence.png",
+            { type: "image/png" },
+          ),
+        );
+        node.dispatchEvent(
+          new ClipboardEvent("paste", {
+            clipboardData: transfer,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }, pixel.data);
+      await expect(
+        shell.pane(chat.paneId).locator(".composer-images img"),
+      ).toHaveCount(2);
+    }
+    const followUp = `Follow-up evidence [Image 1]${addsImage ? "[Image 2]" : ""}`;
     await input.press("Home");
     await input.press("ArrowRight");
     await expect
       .poll(async () => (await draft(workspace, chat.paneId))?.text)
-      .toBe("Follow-up evidence [Image 1]");
+      .toBe(followUp);
     await shell.app!.evaluate(() => (globalThis as any).releaseAdmission());
     await expect
       .poll(async () => (await draft(workspace, chat.paneId))?.text)
-      .toBe("Follow-up evidence [Image 1]");
-    await expect(input).toHaveValue("Follow-up evidence [Image 1]");
+      .toBe(followUp);
+    await expect(input).toHaveValue(followUp);
     await expect(input).toBeFocused();
     expect(
       await input.evaluate(
@@ -367,7 +399,7 @@ for (const fails of [false, true])
     // success; a failed admission retains it with the new unsent text.
     await expect(
       shell.pane(chat.paneId).locator(".composer-images img"),
-    ).toHaveCount(fails ? 1 : 0);
+    ).toHaveCount((fails ? 1 : 0) + (addsImage ? 1 : 0));
     if (fails) {
       await expect(shell.pane(chat.paneId)).toContainText(
         "Invented admission failure",
@@ -383,13 +415,15 @@ for (const fails of [false, true])
       shell
         .pane(chat.paneId)
         .getByRole("textbox", { name: "Message", exact: true }),
-    ).toHaveValue("Follow-up evidence [Image 1]");
+    ).toHaveValue(followUp);
     await expect(
       shell.pane(chat.paneId).locator(".composer-images img"),
-    ).toHaveCount(fails ? 1 : 0);
+    ).toHaveCount((fails ? 1 : 0) + (addsImage ? 1 : 0));
   });
 
 test("Composer typing stays responsive with large history and an attachment", async ({}, info) => {
+  const backgroundWorkspace = await shell.create("Retained history fixture");
+  const background = await shell.newChat(backgroundWorkspace, "codex");
   const workspace = await shell.create("Responsive composer fixture");
   const chat = await shell.newChat(workspace, "codex");
   const image = {
@@ -421,7 +455,15 @@ test("Composer typing stays responsive with large history and an attachment", as
     text: "Invented history paragraph. ".repeat(100),
     order: index,
   }));
-  state.fixtureHistory = "Invented inert state. ".repeat(1200000);
+  // Apply pressure through a real retained conversation, not unknown fields
+  // that no supported profile can create and UI projection cannot classify.
+  const retained = state.conversations.find((c: any) => c.id === background.id);
+  retained.messages = Array.from({ length: 120 }, (_, index) => ({
+    id: `retained-message-${index}`,
+    role: index % 2 ? "assistant" : "user",
+    text: "Invented retained history. ".repeat(8400),
+    order: index,
+  }));
   await writeFile(stateFile, JSON.stringify(state));
   await shell.start();
   const input = shell
@@ -458,7 +500,6 @@ test("Composer typing stays responsive with large history and an attachment", as
     type: "input-to-frame-p95-ms",
     description: p95.toFixed(1),
   });
-  expect(p95).toBeLessThan(200);
   const performanceFile = info.outputPath("composer-performance.json");
   await writeFile(
     performanceFile,
@@ -472,6 +513,7 @@ test("Composer typing stays responsive with large history and an attachment", as
     path: performanceFile,
     contentType: "application/json",
   });
+  expect(p95).toBeLessThan(200);
   await expect
     .poll(async () => {
       const overlay = await readFile(

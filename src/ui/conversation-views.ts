@@ -231,7 +231,7 @@ export function createConversationViews({
       }
       await saves.get(pane.id)?.promise;
       if (composerConflicts.has(pane.id) || dirtyComposers.has(pane.id)) {
-        setStatus("Resolve or save the draft before sending.");
+        setStatus("Resolve or save this unsent message before sending.");
         return;
       }
       const text = input.value;
@@ -1171,7 +1171,7 @@ export function createConversationViews({
     await saves.get(id)?.promise;
     if (pendingSends.has(id)) return;
     if (composerConflicts.has(id) || dirtyComposers.has(id)) {
-      setStatus("Resolve or save the draft before sending.");
+      setStatus("Resolve or save this unsent message before sending.");
       return;
     }
     sendErrors.delete(id);
@@ -1208,14 +1208,14 @@ export function createConversationViews({
       skillDrafts.delete(id);
     }
     const remaining = attachmentDrafts.get(id) ?? [];
-    if (
-      remaining.length === images.length &&
-      remaining.every((image, i) => image === images[i])
-    ) {
-      attachmentDrafts.delete(id);
-      // Further typing may already have saved a newer text version containing
-      // the submitted images. Persist their removal from that unsent message.
-      if (images.length && composerDrafts.has(id)) await persistComposer(id);
+    const unsentImages = remaining.filter((image) => !images.includes(image));
+    if (unsentImages.length !== remaining.length) {
+      if (unsentImages.length) attachmentDrafts.set(id, unsentImages);
+      else attachmentDrafts.delete(id);
+      // Preserve attachments added during admission, removing only the ones
+      // already admitted with the submitted text from the next unsent message.
+      if (composerDrafts.has(id) || unsentImages.length)
+        await persistComposer(id);
     }
     // The backend retains the submitted version's empty transition. A delayed
     // snapshot must not reset our acknowledged version before the next save.
