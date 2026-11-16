@@ -1,3 +1,4 @@
+import { newTab } from "./ui/new-tab";
 import { updateLiveActivity } from "./ui/turn-activity";
 import { configureKeymap } from "./keyboard";
 import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
@@ -64,10 +65,6 @@ const chats = createConversationViews({
 const layout = createPaneLayout(() => state, invoke, {
   renderPane: (workspace, pane) => workspaceView.pane(workspace, pane),
   saveFile: documents.save,
-  newConversation: () => commands.newConversation(),
-  browserDialog: () => commands.browser(),
-  terminalDialog: () => commands.terminal(),
-  openFile: () => projects.quickOpen(),
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });
@@ -108,6 +105,15 @@ const workspaceView = createWorkspaceView(
   setStatus,
   () => commands.workspace("create"),
   {
+    newTab: (workspace, pane) =>
+      newTab({
+        file: () => projects.quickOpen({ workspace, paneId: pane.id }),
+        browser: () =>
+          commands.browser({ workspace: workspace.id, pane: pane.id }),
+        chat: () => commands.newConversation(workspace.id, pane.id),
+        terminal: () =>
+          commands.terminal({ workspace: workspace.id, pane: pane.id }),
+      }),
     chats,
     documents,
     browsers,

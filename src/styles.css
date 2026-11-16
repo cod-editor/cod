@@ -144,7 +144,8 @@ body {
 .tree-disclosure:hover {
   background: var(--control-hover);
 }
-.workspace-row.conversation-row {
+.workspace-row.conversation-row,
+.workspace-row.browser-row {
   padding-left: 28px;
 }
 .workspace-row.review-row {
@@ -1910,4 +1911,33 @@ browser-action-list::part(action):focus-visible {
 .image-preview-status {
   padding: var(--space-3);
   color: var(--muted);
+}
+
+.new-tab {
+  display: grid;
+  place-items: center;
+}
+.new-tab-choices {
+  display: grid;
+  gap: var(--space-2);
+  width: min(220px, 100%);
+  padding: var(--space-3);
+}
+.new-tab-choices button {
+  justify-content: flex-start;
+}
+.tab-bar {
+  position: relative;
+}
+.tab-insertion-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--focus);
+  pointer-events: none;
+  z-index: 1;
+}
+.tab[data-dragging] {
+  opacity: 0.5;
 }

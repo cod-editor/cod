@@ -420,8 +420,12 @@ export class FileTree {
             )
     ]?.focus();
   }
-  private async openFile(path: string, line?: number): Promise<void> {
-    const workspace = this.workspace;
+  private async openFile(
+    path: string,
+    line?: number,
+    target?: { workspace: WorkspaceState; paneId?: string },
+  ): Promise<void> {
+    const workspace = target?.workspace ?? this.workspace;
     if (!workspace) return;
     // Native dialog focus restoration is not a new user navigation intent.
     // A later real key/pointer action is, and must cancel deferred autofocus.
@@ -439,6 +443,7 @@ export class FileTree {
         workspace: workspace.id,
         path,
         ...(line ? { line } : {}),
+        ...(target?.paneId ? { replacePane: target.paneId } : {}),
       });
       requestAnimationFrame(() => {
         if (intent.signal.aborted) return;
@@ -468,11 +473,15 @@ export class FileTree {
   search(path?: string): void {
     this.openPicker(false, path);
   }
-  quickOpen(): void {
-    this.openPicker(true);
+  quickOpen(target?: { workspace: WorkspaceState; paneId: string }): void {
+    this.openPicker(true, undefined, target);
   }
-  private openPicker(files: boolean, path?: string): void {
-    const workspace = this.workspace;
+  private openPicker(
+    files: boolean,
+    path?: string,
+    target?: { workspace: WorkspaceState; paneId: string },
+  ): void {
+    const workspace = target?.workspace ?? this.workspace;
     if (!workspace) return;
     const dialog = document.createElement("dialog");
     dialog.className = "picker search-picker";
@@ -516,7 +525,13 @@ export class FileTree {
         button.title = match.path;
         button.onclick = () => {
           dialog.close();
-          void this.openFile(match.path, match.line);
+          // A failed open must report on a live surface, not this closing dialog.
+          dialog.remove();
+          void this.openFile(
+            match.path,
+            match.line,
+            target ?? { workspace },
+          ).catch(() => undefined);
         };
         results.append(button);
       }

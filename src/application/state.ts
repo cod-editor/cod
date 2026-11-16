@@ -6,6 +6,7 @@ import type {
   WorkspaceState,
   PaneState,
   ConversationState,
+  OperationRequest,
 } from "../types";
 import { normalizeGroups } from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
@@ -181,6 +182,25 @@ export class ApplicationStateStore {
     const workspace = this.data.workspaces.find((item) => item.id === id);
     if (!workspace) throw new Error(`Workspace not found: ${id}`);
     return workspace;
+  }
+  /** A delayed choice can only replace the blank tab the user selected. */
+  openingPane(workspace: WorkspaceState, request: OperationRequest): PaneState {
+    const id = request.replacePane;
+    if (id !== undefined && typeof id !== "string")
+      throw new Error("replacePane must be a pane ID");
+    const pane =
+      id === undefined
+        ? this.pane(workspace, workspace.activePaneId)
+        : workspace.panes.find((item) => item.id === id);
+    if (!pane)
+      throw new Error(
+        "The blank tab was closed. Open a new tab and choose again.",
+      );
+    if (id !== undefined && !(pane.kind === "empty" && pane.launcher))
+      throw new Error(
+        "The blank tab was changed. Open a new tab and choose again.",
+      );
+    return pane;
   }
   pane(workspace: WorkspaceState, id: string): PaneState {
     const pane = workspace.panes.find((item) => item.id === id);

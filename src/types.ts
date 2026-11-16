@@ -71,6 +71,7 @@ export interface BrowserRectangle {
 export interface EmptyPane {
   id: string;
   kind: "empty";
+  launcher?: boolean;
 }
 export type PaneState =
   | EmptyPane

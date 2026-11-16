@@ -13,6 +13,7 @@ import type { createWorkspaceNavigation } from "./workspace-navigation";
 import type { createFocusManager } from "./focus";
 import type { FileTree } from "./files";
 interface Views {
+  newTab: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   chats: ReturnType<typeof createConversationViews>;
   documents: ReturnType<typeof createDocumentViews>;
   browsers: ReturnType<typeof createBrowserViews>;
@@ -208,6 +209,10 @@ export function createWorkspaceView(
     if (pane.kind === "empty") {
       container.setAttribute("aria-label", "Empty pane");
       container.tabIndex = 0;
+      if (pane.launcher)
+        content =
+          (container.firstElementChild as HTMLElement) ??
+          views.newTab(workspace, pane);
     } else if (pane.kind === "conversation") {
       const conversation = getState().conversations.find(
         (c) => c.id === pane.conversationId,

@@ -694,9 +694,10 @@ export class BrowserApplicationService {
         requiredString(request, "workspace"),
       );
       const id = randomUUID(),
-        active = this.store.pane(workspace, workspace.activePaneId);
+        active = this.store.openingPane(workspace, request);
       const paneId =
-        active.kind === "document" && !active.filePath && !active.draftChat
+        (active.kind === "document" && !active.filePath && !active.draftChat) ||
+        (active.kind === "empty" && active.launcher)
           ? active.id
           : randomUUID();
       if (paneId === active.id)

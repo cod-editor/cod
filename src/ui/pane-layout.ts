@@ -1,3 +1,4 @@
+import { createTabDrag } from "./tab-drag";
 import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
@@ -13,10 +14,6 @@ import type { Invoke } from "./contracts";
 interface LayoutActions {
   renderPane: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   saveFile: (workspace: string, pane: string) => Promise<void>;
-  newConversation: () => Promise<unknown>;
-  browserDialog: () => void;
-  terminalDialog: () => void;
-  openFile: () => void;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   nativeLayout: () => void;
 }
@@ -56,17 +53,9 @@ export function createPaneLayout(
   invoke: Invoke,
   actions: LayoutActions,
 ) {
-  const {
-    renderPane,
-    saveFile,
-    newConversation,
-    browserDialog,
-    terminalDialog,
-    openFile,
-    conversationActions,
-    nativeLayout,
-  } = actions;
+  const { renderPane, saveFile, conversationActions, nativeLayout } = actions;
   const navigationWidths = createNavigationWidths(invoke);
+  const drag = createTabDrag(invoke);
   const activeWorkspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
   function groupFor(
@@ -421,7 +410,7 @@ export function createPaneLayout(
     }
     if (pane.kind === "preview")
       return pane.filePath.split("/").pop() || "Preview";
-    if (pane.kind === "empty") return "Empty pane";
+    if (pane.kind === "empty") return pane.launcher ? "New tab" : "Empty pane";
     return pane.filePath?.split("/").pop() || "New conversation";
   }
   const groupViews = new Map<string, HTMLElement>();
@@ -454,7 +443,7 @@ export function createPaneLayout(
     let tabIndex = 0;
     for (const id of group.paneIds) {
       const pane = workspace.panes.find((p) => p.id === id);
-      if (!pane || pane.kind === "empty") continue;
+      if (!pane || (pane.kind === "empty" && !pane.launcher)) continue;
       const tab = previousTabs.get(id) ?? document.createElement("div");
       previousTabs.delete(id);
       tab.className = "tab";
@@ -465,7 +454,11 @@ export function createPaneLayout(
       tab.dataset.tabId = id;
       tab.title = paneLabel(pane);
       const iconKind =
-        pane.kind === "document" && !pane.filePath ? "conversation" : pane.kind;
+        pane.kind === "document" && !pane.filePath
+          ? "conversation"
+          : pane.kind === "empty" && pane.launcher
+            ? "plus"
+            : pane.kind;
       if (tab.dataset.iconKind !== iconKind) {
         tab.querySelector(":scope > svg")?.remove();
         tab.prepend(icon(iconKind));
@@ -553,8 +546,8 @@ export function createPaneLayout(
         }
       };
       tab.draggable = true;
-      tab.ondragstart = (e) =>
-        e.dataTransfer?.setData("application/x-cod-tab", id);
+      tab.ondragstart = (e) => drag.start(e, tab, workspace.id, id);
+      tab.ondragend = drag.end;
       const actions: MenuAction[] = [
         {
           label: "Close tab",
@@ -658,62 +651,24 @@ export function createPaneLayout(
       tabIndex++;
     }
     for (const tab of previousTabs.values()) tab.remove();
-    bar.ondragover = (e) => {
-      if (e.dataTransfer?.types.includes("application/x-cod-tab"))
-        e.preventDefault();
-    };
-    bar.ondrop = (e) => {
-      e.preventDefault();
-      const id = e.dataTransfer?.getData("application/x-cod-tab");
-      if (id)
-        void invoke("pane.move", {
-          workspace: workspace.id,
-          id,
-          group: group.id,
-        });
-    };
+    drag.bind(bar, tabs, workspace, group);
     const plus =
       bar.querySelector<HTMLButtonElement>('[data-action="new-tab"]') ??
-      iconButton("plus", "New tab", () =>
-        menu(plus, [
-          {
-            label: "Open file...",
-            run: () => {
-              void invoke("group.focus", {
-                workspace: workspace.id,
-                id: group.id,
-              }).then(openFile);
-            },
-          },
-          {
-            label: "New chat",
-            run: () => {
-              void invoke("group.focus", {
-                workspace: workspace.id,
-                id: group.id,
-              }).then(() => newConversation());
-            },
-          },
-          {
-            label: "New browser tab",
-            run: () => {
-              void invoke("group.focus", {
-                workspace: workspace.id,
-                id: group.id,
-              }).then(() => browserDialog());
-            },
-          },
-          {
-            label: "New terminal",
-            run: () => {
-              void invoke("group.focus", {
-                workspace: workspace.id,
-                id: group.id,
-              }).then(() => terminalDialog());
-            },
-          },
-        ]),
-      );
+      iconButton("plus", "New tab", () => {
+        void invoke<{ paneId: string }>("pane.new", {
+          workspace: workspace.id,
+          group: group.id,
+        }).then(({ paneId }) => {
+          requestAnimationFrame(() =>
+            document
+              .querySelector<HTMLElement>(
+                `[data-pane-id="${paneId}"] .new-tab button`,
+              )
+              ?.focus(),
+          );
+        });
+      });
+    plus.title = shortcutTitle("tab.new", "New tab");
     plus.dataset.action = "new-tab";
     const zoom =
       bar.querySelector<HTMLButtonElement>('[data-action="zoom"]') ??

@@ -272,7 +272,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await app.page
       .getByRole("button", { name: "New tab", exact: true })
       .click();
-    await app.page.screenshot({ path: info.outputPath("new-tab-menu.png") });
+    await app.page.screenshot({ path: info.outputPath("new-tab-choices.png") });
     await app.page.keyboard.press("Escape");
     await app.page
       .getByRole("button", { name: "Maximize pane", exact: true })
@@ -487,9 +487,8 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
     expect(await addNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();
     await expect(
-      app.page.getByRole("dialog", { name: "Actions", exact: true }),
+      app.page.getByRole("region", { name: "New tab", exact: true }),
     ).toBeVisible();
-    await app.page.keyboard.press("Escape");
     const secondary = await app.cli<{ id: string }>(
       "workspace",
       "create",

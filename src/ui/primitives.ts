@@ -2,12 +2,17 @@
 export function uiButton(
   label: string,
   variant: "default" | "primary" | "quiet" = "default",
+  leading?: Node,
 ) {
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = label;
   button.className =
     variant === "default" ? "ui-button" : `ui-button ${variant}`;
+  if (leading) {
+    button.classList.add("with-icon");
+    button.prepend(leading);
+  }
   return button;
 }
 export function actionRow(...children: Array<Node | string>) {

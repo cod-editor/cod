@@ -334,6 +334,14 @@ export function createWorkspaceNavigation(
           round.submission?.delivery.status,
         ]),
       ]),
+      next.browsers.map((b) => [
+        b.id,
+        b.workspaceId,
+        b.title,
+        b.url,
+        b.loading,
+        b.error,
+      ]),
       [...collapsedWorkspaces],
     ]);
     if (signature === renderedSignature) return;
@@ -367,7 +375,8 @@ export function createWorkspaceNavigation(
                 c.workspaceId === workspace.id &&
                 c.paneId === workspace.activePaneId,
             ) &&
-              !activeReview)),
+              !activeReview &&
+              activePane?.kind !== "browser")),
       );
       row.setAttribute("aria-label", workspace.name);
       row.classList.add("workspace-parent");
@@ -397,16 +406,19 @@ export function createWorkspaceNavigation(
         parts.label.replaceWith(input);
       }
       if (collapsedWorkspaces.has(workspace.id)) {
-        const count = getState().conversations.filter(
-          (c) => c.workspaceId === workspace.id,
+        const browsers = getState().browsers.filter(
+          (b) => b.workspaceId === workspace.id,
         ).length;
+        const count =
+          getState().conversations.filter((c) => c.workspaceId === workspace.id)
+            .length + browsers;
         if (count) {
           const hiddenCount = document.createElement("span");
           hiddenCount.className = "workspace-child-count";
           hiddenCount.textContent = String(count);
           hiddenCount.setAttribute(
             "aria-label",
-            `${count} hidden conversation${count === 1 ? "" : "s"}`,
+            `${count} hidden ${browsers ? "item" : "conversation"}${count === 1 ? "" : "s"}`,
           );
           hiddenCount.title = hiddenCount.getAttribute("aria-label")!;
           row.append(hiddenCount);
@@ -526,6 +538,83 @@ export function createWorkspaceNavigation(
             e.preventDefault();
             if (!e.repeat) void activateConversation(conversation.id);
           } else navigateTree(e, item);
+        };
+        nextTree.append(item);
+      }
+      for (const browser of getState().browsers.filter(
+        (b) => b.workspaceId === workspace.id,
+      )) {
+        const label = (
+          browser.title ||
+          (browser.url === "about:blank" ? "New browser tab" : browser.url)
+        ).slice(0, 160);
+        const item = treeRow(
+          browser.id,
+          label,
+          workspace.id === getState().activeWorkspaceId &&
+            workspace.activePaneId === browser.paneId,
+        );
+        item.classList.add("browser-row");
+        item.dataset.parentId = workspace.id;
+        item.dataset.browserId = browser.id;
+        item.title = browser.error
+          ? `${label} - ${browser.error}`
+          : browser.url;
+        item.replaceChildren(icon("browser"));
+        const text = document.createElement("span");
+        text.className = "tree-label";
+        text.textContent = label;
+        item.append(text);
+        const open = async () => {
+          await focusWorkspace(workspace.id);
+          await invoke("pane.focus", {
+            workspace: workspace.id,
+            id: browser.paneId,
+          });
+        };
+        const close = async () => {
+          const rows = [
+            ...tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+          ];
+          const current = rows.findIndex(
+            (row) => row.dataset.browserId === browser.id,
+          );
+          const next = rows[current + 1] ?? rows[current - 1];
+          const key = next?.dataset.workspaceId;
+          const result = await invoke<{ closed?: boolean }>("pane.close", {
+            workspace: workspace.id,
+            id: browser.paneId,
+          });
+          if (result.closed === false) return;
+          requestAnimationFrame(() => {
+            if (key)
+              tree
+                .querySelector<HTMLElement>(`[data-workspace-id="${key}"]`)
+                ?.focus();
+          });
+        };
+        item.onclick = () => void open();
+        item.onkeydown = (e) => {
+          if (e.isComposing) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (!e.repeat) void open();
+          } else if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            if (!e.repeat) void close();
+          } else navigateTree(e, item);
+        };
+        item.oncontextmenu = (e) => {
+          e.preventDefault();
+          menu({ x: e.clientX, y: e.clientY }, [
+            { label: "Open tab", run: () => void open() },
+            {
+              label: "Reload",
+              run: () => void invoke("browser.reload", { id: browser.id }),
+            },
+            null,
+            { label: "Close tab", run: () => void close() },
+          ]);
         };
         nextTree.append(item);
       }
