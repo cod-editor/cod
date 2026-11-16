@@ -21,7 +21,7 @@ import { ProjectService } from "../projects";
 import { changedLines } from "../git-lines";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
-import { leaf, replaceLeaf } from "./layout";
+import { leaf, replaceLeaf, removeLeaf } from "./layout";
 
 async function readTextFile(file: string): Promise<string> {
   const bytes = await readFile(file);
@@ -58,17 +58,35 @@ export class FileApplicationService {
     if (!(await stat(filePath)).isFile())
       throw new Error("File path is not a regular file");
     await readTextFile(filePath);
+    const opening = this.store.openingPane(workspace, request);
     const existing = workspace.panes.find(
       (pane) =>
         pane.kind === "document" && pane.canonicalPath === canonicalPath,
     );
     if (existing && existing.kind === "document") {
       existing.line = line;
+      if (opening.kind === "empty" && opening.launcher) {
+        workspace.panes = workspace.panes.filter(
+          (pane) => pane.id !== opening.id,
+        );
+        workspace.layout =
+          removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
+      }
       workspace.activePaneId = existing.id;
       return { paneId: existing.id };
     }
-    let pane = this.store.pane(workspace, workspace.activePaneId);
-    if (pane.kind !== "document" || pane.filePath || pane.draftChat) {
+    let pane = opening;
+    if (pane.kind === "empty" && pane.launcher) {
+      const document: PaneState = {
+        id: pane.id,
+        kind: "document",
+        filePath,
+        canonicalPath,
+        ...(line ? { line } : {}),
+      };
+      workspace.panes[workspace.panes.indexOf(pane)] = document;
+      pane = document;
+    } else if (pane.kind !== "document" || pane.filePath || pane.draftChat) {
       const document: PaneState = {
         id: randomUUID(),
         kind: "document",
@@ -134,6 +152,7 @@ export class FileApplicationService {
     }
     return this.store.change(() => {
       const workspace = this.store.workspace(workspaceId);
+      const opening = this.store.openingPane(workspace, request);
       const existing =
         resource.kind === "preview"
           ? workspace.panes.find(
@@ -143,8 +162,25 @@ export class FileApplicationService {
       if (existing) {
         if (existing.kind === "preview" && resource.kind === "preview")
           existing.format = resource.format;
+        if (opening.kind === "empty" && opening.launcher) {
+          workspace.panes = workspace.panes.filter(
+            (pane) => pane.id !== opening.id,
+          );
+          workspace.layout =
+            removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
+        }
         workspace.activePaneId = existing.id;
         return { paneId: existing.id };
+      }
+      const launcher =
+        opening.kind === "empty" && opening.launcher ? opening : undefined;
+      if (launcher) {
+        workspace.panes[workspace.panes.indexOf(launcher)] = {
+          id: launcher.id,
+          ...resource,
+        };
+        workspace.activePaneId = launcher.id;
+        return { paneId: launcher.id };
       }
       const active = workspace.activePaneId,
         id = randomUUID();

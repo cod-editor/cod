@@ -53,7 +53,9 @@ export function normalizeGroups(workspace: WorkspaceState): void {
   for (const group of workspace.groups) {
     if (group.paneIds.length < 2) continue;
     const emptyIds = group.paneIds.filter((id) =>
-      workspace.panes.some((pane) => pane.id === id && pane.kind === "empty"),
+      workspace.panes.some(
+        (pane) => pane.id === id && pane.kind === "empty" && !pane.launcher,
+      ),
     );
     if (emptyIds.length === group.paneIds.length) continue;
     for (const id of emptyIds) {

@@ -93,6 +93,7 @@ export class TerminalApplicationService {
         ? (workspace.folders[0] ?? os.homedir())
         : requiredString(request, "cwd"),
     );
+    const target = this.store.openingPane(workspace, request);
     const id = randomUUID();
     const snapshot = this.processes.create({
       id,
@@ -103,7 +104,7 @@ export class TerminalApplicationService {
       ...this.terminalShell(),
     });
     const terminal: TerminalState = { ...snapshot, paneId: "", sequence: 0 };
-    terminal.paneId = this.attachTerminal(workspace, id);
+    terminal.paneId = this.attachTerminal(workspace, id, target);
     this.store.data.terminals.push(terminal);
     try {
       await this.store.persist();
@@ -116,9 +117,16 @@ export class TerminalApplicationService {
     return { id, paneId: terminal.paneId };
   }
 
-  attachTerminal(workspace: WorkspaceState, terminalId: string): string {
-    const active = this.store.pane(workspace, workspace.activePaneId);
-    if (active.kind === "document" && !active.filePath && !active.draftChat) {
+  attachTerminal(
+    workspace: WorkspaceState,
+    terminalId: string,
+    target?: import("../types").PaneState,
+  ): string {
+    const active = target ?? this.store.pane(workspace, workspace.activePaneId);
+    if (
+      (active.kind === "document" && !active.filePath && !active.draftChat) ||
+      (active.kind === "empty" && active.launcher)
+    ) {
       const index = workspace.panes.indexOf(active);
       workspace.panes[index] = { id: active.id, kind: "terminal", terminalId };
       workspace.activePaneId = active.id;

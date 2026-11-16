@@ -273,9 +273,29 @@ export function createCommands(
         ?.focus(),
     );
   }
-  async function newConversation(): Promise<unknown> {
-    const result = await invoke("conversation.draft", {});
-    focusActiveComposer();
+  async function newConversation(
+    workspace?: string,
+    replacePane?: string,
+  ): Promise<unknown> {
+    const result = await invoke<{ workspaceId: string; paneId: string }>(
+      "conversation.draft",
+      {
+        ...(workspace ? { workspace } : {}),
+        ...(replacePane ? { replacePane } : {}),
+      },
+    );
+    requestAnimationFrame(() => {
+      const active = activeWorkspace();
+      if (
+        active?.id === result.workspaceId &&
+        active.activePaneId === result.paneId
+      )
+        panes
+          .querySelector<HTMLTextAreaElement>(
+            `[data-pane-id="${result.paneId}"] textarea[aria-label="Message"]`,
+          )
+          ?.focus();
+    });
     return result;
   }
 
@@ -339,12 +359,15 @@ export function createCommands(
     });
   }
 
-  function browserDialog(): void {
-    const workspace = activeWorkspace();
+  function browserDialog(target?: { workspace: string; pane: string }): void {
+    const workspace = target
+      ? getState().workspaces.find((item) => item.id === target.workspace)
+      : activeWorkspace();
     if (!workspace) return;
     void invoke<{ paneId: string }>("browser.open", {
       workspace: workspace.id,
       url: "about:blank",
+      ...(target ? { replacePane: target.pane } : {}),
     })
       .then((browser) => {
         requestAnimationFrame(() => {
@@ -466,11 +489,14 @@ export function createCommands(
     form.requestSubmit();
   }
 
-  function terminalDialog(): void {
-    const workspace = activeWorkspace();
+  function terminalDialog(target?: { workspace: string; pane: string }): void {
+    const workspace = target
+      ? getState().workspaces.find((item) => item.id === target.workspace)
+      : activeWorkspace();
     if (!workspace) return;
     void invoke<{ paneId: string }>("terminal.open", {
       workspace: workspace.id,
+      ...(target ? { replacePane: target.pane } : {}),
     })
       .then((terminal) =>
         requestAnimationFrame(() =>
@@ -538,6 +564,7 @@ export function createCommands(
     const owner =
       getState().conversations.find((item) => item.id === id)?.workspaceId ??
       getState().reviews?.find((item) => item.id === id)?.workspaceId ??
+      getState().browsers.find((item) => item.id === id)?.workspaceId ??
       id;
     return getState().workspaces.find((item) => item.id === owner) ?? fallback;
   }
@@ -749,6 +776,21 @@ export function createCommands(
           break;
         case "workspace.reopen":
           reopenWorkspace();
+          break;
+        case "tab.new":
+          if (w) {
+            const result = await invoke<{ paneId: string }>("pane.new", {
+              workspace: w.id,
+              ...(group ? { group: group.id } : {}),
+            });
+            requestAnimationFrame(() =>
+              panes
+                .querySelector<HTMLElement>(
+                  `[data-pane-id="${result.paneId}"] .new-tab button`,
+                )
+                ?.focus(),
+            );
+          }
           break;
         case "chat.new":
           await newConversation();
@@ -1020,7 +1062,11 @@ export function createCommands(
     const conversation = conversationTarget();
     const context: CommandContext = {
       workspaceId: workspace?.id,
-      paneId: conversation?.paneId ?? workspace?.activePaneId,
+      paneId:
+        getState().browsers.find((item) => item.id === focusedTreeId())
+          ?.paneId ??
+        conversation?.paneId ??
+        workspace?.activePaneId,
       conversationId: conversation?.id,
     };
     let performed = false;

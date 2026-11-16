@@ -113,9 +113,10 @@ export function createKeyboardNavigation(
       g.paneIds.includes(paneId ?? w.activePaneId),
     );
     const ids =
-      group?.paneIds.filter(
-        (id) => w?.panes.find((p) => p.id === id)?.kind !== "empty",
-      ) ?? [];
+      group?.paneIds.filter((id) => {
+        const pane = w?.panes.find((p) => p.id === id);
+        return pane?.kind !== "empty" || pane.launcher;
+      }) ?? [];
     const id = index < 0 ? ids.at(-1) : ids[index];
     if (id) await focusPane(id);
   }
@@ -131,9 +132,10 @@ export function createKeyboardNavigation(
         g.paneIds.includes(paneId ?? w.activePaneId),
       );
     if (!group) return;
-    const ids = group.paneIds.filter(
-      (id) => w!.panes.find((p) => p.id === id)?.kind !== "empty",
-    );
+    const ids = group.paneIds.filter((id) => {
+      const pane = w!.panes.find((p) => p.id === id);
+      return pane?.kind !== "empty" || pane.launcher;
+    });
     if (!ids.length) return;
     await focusPane(
       ids[

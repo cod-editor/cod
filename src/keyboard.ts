@@ -163,6 +163,14 @@ export const commands = [
       "agent-page",
     ]),
   ]),
+  entry("tab.new", "New tab", "Tabs", [
+    key("KeyT", { mod: true, platform: "darwin" }),
+    key("KeyT", { mod: true, platform: "linux" }, [
+      ...cod,
+      "browser",
+      "agent-page",
+    ]),
+  ]),
   entry("tab.reopen", "Reopen closed tab", "Tabs", [
     key("KeyT", { mod: true, shift: true }),
   ]),

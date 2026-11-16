@@ -2,8 +2,9 @@ import { uiButton } from "./primitives";
 export function actionButton(
   label: string,
   action: () => Promise<unknown>,
+  leading?: Node,
 ): HTMLButtonElement {
-  const button = uiButton(label);
+  const button = uiButton(label, "default", leading);
   button.dataset.focusKey = JSON.stringify(["pane-action", label]);
   button.onclick = async () => {
     if (button.disabled) return;

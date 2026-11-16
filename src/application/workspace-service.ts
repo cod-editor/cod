@@ -918,22 +918,33 @@ export class WorkspaceApplicationService {
               this.store.data.workspaces[0] ??
               this.store.workspace(this.createWorkspace("Untitled").id))
             : this.store.workspace(requiredString(request, "workspace"));
-          const empty = implicit
-            ? workspace.panes.find((pane) => {
-                const draft = workspace.chatDrafts?.[pane.id];
-                return (
-                  pane.kind === "document" &&
-                  pane.draftChat &&
-                  !pane.filePath &&
-                  !draft?.text &&
-                  !draft?.localDraft &&
-                  !draft?.images?.length &&
-                  !draft?.skills?.length
-                );
-              })
-            : undefined;
+          const target = this.store.openingPane(workspace, request);
+          const launcher =
+            target.kind === "empty" && target.launcher ? target : undefined;
+          const empty =
+            launcher ??
+            (implicit
+              ? workspace.panes.find((pane) => {
+                  const draft = workspace.chatDrafts?.[pane.id];
+                  return (
+                    pane.kind === "document" &&
+                    pane.draftChat &&
+                    !pane.filePath &&
+                    !draft?.text &&
+                    !draft?.localDraft &&
+                    !draft?.images?.length &&
+                    !draft?.skills?.length
+                  );
+                })
+              : undefined);
           const id = empty?.id ?? randomUUID();
-          if (!empty)
+          if (launcher)
+            workspace.panes[workspace.panes.indexOf(launcher)] = {
+              id,
+              kind: "document",
+              draftChat: true,
+            };
+          else if (!empty)
             workspace.panes.push({ id, kind: "document", draftChat: true });
           workspace.activePaneId = id;
           if (implicit) this.store.data.activeWorkspaceId = workspace.id;
@@ -1007,6 +1018,40 @@ export class WorkspaceApplicationService {
               "Workspace has private review drafts or undelivered feedback. Submit or delete current draft comments and resolve deliveries before closing.",
             );
           return this.closeWorkspace(id);
+        });
+
+      case "pane.new":
+        return this.store.change(() => {
+          const workspace = this.store.workspace(
+            requiredString(request, "workspace"),
+          );
+          normalizeGroups(workspace);
+          const groupId = request.group ?? workspace.activeGroupId;
+          const group = workspace.groups!.find((item) => item.id === groupId);
+          if (!group) throw new Error("Target group not found");
+          const paneId = randomUUID();
+          workspace.panes.push({ id: paneId, kind: "empty", launcher: true });
+          workspace.layout = replaceLeaf(
+            workspace.layout,
+            workspace.activePaneId,
+            {
+              type: "split",
+              direction: "right",
+              ratio: 0.5,
+              first: leaf(workspace.activePaneId),
+              second: leaf(paneId),
+            },
+          );
+          group.paneIds.splice(
+            group.paneIds.indexOf(group.activePaneId) + 1,
+            0,
+            paneId,
+          );
+          group.activePaneId = paneId;
+          group.hidden = false;
+          workspace.activePaneId = paneId;
+          workspace.activeGroupId = group.id;
+          return { paneId, groupId: group.id };
         });
 
       case "pane.split":
