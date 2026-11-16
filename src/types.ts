@@ -244,6 +244,7 @@ export interface WorkspaceState {
       text: string;
       version?: string;
       writer?: string;
+      clearedFromVersion?: string;
       localDraft?: {
         text: string;
         provider?: ProviderId;

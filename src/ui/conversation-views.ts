@@ -104,8 +104,8 @@ export function createConversationViews({
     panel.setAttribute("aria-label", "Draft conflict");
     const message = document.createElement("p");
     message.textContent =
-      "The draft changed outside this window. Your edits are preserved.";
-    const keep = uiButton("Keep my draft");
+      "This unsent message has another saved version. Your text is preserved; choose which version to keep.";
+    const keep = uiButton("Keep my message");
     keep.onclick = async () => {
       await saves.get(key)?.promise;
       const remote = composerConflicts.get(key);
@@ -114,7 +114,7 @@ export function createConversationViews({
       composerConflicts.delete(key);
       void persistComposer(key).then(invalidate);
     };
-    const use = uiButton("Use external draft");
+    const use = uiButton("Use saved version");
     use.onclick = async () => {
       await saves.get(key)?.promise;
       const remote = composerConflicts.get(key);
@@ -183,7 +183,7 @@ export function createConversationViews({
     })()
       .catch(() => {
         setStatus(
-          "Could not save the conversation draft. Keep Cod open and try again.",
+          "Could not save this unsent message. Keep Cod open and try again.",
         );
       })
       .finally(() => saves.delete(key));
@@ -1189,7 +1189,7 @@ export function createConversationViews({
       }
       await invoke(
         "conversation.send",
-        { id, text, images, skills },
+        { id, text, images, skills, writer },
         { reportError: false },
       );
     } catch (error) {
@@ -1211,18 +1211,14 @@ export function createConversationViews({
     if (
       remaining.length === images.length &&
       remaining.every((image, i) => image === images[i])
-    )
+    ) {
       attachmentDrafts.delete(id);
-    const saved = getState().workspaces.find(
-      (w) =>
-        w.id === getState().conversations.find((c) => c.id === id)?.workspaceId,
-    )?.chatDrafts?.[
-      getState().conversations.find((c) => c.id === id)?.paneId ?? ""
-    ];
-    if (!saved) {
-      versions.delete(id);
-      seenVersions.delete(id);
+      // Further typing may already have saved a newer text version containing
+      // the submitted images. Persist their removal from that unsent message.
+      if (images.length && composerDrafts.has(id)) await persistComposer(id);
     }
+    // The backend retains the submitted version's empty transition. A delayed
+    // snapshot must not reset our acknowledged version before the next save.
     invalidate();
   }
 
