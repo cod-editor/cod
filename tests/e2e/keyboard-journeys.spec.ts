@@ -2,6 +2,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
@@ -1587,3 +1588,227 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
     await app.cleanup();
   }
 });
+
+for (const replacement of ["none", "keyboard", "native"] as const) {
+  const cancelled = replacement !== "none";
+  test(`A hidden chat ${cancelled ? `does not steal focus after newer ${replacement} navigation` : "regains native keyboard focus when its selection snapshot follows the operation reply"}`, async () => {
+    const app = new ChatApp();
+    await app.prepare();
+    await app.configure({ codex: {} });
+    await mkdir(app.data, { recursive: true });
+    await writeFile(
+      path.join(app.data, "keymap.json"),
+      JSON.stringify({
+        "pane.focus1": [],
+        "pane.focusLeft": ["Alt+1"],
+        "pane.focus2": [],
+        "pane.focusRight": ["Alt+2"],
+      }),
+    );
+    try {
+      await app.start();
+      const workspace = await app.create("Delayed pane selection");
+      const chat = await app.newChat(workspace, "codex");
+      await app.newChat(workspace, "codex");
+      const file = path.join(app.folders[0], "delayed-pane.html");
+      await writeFile(
+        file,
+        "<title>Delayed native fixture</title><h1>Native page</h1>",
+      );
+      const url = pathToFileURL(file).href;
+      const browser = await app.cli<{ id: string; paneId: string }>(
+        "browser",
+        "open",
+        "--workspace",
+        workspace,
+        "--url",
+        url,
+      );
+      const initial = (await app.cli<AppState>("state")).workspaces.find(
+        (w) => w.id === workspace,
+      )!;
+      const left = initial.groups!.find((g) =>
+        g.paneIds.includes(browser.paneId),
+      )!;
+      const right = initial.groups!.find((g) =>
+        g.paneIds.includes(chat.paneId),
+      )!;
+      await app.cli(
+        "pane",
+        "move",
+        "--workspace",
+        workspace,
+        "--id",
+        chat.paneId,
+        "--group",
+        left.id,
+      );
+      await app.cli(
+        "pane",
+        "move",
+        "--workspace",
+        workspace,
+        "--id",
+        browser.paneId,
+        "--group",
+        right.id,
+      );
+      await app.cli(
+        "group",
+        "visibility",
+        "--workspace",
+        workspace,
+        "--id",
+        (await app.cli<AppState>("state")).workspaces
+          .find((w) => w.id === workspace)!
+          .groups!.find((g) => g.paneIds.includes(chat.paneId))!.id,
+        "--hidden",
+        "true",
+      );
+      await expect(app.pane(chat.paneId)).toBeHidden();
+      await app.app!.evaluate(
+        ({ BrowserWindow, ipcMain }, { workspace, pane }) => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          const send = contents.send.bind(contents);
+          let pending: unknown[] | undefined;
+          let holding = true;
+          let capturing = false;
+          Object.assign(globalThis, {
+            releasePaneSelection: () => {
+              holding = false;
+              if (pending) send("cod:state", ...pending);
+            },
+            paneSelectionAccepted: false,
+            replacementSelectionAccepted: false,
+          });
+          contents.send = function (channel, ...args) {
+            const state = args[0];
+            if (channel === "cod:state")
+              Object.assign(globalThis, {
+                latestSelectedPane: state.workspaces.find(
+                  (w: any) => w.id === workspace,
+                )?.activePaneId,
+              });
+            if (
+              channel === "cod:state" &&
+              holding &&
+              (capturing ||
+                state?.workspaces?.find((w: any) => w.id === workspace)
+                  ?.activePaneId === pane)
+            ) {
+              capturing = true;
+              pending = args;
+              return;
+            }
+            send(channel, ...args);
+          };
+          const handlers = (
+            ipcMain as unknown as {
+              _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+            }
+          )._invokeHandlers;
+          const original = handlers.get("cod:invoke")!;
+          ipcMain.removeHandler("cod:invoke");
+          ipcMain.handle("cod:invoke", async (event, request) => {
+            const result = await original(event, request);
+            if (request.op === "pane.focus" && request.id === pane)
+              Object.assign(globalThis, { paneSelectionAccepted: true });
+            if (request.op === "pane.focus" && request.id !== pane)
+              Object.assign(globalThis, { replacementSelectionAccepted: true });
+            return result;
+          });
+        },
+        { workspace, pane: chat.paneId },
+      );
+      await app.app!.evaluate(({ webContents }, url) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((c) => c.getURL() === url)!;
+        contents.focus();
+        contents.sendInputEvent({
+          type: "keyDown",
+          keyCode: "1",
+          modifiers: ["alt"],
+        });
+        contents.sendInputEvent({
+          type: "keyUp",
+          keyCode: "1",
+          modifiers: ["alt"],
+        });
+      }, url);
+      await expect
+        .poll(() =>
+          app.app!.evaluate(() => (globalThis as any).paneSelectionAccepted),
+        )
+        .toBe(true);
+      await app.page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      if (replacement === "keyboard") {
+        await app.page.keyboard.press("Alt+2");
+        await expect
+          .poll(() =>
+            app.app!.evaluate(
+              () => (globalThis as any).replacementSelectionAccepted,
+            ),
+          )
+          .toBe(true);
+      } else if (replacement === "native") {
+        await app.app!.evaluate(({ webContents }, url) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((c) => c.getURL() === url)!;
+          contents.focus();
+          contents.sendInputEvent({
+            type: "mouseDown",
+            x: 30,
+            y: 35,
+            button: "left",
+            clickCount: 1,
+          });
+          contents.sendInputEvent({
+            type: "mouseUp",
+            x: 30,
+            y: 35,
+            button: "left",
+            clickCount: 1,
+          });
+        }, url);
+        await expect
+          .poll(() =>
+            app.app!.evaluate(() => (globalThis as any).latestSelectedPane),
+          )
+          .toBe(browser.paneId);
+      }
+      await app.app!.evaluate(() => (globalThis as any).releasePaneSelection());
+      const input = app
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true });
+      await expect(input).toBeVisible();
+      if (cancelled) {
+        await expect(input).not.toBeFocused();
+        await expect
+          .poll(() =>
+            app.app!.evaluate(
+              ({ webContents }, url) =>
+                webContents
+                  .getAllWebContents()
+                  .some((c) => c.getURL() === url && c.isFocused()),
+              url,
+            ),
+          )
+          .toBe(true);
+      } else {
+        await expect(input).toBeFocused();
+        await app.page.keyboard.type("Retained keyboard input");
+        await expect(input).toHaveValue("Retained keyboard input");
+      }
+      expect(await app.prompts()).toHaveLength(0);
+    } finally {
+      await app.cleanup();
+    }
+  });
+}

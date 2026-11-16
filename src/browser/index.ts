@@ -184,7 +184,7 @@ export class BrowserService {
     });
   }
   private secure(contents: WebContents, resource: Resource) {
-    installPageContextMenu(contents, this.options.window);
+    installPageContextMenu(contents, this.options.window, true);
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
     const navigable = (url: string) =>

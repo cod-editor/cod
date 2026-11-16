@@ -147,6 +147,12 @@ export function createContentFind(
     }
     const host = hostFor(view.pane);
     if (!host) return;
+    // Searching is explicit: include earlier conversation messages as well as
+    // the recent window used for fast initial navigation.
+    if (view.pane.kind === "conversation")
+      host
+        .querySelector(".transcript")
+        ?.dispatchEvent(new Event("cod:show-complete-history"));
     const editor = host.querySelector<HTMLTextAreaElement>(".file-editor");
     const needle = query.toLocaleLowerCase();
     const matches: { start: number; end: number; node?: Text }[] = [];
@@ -167,7 +173,7 @@ export function createContentFind(
         acceptNode(node) {
           const parent = node.parentElement;
           return parent?.closest(
-            "textarea,input,script,style,.composer,.review-header,.review-form",
+            "textarea,input,script,style,.composer,.review-header,.review-form,[data-history-navigation]",
           ) || !parent?.getClientRects().length
             ? NodeFilter.FILTER_REJECT
             : NodeFilter.FILTER_ACCEPT;

@@ -294,6 +294,7 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
+  toggleDevTools(browserId?: string): Promise<void>;
   onSettings(
     callback: (state: import("./settings").SettingsState) => void,
   ): void;

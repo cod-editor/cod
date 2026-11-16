@@ -10,8 +10,9 @@ import type {
   PaneState,
   Layout,
 } from "../types";
-import type { Invoke } from "./contracts";
+import type { Invoke, WhenRendered } from "./contracts";
 interface LayoutActions {
+  whenRendered: WhenRendered;
   renderPane: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   conversationActions: (conversation: ConversationState) => MenuAction[];
@@ -223,7 +224,7 @@ export function createPaneLayout(
       groupControls.append(button);
     }
   }
-  async function toggleRegion(id: string): Promise<void> {
+  async function toggleRegion(id: string, signal?: AbortSignal): Promise<void> {
     const workspace = activeWorkspace();
     if (!workspace) return;
     const region = paneRegions(workspace).find((region) => region.id === id);
@@ -233,23 +234,49 @@ export function createPaneLayout(
       group &&
       !group.hidden &&
       (!workspace.zoomedGroupId || workspace.zoomedGroupId === id);
-    if (!group)
-      await invoke("group.ensure", {
-        workspace: workspace.id,
-        side: region.x < 0.5 ? "left" : "right",
-      });
-    else if (!visible)
+    let selectedGroup = id;
+    let hidden: boolean;
+    if (!group) {
+      selectedGroup = (
+        await invoke<{ groupId: string }>("group.ensure", {
+          workspace: workspace.id,
+          side: region.x < 0.5 ? "left" : "right",
+        })
+      ).groupId;
+      hidden = false;
+    } else if (!visible) {
       await invoke("pane.focus", {
         workspace: workspace.id,
         id: group.activePaneId,
       });
-    else if ((workspace.groups?.filter((g) => !g.hidden).length ?? 0) > 1)
+      hidden = false;
+    } else if ((workspace.groups?.filter((g) => !g.hidden).length ?? 0) > 1) {
       await invoke("group.visibility", {
         workspace: workspace.id,
         id,
         hidden: true,
       });
+      hidden = true;
+    } else return;
+    if (signal)
+      await actions.whenRendered(() => {
+        const current = activeWorkspace();
+        if (current?.id !== workspace.id) return false;
+        const target = current.groups?.find(
+          (group) => group.id === selectedGroup,
+        );
+        if (!target) return undefined;
+        return (
+          hidden
+            ? target.hidden
+            : !target.hidden &&
+              (!current.zoomedGroupId || current.zoomedGroupId === target.id)
+        )
+          ? true
+          : undefined;
+      }, signal);
   }
+
   function sideRegion(side: "left" | "right") {
     const workspace = activeWorkspace();
     if (!workspace) return undefined;
@@ -271,9 +298,12 @@ export function createPaneLayout(
       })
     ).paneId;
   }
-  function togglePane(side: "left" | "right"): Promise<void> {
+  function togglePane(
+    side: "left" | "right",
+    signal?: AbortSignal,
+  ): Promise<void> {
     const region = sideRegion(side);
-    return region ? toggleRegion(region.id) : Promise.resolve();
+    return region ? toggleRegion(region.id, signal) : Promise.resolve();
   }
   function paneToggleReason(side: "left" | "right"): string | undefined {
     const workspace = activeWorkspace();
