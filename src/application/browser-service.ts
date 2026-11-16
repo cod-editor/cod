@@ -461,7 +461,14 @@ export class BrowserApplicationService {
       if (!match) return;
       event.preventDefault();
       if (!match.dispatch) return;
-      this.browserWindow?.webContents.focus();
+      // Hiding a pane chooses its replacement after layout is committed. Moving
+      // native focus first can revive a stale editor and echo pane.focus back,
+      // racing the hide and reopening the pane that was just hidden.
+      if (
+        match.command !== "pane.toggleLeft" &&
+        match.command !== "pane.toggleRight"
+      )
+        this.browserWindow?.webContents.focus();
       this.browserWindow?.webContents.send("cod:command", {
         command: match.command,
         browserId: id,
