@@ -21,6 +21,14 @@ Docker is required. The checked-in Dockerfile builds the default `cod-test-elect
 
 The OrbStack test environment uses an outer Docker seccomp exception for Chromium user namespaces; Chromium's own sandbox stays enabled. The runner checks actual renderer isolation. An unavailable image, display or sandbox is an environment blocker, not permission to add `--no-sandbox`.
 
+## Feedback and complete CI coverage
+
+Start with `npm run check && npm run build && npm run test:unit` for formatting, all production types and the same unit/protocol checks used in CI. These checks do not establish graphical behavior. Run the affected real-Electron journey next using the isolated runner's existing file and `--grep` selection; there is no automatic change-impact mapper. Keep one local Docker suite at a time on a memory-limited development machine. Full CI remains the merge gate.
+
+The Check workflow runs fast checks before graphical setup. After they pass, service suites and three native Playwright shards run on independent standard Linux runners. Each shard keeps one worker and the Chromium sandbox; files stay serial internally (`fullyParallel` remains false). The unchanged full E2E file list is partitioned with `--shard=1/3`, `2/3` and `3/3`, not filtered or retried. The final `e2e` status succeeds only when fast checks, services and every shard succeed, including after an upstream skip or cancellation. Keep that context required in branch protection.
+
+Use Playwright's `--list --shard=N/3` to inspect a partition without opening an application. New suites still belong in the full E2E command. Sharding reduces elapsed feedback time using independent CI machines; it does not reduce total test work or justify more workers on the local desktop. npm downloads already use the existing setup-node cache; builds are short and are rebuilt per runner rather than introducing a binary distribution layer.
+
 ## Private SSH test machine
 
 `node scripts/verify-electron-remote.mjs -- tests/e2e/files.spec.ts` runs selected checks on a configured Linux machine without local Docker, builds or GUI windows. Set `COD_TEST_SSH_HOST` to an existing SSH alias, or use `--host` / `--config` with a private JSON file containing a `host` property. Keep personal destinations/configuration in ignored local files, never in the repository or public issue content. Known-host verification is required and agent forwarding is disabled.
