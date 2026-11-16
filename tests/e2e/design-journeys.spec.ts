@@ -922,11 +922,11 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
     const addressInput = shell
       .pane(browser.paneId)
       .getByRole("textbox", { name: "Address", exact: true });
-    await addressInput.fill("file:///invented-forbidden-file");
+    await addressInput.fill("ftp://example.invalid/invented-forbidden-file");
     await addressInput.press("Enter");
     const localError = shell.pane(browser.paneId).getByRole("alert");
     await expect(localError).toContainText(
-      "Only HTTP and HTTPS addresses are supported",
+      "Only HTTP, HTTPS and local file addresses are supported",
     );
     await expect
       .poll(async () => {
