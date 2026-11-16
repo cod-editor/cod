@@ -93,7 +93,8 @@ select:focus-visible {
   vertical-align: middle;
 }
 .icon-button {
-  padding: 5px;
+  --icon-button-padding: 5px;
+  padding: var(--icon-button-padding);
   --icon-button-size: var(--control-height);
   width: var(--icon-button-size);
   height: var(--icon-button-size);
@@ -177,7 +178,8 @@ dialog .setting-row {
 }
 .icon-button.compact {
   --icon-button-size: var(--compact-icon-button-size);
-  padding: 2px;
+  --icon-button-padding: 2px;
+  padding: var(--icon-button-padding);
 }
 .icon-button.compact .icon {
   width: var(--compact-icon-size);
@@ -220,4 +222,27 @@ dialog .setting-row.compact {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Shared spacious picker variant; features arrange rows without resizing controls. */
+.search-picker.picker-wide {
+  width: min(880px, calc(100vw - 40px));
+}
+.search-picker.picker-wide .command-list {
+  max-height: min(560px, 65vh);
+}
+
+.workspace-row.tree-row-wrap {
+  height: auto;
+  white-space: normal;
+}
+
+.command-list .icon-button {
+  padding: var(--icon-button-padding);
+}
+.command-list .icon-button:not(:disabled):hover {
+  background: var(--control-hover);
+}
+.command-list .icon-button:not(:disabled):active {
+  background: var(--control-pressed);
 }

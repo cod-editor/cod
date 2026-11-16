@@ -40,7 +40,7 @@ test("First-run controls, menus, pending work and failure recovery remain usable
     await app.start();
     await capture("01-clean-launch");
     await app.page
-      .getByRole("button", { name: "Switch workspace", exact: true })
+      .getByRole("button", { name: "Overview", exact: true })
       .click();
     await capture("02-workspace-picker");
     await app.page.keyboard.press("Escape");
@@ -253,12 +253,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await app.page.mouse.move(800, 400);
     await app.page.mouse.up();
     await expect(selected).toHaveCount(1);
-    for (const name of [
-      "New tab",
-      "Maximize pane",
-      "Switch workspace",
-      "Provider",
-    ]) {
+    for (const name of ["New tab", "Maximize pane", "Overview", "Provider"]) {
       const control = app.page
         .getByRole("button", { name, exact: true })
         .first();
@@ -432,7 +427,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       "Background rename one",
     );
     await expect(
-      app.page.getByRole("button", { name: "Switch workspace", exact: true }),
+      app.page.getByRole("button", { name: "Overview", exact: true }),
     ).toHaveText("Background rename one");
     expect(await closeNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();
@@ -482,7 +477,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       "Background rename two",
     );
     await expect(
-      app.page.getByRole("button", { name: "Switch workspace", exact: true }),
+      app.page.getByRole("button", { name: "Overview", exact: true }),
     ).toHaveText("Background rename two");
     expect(await addNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();

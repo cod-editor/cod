@@ -103,9 +103,7 @@ async function launch() {
     )
     .toBe(true);
   main.setDefaultTimeout(15000);
-  await main
-    .getByRole("button", { name: "Switch workspace", exact: true })
-    .waitFor();
+  await main.getByRole("button", { name: "Overview", exact: true }).waitFor();
 }
 async function nativePage(url) {
   let page;

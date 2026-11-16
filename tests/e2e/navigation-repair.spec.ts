@@ -97,7 +97,7 @@ test("Closing workspace rows keeps keyboard focus on a surviving neighbor and th
   for (const workspace of (await shell.state()).workspaces)
     await close(workspace.id);
   await expect(
-    shell.page.getByRole("button", { name: "Switch workspace", exact: true }),
+    shell.page.getByRole("button", { name: "Overview", exact: true }),
   ).toBeFocused();
   expect((await shell.state()).workspaces).toHaveLength(0);
 });

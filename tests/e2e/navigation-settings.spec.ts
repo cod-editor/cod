@@ -454,10 +454,10 @@ test("Workspace and file pickers preserve filtering after arrow navigation", asy
     const first = await app.create("Project Alpha");
     await app.create("Project Beta");
     await app.page
-      .getByRole("button", { name: "Switch workspace", exact: true })
+      .getByRole("button", { name: "Overview", exact: true })
       .click();
     const picker = app.page.getByRole("dialog");
-    const filter = picker.getByRole("textbox");
+    const filter = picker.getByRole("combobox", { name: "Search Overview" });
     await filter.fill("Project");
     await filter.press("ArrowDown");
     await expect(filter).toBeFocused();

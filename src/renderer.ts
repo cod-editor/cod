@@ -72,9 +72,10 @@ const layout = createPaneLayout(() => state, invoke, {
   nativeLayout: browsers.layout,
 });
 const navigation = createWorkspaceNavigation(tree, () => state, invoke, {
-  newConversation: () => commands.newConversation(),
-  folderDialog: (workspace) => commands.folder(workspace),
-  conversationActions: (c) => commands.conversationActions(c),
+  newConversation: (workspace) => commands.newConversation(workspace),
+  folderDialog: (workspace, restoreFocus) =>
+    commands.folder(workspace, restoreFocus),
+  conversationActions: (c, rename) => commands.conversationActions(c, rename),
   paneButton,
 });
 const projects = new FileTree(

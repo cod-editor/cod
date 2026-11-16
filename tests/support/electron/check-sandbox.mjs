@@ -21,9 +21,7 @@ try {
     },
   });
   const page = await app.firstWindow();
-  await page
-    .getByRole("button", { name: "Switch workspace", exact: true })
-    .waitFor();
+  await page.getByRole("button", { name: "Overview", exact: true }).waitFor();
   const renderers = await app.evaluate(({ webContents }) =>
     webContents
       .getAllWebContents()
