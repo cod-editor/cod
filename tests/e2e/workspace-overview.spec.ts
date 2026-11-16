@@ -1014,9 +1014,9 @@ test("Overview opens from a Markdown preview and returns to its focused link", a
     .contentFrame();
   const link = frame.getByRole("link", { name: "Example" });
   await link.focus();
+  await expect(link).toBeFocused();
   await app.app!.evaluate(({ BrowserWindow }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents;
-    contents.focus();
     const modifiers: ("meta" | "control" | "shift")[] = [
       process.platform === "darwin" ? "meta" : "control",
       "shift",

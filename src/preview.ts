@@ -1,17 +1,19 @@
 import { renderMarkdown } from "./markdown-view";
 let revision = 0;
 let linkReturn: { element: HTMLElement; range?: Range } | undefined;
-function rememberFocus() {
+function rememberFocus(element = document.activeElement as HTMLElement) {
   const selection = window.getSelection();
   linkReturn = {
-    element: document.activeElement as HTMLElement,
+    element,
     range: selection?.rangeCount
       ? selection.getRangeAt(0).cloneRange()
       : undefined,
   };
 }
 // The parent can return focus after a modal without discarding the inner target.
-window.addEventListener("blur", rememberFocus);
+document.addEventListener("focusout", (event) => {
+  if (event.target instanceof HTMLElement) rememberFocus(event.target);
+});
 window.addEventListener("message", (event) => {
   if (
     event.source === parent &&
@@ -19,10 +21,9 @@ window.addEventListener("message", (event) => {
   ) {
     const origin = linkReturn;
     linkReturn = undefined;
-    if (document.hasFocus() && origin?.element.isConnected)
+    if (origin?.element.isConnected)
       origin.element.focus({ preventScroll: true });
     if (
-      document.hasFocus() &&
       origin?.range?.startContainer.isConnected &&
       origin.range.endContainer.isConnected
     ) {
