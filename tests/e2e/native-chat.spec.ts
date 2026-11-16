@@ -1619,8 +1619,23 @@ test("Enter sends chat, Shift Enter inserts a line and IME and model controls do
     shell.page.getByRole("dialog", { name: "Actions", exact: true }),
   ).toBeVisible();
   expect(await shell.prompts()).toHaveLength(0);
+  // Native dialog close events are queued. A newer focus must win if cleanup
+  // reaches the renderer after the user has already returned to the composer.
+  await shell.page
+    .getByRole("dialog", { name: "Actions", exact: true })
+    .evaluate((node: HTMLDialogElement) => {
+      const closed = node.onclose;
+      node.onclose = (event) => {
+        (window as any).__finishMenuClose = () => closed?.call(node, event);
+      };
+    });
   await shell.page.keyboard.press("Escape");
+  await shell.page.waitForFunction(
+    () => typeof (window as any).__finishMenuClose === "function",
+  );
   await input.focus();
+  await shell.page.evaluate(() => (window as any).__finishMenuClose());
+  await expect(input).toBeFocused();
   await input.press("Enter");
   await expect.poll(() => shell.prompts()).toHaveLength(1);
   await expect(input).toHaveValue("");

@@ -125,8 +125,13 @@ export function menu(
     }
   });
   dialog.onclose = () => {
+    const restoreFocus =
+      dialog.contains(document.activeElement) ||
+      document.activeElement === document.body;
     dialog.remove();
-    if (!performed && previous?.isConnected)
+    // A native close event may arrive after a newer click or focus command.
+    // Restore abandoned menu focus without taking it from the new target.
+    if (!performed && previous?.isConnected && restoreFocus)
       previous.focus({ preventScroll: true });
   };
   dialog.onkeydown = (event) => {
