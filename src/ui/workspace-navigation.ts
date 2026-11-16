@@ -1,14 +1,23 @@
 import { treeRowParts } from "./tree-row";
 import { reconcileView } from "./view-reconcile";
 import { conversationLabel } from "./message-label";
+import {
+  projectNavigation,
+  describeNavigationStatus,
+  type NavigationItem,
+} from "./navigation-model";
 import { icon, menu, type MenuAction } from "./controls";
 import { readPreference, writePreference } from "./preferences";
 import type { AppState, ConversationState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+type NavigationAction = Exclude<MenuAction, null> & { command?: string };
 interface NavigationActions {
-  newConversation: () => Promise<unknown>;
-  folderDialog: (workspace?: string) => void;
-  conversationActions: (conversation: ConversationState) => MenuAction[];
+  newConversation: (workspace?: string) => Promise<unknown>;
+  folderDialog: (workspace?: string, restoreFocus?: () => void) => void;
+  conversationActions: (
+    conversation: ConversationState,
+    rename?: () => void,
+  ) => Array<NavigationAction | null>;
   paneButton: (
     label: string,
     action: () => Promise<unknown>,
@@ -22,20 +31,6 @@ export function createWorkspaceNavigation(
 ) {
   const { newConversation, folderDialog, conversationActions, paneButton } =
     actions;
-  function describeStatus(status: string, context?: string): string {
-    const text =
-      (
-        {
-          working: "Working",
-          waiting: "Needs attention",
-          review: "Review requested",
-          ready: "Completed",
-          failed: "Error",
-          starting: "Starting",
-        } as Record<string, string>
-      )[status] ?? "Idle";
-    return context ? `${text}: ${context}` : text;
-  }
   function applyStatus(
     row: HTMLElement,
     label: string,
@@ -43,47 +38,13 @@ export function createWorkspaceNavigation(
     context?: string,
   ) {
     row.dataset.status = status;
-    const description = describeStatus(status, context);
-    row.title = `${label} - ${description}`;
-    row.setAttribute("aria-label", `${label}, ${description}`);
+    row.title = `${label} - ${describeNavigationStatus(status, context)}`;
+    row.setAttribute(
+      "aria-label",
+      `${label}, ${describeNavigationStatus(status, context)}`,
+    );
   }
-  function attentionStatus(
-    conversation: import("../types").ConversationState,
-  ): string {
-    if (conversation.status === "failed" || conversation.error) return "failed";
-    if (
-      conversation.pendingPermissions.length ||
-      conversation.status === "waiting"
-    )
-      return "waiting";
-    if (
-      getState().reviews?.some(
-        (r) =>
-          r.originConversationId === conversation.id &&
-          r.rounds.some(
-            (round) =>
-              round.id === r.currentRoundId && round.status === "draft",
-          ),
-      )
-    )
-      return "review";
-    if (
-      conversation.taskStatus === "ready" &&
-      conversation.taskStatusAcknowledgedAt &&
-      (!conversation.taskStatusUpdatedAt ||
-        conversation.taskStatusAcknowledgedAt >=
-          conversation.taskStatusUpdatedAt)
-    )
-      return "";
-    if (conversation.taskStatus) return conversation.taskStatus;
-    if (conversation.status === "ready")
-      return (conversation.completionRevision ?? 0) >
-        (conversation.acknowledgedCompletionRevision ?? 0)
-        ? "ready"
-        : "";
-    return conversation.status;
-  }
-  function closeWorkspace(workspace: WorkspaceState): void {
+  function closeWorkspace(workspace: WorkspaceState, restoreTree = true): void {
     workspace =
       getState().workspaces.find((w) => w.id === workspace.id) ?? workspace;
     const agents = getState().conversations.filter(
@@ -104,6 +65,7 @@ export function createWorkspaceNavigation(
         id: workspace.id,
         ...(force ? { force: true } : {}),
       });
+      if (!restoreTree) return;
       requestAnimationFrame(() => {
         const focused = document.activeElement;
         if (
@@ -128,9 +90,7 @@ export function createWorkspaceNavigation(
         if (row) row.focus();
         else
           document
-            .querySelector<HTMLButtonElement>(
-              'button[aria-label="Switch workspace"]',
-            )
+            .querySelector<HTMLButtonElement>('button[aria-label="Overview"]')
             ?.focus();
       });
     };
@@ -303,387 +263,352 @@ export function createWorkspaceNavigation(
       }
     }
   }
+  async function openItem(
+    item: NavigationItem,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const current = projectNavigation(getState()).find(
+      (row) => row.key === item.key,
+    );
+    if (!current || signal?.aborted) return;
+    await focusWorkspace(current.workspaceId);
+    if (signal?.aborted) return;
+    if (current.kind === "conversation") {
+      await invoke("conversation.show", { id: current.id });
+      if (!signal?.aborted)
+        await invoke("conversation.acknowledge", { id: current.id });
+    } else if (current.kind === "review")
+      await invoke("review.show", { id: current.id });
+    else if (current.kind === "browser")
+      await invoke("pane.focus", {
+        workspace: current.workspaceId,
+        id: current.paneId,
+      });
+  }
+  async function closeItem(
+    item: NavigationItem,
+    includePinned = false,
+    restoreTree = true,
+  ): Promise<void> {
+    const rows = [
+      ...tree.querySelectorAll<HTMLElement>("[data-navigation-key]"),
+    ];
+    const index = rows.findIndex(
+      (row) => row.dataset.navigationKey === item.key,
+    );
+    const order = [
+      ...rows.slice(index + 1),
+      ...rows.slice(0, index).reverse(),
+    ].map((row) => row.dataset.navigationKey);
+    const result = await invoke<{ closed?: boolean }>("pane.close", {
+      workspace: item.workspaceId,
+      id: item.paneId,
+      includePinned,
+    });
+    if (result.closed === false || !restoreTree) return;
+    requestAnimationFrame(() => {
+      const surviving = [
+        ...tree.querySelectorAll<HTMLElement>("[data-navigation-key]"),
+      ];
+      const next =
+        order
+          .map((key) =>
+            surviving.find((row) => row.dataset.navigationKey === key),
+          )
+          .find(Boolean) ?? surviving[0];
+      if (!document.querySelector("dialog[open]")) next?.focus();
+    });
+  }
+  function itemActions(
+    item: NavigationItem,
+    overrides: {
+      rename?: (item: NavigationItem) => void;
+      open?: (item: NavigationItem) => void;
+      newConversation?: (workspace: string) => void;
+      openPane?: (workspace: string, pane: string) => void;
+      restoreTree?: boolean;
+      restoreFocus?: () => void;
+    } = {},
+  ): Array<NavigationAction | null> {
+    const state = getState();
+    const current = projectNavigation(state).find(
+      (row) => row.key === item.key,
+    );
+    if (!current) return [];
+    item = current;
+    const workspace = state.workspaces.find((w) => w.id === item.workspaceId)!;
+    const rename = () =>
+      overrides.rename
+        ? overrides.rename(item)
+        : void (item.kind === "workspace"
+            ? renameWorkspace(item.id)
+            : renameConversation(item.id));
+    const open = () =>
+      overrides.open ? overrides.open(item) : void openItem(item);
+    if (item.kind === "workspace")
+      return [
+        { label: "Open workspace", run: open },
+        {
+          label: "New chat",
+          run: () =>
+            overrides.newConversation
+              ? overrides.newConversation(item.workspaceId)
+              : void focusWorkspace(item.workspaceId).then(() =>
+                  newConversation(),
+                ),
+        },
+        { label: "Rename workspace", run: rename },
+        { label: "Add folder...", run: () => folderDialog(item.workspaceId) },
+        null,
+        {
+          label: "Close workspace",
+          run: () => closeWorkspace(workspace, overrides.restoreTree !== false),
+        },
+      ];
+    const pane = workspace.panes.find((p) => p.id === item.paneId);
+    const group = workspace.groups?.find((g) =>
+      g.paneIds.includes(item.paneId ?? ""),
+    );
+    const tabActions: MenuAction[] = pane
+      ? [
+          null,
+          {
+            label: pane.pinned ? "Unpin tab" : "Pin tab",
+            run: () =>
+              void invoke("pane.pin", {
+                workspace: workspace.id,
+                id: pane.id,
+                pinned: !pane.pinned,
+              }),
+          },
+          {
+            label: "Close tab",
+            run: () =>
+              void closeItem(item, true, overrides.restoreTree !== false),
+          },
+          {
+            label: "Close other tabs",
+            disabled: !group?.paneIds.some(
+              (id) =>
+                id !== pane.id &&
+                !workspace.panes.find((p) => p.id === id)?.pinned,
+            ),
+            run: () =>
+              void invoke("pane.close-many", {
+                workspace: workspace.id,
+                group: group?.id,
+                scope: "others",
+                id: pane.id,
+              }),
+          },
+          {
+            label: "Close all tabs",
+            disabled: !group?.paneIds.some(
+              (id) => !workspace.panes.find((p) => p.id === id)?.pinned,
+            ),
+            run: () =>
+              void invoke("pane.close-many", {
+                workspace: workspace.id,
+                group: group?.id,
+                scope: "all",
+                id: pane.id,
+              }),
+          },
+        ]
+      : [];
+    if (item.kind === "conversation") {
+      const conversation = state.conversations.find((c) => c.id === item.id)!;
+      return [
+        { label: "Open conversation", run: open },
+        ...conversationActions(conversation, rename).map((action) => {
+          if (action?.command !== "conversation.openCli" || !overrides.openPane)
+            return action;
+          const terminal = state.terminals.find(
+            (t) => t.id === conversation.handoffTerminalId,
+          );
+          return {
+            ...action,
+            run: () => {
+              if (terminal) overrides.openPane!(workspace.id, terminal.paneId);
+            },
+          };
+        }),
+        ...tabActions,
+      ];
+    }
+    if (item.kind === "browser")
+      return [
+        { label: "Open tab", run: open },
+        {
+          label: "Reload",
+          run: () => void invoke("browser.reload", { id: item.id }),
+        },
+        ...tabActions,
+      ];
+    return [{ label: "Open review", run: open }, ...tabActions];
+  }
   let renderedSignature = "";
   function renderTree(): void {
-    const host = tree;
-    const nextTree = host.cloneNode(false) as HTMLElement;
-    const next = getState();
+    const items = projectNavigation(getState());
     const signature = JSON.stringify([
-      next.activeWorkspaceId,
+      items,
       editing?.id,
-      next.workspaces.map((w) => [w.id, w.name, w.activePaneId, w.panes]),
-      next.conversations.map((c) => [
-        c.id,
-        c.workspaceId,
-        c.paneId,
-        conversationLabel(c, next),
-        attentionStatus(c),
-        c.taskStatusContext,
-        c.handoffTerminalId,
-      ]),
-      next.terminals.map((t) => [t.id, t.status]),
-      next.reviews?.map((r) => [
-        r.id,
-        r.workspaceId,
-        r.target,
-        r.originConversationId,
-        r.currentRoundId,
-        r.rounds.map((round) => [
-          round.id,
-          round.status,
-          round.submission?.delivery.status,
-        ]),
-      ]),
-      next.browsers.map((b) => [
-        b.id,
-        b.workspaceId,
-        b.title,
-        b.url,
-        b.loading,
-        b.error,
-      ]),
       [...collapsedWorkspaces],
     ]);
     if (signature === renderedSignature) return;
     renderedSignature = signature;
     writePreference("collapsed-workspaces", [...collapsedWorkspaces]);
-    nextTree.replaceChildren();
-    for (const workspace of getState().workspaces) {
-      const reviews = (getState().reviews ?? []).filter((review) => {
-        const current = review.rounds.find(
-          (round) => round.id === review.currentRoundId,
+    const nextTree = tree.cloneNode(false) as HTMLElement;
+    for (const item of items) {
+      if (
+        item.kind !== "workspace" &&
+        collapsedWorkspaces.has(item.workspaceId)
+      )
+        continue;
+      const active =
+        item.active ||
+        (item.kind === "workspace" &&
+          item.workspaceId === getState().activeWorkspaceId &&
+          collapsedWorkspaces.has(item.id));
+      const displayLabel =
+        item.kind === "conversation"
+          ? item.label.slice(0, 80)
+          : item.kind === "browser"
+            ? item.label.slice(0, 160)
+            : item.label;
+      const row = treeRow(item.id, displayLabel, active);
+      row.dataset.navigationKey = item.key;
+      if (item.kind === "browser") {
+        row.title = item.hint ?? item.label;
+        row.setAttribute("aria-label", displayLabel);
+      } else applyStatus(row, displayLabel, item.status, item.context);
+
+      if (item.pinned)
+        row.setAttribute(
+          "aria-label",
+          `${row.getAttribute("aria-label")}, Pinned`,
         );
-        return (
-          review.workspaceId === workspace.id &&
-          current &&
-          current.submission?.delivery.status !== "acknowledged"
+      if (item.parent)
+        row.dataset.parentId = item.parent.slice(item.parent.indexOf(":") + 1);
+      if (item.kind === "workspace") {
+        row.classList.add("workspace-parent");
+        row.setAttribute(
+          "aria-expanded",
+          String(!collapsedWorkspaces.has(item.id)),
         );
-      });
-      const activePane = workspace.panes.find(
-        (pane) => pane.id === workspace.activePaneId,
-      );
-      const activeReview =
-        activePane?.kind === "review" &&
-        reviews.some((review) => review.id === activePane.reviewId);
-      const row = treeRow(
-        workspace.id,
-        workspace.name,
-        workspace.id === getState().activeWorkspaceId &&
-          (collapsedWorkspaces.has(workspace.id) ||
-            (!getState().conversations.some(
-              (c) =>
-                c.workspaceId === workspace.id &&
-                c.paneId === workspace.activePaneId,
-            ) &&
-              !activeReview &&
-              activePane?.kind !== "browser")),
-      );
-      row.setAttribute("aria-label", workspace.name);
-      row.classList.add("workspace-parent");
-      row.setAttribute(
-        "aria-expanded",
-        String(!collapsedWorkspaces.has(workspace.id)),
-      );
-      row.replaceChildren();
-      const parts = treeRowParts(
-        "workspace",
-        workspace.name,
-        () => {
-          if (collapsedWorkspaces.has(workspace.id))
-            collapsedWorkspaces.delete(workspace.id);
-          else collapsedWorkspaces.add(workspace.id);
-          renderTree();
-        },
-        "Expand or collapse workspace",
-      );
-      row.append(...parts.nodes);
-      parts.label.ondblclick = (event) => {
-        event.stopPropagation();
-        void renameWorkspace(workspace.id);
-      };
-      if (editing?.id === workspace.id) {
-        const input = renameInput(workspace.id, "workspace");
-        parts.label.replaceWith(input);
-      }
-      if (collapsedWorkspaces.has(workspace.id)) {
-        const browsers = getState().browsers.filter(
-          (b) => b.workspaceId === workspace.id,
-        ).length;
-        const count =
-          getState().conversations.filter((c) => c.workspaceId === workspace.id)
-            .length + browsers;
-        if (count) {
-          const hiddenCount = document.createElement("span");
-          hiddenCount.className = "workspace-child-count";
-          hiddenCount.textContent = String(count);
-          hiddenCount.setAttribute(
-            "aria-label",
-            `${count} hidden ${browsers ? "item" : "conversation"}${count === 1 ? "" : "s"}`,
-          );
-          hiddenCount.title = hiddenCount.getAttribute("aria-label")!;
-          row.append(hiddenCount);
+        const parts = treeRowParts(
+          "workspace",
+          item.label,
+          () => {
+            if (collapsedWorkspaces.has(item.id))
+              collapsedWorkspaces.delete(item.id);
+            else collapsedWorkspaces.add(item.id);
+            renderedSignature = "";
+            renderTree();
+          },
+          "Expand or collapse workspace",
+        );
+        row.replaceChildren(...parts.nodes);
+        if (collapsedWorkspaces.has(item.id)) {
+          const count = items.filter(
+            (child) =>
+              child.workspaceId === item.id &&
+              ["conversation", "browser"].includes(child.kind),
+          ).length;
+          if (count) {
+            const badge = document.createElement("span");
+            badge.className = "workspace-child-count";
+            badge.textContent = String(count);
+            const conversations = items.filter(
+              (child) =>
+                child.workspaceId === item.id && child.kind === "conversation",
+            ).length;
+            const browsers = count - conversations;
+            badge.setAttribute(
+              "aria-label",
+              [
+                conversations && `${conversations} hidden conversations`,
+                browsers && `${browsers} hidden browser tabs`,
+              ]
+                .filter(Boolean)
+                .join(", "),
+            );
+            row.append(badge);
+          }
         }
+      } else {
+        row.classList.add(`${item.kind}-row`);
+        if (item.kind === "browser") row.dataset.browserId = item.id;
+        const label = document.createElement("span");
+        label.className = "tree-label";
+        label.textContent = displayLabel;
+        row.replaceChildren(icon(item.kind), label);
       }
-      const statuses = getState()
-        .conversations.filter((c) => c.workspaceId === workspace.id)
-        .map(attentionStatus);
-      const attention = [
-        "failed",
-        "waiting",
-        "review",
-        "ready",
-        "working",
-      ].find((s) => statuses.includes(s));
-      const source = getState().conversations.find(
-        (c) =>
-          c.workspaceId === workspace.id && attentionStatus(c) === attention,
-      );
-      applyStatus(
-        row,
-        workspace.name,
-        attention ?? "",
-        source?.taskStatusContext,
-      );
-      row.onclick = () => void focusWorkspace(workspace.id);
-      row.onkeydown = (e) => {
-        if (e.isComposing) return;
-        if (e.key === "Enter") {
-          e.preventDefault();
-          if (!e.repeat) void renameWorkspace(workspace.id);
-        } else if (e.key === " ") {
-          e.preventDefault();
-          if (!e.repeat) void focusWorkspace(workspace.id);
-        } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-          e.preventDefault();
-          if (e.key === "ArrowLeft") collapsedWorkspaces.add(workspace.id);
-          else if (!collapsedWorkspaces.has(workspace.id)) {
-            row.nextElementSibling instanceof HTMLElement &&
-              row.nextElementSibling.dataset.parentId === workspace.id &&
-              row.nextElementSibling.focus();
-            return;
-          } else collapsedWorkspaces.delete(workspace.id);
-          renderTree();
-        } else navigateTree(e, row);
+      const label = row.querySelector<HTMLElement>(".tree-label")!;
+      if (item.kind === "workspace" || item.kind === "conversation") {
+        label.ondblclick = (event) => {
+          event.stopPropagation();
+          void (item.kind === "workspace"
+            ? renameWorkspace(item.id)
+            : renameConversation(item.id));
+        };
+        if (editing?.id === item.id)
+          label.replaceWith(renameInput(item.id, item.kind));
+      }
+      if (item.pinned) {
+        const pin = icon("pin");
+        pin.classList.add("navigation-pin");
+        row.append(pin);
+      }
+      row.onclick = () => void openItem(item);
+      row.oncontextmenu = (event) => {
+        event.preventDefault();
+        menu({ x: event.clientX, y: event.clientY }, itemActions(item));
       };
-      row.oncontextmenu = (e) => {
-        e.preventDefault();
-        menu({ x: e.clientX, y: e.clientY }, [
-          {
-            label: "New chat",
-            run: () =>
-              void focusWorkspace(workspace.id).then(() => newConversation()),
-          },
-          {
-            label: "Rename workspace",
-            run: () => void renameWorkspace(workspace.id),
-          },
-          {
-            label: "Add folder...",
-            run: () =>
-              void focusWorkspace(workspace.id).then(() =>
-                folderDialog(workspace.id),
-              ),
-          },
-          null,
-          {
-            label: "Close workspace",
-            run: () => closeWorkspace(workspace),
-          },
-        ]);
+      row.onkeydown = (event) => {
+        if (event.isComposing) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (event.repeat) return;
+          if (
+            event.key === "Enter" &&
+            (item.kind === "workspace" || item.kind === "conversation")
+          )
+            void (item.kind === "workspace"
+              ? renameWorkspace(item.id)
+              : renameConversation(item.id));
+          else void openItem(item);
+        } else if (
+          item.kind === "workspace" &&
+          ["ArrowLeft", "ArrowRight"].includes(event.key)
+        ) {
+          event.preventDefault();
+          if (event.key === "ArrowLeft") collapsedWorkspaces.add(item.id);
+          else if (!collapsedWorkspaces.has(item.id)) {
+            (row.nextElementSibling as HTMLElement | null)?.focus();
+            return;
+          } else collapsedWorkspaces.delete(item.id);
+          renderedSignature = "";
+          renderTree();
+        } else if (
+          item.kind === "browser" &&
+          ["Delete", "Backspace"].includes(event.key)
+        ) {
+          event.preventDefault();
+          if (!event.repeat) void closeItem(item);
+        } else navigateTree(event, row);
       };
       nextTree.append(row);
-      if (collapsedWorkspaces.has(workspace.id)) continue;
-      for (const conversation of getState().conversations.filter(
-        (c) => c.workspaceId === workspace.id,
-      )) {
-        const label = conversationLabel(conversation, getState()).slice(0, 80);
-        const item = treeRow(
-          conversation.id,
-          label,
-          workspace.id === getState().activeWorkspaceId &&
-            workspace.activePaneId === conversation.paneId,
-        );
-        item.classList.add("conversation-row");
-        item.dataset.parentId = workspace.id;
-        const attention = attentionStatus(conversation);
-        applyStatus(item, label, attention, conversation.taskStatusContext);
-        item.replaceChildren(icon("conversation"));
-        const text = document.createElement("span");
-        text.className = "tree-label";
-        text.textContent = label;
-        item.append(text);
-        text.ondblclick = (event) => {
-          event.stopPropagation();
-          void renameConversation(conversation.id);
-        };
-        if (editing?.id === conversation.id)
-          text.replaceWith(renameInput(conversation.id, "conversation"));
-        item.oncontextmenu = (event) => {
-          event.preventDefault();
-          menu(
-            { x: event.clientX, y: event.clientY },
-            conversationActions(
-              getState().conversations.find((c) => c.id === conversation.id) ??
-                conversation,
-            ),
-          );
-        };
-        item.onclick = () => void activateConversation(conversation.id);
-        item.onkeydown = (e) => {
-          if (e.isComposing) return;
-          if (e.key === "Enter") {
-            e.preventDefault();
-            if (!e.repeat) void renameConversation(conversation.id);
-          } else if (e.key === " ") {
-            e.preventDefault();
-            if (!e.repeat) void activateConversation(conversation.id);
-          } else navigateTree(e, item);
-        };
-        nextTree.append(item);
-      }
-      for (const browser of getState().browsers.filter(
-        (b) => b.workspaceId === workspace.id,
-      )) {
-        const label = (
-          browser.title ||
-          (browser.url === "about:blank" ? "New browser tab" : browser.url)
-        ).slice(0, 160);
-        const item = treeRow(
-          browser.id,
-          label,
-          workspace.id === getState().activeWorkspaceId &&
-            workspace.activePaneId === browser.paneId,
-        );
-        item.classList.add("browser-row");
-        item.dataset.parentId = workspace.id;
-        item.dataset.browserId = browser.id;
-        item.title = browser.error
-          ? `${label} - ${browser.error}`
-          : browser.url;
-        item.replaceChildren(icon("browser"));
-        const text = document.createElement("span");
-        text.className = "tree-label";
-        text.textContent = label;
-        item.append(text);
-        const open = async () => {
-          await focusWorkspace(workspace.id);
-          await invoke("pane.focus", {
-            workspace: workspace.id,
-            id: browser.paneId,
-          });
-        };
-        const close = async (includePinned = false) => {
-          const rows = [
-            ...tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
-          ];
-          const current = rows.findIndex(
-            (row) => row.dataset.browserId === browser.id,
-          );
-          const next = rows[current + 1] ?? rows[current - 1];
-          const key = next?.dataset.workspaceId;
-          const result = await invoke<{ closed?: boolean }>("pane.close", {
-            workspace: workspace.id,
-            id: browser.paneId,
-            includePinned,
-          });
-          if (result.closed === false) return;
-          requestAnimationFrame(() => {
-            if (key)
-              tree
-                .querySelector<HTMLElement>(`[data-workspace-id="${key}"]`)
-                ?.focus();
-          });
-        };
-        item.onclick = () => void open();
-        item.onkeydown = (e) => {
-          if (e.isComposing) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            if (!e.repeat) void open();
-          } else if (e.key === "Delete" || e.key === "Backspace") {
-            e.preventDefault();
-            if (!e.repeat) void close();
-          } else navigateTree(e, item);
-        };
-        item.oncontextmenu = (e) => {
-          e.preventDefault();
-          menu({ x: e.clientX, y: e.clientY }, [
-            { label: "Open tab", run: () => void open() },
-            {
-              label: "Reload",
-              run: () => void invoke("browser.reload", { id: browser.id }),
-            },
-            null,
-            {
-              label: workspace.panes.find((pane) => pane.id === browser.paneId)
-                ?.pinned
-                ? "Unpin tab"
-                : "Pin tab",
-              run: () =>
-                void invoke("pane.pin", {
-                  workspace: workspace.id,
-                  id: browser.paneId,
-                  pinned: !workspace.panes.find(
-                    (pane) => pane.id === browser.paneId,
-                  )?.pinned,
-                }),
-            },
-            { label: "Close tab", run: () => void close(true) },
-          ]);
-        };
-        nextTree.append(item);
-      }
-      for (const review of reviews) {
-        const reviewLabel =
-          review.target.kind === "document"
-            ? review.target.path.split("/").pop() || "Document review"
-            : `Changes · ${review.target.repoRoot.split("/").pop()}`;
-        const item = treeRow(
-          review.id,
-          reviewLabel,
-          workspace.id === getState().activeWorkspaceId &&
-            activePane?.kind === "review" &&
-            activePane.reviewId === review.id,
-        );
-        item.setAttribute("aria-label", reviewLabel);
-        applyStatus(item, reviewLabel, "review");
-        item.classList.add("review-row");
-        item.dataset.parentId = review.originConversationId ?? workspace.id;
-        item.replaceChildren(
-          icon("review"),
-          document.createTextNode(reviewLabel),
-        );
-        const open = async () => {
-          await focusWorkspace(workspace.id);
-          await invoke("review.show", { id: review.id });
-        };
-        item.onclick = () => void open();
-        item.onkeydown = (e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            if (!e.repeat) void open();
-          } else navigateTree(e, item);
-        };
-        const origin = nextTree.querySelector<HTMLElement>(
-          `[data-workspace-id="${review.originConversationId}"]`,
-        );
-        if (origin) {
-          let after: Element = origin;
-          while (after.nextElementSibling?.classList.contains("review-row"))
-            after = after.nextElementSibling;
-          after.after(item);
-        } else nextTree.append(item);
-      }
     }
-    reconcileView(host, nextTree);
+    reconcileView(tree, nextTree);
     const focused =
       document.activeElement?.closest<HTMLElement>('[role="treeitem"]');
     const current =
-      focused && host.contains(focused)
+      focused && tree.contains(focused)
         ? focused
-        : (host.querySelector<HTMLElement>('[aria-selected="true"]') ??
-          host.querySelector<HTMLElement>('[role="treeitem"]'));
-    for (const row of host.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+        : (tree.querySelector<HTMLElement>('[aria-selected="true"]') ??
+          tree.querySelector<HTMLElement>('[role="treeitem"]'));
+    for (const row of tree.querySelectorAll<HTMLElement>('[role="treeitem"]'))
       row.tabIndex = row === current ? 0 : -1;
   }
 
@@ -748,6 +673,9 @@ export function createWorkspaceNavigation(
 
   return {
     render: renderTree,
+    items: () => projectNavigation(getState()),
+    actions: itemActions,
+    open: openItem,
     activate: activateConversation,
     focusWorkspace,
     renameWorkspace,

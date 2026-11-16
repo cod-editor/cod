@@ -51,12 +51,12 @@ export function createFocusManager(
     };
   }
 
-  function restoreFocus(location: FocusLocation): void {
+  function restoreFocus(location: FocusLocation): boolean {
     if (location.browserId) {
       remembered = location;
       nativeOrigin = true;
       focusNative(location.browserId);
-      return;
+      return true;
     }
     let target: HTMLElement | null =
       location.element?.isConnected && location.element.getClientRects().length
@@ -126,6 +126,14 @@ export function createFocusManager(
         ) ?? null;
     target?.focus({ preventScroll: true });
     if (
+      target instanceof HTMLIFrameElement &&
+      /\/preview\.html(?:$|[?#])/.test(target.src)
+    )
+      target.contentWindow?.postMessage(
+        { type: "cod-preview-link-restore" },
+        "*",
+      );
+    if (
       target instanceof HTMLTextAreaElement ||
       (target instanceof HTMLInputElement && target.selectionStart !== null)
     ) {
@@ -137,6 +145,7 @@ export function createFocusManager(
       target.scrollLeft = location.scrollLeft ?? 0;
     }
     if (target) remembered = focusLocation(target);
+    return !!target && document.activeElement === target;
   }
 
   let remembered: FocusLocation = {};

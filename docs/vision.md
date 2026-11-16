@@ -47,14 +47,14 @@ The expected daily use includes 2-4 parallel tasks plus temporary conversations 
 
 ### Workspaces and attention
 
-| ID  | Requirement                                                                                                                                                                     |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WS1 | Create, name, switch and close workspaces containing zero or more folders and multiple repositories.                                                                            |
-| WS2 | Workspaces can start empty and gain chats, folders and other panes as needed.                                                                                                   |
-| WS3 | A visible workspace/session panel shows session activity and attention states, with workspace-level indications when a session needs attention.                                 |
-| WS4 | A shortcut focuses the panel. Arrow keys navigate its workspace and session rows, with keyboard activation. No separate overview or next-needing-attention command is required. |
-| WS6 | Restore workspaces as left: pane layouts, open files and pages, saved conversations and the active pane.                                                                        |
-| WS9 | CLI consumers can observe relevant workspace, session and review state changes. Transport and event schema are implementation decisions.                                        |
+| ID  | Requirement                                                                                                                                                                                                                                                                  |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS1 | Create, name, switch and close workspaces containing zero or more folders and multiple repositories.                                                                                                                                                                         |
+| WS2 | Workspaces can start empty and gain chats, folders and other panes as needed.                                                                                                                                                                                                |
+| WS3 | A visible workspace/session panel shows session activity and attention states, with workspace-level indications when a session needs attention.                                                                                                                              |
+| WS4 | A shortcut focuses the panel. Arrow keys navigate its workspace and session rows, with keyboard activation. A searchable Overview presents the same workspace, conversation, browser and review hierarchy as a command-palette-style overlay; the sidebar remains available. |
+| WS6 | Restore workspaces as left: pane layouts, open files and pages, saved conversations and the active pane.                                                                                                                                                                     |
+| WS9 | CLI consumers can observe relevant workspace, session and review state changes. Transport and event schema are implementation decisions.                                                                                                                                     |
 
 Ship a provider integration plugin with the Cod skill and ready-made status hooks so users do not have to build their own status system. Offer setup in the first conversation for each detected provider profile, with a preview and an explicit install action. Remember dismissal for that profile and keep setup available in Commands. The plugin owns the rules mapping provider events to working, waiting and completion statuses. Users may extend these rules through hooks and scripts.
 Cod owns status storage, display and CLI updates, plus technical process and connection state. Do not duplicate the plugin's task-status rules in the application or infer task completion from a disconnected process.

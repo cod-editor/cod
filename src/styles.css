@@ -151,23 +151,29 @@ body {
 .workspace-row.review-row {
   padding-left: 44px;
 }
-.workspace-row[data-status="working"] > .icon,
+.workspace-row[data-status="working"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="working"] .navigation-item-icon,
 .workspace-row[data-status="working"] > .tree-disclosure,
-.workspace-row[data-status="starting"] > .icon,
+.workspace-row[data-status="starting"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="starting"] .navigation-item-icon,
 .workspace-row[data-status="starting"] > .tree-disclosure {
   color: #85b7ff;
 }
-.workspace-row[data-status="waiting"] > .icon,
+.workspace-row[data-status="waiting"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="waiting"] .navigation-item-icon,
 .workspace-row[data-status="waiting"] > .tree-disclosure,
-.workspace-row[data-status="review"] > .icon,
+.workspace-row[data-status="review"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="review"] .navigation-item-icon,
 .workspace-row[data-status="review"] > .tree-disclosure {
   color: #d9bd85;
 }
-.workspace-row[data-status="ready"] > .icon,
+.workspace-row[data-status="ready"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="ready"] .navigation-item-icon,
 .workspace-row[data-status="ready"] > .tree-disclosure {
   color: #98c379;
 }
-.workspace-row[data-status="failed"] > .icon,
+.workspace-row[data-status="failed"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="failed"] .navigation-item-icon,
 .workspace-row[data-status="failed"] > .tree-disclosure {
   color: #e06c75;
 }
@@ -1923,4 +1929,46 @@ browser-action-list::part(action):focus-visible {
 }
 .tab[data-dragging] {
   opacity: 0.5;
+}
+
+.overview-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--control-height);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-left: calc(var(--tree-depth) * var(--space-3));
+}
+.overview-row .overview-item {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  gap: var(--space-2);
+}
+.overview-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.overview-disclosure {
+  flex: 0 0 var(--control-height);
+}
+.overview-actions {
+  opacity: 0;
+}
+.overview-row:hover .overview-actions,
+.overview-row:has(.selected) .overview-actions,
+.overview-actions:focus-visible {
+  opacity: 1;
+}
+.overview-row:has([data-active="true"]) {
+  box-shadow: inset 2px 0 var(--focus);
+}
+.overview-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-disclosure[aria-expanded="true"] > .icon {
+  transform: rotate(90deg);
 }

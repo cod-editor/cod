@@ -141,7 +141,7 @@ export class WorkspaceApp {
       .toBe(true);
     await this.page.locator('body[data-ready="true"]').waitFor();
     await this.page
-      .getByRole("button", { name: "Switch workspace", exact: true })
+      .getByRole("button", { name: "Overview", exact: true })
       .waitFor();
     // Health probing must not dump every retained history and attachment.
     await expect
@@ -217,7 +217,7 @@ export class WorkspaceApp {
     ).id;
     await this.cli("workspace", "focus", "--id", id);
     await expect(
-      this.page.getByRole("button", { name: "Switch workspace", exact: true }),
+      this.page.getByRole("button", { name: "Overview", exact: true }),
     ).toHaveText(name);
     return id;
   }

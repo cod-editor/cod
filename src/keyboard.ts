@@ -106,6 +106,13 @@ export const commands = [
     "open session",
     "start session",
   ]),
+  entry(
+    "workspace.overview",
+    "Overview",
+    "Navigation",
+    [key("KeyO", { mod: true, shift: true })],
+    ["switch workspace", "switch conversation", "switch browser"],
+  ),
   entry("workspace.focusTree", "Focus workspaces / return", "Navigation", [
     key("KeyW", { mod: true, shift: true }),
   ]),
@@ -445,6 +452,16 @@ export const localGestures: readonly {
   context: string;
   aliases?: readonly string[];
 }[] = [
+  {
+    title: "Collapse or go to parent",
+    keys: ["Alt+Left"],
+    context: "Overview with empty search",
+  },
+  {
+    title: "Expand or go to child",
+    keys: ["Alt+Right"],
+    context: "Overview with empty search",
+  },
   { title: "Zoom image", keys: ["+", "-"], context: "Image preview" },
   { title: "Fit image to pane", keys: ["0"], context: "Image preview" },
   { title: "Show image at actual size", keys: ["1"], context: "Image preview" },

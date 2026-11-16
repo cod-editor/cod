@@ -1391,7 +1391,7 @@ test("Development builds explain why default browser registration needs a packag
   expect(status.reason).toContain("packaged");
   expect((await shell.raw("browser", "register-default")).code).not.toBe(0);
   await shell.page
-    .getByRole("button", { name: "Switch workspace", exact: true })
+    .getByRole("button", { name: "Overview", exact: true })
     .focus();
   await shell.command("Default browser...");
   const dialog = shell.page.getByRole("dialog", {

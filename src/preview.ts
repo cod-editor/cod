@@ -1,6 +1,19 @@
 import { renderMarkdown } from "./markdown-view";
 let revision = 0;
 let linkReturn: { element: HTMLElement; range?: Range } | undefined;
+function rememberFocus(element = document.activeElement as HTMLElement) {
+  const selection = window.getSelection();
+  linkReturn = {
+    element,
+    range: selection?.rangeCount
+      ? selection.getRangeAt(0).cloneRange()
+      : undefined,
+  };
+}
+// The parent can return focus after a modal without discarding the inner target.
+document.addEventListener("focusout", (event) => {
+  if (event.target instanceof HTMLElement) rememberFocus(event.target);
+});
 window.addEventListener("message", (event) => {
   if (
     event.source === parent &&
@@ -51,13 +64,7 @@ document.addEventListener("contextmenu", (event) => {
   const href = link?.getAttribute("href") ?? "";
   if (!/^https?:\/\//i.test(href)) return;
   event.preventDefault();
-  const selection = window.getSelection();
-  linkReturn = {
-    element: document.activeElement as HTMLElement,
-    range: selection?.rangeCount
-      ? selection.getRangeAt(0).cloneRange()
-      : undefined,
-  };
+  rememberFocus();
   parent.postMessage(
     { type: "cod-preview-link-menu", href, x: event.clientX, y: event.clientY },
     "*",
