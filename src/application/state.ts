@@ -174,9 +174,59 @@ export class ApplicationStateStore {
       throw error;
     }
   }
-  snapshot(): AppState {
+  snapshot(visibleConversationsOnly = false): AppState {
     this.data.workspaces.forEach(normalizeGroups);
-    return structuredClone(this.data);
+    if (!visibleConversationsOnly) return structuredClone(this.data);
+    const workspace = this.data.workspaces.find(
+      (item) => item.id === this.data.activeWorkspaceId,
+    );
+    const visiblePanes = new Set(
+      workspace?.groups
+        ?.filter(
+          (group) =>
+            !group.hidden &&
+            (!workspace.zoomedGroupId || workspace.zoomedGroupId === group.id),
+        )
+        .map((group) => group.activePaneId),
+    );
+    return structuredClone({
+      ...this.data,
+      conversations: this.data.conversations.map((conversation) => {
+        if (
+          conversation.workspaceId === workspace?.id &&
+          visiblePanes.has(conversation.paneId)
+        )
+          return conversation;
+        // Hidden tabs need their label and attention state, not their complete
+        // transcript, tool output or image payload on every navigation update.
+        const first = conversation.messages.find(
+          (message) => message.role === "user",
+        );
+        return {
+          ...conversation,
+          messages: first
+            ? [
+                {
+                  ...first,
+                  images: first.images?.map((image) => ({
+                    ...image,
+                    data: "",
+                  })),
+                },
+              ]
+            : [],
+          tools: [],
+          turns: undefined,
+          metadata: undefined,
+        };
+      }),
+      // Closed workspaces are restored by an operation; the renderer only needs
+      // their identity for the reopen menu.
+      closedWorkspaces: this.data.closedWorkspaces?.map((record) => ({
+        ...record,
+        conversations: [],
+      })),
+    });
   }
   workspace(id: string): WorkspaceState {
     const workspace = this.data.workspaces.find((item) => item.id === id);
@@ -251,7 +301,20 @@ export class ApplicationStateStore {
     mutation: () => T | Promise<T>,
     options: { notify?: boolean },
   ): Promise<T> {
-    const before = this.snapshot();
+    this.data.workspaces.forEach(normalizeGroups);
+    // rollbackState deliberately preserves live provider fields. Copying those
+    // transcripts here cannot help rollback and multiplies allocation on every
+    // unrelated pane, browser or workspace mutation.
+    const before = structuredClone({
+      ...this.data,
+      conversations: this.data.conversations.map((conversation) => ({
+        ...conversation,
+        messages: [],
+        tools: [],
+        turns: undefined,
+        metadata: undefined,
+      })),
+    });
     const original = {
       ...this.data,
       workspaces: [...this.data.workspaces],
@@ -274,7 +337,7 @@ export class ApplicationStateStore {
     if (!coalesce) {
       if (this.notificationTimer) clearTimeout(this.notificationTimer);
       this.notificationTimer = undefined;
-      this.onDidChange?.(this.snapshot());
+      this.onDidChange?.(this.snapshot(true));
       return;
     }
     if (this.notificationTimer || this.closing) return;
@@ -282,7 +345,7 @@ export class ApplicationStateStore {
     // Snapshot the latest state once per batch, not once per token/tool event.
     this.notificationTimer = setTimeout(() => {
       this.notificationTimer = undefined;
-      if (!this.closing) this.onDidChange?.(this.snapshot());
+      if (!this.closing) this.onDidChange?.(this.snapshot(true));
     }, 50);
     this.notificationTimer.unref();
   }

@@ -978,7 +978,9 @@ export class BrowserApplicationService {
         });
       }
       this.store.schedulePersist();
-      this.store.notify();
+      // Native navigation emits several snapshots for URL, title, loading and
+      // history changes. Publish the latest state once per existing UI batch.
+      this.store.notify(true);
     }
   }
 

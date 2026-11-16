@@ -1,0 +1,259 @@
+import { test, after } from "node:test";
+import assert from "node:assert/strict";
+import { build } from "esbuild";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+// Bundle the same application classes as Electron: their UI-side imports use
+// extensionless module paths that the native TypeScript runner cannot resolve.
+const { outputFiles } = await build({
+  stdin: {
+    contents:
+      'export { ConversationApplicationService } from "./src/application/conversation-service.ts"; export { ApplicationStateStore } from "./src/application/state.ts";',
+    resolveDir: process.cwd(),
+  },
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  write: false,
+});
+const moduleDirectory = await mkdtemp(
+  path.join(os.tmpdir(), "cod-provider-module-"),
+);
+const moduleFile = path.join(moduleDirectory, "service.mjs");
+await writeFile(moduleFile, outputFiles[0].text);
+after(() => rm(moduleDirectory, { recursive: true, force: true }));
+const { ConversationApplicationService, ApplicationStateStore } = await import(
+  pathToFileURL(moduleFile).href
+);
+
+async function fixture() {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "cod-provider-events-"),
+  );
+  const store = new ApplicationStateStore(directory);
+  await store.load();
+  store.data.conversations.push({
+    id: "conversation",
+    workspaceId: "workspace",
+    paneId: "pane",
+    provider: "codex",
+    nativeId: "fixture",
+    status: "ready",
+    messages: [],
+    tools: [],
+    pendingPermissions: [],
+  });
+  let snapshots = 0;
+  let persists = 0;
+  store.onDidChange = () => snapshots++;
+  const persist = store.persist.bind(store);
+  store.persist = async () => {
+    persists++;
+    await persist();
+  };
+  const service = new ConversationApplicationService(store, {}, {});
+  const event = (body) =>
+    service.providerEvent("conversation", {
+      provider: "codex",
+      nativeId: "fixture",
+      ...body,
+    });
+  return {
+    store,
+    event,
+    counters: () => ({ snapshots, persists }),
+    async close() {
+      store.beginShutdown();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+test("Informational provider diagnostics and ignored history do not rewrite or broadcast state", async () => {
+  const app = await fixture();
+  try {
+    for (let index = 0; index < 8; index++) {
+      app.event({
+        type: "diagnostic",
+        message: "Invented provider diagnostic",
+      });
+      app.event({
+        type: "history",
+        details: { thread: { id: "fixture", turns: [] } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    assert.deepEqual(app.counters(), { snapshots: 0, persists: 0 });
+    assert.equal(app.store.data.conversations[0].status, "ready");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Actual provider state and reply changes still notify and persist", async () => {
+  const app = await fixture();
+  try {
+    app.event({ type: "state", state: "working" });
+    app.event({
+      type: "text",
+      text: "Invented visible reply",
+      role: "assistant",
+      replay: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    assert.equal(app.store.data.conversations[0].status, "working");
+    assert.ok(app.counters().snapshots > 0);
+    assert.ok(app.counters().persists > 0);
+    assert.ok(
+      app.store.data.conversations[0].messages.some((message) =>
+        message.text.includes("Invented visible reply"),
+      ),
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("UI snapshots retain labels and attention without copying hidden history or images", async () => {
+  const app = await fixture();
+  try {
+    const makeWorkspace = (id, conversation) => ({
+      id,
+      name: "Invented workspace",
+      folders: [],
+      panes: [
+        {
+          id: conversation.paneId,
+          kind: "conversation",
+          conversationId: conversation.id,
+        },
+      ],
+      activePaneId: conversation.paneId,
+      layout: { type: "leaf", paneId: conversation.paneId },
+    });
+    const visible = app.store.data.conversations[0];
+    const hidden = {
+      ...visible,
+      id: "hidden",
+      paneId: "hidden-pane",
+      workspaceId: "background",
+      messages: [
+        {
+          id: "question",
+          role: "user",
+          order: 0,
+          text: "Invented question",
+          images: [
+            {
+              mimeType: "image/png",
+              name: "Invented image",
+              data: "x".repeat(1024 * 1024),
+            },
+          ],
+        },
+        {
+          id: "answer",
+          role: "assistant",
+          order: 1,
+          text: "Invented history ".repeat(64000),
+        },
+      ],
+      tools: [
+        {
+          id: "tool",
+          order: 2,
+          details: { output: "Invented output ".repeat(64000) },
+        },
+      ],
+      pendingPermissions: [
+        { id: "approval", description: "Invented approval" },
+      ],
+      completionRevision: 3,
+    };
+    app.store.data.conversations.push(hidden);
+    app.store.data.workspaces.push(
+      makeWorkspace("workspace", visible),
+      makeWorkspace("background", hidden),
+    );
+    app.store.data.activeWorkspaceId = "workspace";
+    const projected = app.store.snapshot(true);
+    assert.ok(JSON.stringify(projected).length < 10000);
+    assert.equal(
+      projected.conversations[1].messages[0].text,
+      "Invented question",
+    );
+    assert.equal(
+      projected.conversations[1].messages[0].images[0].name,
+      "Invented image",
+    );
+    assert.deepEqual(
+      projected.conversations[1].pendingPermissions,
+      hidden.pendingPermissions,
+    );
+    assert.equal(projected.conversations[1].completionRevision, 3);
+    assert.equal(app.store.snapshot().conversations[1].messages.length, 2);
+    assert.equal(hidden.messages[0].images[0].data.length, 1024 * 1024);
+    app.store.data.activeWorkspaceId = "background";
+    assert.deepEqual(app.store.snapshot(true).conversations[1], hidden);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Failed navigation persistence rolls back layout while retaining live provider data", async () => {
+  const app = await fixture();
+  try {
+    const conversation = app.store.data.conversations[0];
+    app.store.data.workspaces.push({
+      id: "workspace",
+      name: "Original",
+      folders: [],
+      panes: [
+        { id: "pane", kind: "conversation", conversationId: conversation.id },
+      ],
+      activePaneId: "pane",
+      layout: { type: "leaf", paneId: "pane" },
+    });
+    app.store.data.activeWorkspaceId = "workspace";
+    conversation.messages.push({
+      id: "first",
+      role: "user",
+      order: 0,
+      text: "Invented question",
+    });
+    conversation.queuedMessages = [
+      { id: "queued", text: "Invented queued message", status: "queued" },
+    ];
+    app.store.persist = async () => {
+      conversation.messages.push({
+        id: "reply",
+        role: "assistant",
+        order: 1,
+        text: "Invented live reply",
+      });
+      conversation.status = "working";
+      throw new Error("Invented disk failure");
+    };
+    await assert.rejects(
+      app.store.change(() => {
+        app.store.data.workspaces[0].name = "Changed";
+        conversation.queuedMessages[0].text = "Changed queued message";
+      }),
+      /Invented disk failure/,
+    );
+    assert.equal(app.store.data.workspaces[0].name, "Original");
+    assert.equal(app.store.data.conversations[0], conversation);
+    assert.equal(conversation.messages[1].text, "Invented live reply");
+    assert.equal(conversation.status, "working");
+    assert.equal(
+      conversation.queuedMessages[0].text,
+      "Invented queued message",
+    );
+  } finally {
+    await app.close();
+  }
+});

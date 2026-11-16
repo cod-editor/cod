@@ -116,8 +116,11 @@ export class ApplicationOperations {
     return this.browsers.diagnosticContext(contentsId);
   }
 
-  snapshot(): AppState {
-    return this.store.snapshot();
+  get activeWorkspaceId(): string | null {
+    return this.store.data.activeWorkspaceId;
+  }
+  snapshot(forUi = false): AppState {
+    return this.store.snapshot(forUi);
   }
 
   async dispatch(
@@ -240,7 +243,7 @@ export class ApplicationOperations {
         };
       }
       case "state":
-        return this.snapshot();
+        return this.snapshot(trustedUi);
 
       default:
         throw new Error(`Unknown operation: ${request.op}`);
