@@ -9,6 +9,7 @@ import {
 export function installPageContextMenu(
   contents: WebContents,
   window: BrowserWindow,
+  inspect = false,
 ) {
   contents.on("context-menu", (_event, params) => {
     const run = (action: () => void) => () => {
@@ -54,6 +55,19 @@ export function installPageContextMenu(
             },
           ]),
       { label: "Select all", click: run(() => contents.selectAll()) },
+      ...(inspect
+        ? [
+            { type: "separator" as const },
+            {
+              label: "Inspect element",
+              click: run(() => {
+                if (!contents.isDevToolsOpened())
+                  contents.openDevTools({ mode: "detach" });
+                contents.inspectElement(params.x, params.y);
+              }),
+            },
+          ]
+        : []),
       ...(params.linkURL
         ? [
             { type: "separator" as const },

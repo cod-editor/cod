@@ -438,3 +438,40 @@ test("Positional pane overrides retain declared native authority and terminal ed
     }
   }
 });
+
+test("Developer Tools uses function keys without admitting text shortcuts or terminal editing theft", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    configureKeymap({}, platform);
+    for (const surface of [
+      "shell",
+      "editor",
+      "composer",
+      "terminal",
+      "browser",
+      "agent-page",
+    ] as const)
+      assert.equal(
+        resolveKeybinding(input("F12"), platform, surface)?.command,
+        "devtools.toggle",
+      );
+    configureKeymap({ "devtools.toggle": ["F12"] }, platform);
+    assert.equal(
+      resolveKeybinding(input("F12"), platform, "browser")?.command,
+      "devtools.toggle",
+    );
+    assert.throws(() =>
+      configureKeymap({ "devtools.toggle": ["i"] }, platform),
+    );
+    configureKeymap({}, platform);
+  }
+  configureKeymap({ "devtools.toggle": ["Mod+K"] }, "linux");
+  assert.equal(
+    resolveKeybinding(input("k", { ctrlKey: true }), "linux", "shell")?.command,
+    "devtools.toggle",
+  );
+  assert.equal(
+    resolveKeybinding(input("k", { ctrlKey: true }), "linux", "terminal"),
+    undefined,
+  );
+  configureKeymap({}, "linux");
+});

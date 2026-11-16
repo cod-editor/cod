@@ -84,6 +84,9 @@ export class ApplicationOperations {
   browserStopFind(id: string): void {
     this.browsers.browserStopFind(id);
   }
+  browserDevTools(id: string): void {
+    this.browsers.browserDevTools(id);
+  }
   browserFocus(id: string): void {
     this.browsers.browserFocus(id);
   }
