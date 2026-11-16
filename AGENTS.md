@@ -10,6 +10,10 @@ New user defect reports go to the front of the pending repair queue. Preserve th
 
 For an authorized repair backlog, continue from each verified checkpoint to the next agreed item without requiring a new prompt. Publishing a checkpoint or reporting status does not complete the backlog. Use completion notifications for long checks and resume dependent work when they finish; stop only for an actual blocker, a user pause or completion of the requested scope.
 
+GitHub Issues in this repository are the canonical repair queue. Search existing issues before creating one; keep one current issue per coherent outcome, with concise acceptance criteria, ordering/dependency links and the implementation PR. Record planning-only work explicitly: an issue does not itself authorize implementation. Task owners maintain their issues through verification and publication, and close them only after the relevant checked merge or an evidence-backed audit. Use Completed for delivered behavior and Not planned for obsolete or duplicate work, linking the surviving issue when applicable. Keep historical architecture reports out of the active queue unless their requirement or defect still applies to the current application.
+
+Before publishing an issue, comment, PR or attachment, inspect its exact content and sanitize it. Publish only product behavior and invented fixtures: no personal or employer information, internal names/URLs/IPs, account/profile details, personal filesystem paths, screenshots of real work, raw logs or session transcripts. Keep private evidence in ignored local artifacts and publish only the minimum conclusion needed to understand the issue.
+
 1. Identify the user outcome, requirements and relevant compatibility gaps before choosing an implementation.
 2. Make focused changes with clear module boundaries. Keep UI, CLI, persistence and native provider behavior aligned.
 3. Verify observable behavior with appropriate tests. Use real Electron, Git and PTYs with invented fixture data; distinguish protocol fixtures from live compatibility.
