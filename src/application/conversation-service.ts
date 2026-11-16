@@ -1,3 +1,4 @@
+import { conversationHandoffReason } from "../conversation-actions";
 import { parseProviderCommand } from "../provider-commands";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -479,22 +480,19 @@ export class ConversationApplicationService {
   async handoffConversation(
     id: string,
   ): Promise<{ id: string; paneId: string; terminalId: string }> {
-    const conversation = this.store.conversation(id);
-    if (conversation.handoffTerminalId)
-      throw new Error("Conversation is already handed off");
-    if (
-      this.activeTurns.has(id) ||
-      this.controllerInitializations.has(id) ||
-      conversation.queuedMessages?.length ||
-      conversation.pendingPermissions.length ||
-      conversation.status === "starting"
-    )
-      throw new Error(
-        "Finish or interrupt the active turn before continuing in CLI",
-      );
-    const workspace = this.store.workspace(conversation.workspaceId);
     const terminalId = randomUUID();
-    conversation.handoffTerminalId = terminalId;
+    const { conversation, workspace } = await this.store.serialize(() => {
+      const conversation = this.store.conversation(id);
+      const reason = conversationHandoffReason(this.store.data, conversation);
+      if (reason) throw new Error(reason);
+      if (this.activeTurns.has(id) || this.controllerInitializations.has(id))
+        throw new Error(
+          "Finish or interrupt the active turn before continuing in CLI",
+        );
+      const workspace = this.store.workspace(conversation.workspaceId);
+      conversation.handoffTerminalId = terminalId;
+      return { conversation, workspace };
+    });
     try {
       const resolved = await resolveProviderExecutable(conversation.provider);
       await this.disposeController(id);

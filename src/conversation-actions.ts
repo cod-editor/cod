@@ -25,6 +25,40 @@ export function conversationRemovalReason(
     conversation.pendingPermissions.length
   )
     return "Stop the current response before removing this chat.";
+  const feedback = pendingFeedback(state, conversation);
+  if (feedback === "review")
+    return "Finish the pending review before removing its originating chat.";
+  if (feedback === "page")
+    return "Finish or close the interactive page before removing its originating chat.";
+  return undefined;
+}
+
+/** UI and host share the same feedback and native ownership guard. */
+export function conversationHandoffReason(
+  state: AppState,
+  conversation: ConversationState,
+): string | undefined {
+  if (conversation.handoffTerminalId)
+    return "Conversation is already handed off";
+  if (conversation.queuedMessages?.length)
+    return "Send or cancel queued messages first";
+  if (
+    ["starting", "working", "waiting"].includes(conversation.status) ||
+    conversation.pendingPermissions.length
+  )
+    return "Finish or interrupt the active response first";
+  const feedback = pendingFeedback(state, conversation);
+  if (feedback === "review")
+    return "Finish the pending review before continuing its originating chat in CLI.";
+  if (feedback === "page")
+    return "Finish or close the interactive page before continuing its originating chat in CLI.";
+  return undefined;
+}
+
+function pendingFeedback(
+  state: AppState,
+  conversation: ConversationState,
+): "review" | "page" | undefined {
   if (
     state.reviews?.some(
       (review) =>
@@ -37,7 +71,7 @@ export function conversationRemovalReason(
           )),
     )
   )
-    return "Finish the pending review before removing its originating chat.";
+    return "review";
   if (
     state.browsers.some(
       (browser) =>
@@ -45,6 +79,6 @@ export function conversationRemovalReason(
         browser.agentPage.submission?.status !== "completed",
     )
   )
-    return "Finish or close the interactive page before removing its originating chat.";
+    return "page";
   return undefined;
 }
