@@ -223,6 +223,18 @@ test("Overview uses one compact selection surface with first-line controls at no
       ),
     });
   }
+  await search().press("Tab");
+  const actions = overview().getByRole("button", {
+    name: `Actions for ${label}`,
+    exact: true,
+  });
+  await expect(actions).toBeFocused();
+  expect(
+    await actions.evaluate((node) => getComputedStyle(node).outlineStyle),
+  ).toBe("solid");
+  await overview().screenshot({
+    path: info.outputPath("overview-actions-focus.png"),
+  });
   await search().press("Escape");
   await expect(
     app

@@ -296,3 +296,8 @@ button:is(.selected, :focus-visible) .ui-button-description {
 .ui-picker-row > .icon-button {
   margin-top: var(--space-1);
 }
+
+.command-list .ui-picker-row > button:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -1px;
+}
