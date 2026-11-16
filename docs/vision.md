@@ -122,7 +122,7 @@ Application chrome uses shared control components and a compact spacing scale. F
 | W8  | Built-in ad blocking using an existing engine, with a per-site toggle. It must be comparable to AdGuard on representative daily-use sites, including ads, leftover clutter and page breakage. |
 
 The goal is to replace the user's primary browser, not to promise every Chrome feature.
-New tabs provide an address/search field and a quiet grid of user-pinned sites shared across workspaces. Do not show recent sites, a Favorites heading or a persistent bookmarks bar. Bookmark controls, if added, stay out of the default layout. Bitwarden and ad blocking are the required extension use cases.
+New browser tabs provide an address/search field and a quiet grid of user-pinned sites shared across workspaces. Do not show recent sites, a Favorites heading or a persistent bookmarks bar. Bookmark controls, if added, stay out of the default layout. Bitwarden and ad blocking are the required extension use cases.
 Bitwarden compatibility does not imply support for arbitrary extensions or an extension store.
 Apple Passwords is not a v1 requirement. Cookie importing is not needed.
 Agent screenshots and agent browser control are outside v1; opening a URL through codctl remains in scope.
@@ -138,9 +138,10 @@ Agent screenshots and agent browser control are outside v1; opening a URL throug
 | P4  | Clear modules, few dependencies, quick builds and modest development disk use.                                                                          |
 
 The visible workspace panel is the starting navigation model. It lists expandable workspaces with summarized attention status, conversation and browser-tab children and pending review requests beneath their originating conversations. Selecting a conversation or request jumps directly to it, including across workspaces. Tabs still arrange open content within each workspace. Browser notifications may later join this navigation model; notification infrastructure is deferred. Workspace-row context menus provide Rename, Add folder and Close workspace. Repository-root context menus provide removal from the workspace without deleting files. File browsing, quick-open by filename and workspace text search are separate interactions.
-Workspace rows have no separate disclosure arrow. Clicking the workspace icon toggles its children; clicking its label selects the workspace. A collapsed row shows a muted conversation count. Preserve manual collapse across restart and ordinary selection/status updates; explicitly navigating to a hidden conversation reveals it.
+Workspace rows have no separate disclosure arrow. Clicking the workspace icon toggles its children; clicking its label selects the workspace. A collapsed row shows a muted count of its conversations and browser tabs. Preserve manual collapse across restart and ordinary selection/status updates; explicitly navigating to a hidden conversation reveals it.
 There is no separate overview dashboard requirement.
 A new workspace opens with chat as its main view, with a provider selector in the chat rather than a separate provider-selection step. Existing workspaces reopen as left.
+The general New tab action opens a blank tab with a compact choice of file, browser, chat or terminal in the selected pane. Choosing content replaces that tab in place. Direct creation commands remain available, and blank tabs survive restart without starting a native process.
 Chat content and input use the available pane width up to a configurable pixel maximum. Keep input at the bottom in both empty and populated chats, without moving it after the first message.
 Add folder uses the native directory chooser from workspace and file-tree context menus, including an empty tree. Settings is available from the application menu, command palette and Cmd/Ctrl+,; interface, editor, chat and terminal text sizes persist independently without zooming web pages.
 
