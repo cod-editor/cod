@@ -1929,6 +1929,8 @@ browser-action-list::part(action):focus-visible {
 }
 
 .overview-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--control-height);
   display: flex;
   align-items: center;
   gap: var(--space-1);

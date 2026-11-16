@@ -519,7 +519,20 @@ export function createWorkspaceNavigation(
             const badge = document.createElement("span");
             badge.className = "workspace-child-count";
             badge.textContent = String(count);
-            badge.setAttribute("aria-label", `${count} hidden items`);
+            const conversations = items.filter(
+              (child) =>
+                child.workspaceId === item.id && child.kind === "conversation",
+            ).length;
+            const browsers = count - conversations;
+            badge.setAttribute(
+              "aria-label",
+              [
+                conversations && `${conversations} hidden conversations`,
+                browsers && `${browsers} hidden browser tabs`,
+              ]
+                .filter(Boolean)
+                .join(", "),
+            );
             row.append(badge);
           }
         }

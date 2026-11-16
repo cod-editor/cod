@@ -20,7 +20,10 @@ export function createSearchList(
     ),
   ];
   function select(button: HTMLButtonElement | undefined, scroll = false): void {
-    if (selected === button && button?.classList.contains("selected")) return;
+    if (selected === button && button?.classList.contains("selected")) {
+      if (scroll) button.scrollIntoView({ block: "nearest" });
+      return;
+    }
     selected?.classList.remove("selected");
     selected?.removeAttribute("aria-current");
     selected = button;

@@ -865,10 +865,10 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
     codex: { extraTools: 50, streamDelayMs: 500, finalDelayMs: 2000 },
   });
   await app.start();
-  const baselineNodes = await app.page.evaluate(
-    () => document.getElementsByTagName("*").length,
-  );
   await app.send(stream.id, "Invented Overview traffic");
+  await expect
+    .poll(() => app.inspect(stream.id).then((c) => c.status))
+    .toBe("working");
   await show();
   await search().evaluate((input) => {
     const measured = window as any;
@@ -896,6 +896,9 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
     await expect(overview().locator("button.overview-item")).toHaveCount(
       index % 2 ? 2 : 1050,
     );
+    await expect(
+      overview().locator('.overview-item[aria-selected="true"]'),
+    ).toBeInViewport();
   }
   const timings: number[] = await app.page.evaluate(
     () => (window as any).overviewTimings,
@@ -923,12 +926,41 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
   ).toBe(true);
   expect(metrics.p95Ms).toBeLessThan(100);
   expect(metrics.maxMs!).toBeLessThan(200);
+  await search().fill("Invented");
+  const last = overview().locator("button.overview-item").last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toBeInViewport();
+  await last.hover();
+  await expect(last).toHaveAttribute("aria-selected", "true");
+  await search().press("ArrowDown");
+  await search().press("ArrowUp");
+  await expect(last).toHaveAttribute("aria-selected", "true");
+  await expect(last).toBeInViewport();
+  await search().press("Shift+F10");
+  await expect(
+    app.page.getByRole("dialog", { name: "Actions", exact: true }),
+  ).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await expect(search()).toBeFocused();
   await search().press("Escape");
+  // Compare lifecycle counts after background metadata has settled.
+  await expect
+    .poll(() => app.inspect(stream.id).then((c) => c.status))
+    .toBe("ready");
+  await expect(
+    app.page.locator(
+      '#workspace-tree [data-navigation-key="workspace:invented-workspace-49"]',
+    ),
+  ).toHaveAttribute("data-status", "ready");
+  const baselineNodes = await app.page.evaluate(
+    () => document.getElementsByTagName("*").length,
+  );
   for (let index = 0; index < 20; index++) {
     await show();
     await search().press("Escape");
   }
-  await expect(overview()).toHaveCount(0);
+  // A closed native dialog leaves the accessibility tree before its close event.
+  await expect(app.page.locator("dialog.workspace-overview")).toHaveCount(0);
   expect(
     await app.page.evaluate(() => document.getElementsByTagName("*").length),
   ).toBeLessThanOrEqual(baselineNodes + 5);

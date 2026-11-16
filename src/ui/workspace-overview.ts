@@ -405,7 +405,8 @@ export function createWorkspaceOverview(
       const searching = !!input.value.trim();
       if (searching && !wasSearching) unfilteredScroll = list.scrollTop;
       refresh();
-      if (!searching && wasSearching) list.scrollTop = unfilteredScroll;
+      if (searching) highlight(selectedKey, true);
+      else if (wasSearching) list.scrollTop = unfilteredScroll;
       wasSearching = searching;
     });
     dialog.addEventListener("keydown", (event) => {
