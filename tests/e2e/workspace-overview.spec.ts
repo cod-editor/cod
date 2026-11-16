@@ -1029,7 +1029,7 @@ test("Overview cancellation uses the current pane when its original pane was rem
   ).toBeFocused();
 });
 
-test("Overview opens from a Markdown preview and returns to its focused link", async () => {
+test("Overview and Commands open from a Markdown preview and return to its focused link", async () => {
   const workspace = await app.create("Invented preview origin");
   const file = path.join(app.folders[0], "overview-preview.md");
   await writeFile(
@@ -1047,16 +1047,22 @@ test("Overview opens from a Markdown preview and returns to its focused link", a
   const link = frame.getByRole("link", { name: "Example" });
   await link.focus();
   await expect(link).toBeFocused();
-  await app.app!.evaluate(({ BrowserWindow }) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents;
-    const modifiers: ("meta" | "control" | "shift")[] = [
-      process.platform === "darwin" ? "meta" : "control",
-      "shift",
-    ];
-    contents.sendInputEvent({ type: "keyDown", keyCode: "O", modifiers });
-    contents.sendInputEvent({ type: "keyUp", keyCode: "O", modifiers });
-  });
-  await expect(search()).toBeFocused();
-  await search().press("Escape");
-  await expect(link).toBeFocused();
+  for (const keyCode of ["O", "P"]) {
+    await app.app!.evaluate(({ BrowserWindow }, keyCode) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      const modifiers: ("meta" | "control" | "shift")[] = [
+        process.platform === "darwin" ? "meta" : "control",
+        "shift",
+      ];
+      contents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+      contents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    }, keyCode);
+    const field =
+      keyCode === "O"
+        ? search()
+        : app.page.getByRole("textbox", { name: "Filter commands" });
+    await expect(field).toBeFocused();
+    await field.press("Escape");
+    await expect(link).toBeFocused();
+  }
 });

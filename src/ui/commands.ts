@@ -1523,10 +1523,20 @@ export function createCommands(
     dialog.classList.add("picker", "command-palette", "search-picker");
     dialog.append(input, list);
     document.body.append(dialog);
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      dialog.close();
+      // Restore the invoker's caret now; the native close event may arrive
+      // after a newer focus command or another edit in that same control.
+      if (!performed) focus.restore(returnFocus);
+    });
     dialog.addEventListener("close", () => {
+      const restore =
+        dialog.contains(document.activeElement) ||
+        document.activeElement === document.body;
       dialog.remove();
       if (refreshPalette === refresh) refreshPalette = undefined;
-      if (!performed) focus.restore(returnFocus);
+      if (!performed && restore) focus.restore(returnFocus);
     });
     dialog.showModal();
     input.focus();
