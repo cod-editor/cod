@@ -25,7 +25,8 @@
     "test:reviews": "npm run build && node --test tests/reviews/service.test.ts && playwright test tests/e2e/reviews.spec.ts",
     "test:files": "npm run build && playwright test tests/e2e/files.spec.ts",
     "test:integration": "node --test tests/agent-plugin.test.ts",
-    "test:isolated": "scripts/verify-electron-linux.sh"
+    "test:isolated": "scripts/verify-electron-linux.sh",
+    "test:unit": "node --test tests/diff/hunks.test.ts tests/state/draft-coalescing.test.ts tests/settings/settings.test.ts tests/diagnostics/journal.test.ts tests/providers/adapters.test.ts tests/projects/service.test.ts tests/git-lines.test.ts tests/reviews/service.test.ts tests/runtime-context/runtime-context.test.mjs tests/runtime-integration/cli-protocol.test.mjs tests/browser/diagnostics.test.ts tests/browser/navigation.test.ts tests/browser/extension-install.test.ts tests/packaging/retention.test.mjs tests/keyboard/bindings.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

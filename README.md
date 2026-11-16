@@ -62,6 +62,7 @@ Read [AGENTS.md](AGENTS.md), [the requirements](docs/vision.md) and [implementat
 
 - `npm run build`: bundle the application and CLI.
 - `npm run check`: formatting and TypeScript checks.
+- `npm run test:unit`: unit and CLI protocol checks; run `npm run build` first.
 - `npm run test:providers`: provider subprocess tests, without live accounts.
 - `npm run test:integration`: status-plugin tests using temporary profiles.
 - `npm run test:isolated`: real Electron acceptance in Docker/Xvfb. It requires the configured Linux test image; see [test environments](tests/README.md).
