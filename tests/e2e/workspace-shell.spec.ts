@@ -794,3 +794,59 @@ test("Workspace rename stays inline through updates, saves on blur and cancels w
   await shell.start();
   await expect(shell.row("Saved on blur")).toBeVisible();
 });
+
+test("Workspace panel shortcut uses the selected workspace when its tree render is pending", async () => {
+  const first = await shell.create("Alpha pending render");
+  await shell.create("Beta current render");
+  await shell.page.evaluate(() => {
+    const original = window.requestAnimationFrame;
+    const pending: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = (callback) => {
+      pending.push(callback);
+      return pending.length;
+    };
+    Object.assign(window, {
+      finishPendingFrame: () => {
+        window.requestAnimationFrame = original;
+        const frame = pending.splice(0);
+        for (const callback of frame) callback(performance.now());
+      },
+      pendingFrameCount: () => pending.length,
+    });
+  });
+  await shell.cli("workspace", "focus", "--id", first);
+  await expect
+    .poll(() =>
+      shell.page.evaluate(() =>
+        (
+          window as unknown as { pendingFrameCount: () => number }
+        ).pendingFrameCount(),
+      ),
+    )
+    .toBeGreaterThan(0);
+  await expect(
+    shell.page.getByRole("button", { name: "Switch workspace", exact: true }),
+  ).toHaveText("Beta current render");
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await shell.page.evaluate(() =>
+    (
+      window as unknown as { finishPendingFrame: () => void }
+    ).finishPendingFrame(),
+  );
+  await expect(shell.row("Alpha pending render")).toBeFocused();
+  await expect(shell.row("Alpha pending render")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  const firstPane = (await shell.workspace(first)).activePaneId;
+  await expect(
+    shell
+      .pane(firstPane)
+      .getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeFocused();
+  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(shell.row("Alpha pending render")).toBeFocused();
+  await shell.page.keyboard.press("ArrowDown");
+  await expect(shell.row("Beta current render")).toBeFocused();
+});
