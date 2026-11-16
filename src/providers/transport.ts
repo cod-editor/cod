@@ -31,7 +31,8 @@ export class RpcTransport {
   private closing = false;
   private closed = false;
   private closePromise?: Promise<void>;
-  private buffer = "";
+  private buffer: string[] = [];
+  private bufferedLength = 0;
   private decoder = new StringDecoder("utf8");
   private stderrBudget = 16_384;
   private readonly timeout: number;
@@ -72,20 +73,25 @@ export class RpcTransport {
     this.child.stdin.on("error", (error) => this.fail(error));
     this.child.stdout.on("data", (chunk: Buffer) => {
       if (this.closing || this.failure) return;
-      this.buffer += this.decoder.write(chunk);
-      let end: number;
-      while ((end = this.buffer.indexOf("\n")) !== -1) {
-        if (end > 4 * 1024 * 1024) {
+      const decoded = this.decoder.write(chunk);
+      let start = 0;
+      do {
+        const end = decoded.indexOf("\n", start);
+        const part = decoded.slice(start, end < 0 ? undefined : end);
+        this.bufferedLength += part.length;
+        if (this.bufferedLength > 4 * 1024 * 1024) {
           this.fail(new Error("Provider protocol line exceeded size limit"));
           return;
         }
-        const line = this.buffer.slice(0, end).trim();
-        this.buffer = this.buffer.slice(end + 1);
+        if (part) this.buffer.push(part);
+        if (end < 0) break;
+        const line = this.buffer.join("").trim();
+        this.buffer = [];
+        this.bufferedLength = 0;
         if (line) this.read(line);
         if (this.failure) return;
-      }
-      if (this.buffer.length > 4 * 1024 * 1024)
-        this.fail(new Error("Provider protocol line exceeded size limit"));
+        start = end + 1;
+      } while (start < decoded.length);
     });
     this.child.stderr.on("data", (chunk: Buffer) => {
       if (this.stderrBudget <= 0) return;
@@ -233,6 +239,8 @@ export class RpcTransport {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
+    this.buffer = [];
+    this.bufferedLength = 0;
     this.rejectPending(new Error("Provider controller is closed"));
     this.closePromise = new Promise((resolve) => {
       const leaderExited = () =>

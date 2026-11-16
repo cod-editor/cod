@@ -8,13 +8,14 @@ import type { OperationRequest } from "./types";
 async function invoke(request: OperationRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const connection = connect(defaultSocketPath());
-    let input = "",
+    let input: string[] = [],
       bytes = 0,
       settled = false;
     const finish = (error?: Error, result?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
+      input = [];
       connection.destroy();
       if (error) reject(error);
       else resolve(result);
@@ -34,11 +35,13 @@ async function invoke(request: OperationRequest): Promise<unknown> {
         finish(new Error("Cod response exceeds 128 MiB"));
         return;
       }
-      input += chunk;
-      const newline = input.indexOf("\n");
+      // Search only the new chunk. Flattening and rescanning every growing
+      // prefix makes a large response quadratic in CPU and transient memory.
+      const newline = chunk.indexOf("\n");
+      input.push(newline < 0 ? chunk : chunk.slice(0, newline));
       if (newline < 0) return;
       try {
-        const response: unknown = JSON.parse(input.slice(0, newline));
+        const response: unknown = JSON.parse(input.join(""));
         if (!response || typeof response !== "object")
           throw new Error("Invalid response envelope");
         const value = response as Record<string, unknown>;

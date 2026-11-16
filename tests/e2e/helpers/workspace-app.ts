@@ -143,7 +143,10 @@ export class WorkspaceApp {
     await this.page
       .getByRole("button", { name: "Switch workspace", exact: true })
       .waitFor();
-    await expect.poll(async () => (await this.raw("state")).code).toBe(0);
+    // Health probing must not dump every retained history and attachment.
+    await expect
+      .poll(async () => (await this.raw("capabilities")).code)
+      .toBe(0);
   }
 
   async stop() {
