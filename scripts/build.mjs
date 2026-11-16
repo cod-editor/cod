@@ -1,9 +1,16 @@
 import { build } from "esbuild";
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
+import {
+  buildInfoName,
+  newBuild,
+  outputHashes,
+  sourceHash,
+} from "./build-info.mjs";
 
 const root = process.cwd();
 const output = path.join(root, "dist");
+const identity = await newBuild(root);
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 
@@ -25,6 +32,7 @@ await Promise.all([
       "@ghostery/adblocker-electron",
     ],
     entryPoints: ["src/main.ts"],
+    define: { __COD_BUILD_ID__: JSON.stringify(identity.id) },
     outfile: "dist/main.cjs",
   }),
   build({
@@ -68,3 +76,18 @@ await Promise.all([
   copyFile("assets/cod-icon.png", "dist/cod-icon.png"),
   copyFile("node_modules/@xterm/xterm/css/xterm.css", "dist/xterm.css"),
 ]);
+if ((await sourceHash(root)) !== identity.sourceHash)
+  throw new Error("Source changed during build; rebuild from stable inputs");
+await writeFile(
+  path.join(output, buildInfoName + ".tmp"),
+  JSON.stringify({
+    schema: 1,
+    build: identity,
+    outputs: await outputHashes(output),
+  }) + "\n",
+);
+
+await rename(
+  path.join(output, buildInfoName + ".tmp"),
+  path.join(output, buildInfoName),
+);

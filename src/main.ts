@@ -1,6 +1,7 @@
 import { toggleDevTools } from "./devtools";
 import os from "node:os";
 import { DiagnosticJournal } from "./diagnostics";
+import { startupBuildInfo } from "./build-info";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -51,6 +52,7 @@ registerAgentPageScheme([
 ]);
 
 const dataDirectory = defaultDataDirectory();
+const runningBuild = startupBuildInfo(__dirname);
 let runtimeJournal: DiagnosticJournal | undefined;
 let operations: ApplicationOperations;
 let initialized = false;
@@ -304,7 +306,7 @@ async function startCommandServer(): Promise<void> {
 
 async function start(): Promise<void> {
   try {
-    operations = new ApplicationOperations(dataDirectory);
+    operations = new ApplicationOperations(dataDirectory, runningBuild);
     await operations.initialize();
     initialized = true;
     await startCommandServer();
@@ -556,7 +558,7 @@ async function start(): Promise<void> {
 if (ownsInstance) {
   const journal = new DiagnosticJournal(dataDirectory);
   runtimeJournal = journal;
-  journal.start(app.getVersion());
+  journal.start(app.getVersion(), runningBuild);
   const contexts = new Map<
     number,
     {
