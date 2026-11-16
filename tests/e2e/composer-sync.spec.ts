@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { AppState } from "../../src/types";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 let shell: ChatApp;
@@ -93,7 +95,7 @@ test("CLI composer updates reach an already hydrated chat with images and skills
   ).toHaveCount(0);
 });
 
-for (const choice of ["Keep my draft", "Use external draft"])
+for (const choice of ["Keep my message", "Use saved version"])
   test(`Concurrent composer changes survive restart and resolve with ${choice}`, async ({}, info) => {
     const workspace = await shell.create("Conflicting draft fixture");
     const chat = await shell.newChat(workspace, "codex");
@@ -172,7 +174,7 @@ for (const choice of ["Keep my draft", "Use external draft"])
     await conflict().getByRole("button", { name: choice, exact: true }).click();
     await expect(conflict()).toHaveCount(0);
     await expect(input).toHaveValue(
-      choice === "Keep my draft"
+      choice === "Keep my message"
         ? "My revised local edits [Image 2]"
         : "Later external evidence [Image 1]",
     );
@@ -184,14 +186,14 @@ for (const choice of ["Keep my draft", "Use external draft"])
     ).toHaveCount(1);
     await expect(
       shell.pane(chat.paneId).locator(".composer-images .image-reference"),
-    ).toHaveText(choice === "Keep my draft" ? "[Image 2]" : "[Image 1]");
+    ).toHaveText(choice === "Keep my message" ? "[Image 2]" : "[Image 1]");
     await shell.stop();
     await shell.start();
     input = shell
       .pane(chat.paneId)
       .getByRole("textbox", { name: "Message", exact: true });
     await expect(input).toHaveValue(
-      choice === "Keep my draft"
+      choice === "Keep my message"
         ? "My revised local edits [Image 2]"
         : "Later external evidence [Image 1]",
     );
@@ -236,4 +238,370 @@ test("CLI updates an already open new-chat draft including its provider", async 
         .map((c) => c.provider),
     )
     .toEqual(["kimi"]);
+});
+
+for (const queued of [false, true])
+  test(`A single composer keeps its next message when ${queued ? "queueing" : "sending"} with delayed state delivery`, async () => {
+    const workspace = await shell.create("Send autosave ordering");
+    const chat = await shell.newChat(workspace, "codex");
+    if (queued) {
+      await shell.send(chat.id, "[hold] Invented active request");
+      await expect
+        .poll(async () => (await shell.inspect(chat.id)).status)
+        .toBe("working");
+    }
+    const input = shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("First submitted message");
+    await expect
+      .poll(async () => (await draft(workspace, chat.paneId))?.text)
+      .toBe("First submitted message");
+    // Hold state notifications while keeping production operation responses and
+    // disk writes real. IPC replies need not arrive after a rendered snapshot.
+    await shell.app!.evaluate(({ webContents }) => {
+      const view = webContents
+        .getAllWebContents()
+        .find((v) => v.getURL().endsWith("/index.html"))!;
+      const send = view.send.bind(view);
+      (globalThis as any).releaseComposerState = () => {
+        view.send = send;
+      };
+      view.send = ((channel: string, ...args: any[]) => {
+        if (channel !== "cod:state") send(channel, ...args);
+      }) as typeof view.send;
+    });
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await input.fill("My follow-up message");
+    await expect
+      .poll(async () => (await draft(workspace, chat.paneId))?.text)
+      .toBe("My follow-up message");
+    await expect(
+      shell.pane(chat.paneId).getByRole("region", { name: "Draft conflict" }),
+    ).toHaveCount(0);
+    await shell.app!.evaluate(() => (globalThis as any).releaseComposerState());
+    await shell.cli(
+      "conversation",
+      "rename",
+      "--id",
+      chat.id,
+      "--name",
+      "Ordering fixture",
+    );
+    await expect(input).toHaveValue("My follow-up message");
+    await shell.stop();
+    await shell.start();
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("My follow-up message");
+  });
+
+for (const { fails, addsImage } of [
+  { fails: false, addsImage: false },
+  { fails: true, addsImage: false },
+  { fails: false, addsImage: true },
+  { fails: true, addsImage: true },
+])
+  test(`Typing during ${fails ? "failed" : "pending"} admission keeps the next message and attachments${addsImage ? " added during admission" : ""}`, async ({}, info) => {
+    const workspace = await shell.create("Admission fixture");
+    const chat = await shell.newChat(workspace, "codex");
+    const input = shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await shell.cli(
+      "conversation",
+      "composer",
+      "--workspace",
+      workspace,
+      "--pane-id",
+      chat.paneId,
+      "--text",
+      "Submitted evidence [Image 1]",
+      "--images",
+      JSON.stringify([pixel]),
+    );
+    await expect(input).toHaveValue("Submitted evidence [Image 1]");
+    await shell.app!.evaluate(({ ipcMain }, fails) => {
+      const original = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      (globalThis as any).releaseAdmission = release;
+      (globalThis as any).admissionStarted = false;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (request.op === "conversation.send") {
+          (globalThis as any).admissionStarted = true;
+          await gate;
+          if (fails) throw new Error("Invented admission failure");
+        }
+        return original(event, request);
+      });
+    }, fails);
+    await input.press("Enter");
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(() => (globalThis as any).admissionStarted),
+      )
+      .toBe(true);
+    await input.fill("Follow-up evidence [Image 1]");
+    if (addsImage) {
+      await input.evaluate((node, data) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File(
+            [
+              Uint8Array.from(atob(data), (character) =>
+                character.charCodeAt(0),
+              ),
+            ],
+            "next-evidence.png",
+            { type: "image/png" },
+          ),
+        );
+        node.dispatchEvent(
+          new ClipboardEvent("paste", {
+            clipboardData: transfer,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }, pixel.data);
+      await expect(
+        shell.pane(chat.paneId).locator(".composer-images img"),
+      ).toHaveCount(2);
+    }
+    const followUp = `Follow-up evidence [Image 1]${addsImage ? "[Image 2]" : ""}`;
+    await input.press("Home");
+    await input.press("ArrowRight");
+    await expect
+      .poll(async () => (await draft(workspace, chat.paneId))?.text)
+      .toBe(followUp);
+    await shell.app!.evaluate(() => (globalThis as any).releaseAdmission());
+    await expect
+      .poll(async () => (await draft(workspace, chat.paneId))?.text)
+      .toBe(followUp);
+    await expect(input).toHaveValue(followUp);
+    await expect(input).toBeFocused();
+    expect(
+      await input.evaluate(
+        (node) => (node as HTMLTextAreaElement).selectionStart,
+      ),
+    ).toBe(1);
+    await expect(
+      shell.pane(chat.paneId).getByRole("region", { name: "Draft conflict" }),
+    ).toHaveCount(0);
+    // The unchanged attachment was admitted with the submitted text only on
+    // success; a failed admission retains it with the new unsent text.
+    await expect(
+      shell.pane(chat.paneId).locator(".composer-images img"),
+    ).toHaveCount((fails ? 1 : 0) + (addsImage ? 1 : 0));
+    if (fails) {
+      await expect(shell.pane(chat.paneId)).toContainText(
+        "Invented admission failure",
+      );
+      expect((await shell.inspect(chat.id)).messages).toHaveLength(0);
+    }
+    await shell
+      .pane(chat.paneId)
+      .screenshot({ path: info.outputPath("admission-composer.png") });
+    await shell.stop();
+    await shell.start();
+    await expect(
+      shell
+        .pane(chat.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue(followUp);
+    await expect(
+      shell.pane(chat.paneId).locator(".composer-images img"),
+    ).toHaveCount((fails ? 1 : 0) + (addsImage ? 1 : 0));
+  });
+
+test("Composer typing stays responsive with large history and an attachment", async ({}, info) => {
+  const backgroundWorkspace = await shell.create("Retained history fixture");
+  const background = await shell.newChat(backgroundWorkspace, "codex");
+  const workspace = await shell.create("Responsive composer fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const image = {
+    ...pixel,
+    data: Buffer.concat([
+      Buffer.from(pixel.data, "base64"),
+      Buffer.alloc(1024 * 1024),
+    ]).toString("base64"),
+  };
+  const initial = "Invented unsent message. ".repeat(2000);
+  await shell.page.evaluate(
+    ({ workspace, paneId, initial, image }) =>
+      window.cod.invoke({
+        op: "conversation.composer",
+        workspace,
+        paneId,
+        text: initial,
+        images: [image],
+      }),
+    { workspace, paneId: chat.paneId, initial, image },
+  );
+  await shell.stop();
+  const stateFile = path.join(shell.data, "state.json");
+  const state = JSON.parse(await readFile(stateFile, "utf8"));
+  const conversation = state.conversations.find((c: any) => c.id === chat.id);
+  conversation.messages = Array.from({ length: 120 }, (_, index) => ({
+    id: `fixture-message-${index}`,
+    role: index % 2 ? "assistant" : "user",
+    text: "Invented history paragraph. ".repeat(100),
+    order: index,
+  }));
+  // Apply pressure through a real retained conversation, not unknown fields
+  // that no supported profile can create and UI projection cannot classify.
+  const retained = state.conversations.find((c: any) => c.id === background.id);
+  retained.messages = Array.from({ length: 120 }, (_, index) => ({
+    id: `retained-message-${index}`,
+    role: index % 2 ? "assistant" : "user",
+    text: "Invented retained history. ".repeat(8400),
+    order: index,
+  }));
+  await writeFile(stateFile, JSON.stringify(state));
+  await shell.start();
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toHaveValue(initial);
+  await input.focus();
+  await input.evaluate((node) => {
+    const field = node as HTMLTextAreaElement;
+    field.setSelectionRange(field.value.length, field.value.length);
+    (window as any).composerInputFrames = [];
+    field.addEventListener("input", () => {
+      const start = performance.now();
+      requestAnimationFrame(() =>
+        (window as any).composerInputFrames.push(performance.now() - start),
+      );
+    });
+  });
+  await input.pressSequentially(" Follow-up message");
+  for (let index = 0; index < 45; index++) await input.press("Backspace");
+  const expected = (initial + " Follow-up message").slice(0, -45);
+  await expect(input).toHaveValue(expected);
+  await expect(input).toBeFocused();
+  const samples = await shell.page.evaluate(async () => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    return (window as any).composerInputFrames as number[];
+  });
+  expect(samples.length).toBe(63);
+  const sorted = [...samples].sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)];
+  info.annotations.push({
+    type: "input-to-frame-p95-ms",
+    description: p95.toFixed(1),
+  });
+  const performanceFile = info.outputPath("composer-performance.json");
+  await writeFile(
+    performanceFile,
+    JSON.stringify({
+      samples: samples.length,
+      p95Ms: p95,
+      maxMs: sorted.at(-1),
+    }),
+  );
+  await info.attach("composer-performance", {
+    path: performanceFile,
+    contentType: "application/json",
+  });
+  expect(p95).toBeLessThan(200);
+  await expect
+    .poll(async () => {
+      const overlay = await readFile(
+        path.join(shell.data, "composer-text.json"),
+        "utf8",
+      );
+      return {
+        text: (Object.values(JSON.parse(overlay).drafts) as any[]).find(
+          (entry) => entry.pane === chat.paneId,
+        )?.draft.text,
+        bounded: overlay.length < 55000 && !overlay.includes(image.data),
+      };
+    })
+    .toEqual({ text: expected, bounded: true });
+  await expect(
+    shell.pane(chat.paneId).getByRole("region", { name: "Draft conflict" }),
+  ).toHaveCount(0);
+});
+
+test("An unseen external edit during send admission remains a genuine conflict", async () => {
+  const workspace = await shell.create("External admission fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await shell.cli(
+    "conversation",
+    "composer",
+    "--workspace",
+    workspace,
+    "--pane-id",
+    chat.paneId,
+    "--text",
+    "Original message",
+  );
+  await expect(input).toHaveValue("Original message");
+  await shell.app!.evaluate(({ ipcMain, webContents }) => {
+    const view = webContents
+      .getAllWebContents()
+      .find((v) => v.getURL().endsWith("/index.html"))!;
+    const send = view.send.bind(view);
+    view.send = ((channel: string, ...args: any[]) => {
+      if (channel !== "cod:state") send(channel, ...args);
+    }) as typeof view.send;
+    const original = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (globalThis as any).releaseAdmission = release;
+    (globalThis as any).admissionStarted = false;
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      if (request.op === "conversation.send") {
+        (globalThis as any).admissionStarted = true;
+        await gate;
+      }
+      return original(event, request);
+    });
+  });
+  await input.press("Enter");
+  await expect
+    .poll(() => shell.app!.evaluate(() => (globalThis as any).admissionStarted))
+    .toBe(true);
+  await input.evaluate(
+    async (node, { workspace, paneId }) => {
+      await window.cod.invoke({
+        op: "conversation.composer",
+        workspace,
+        paneId,
+        text: "Other writer message",
+        writer: "invented-other-writer",
+      });
+      (node as HTMLTextAreaElement).value = "Local next message";
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    { workspace, paneId: chat.paneId },
+  );
+  await shell.app!.evaluate(() => (globalThis as any).releaseAdmission());
+  const conflict = shell
+    .pane(chat.paneId)
+    .getByRole("region", { name: "Draft conflict" });
+  await expect(conflict).toBeVisible();
+  await expect(input).toHaveValue("Local next message");
+  await expect
+    .poll(async () => {
+      const saved = await draft(workspace, chat.paneId);
+      return { external: saved?.text, local: saved?.localDraft?.text };
+    })
+    .toEqual({ external: "Other writer message", local: "Local next message" });
 });

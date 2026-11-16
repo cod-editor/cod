@@ -710,6 +710,7 @@ export class ConversationApplicationService {
     conversation: ConversationState,
     text: string,
     images: import("../providers/types").ImageAttachment[],
+    writer?: string,
   ): void {
     const workspace = this.store.workspace(conversation.workspaceId);
     const draft = workspace.chatDrafts?.[conversation.paneId];
@@ -724,8 +725,19 @@ export class ConversationApplicationService {
           image.mimeType === images[i].mimeType &&
           image.reference === images[i].reference,
       )
-    )
-      delete workspace.chatDrafts![conversation.paneId];
+    ) {
+      // Keep one empty version transition so this writer can rebase an autosave
+      // that was already in flight when its submitted message was cleared.
+      workspace.chatDrafts![conversation.paneId] = {
+        text: "",
+        version: randomUUID(),
+        writer:
+          typeof writer === "string" && writer.length <= 64
+            ? writer
+            : draft.writer,
+        clearedFromVersion: draft.version ?? "",
+      };
+    }
   }
 
   async sendConversation(
@@ -765,7 +777,12 @@ export class ConversationApplicationService {
           ...(skills.length ? { skills } : {}),
           status: "queued",
         });
-        this.clearSubmittedDraft(conversation, text, images);
+        this.clearSubmittedDraft(
+          conversation,
+          text,
+          images,
+          request.writer as string | undefined,
+        );
       });
       this.scheduleQueue(conversation.id);
       return { id: conversation.id, status: "queued", messageId };
@@ -794,7 +811,13 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
-      if (!fromQueue) this.clearSubmittedDraft(conversation, text, images);
+      if (!fromQueue)
+        this.clearSubmittedDraft(
+          conversation,
+          text,
+          images,
+          request.writer as string | undefined,
+        );
       this.store.notify();
       this.store.schedulePersist();
       const turn = adapter.send(text, images, skills);
@@ -1163,9 +1186,18 @@ export class ConversationApplicationService {
           )
             throw new Error("Not a chat composer");
           const previous = workspace.chatDrafts?.[pane.id];
+          const ownSubmittedVersion =
+            previous?.text === "" &&
+            !previous.images?.length &&
+            !previous.localDraft &&
+            previous.clearedFromVersion !== undefined &&
+            previous.clearedFromVersion === request.expectedVersion &&
+            typeof request.writer === "string" &&
+            previous.writer === request.writer;
           if (
             trustedUi &&
             request.saveConflict !== true &&
+            !ownSubmittedVersion &&
             typeof request.expectedVersion === "string" &&
             request.expectedVersion !== (previous?.version ?? "")
           )
