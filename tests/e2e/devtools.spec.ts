@@ -46,15 +46,45 @@ async function nativeKey(
     { url, key, modifiers },
   );
 }
-async function closeInspector(url = app.page.url()) {
+async function closeInspector(url = app.page.url(), shortcut = "F12") {
   const state = await owner(url);
   if (!state.open) return;
-  await app.app!.evaluate(({ webContents }, id) => {
-    const tools = webContents.fromId(id!)!;
-    tools.focus();
-    tools.sendInputEvent({ type: "keyDown", keyCode: "F12" });
-    tools.sendInputEvent({ type: "keyUp", keyCode: "F12" });
-  }, state.tools);
+  await expect
+    .poll(() =>
+      app.app!.evaluate(async ({ webContents }, id) => {
+        const tools = webContents.fromId(id!);
+        return tools && !tools.isLoadingMainFrame()
+          ? await tools.executeJavaScript("document.readyState")
+          : "loading";
+      }, state.tools),
+    )
+    .toBe("complete");
+  // Detached DevTools is a native Chromium window, not an Electron BrowserWindow.
+  const windows = await execute("xdotool", [
+    "search",
+    "--onlyvisible",
+    "--name",
+    "DevTools",
+  ]);
+  const inspectorWindow = windows.stdout.trim().split(/\s+/).at(-1)!;
+  await execute("xdotool", ["windowfocus", "--sync", inspectorWindow]);
+  await expect
+    .poll(() =>
+      app.app!.evaluate(
+        ({ webContents }) => webContents.getFocusedWebContents()?.id,
+      ),
+    )
+    .toBe(state.tools);
+  const capture = await app.app!.evaluate(
+    async ({ webContents }, id) =>
+      (await webContents.fromId(id!)!.capturePage()).toPNG().toString("base64"),
+    state.tools,
+  );
+  await writeFile(
+    test.info().outputPath(`inspector-${state.id}.png`),
+    Buffer.from(capture, "base64"),
+  );
+  await execute("xdotool", ["key", "--clearmodifiers", shortcut]);
   await expect.poll(() => owner(url).then((s) => s.open)).toBe(false);
 }
 async function page(name: string) {
@@ -330,26 +360,7 @@ test("Keymap remapping, live reset and restart preserve exact inspector authorit
   await expect
     .poll(() => owner(remappedPage.url).then((s) => s.open))
     .toBe(true);
-  await app.app!.evaluate(
-    ({ webContents }, id) => {
-      const tools = webContents.fromId(id!)!;
-      tools.focus();
-      tools.sendInputEvent({
-        type: "keyDown",
-        keyCode: "F12",
-        modifiers: ["alt"],
-      });
-      tools.sendInputEvent({
-        type: "keyUp",
-        keyCode: "F12",
-        modifiers: ["alt"],
-      });
-    },
-    (await owner(remappedPage.url)).tools,
-  );
-  await expect
-    .poll(() => owner(remappedPage.url).then((s) => s.open))
-    .toBe(false);
+  await closeInspector(remappedPage.url, "alt+F12");
   await app.stop();
   await app.start();
   await nativeKey(app.page.url(), "F12", ["alt"]);
