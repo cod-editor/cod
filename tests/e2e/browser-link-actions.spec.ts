@@ -232,15 +232,25 @@ async function nativeContext(
       );
       window.focus();
       contents.focus();
+      if (keyboard) {
+        contents.sendInputEvent({
+          type: "keyDown",
+          keyCode: "F10",
+          modifiers: ["shift"],
+        });
+        contents.sendInputEvent({
+          type: "keyUp",
+          keyCode: "F10",
+          modifiers: ["shift"],
+        });
+      }
       return { ...point, serial };
     },
     { url, selector, keyboard },
   );
-  // Use one OS input path. Synthetic WebContents mouse events leave the real
-  // pointer elsewhere, while the native popup and keyboard use desktop state.
-  if (keyboard)
-    await execute("xdotool", ["key", "--clearmodifiers", "shift+F10"]);
-  else
+  // Keep the established native-key entry. Mouse input and native popup
+  // selection share OS input so the real pointer reaches the popup's source.
+  if (!keyboard)
     await execute("xdotool", [
       "mousemove",
       "--sync",
