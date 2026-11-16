@@ -593,15 +593,7 @@ export class WorkspaceApplicationService {
         ? [layout.paneId]
         : [...leaves(layout.first), ...leaves(layout.second)];
     const ordered = leaves(workspace.groupLayout!);
-    const soleIsChat = workspace.panes.some(
-      (pane) =>
-        pane.kind === "conversation" ||
-        pane.kind === "terminal" ||
-        (pane.kind === "document" && !pane.filePath),
-    );
-    const existing =
-      ordered.length > 1 ||
-      (request.side === "right" ? soleIsChat : !soleIsChat);
+    const existing = ordered.length > 1 || request.side === "left";
     if (existing) {
       const id = request.side === "left" ? ordered[0]! : ordered.at(-1)!;
       const group = workspace.groups!.find((item) => item.id === id)!;
@@ -613,11 +605,7 @@ export class WorkspaceApplicationService {
     }
     const paneId = randomUUID(),
       groupId = randomUUID();
-    workspace.panes.push(
-      request.side === "left"
-        ? { id: paneId, kind: "empty" }
-        : { id: paneId, kind: "document", draftChat: true },
-    );
+    workspace.panes.push({ id: paneId, kind: "empty" });
     workspace.groups!.push({
       id: groupId,
       paneIds: [paneId],

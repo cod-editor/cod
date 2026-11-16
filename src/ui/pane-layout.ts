@@ -44,21 +44,9 @@ export function paneRegions(workspace: WorkspaceState) {
   };
   if (workspace.groupLayout) visit(workspace.groupLayout);
   if (regions.length === 1) {
-    const chat = workspace.panes.some(
-      (p) =>
-        p.kind === "conversation" ||
-        p.kind === "terminal" ||
-        (p.kind === "document" && !p.filePath),
-    );
-    regions[0].x = chat ? 0.5 : 0;
+    regions[0].x = 0;
     regions[0].w = 0.5;
-    regions.push({
-      id: chat ? "missing-left" : "missing-right",
-      x: chat ? 0 : 0.5,
-      y: 0,
-      w: 0.5,
-      h: 1,
-    });
+    regions.push({ id: "missing-right", x: 0.5, y: 0, w: 0.5, h: 1 });
   }
   regions.sort((a, b) => a.y - b.y || a.x - b.x);
   return regions;
@@ -145,6 +133,8 @@ export function createPaneLayout(
     );
     const signature = JSON.stringify([
       workspace.id,
+      shortcutTitle("pane.toggleLeft"),
+      shortcutTitle("pane.toggleRight"),
       workspace.settings,
       workspace.groupLayout,
       workspace.zoomedGroupId,
@@ -209,6 +199,17 @@ export function createPaneLayout(
       );
 
       if (group) button.dataset.groupId = group.id;
+      const side =
+        region.id === sideRegion("left")?.id
+          ? "left"
+          : region.id === sideRegion("right")?.id
+            ? "right"
+            : undefined;
+      if (side)
+        button.title = shortcutTitle(
+          side === "left" ? "pane.toggleLeft" : "pane.toggleRight",
+          button.getAttribute("aria-label")!,
+        );
       button.disabled =
         visible &&
         (workspace.groups?.filter((g) => !g.hidden).length ?? 0) <= 1;
@@ -267,6 +268,19 @@ export function createPaneLayout(
       (a, b) => a.x - b.x || a.y - b.y,
     );
     return side === "left" ? regions[0] : regions.at(-1);
+  }
+  async function sidePane(side: "left" | "right"): Promise<string | undefined> {
+    const workspace = activeWorkspace();
+    const region = sideRegion(side);
+    if (!workspace || !region) return;
+    const group = workspace.groups?.find((g) => g.id === region.id);
+    if (group) return group.activePaneId;
+    return (
+      await invoke<{ paneId: string }>("group.ensure", {
+        workspace: workspace.id,
+        side,
+      })
+    ).paneId;
   }
   function togglePane(side: "left" | "right"): Promise<void> {
     const region = sideRegion(side);
@@ -812,6 +826,7 @@ export function createPaneLayout(
     applySettings: applyWorkspaceSettings,
     toggle: toggleSetting,
     togglePane,
+    sidePane,
     paneToggleReason,
     split: splitActive,
     zoom: zoomActive,
