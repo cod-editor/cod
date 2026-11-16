@@ -94,13 +94,19 @@ export function createFocusTargets(
     if (!within) returns.set(key, focus.capture());
     if (target === "files" || target === "workspaces") {
       const setting = target === "files" ? "filesVisible" : "workspacesVisible";
-      await invoke("workspace.settings", {
-        id: w.id,
-        settings: { [setting]: true },
-      });
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => resolve()),
-      );
+      const visible =
+        target === "files"
+          ? w.settings?.filesVisible === true
+          : w.settings?.workspacesVisible !== false;
+      if (!visible || w.zoomedGroupId) {
+        await invoke("workspace.settings", {
+          id: w.id,
+          settings: { [setting]: true },
+        });
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      }
       const host = document.querySelector<HTMLElement>(
         target === "files" ? "#project-panel" : "#workspace-tree",
       );

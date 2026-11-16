@@ -228,6 +228,9 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
   await expect(
     app.page.getByRole("textbox", { name: "File contents", exact: true }),
   ).toHaveValue("# Guide leaf\n");
+  await expect(
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toBeFocused();
   await focusTreeItem(leaf);
   await app.page.keyboard.press("Shift+F10");
   await expect(
