@@ -227,6 +227,15 @@ export const commands = [
   entry("terminal.new", "New terminal", "Terminal", [
     key("Backquote", { ctrl: true, shift: true }),
   ]),
+  entry("link.open", "Open link", "Navigation", [], ["url"], cod),
+  entry(
+    "browser.openExternal",
+    "Open in system browser",
+    "Browser",
+    [],
+    ["external", "url"],
+    all,
+  ),
   entry("browser.new", "New browser tab", "Browser"),
   entry("browser.pin", "Pin current site to home", "Browser"),
   entry("folders.add", "Add folder", "Workspace"),

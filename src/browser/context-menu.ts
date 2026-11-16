@@ -1,6 +1,8 @@
+import { webUrl, contextLinkUrl } from "./address";
 import {
   Menu,
   clipboard,
+  dialog,
   type BrowserWindow,
   type WebContents,
 } from "electron";
@@ -9,14 +11,81 @@ import {
 export function installPageContextMenu(
   contents: WebContents,
   window: BrowserWindow,
-  inspect = false,
+  options: {
+    inspect?: boolean;
+    openLink?: (url: string) => Promise<unknown>;
+    openExternal?: (url: string) => Promise<unknown>;
+  } = {},
 ) {
   contents.on("context-menu", (_event, params) => {
-    const run = (action: () => void) => () => {
-      if (!contents.isDestroyed()) action();
+    const run = (action: () => unknown | Promise<unknown>) => () => {
+      if (contents.isDestroyed()) return;
+      void Promise.resolve()
+        .then(action)
+        .catch((error) => {
+          if (!contents.isDestroyed())
+            void dialog
+              .showMessageBox(window, {
+                type: "error",
+                message: "Could not complete page action",
+                detail: error instanceof Error ? error.message : String(error),
+              })
+              .catch(() => undefined);
+        });
     };
+    const valid = (check: () => unknown) => {
+      try {
+        check();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const link = params.linkURL;
+    const canOpenLink =
+      !!options.openLink &&
+      valid(() => contextLinkUrl(link, contents.getURL()));
+    const web = link || contents.getURL();
+    const canOpenExternal = !!options.openExternal && valid(() => webUrl(web));
+    let retainSource = false;
     const history = contents.navigationHistory;
     const menu = Menu.buildFromTemplate([
+      ...(link
+        ? [
+            ...(canOpenLink
+              ? [
+                  {
+                    label: "Open link in new tab",
+                    click: () => {
+                      retainSource = true;
+                      run(() => options.openLink!(link))();
+                    },
+                  },
+                ]
+              : []),
+            ...(canOpenExternal
+              ? [
+                  {
+                    label: "Open link in system browser",
+                    click: run(() => options.openExternal!(link)),
+                  },
+                ]
+              : []),
+            {
+              label: "Copy link address",
+              click: () => clipboard.writeText(link),
+            },
+            { type: "separator" as const },
+          ]
+        : canOpenExternal
+          ? [
+              {
+                label: "Open page in system browser",
+                click: run(() => options.openExternal!(web)),
+              },
+              { type: "separator" as const },
+            ]
+          : []),
       {
         label: "Back",
         enabled: history.canGoBack(),
@@ -55,7 +124,7 @@ export function installPageContextMenu(
             },
           ]),
       { label: "Select all", click: run(() => contents.selectAll()) },
-      ...(inspect
+      ...(options.inspect
         ? [
             { type: "separator" as const },
             {
@@ -68,21 +137,19 @@ export function installPageContextMenu(
             },
           ]
         : []),
-      ...(params.linkURL
-        ? [
-            { type: "separator" as const },
-            {
-              label: "Copy link address",
-              click: () => clipboard.writeText(params.linkURL),
-            },
-          ]
-        : []),
     ]);
     const close = () => menu.closePopup();
     contents.once("destroyed", close);
     menu.once("menu-will-close", () =>
       contents.removeListener("destroyed", close),
     );
-    menu.popup({ window });
+    menu.popup({
+      window,
+      callback: () => {
+        // Restore native menu ownership immediately, never after a slow page load
+        // when the user may already be typing in a different control.
+        if (retainSource && !contents.isDestroyed()) contents.focus();
+      },
+    });
   });
 }

@@ -8,7 +8,7 @@ import {
 import { BrowserLibrary } from "../browser/library";
 import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
-import { resolveAddress } from "../browser/address";
+import { resolveAddress, webUrl, contextLinkUrl } from "../browser/address";
 import {
   findFocusWorld,
   captureFindFocus,
@@ -80,6 +80,8 @@ export class BrowserApplicationService {
   }
   attachAgentPageHost(window: BrowserWindow, session: Session): void {
     this.agentPages = new AgentPageService({
+      openLink: (id, url) => this.openLink(id, url),
+      openExternal: (url) => this.openExternal(url),
       window,
       session,
       preloadPath: path.join(__dirname, "agent-page-preload.cjs"),
@@ -323,6 +325,8 @@ export class BrowserApplicationService {
       window,
       session,
       downloadDirectory,
+      openLink: (id, url) => this.openLink(id, url),
+      openExternal: (url) => this.openExternal(url),
       onTabCreated: (tab, openerId, background) => {
         // Chromium needs a WebContents synchronously to preserve opener/POST.
         // Admit its metadata through the same serialized durable mutation as UI operations.
@@ -409,6 +413,7 @@ export class BrowserApplicationService {
     );
     if (
       !current ||
+      !current.visible ||
       owner?.id !== this.store.data.activeWorkspaceId ||
       owner.activePaneId === current.paneId
     )
@@ -431,7 +436,7 @@ export class BrowserApplicationService {
         );
         if (
           workspace &&
-          browser &&
+          browser?.visible &&
           workspace.panes.some((pane) => pane.id === browser.paneId)
         )
           workspace.activePaneId = browser.paneId;
@@ -706,9 +711,29 @@ export class BrowserApplicationService {
       throw new Error("Only local file addresses are supported");
     return parsed.href;
   }
+  async openExternal(url: string): Promise<{ url: string }> {
+    const target = webUrl(url);
+    if (app.isDefaultProtocolClient(new URL(target).protocol.slice(0, -1)))
+      throw new Error(
+        "Cod is the default browser for this link. Choose another system default browser to open it outside Cod.",
+      );
+    await shell.openExternal(target);
+    return { url: target };
+  }
+  async openLink(id: string, value: string): Promise<BrowserState> {
+    const source = this.browser(id);
+    const url = contextLinkUrl(value, source.url);
+    return this.openBrowser(
+      { op: "browser.open", workspace: source.workspaceId, url },
+      false,
+      source,
+    );
+  }
+
   async openBrowser(
     request: OperationRequest,
     extension = false,
+    source?: BrowserState,
   ): Promise<BrowserState> {
     const requested = requiredString(request, "url");
     const url =
@@ -721,10 +746,15 @@ export class BrowserApplicationService {
         requiredString(request, "workspace"),
       );
       const id = randomUUID(),
-        active = this.store.openingPane(workspace, request);
+        active = source
+          ? this.store.pane(workspace, source.paneId)
+          : this.store.openingPane(workspace, request);
       const paneId =
-        (active.kind === "document" && !active.filePath && !active.draftChat) ||
-        (active.kind === "empty" && active.launcher)
+        !source &&
+        ((active.kind === "document" &&
+          !active.filePath &&
+          !active.draftChat) ||
+          (active.kind === "empty" && active.launcher))
           ? active.id
           : randomUUID();
       if (paneId === active.id)
@@ -736,15 +766,22 @@ export class BrowserApplicationService {
         };
       else {
         workspace.panes.push({ id: paneId, kind: "browser", browserId: id });
-        workspace.layout = replaceLeaf(workspace.layout, active.id, {
-          type: "split",
-          direction: "right",
-          ratio: 0.5,
-          first: leaf(active.id),
-          second: leaf(paneId),
-        });
+        if (source) {
+          const group = workspace.groups?.find((item) =>
+            item.paneIds.includes(active.id),
+          );
+          if (!group) throw new Error("Source tab group no longer exists");
+          group.paneIds.splice(group.paneIds.indexOf(active.id) + 1, 0, paneId);
+        } else
+          workspace.layout = replaceLeaf(workspace.layout, active.id, {
+            type: "split",
+            direction: "right",
+            ratio: 0.5,
+            first: leaf(active.id),
+            second: leaf(paneId),
+          });
       }
-      workspace.activePaneId = paneId;
+      if (!source) workspace.activePaneId = paneId;
       const record: BrowserState = {
         id,
         paneId,
@@ -1223,6 +1260,13 @@ export class BrowserApplicationService {
       case "page.open":
         return this.openAgentPage(request);
 
+      case "browser.open-external":
+        return this.openExternal(requiredString(request, "url"));
+      case "browser.open-link":
+        return this.openLink(
+          requiredString(request, "id"),
+          requiredString(request, "url"),
+        );
       case "browser.open":
         return this.openBrowser(request);
 
