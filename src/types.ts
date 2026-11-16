@@ -95,6 +95,7 @@ export interface PreviewPane {
   id: string;
   kind: "preview";
   filePath: string;
+  format?: "image";
 }
 export interface DiffPane {
   id: string;

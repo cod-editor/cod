@@ -415,7 +415,7 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
     await input.press("Enter");
     await expect(
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),
-    ).toBeVisible();
+    ).toBeFocused();
     await app.page.keyboard.press("Escape");
     await expect(
       app.page.getByRole("treeitem", { name: /Keyboard navigation/ }).first(),

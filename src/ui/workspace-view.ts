@@ -94,8 +94,12 @@ export function createWorkspaceView(
           !getState().workspaces.some((workspace) =>
             workspace.panes.some((pane) => pane.id === id),
           )
-        )
+        ) {
+          resourcePanes
+            .get(id)
+            ?.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
           resourcePanes.delete(id);
+        }
       workspaceName.textContent = workspace?.name ?? "No workspace";
       if (!workspace) {
         layout.applySettings();
@@ -158,8 +162,17 @@ export function createWorkspaceView(
   function renderPane(workspace: WorkspaceState, pane: PaneState): HTMLElement {
     let container = resourcePanes.get(pane.id);
     const kind =
-      pane.kind === "document" && !pane.filePath ? "draft-chat" : pane.kind;
-    if (container?.dataset.viewKind !== kind) container = undefined;
+      pane.kind === "document" && !pane.filePath
+        ? "draft-chat"
+        : pane.kind === "preview"
+          ? `preview:${pane.format ?? "markdown"}`
+          : pane.kind;
+    if (container?.dataset.viewKind !== kind) {
+      container?.firstElementChild?.dispatchEvent(
+        new Event("cod:dispose-view"),
+      );
+      container = undefined;
+    }
     if (!container) {
       container = document.createElement("section");
       container.className = "pane";
@@ -262,7 +275,7 @@ export function createWorkspaceView(
             ...(result.line ? { line: result.line } : {}),
           });
     if (!result.candidates.length) {
-      setStatus(`File not found in workspace folders: ${reference}`);
+      setStatus(`File not found: ${reference}`);
       return;
     }
     if (result.candidates.length === 1) {
@@ -323,6 +336,8 @@ export function createWorkspaceView(
     openReference,
     dispose() {
       events.abort();
+      for (const view of resourcePanes.values())
+        view.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
       resourcePanes.clear();
     },
   };

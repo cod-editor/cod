@@ -321,6 +321,12 @@ export function reviewPane(
   });
   function draw() {
     if (!detail) return;
+    const focused = host.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement)
+      : undefined;
+    const focusedLine = focused?.classList.contains("review-line")
+      ? focused.getAttribute("aria-label")
+      : undefined;
     const scrollTop = host.scrollTop;
     const round =
       detail.rounds.find((r) => r.id === selectedRound) ??
@@ -686,6 +692,19 @@ export function reviewPane(
             },
           ),
         );
+    }
+    // Refreshing saved comments can replace diff rows or temporarily detach the
+    // retained comment form. Keep keyboard focus on the same visible control.
+    if (focused && document.activeElement === document.body) {
+      const target = focused.isConnected
+        ? focused
+        : focusedLine
+          ? buttons.find(
+              (line) => line.getAttribute("aria-label") === focusedLine,
+            )
+          : undefined;
+      if (target?.getClientRects().length)
+        target.focus({ preventScroll: true });
     }
     host.scrollTop = scrollTop;
   }

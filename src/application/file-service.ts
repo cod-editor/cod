@@ -1,3 +1,5 @@
+import { isUtf8 } from "node:buffer";
+import os from "node:os";
 import path from "node:path";
 import {
   realpath,
@@ -21,9 +23,30 @@ import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
 import { leaf, replaceLeaf } from "./layout";
 
+async function readTextFile(file: string): Promise<string> {
+  const bytes = await readFile(file);
+  if (bytes.includes(0) || !isUtf8(bytes))
+    throw new Error("Binary files cannot be opened or saved as text");
+  return bytes.toString("utf8");
+}
+
 export class FileApplicationService {
   constructor(private readonly store: ApplicationStateStore) {}
   async openFile(request: OperationRequest): Promise<{ paneId: string }> {
+    const filePath = await realpath(
+      path.resolve(requiredString(request, "path")),
+    );
+    if (/\.(png|jpe?g|gif|webp|apng)$/i.test(filePath))
+      return this.openResourcePane({
+        ...request,
+        op: "preview.open",
+        path: filePath,
+      });
+    return this.store.change(() => this.openTextFile(request));
+  }
+  private async openTextFile(
+    request: OperationRequest,
+  ): Promise<{ paneId: string }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
@@ -34,7 +57,7 @@ export class FileApplicationService {
       throw new Error("line must be a positive integer");
     if (!(await stat(filePath)).isFile())
       throw new Error("File path is not a regular file");
-    await readFile(filePath, "utf8");
+    await readTextFile(filePath);
     const existing = workspace.panes.find(
       (pane) =>
         pane.kind === "document" && pane.canonicalPath === canonicalPath,
@@ -88,7 +111,13 @@ export class FileApplicationService {
       const filePath = await realpath(requiredString(request, "path"));
       if (!(await stat(filePath)).isFile())
         throw new Error("Preview path must be a file");
-      resource = { kind: "preview", filePath };
+      resource = {
+        kind: "preview",
+        filePath,
+        ...(/\.(png|jpe?g|gif|webp|apng)$/i.test(filePath)
+          ? { format: "image" as const }
+          : {}),
+      };
     } else {
       const diff = await this.projects(request).diff({
         repoRoot: requiredString(request, "repoRoot"),
@@ -112,6 +141,8 @@ export class FileApplicationService {
             )
           : undefined;
       if (existing) {
+        if (existing.kind === "preview" && resource.kind === "preview")
+          existing.format = resource.format;
         workspace.activePaneId = existing.id;
         return { paneId: existing.id };
       }
@@ -169,6 +200,20 @@ export class FileApplicationService {
         "Image reference must resolve to one file inside workspace folders",
       );
     const file = result.candidates[0]!.path;
+    const roots = await Promise.all(
+      this.store
+        .workspace(requiredString(request, "workspace"))
+        .folders.map((root) => realpath(root).catch(() => "")),
+    );
+    if (!roots.some((root) => root && file.startsWith(root + path.sep)))
+      throw new Error(
+        "Automatic image previews are limited to workspace folders",
+      );
+    return this.readImageFile(file);
+  }
+  private async readImageFile(
+    file: string,
+  ): Promise<import("../providers/types").ImageAttachment> {
     const expected = await stat(file);
     if (expected.size > 20 * 1024 * 1024)
       throw new Error("Image exceeds 20 MiB");
@@ -231,6 +276,18 @@ export class FileApplicationService {
       ),
       reference = requiredString(request, "path");
     const find = async (reference: string) => {
+      if (path.isAbsolute(reference) || reference.startsWith("~/")) {
+        try {
+          const file = await realpath(
+            reference.startsWith("~/")
+              ? path.join(os.homedir(), reference.slice(2))
+              : reference,
+          );
+          return (await stat(file)).isFile() ? [{ path: file }] : [];
+        } catch {
+          return [];
+        }
+      }
       const matches = new Set<string>();
       for (const folder of workspace.folders)
         try {
@@ -293,7 +350,7 @@ export class FileApplicationService {
     try {
       canonical = await realpath(pane.filePath!);
       const version = (await this.fileVersion(request)).version;
-      const content = await readFile(canonical, "utf8"),
+      const content = await readTextFile(canonical),
         draft = this.store.data.drafts[canonical];
       return {
         content,
@@ -323,7 +380,7 @@ export class FileApplicationService {
       throw new Error("content and expectedContent must be strings");
     }
     const targetPath = await realpath(pane.filePath!);
-    const current = await readFile(targetPath, "utf8");
+    const current = await readTextFile(targetPath);
     if (current !== expectedContent) return { saved: false, conflict: true };
     const mode = (await stat(targetPath)).mode;
     const temporary = `${targetPath}.cod-${randomUUID()}.tmp`;
@@ -343,7 +400,7 @@ export class FileApplicationService {
   ): Promise<unknown> {
     switch (request.op) {
       case "file.open":
-        return this.store.change(async () => this.openFile(request));
+        return this.openFile(request);
 
       case "project.list":
         return this.projects(request).list(
@@ -378,12 +435,14 @@ export class FileApplicationService {
         );
         if (pane.kind !== "preview") throw new Error("Not a preview pane");
         const canonical = await realpath(pane.filePath);
+        if (pane.format === "image")
+          return { image: await this.readImageFile(canonical) };
         if ((await stat(canonical)).size > 2_000_000)
           throw new Error("Preview exceeds 2 MB limit");
         return {
           content:
             this.store.data.drafts[canonical]?.content ??
-            (await readFile(canonical, "utf8")),
+            (await readTextFile(canonical)),
         };
       }
 

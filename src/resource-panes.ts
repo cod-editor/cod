@@ -1,3 +1,4 @@
+import { imagePreviewPane } from "./ui/image-preview";
 import type { DiffPane, PreviewPane, WorkspaceState } from "./types";
 import type { Invoke } from "./ui/contracts";
 export function previewPane(
@@ -5,6 +6,7 @@ export function previewPane(
   pane: PreviewPane,
   invoke: Invoke,
 ): HTMLElement {
+  if (pane.format === "image") return imagePreviewPane(workspace, pane, invoke);
   const region = document.createElement("div");
   region.className = "pane-body markdown-preview";
   region.setAttribute("role", "region");
