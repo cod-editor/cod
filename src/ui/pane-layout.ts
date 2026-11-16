@@ -730,7 +730,7 @@ export function createPaneLayout(
     );
     if (
       pane &&
-      (pane.kind === "preview" ||
+      ((pane.kind === "preview" && pane.format !== "image") ||
         (pane.kind === "document" &&
           /\.md(?:own|arkdown)?$/i.test(pane.filePath ?? "")))
     ) {

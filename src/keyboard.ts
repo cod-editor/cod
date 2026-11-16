@@ -410,6 +410,9 @@ export const localGestures: readonly {
   context: string;
   aliases?: readonly string[];
 }[] = [
+  { title: "Zoom image", keys: ["+", "-"], context: "Image preview" },
+  { title: "Fit image to pane", keys: ["0"], context: "Image preview" },
+  { title: "Show image at actual size", keys: ["1"], context: "Image preview" },
   {
     title: "Move through controls",
     keys: ["Tab", "Shift+Tab"],

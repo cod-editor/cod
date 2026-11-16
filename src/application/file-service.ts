@@ -1,5 +1,5 @@
 import { isUtf8 } from "node:buffer";
-import { pathToFileURL } from "node:url";
+import os from "node:os";
 import path from "node:path";
 import {
   realpath,
@@ -31,40 +31,17 @@ async function readTextFile(file: string): Promise<string> {
 }
 
 export class FileApplicationService {
-  constructor(
-    private readonly store: ApplicationStateStore,
-    private readonly openBrowser: (
-      request: OperationRequest,
-    ) => Promise<{ paneId: string }>,
-  ) {}
+  constructor(private readonly store: ApplicationStateStore) {}
   async openFile(request: OperationRequest): Promise<{ paneId: string }> {
-    const workspace = this.store.workspace(
-      requiredString(request, "workspace"),
-    );
     const filePath = await realpath(
       path.resolve(requiredString(request, "path")),
     );
-    if (/\.(png|jpe?g|gif|webp|bmp|ico|avif|apng|svg)$/i.test(filePath)) {
-      if (!(await stat(filePath)).isFile())
-        throw new Error("Image path is not a file");
-      const url = pathToFileURL(filePath).href;
-      const existing = this.store.data.browsers.find(
-        (b) => !b.agentPage && b.workspaceId === workspace.id && b.url === url,
-      );
-      if (existing)
-        return this.store.change(() => {
-          const current = this.store.workspace(workspace.id);
-          if (!current.panes.some((pane) => pane.id === existing.paneId))
-            throw new Error("Image tab was closed while opening");
-          current.activePaneId = existing.paneId;
-          return { paneId: existing.paneId };
-        });
-      return this.openBrowser({
-        op: "browser.open",
-        workspace: workspace.id,
-        url,
+    if (/\.(png|jpe?g|gif|webp|apng)$/i.test(filePath))
+      return this.openResourcePane({
+        ...request,
+        op: "preview.open",
+        path: filePath,
       });
-    }
     return this.store.change(() => this.openTextFile(request));
   }
   private async openTextFile(
@@ -134,7 +111,13 @@ export class FileApplicationService {
       const filePath = await realpath(requiredString(request, "path"));
       if (!(await stat(filePath)).isFile())
         throw new Error("Preview path must be a file");
-      resource = { kind: "preview", filePath };
+      resource = {
+        kind: "preview",
+        filePath,
+        ...(/\.(png|jpe?g|gif|webp|apng)$/i.test(filePath)
+          ? { format: "image" as const }
+          : {}),
+      };
     } else {
       const diff = await this.projects(request).diff({
         repoRoot: requiredString(request, "repoRoot"),
@@ -158,6 +141,8 @@ export class FileApplicationService {
             )
           : undefined;
       if (existing) {
+        if (existing.kind === "preview" && resource.kind === "preview")
+          existing.format = resource.format;
         workspace.activePaneId = existing.id;
         return { paneId: existing.id };
       }
@@ -215,6 +200,20 @@ export class FileApplicationService {
         "Image reference must resolve to one file inside workspace folders",
       );
     const file = result.candidates[0]!.path;
+    const roots = await Promise.all(
+      this.store
+        .workspace(requiredString(request, "workspace"))
+        .folders.map((root) => realpath(root).catch(() => "")),
+    );
+    if (!roots.some((root) => root && file.startsWith(root + path.sep)))
+      throw new Error(
+        "Automatic image previews are limited to workspace folders",
+      );
+    return this.readImageFile(file);
+  }
+  private async readImageFile(
+    file: string,
+  ): Promise<import("../providers/types").ImageAttachment> {
     const expected = await stat(file);
     if (expected.size > 20 * 1024 * 1024)
       throw new Error("Image exceeds 20 MiB");
@@ -277,6 +276,18 @@ export class FileApplicationService {
       ),
       reference = requiredString(request, "path");
     const find = async (reference: string) => {
+      if (path.isAbsolute(reference) || reference.startsWith("~/")) {
+        try {
+          const file = await realpath(
+            reference.startsWith("~/")
+              ? path.join(os.homedir(), reference.slice(2))
+              : reference,
+          );
+          return (await stat(file)).isFile() ? [{ path: file }] : [];
+        } catch {
+          return [];
+        }
+      }
       const matches = new Set<string>();
       for (const folder of workspace.folders)
         try {
@@ -424,6 +435,8 @@ export class FileApplicationService {
         );
         if (pane.kind !== "preview") throw new Error("Not a preview pane");
         const canonical = await realpath(pane.filePath);
+        if (pane.format === "image")
+          return { image: await this.readImageFile(canonical) };
         if ((await stat(canonical)).size > 2_000_000)
           throw new Error("Preview exceeds 2 MB limit");
         return {

@@ -451,7 +451,14 @@ export class FileTree {
             () => this.workspace?.id === workspace.id,
             intent,
           );
-        else intent.abort();
+        else {
+          const image = document.querySelector<HTMLElement>(
+            `[data-pane-id="${result.paneId}"] .image-preview-pane`,
+          );
+          if (image && this.workspace?.id === workspace.id)
+            image.focus({ preventScroll: true });
+          intent.abort();
+        }
       });
     } catch (error) {
       intent.abort();

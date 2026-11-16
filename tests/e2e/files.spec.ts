@@ -919,7 +919,7 @@ test("HTML chat references open the browser while explicit file opening retains 
   await expect(editor(document)).toHaveValue(source);
 });
 
-test("Image files open as images from CLI, tree and chat without creating editable binary text", async ({}, info) => {
+test("Image files open in Cod preview from CLI, tree and external chat paths without editable binary text", async ({}, info) => {
   await app.stop();
   const recording = path.join(app.temporary, "image-provider.jsonl");
   await writeFile(recording, "");
@@ -932,8 +932,8 @@ test("Image files open as images from CLI, tree and chat without creating editab
   await app.start();
   const images = await app.app!.evaluate(({ nativeImage }) => {
     const image = nativeImage.createFromBitmap(
-      Buffer.alloc(128 * 80 * 4, 150),
-      { width: 128, height: 80 },
+      Buffer.alloc(1280 * 800 * 4, 150),
+      { width: 1280, height: 800 },
     );
     return {
       png: image.toPNG().toString("base64"),
@@ -945,7 +945,7 @@ test("Image files open as images from CLI, tree and chat without creating editab
   const bytes = Buffer.from(images.png, "base64");
   await writeFile(file, bytes);
   await writeFile(jpeg, Buffer.from(images.jpeg, "base64"));
-  const first = await app.cli<{ id: string; paneId: string }>(
+  const first = await app.cli<{ paneId: string }>(
     "file",
     "open",
     "--workspace",
@@ -953,36 +953,43 @@ test("Image files open as images from CLI, tree and chat without creating editab
     "--path",
     file,
   );
-  const imagePage = async (file: string) => {
-    const url = (await import("node:url")).pathToFileURL(file).href;
+  const imageView = async (file: string) => {
+    const region = app.page
+      .getByRole("region", { name: "Image preview", exact: true })
+      .filter({
+        has: app.page.getByRole("img", {
+          name: path.basename(file),
+          exact: true,
+        }),
+      });
+    await expect(region).toBeVisible();
+    const image = region.getByRole("img");
+    await expect(image).toBeVisible();
     await expect
       .poll(() =>
-        app
-          .app!.context()
-          .pages()
-          .some((p) => p.url() === url),
+        image.evaluate((image: HTMLImageElement) => [
+          image.naturalWidth,
+          image.naturalHeight,
+        ]),
       )
-      .toBe(true);
-    const page = app
-      .app!.context()
-      .pages()
-      .find((p) => p.url() === url)!;
-    await expect(page.locator("img")).toBeVisible();
-    await expect
-      .poll(() =>
-        page
-          .locator("img")
-          .evaluate((image: HTMLImageElement) => [
-            image.naturalWidth,
-            image.naturalHeight,
-          ]),
-      )
-      .toEqual([128, 80]);
-    return page;
+      .toEqual([1280, 800]);
+    return region;
   };
-  await imagePage(file);
+  await imageView(file);
   expect(
     await app.pane(first.paneId).locator("textarea.file-editor").count(),
+  ).toBe(0);
+  expect(
+    await app
+      .pane(first.paneId)
+      .getByRole("textbox", { name: "Address", exact: true })
+      .count(),
+  ).toBe(0);
+  expect(
+    await app
+      .pane(first.paneId)
+      .getByRole("button", { name: "Show source", exact: true })
+      .count(),
   ).toBe(0);
   expect(
     await app.cli("file", "open", "--workspace", workspace, "--path", file),
@@ -1006,7 +1013,8 @@ test("Image files open as images from CLI, tree and chat without creating editab
   const row = tree.getByRole("treeitem", { name: "fixture.jpg", exact: true });
   await focusTreeItem(row);
   await app.page.keyboard.press("Enter");
-  await imagePage(jpeg);
+  const jpegView = await imageView(jpeg);
+  await expect(jpegView).toBeFocused();
   const chat = await app.cli<{ id: string; paneId: string }>(
     "conversation",
     "create",
@@ -1033,8 +1041,104 @@ test("Image files open as images from CLI, tree and chat without creating editab
     .first()
     .click();
   await expect(app.pane(first.paneId)).toBeVisible();
-  const content = await imagePage(file);
-  await content.screenshot({ path: info.outputPath("local-png-viewer.png") });
+  const content = await imageView(file);
+  await content.focus();
+  await content.press("1");
+  await expect(content.getByRole("img")).toHaveJSProperty("width", 1280);
+  expect(
+    await content.evaluate((node) => node.scrollWidth > node.clientWidth),
+  ).toBe(true);
+  await content.press("0");
+  await expect
+    .poll(() =>
+      content
+        .getByRole("img")
+        .evaluate((img) => img.getBoundingClientRect().width),
+    )
+    .toBeLessThan(1280);
+  await content.press("Shift+F10");
+  await expect(
+    app.page.getByRole("button", { name: "Actual size", exact: true }),
+  ).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await app
+    .pane(first.paneId)
+    .screenshot({ path: info.outputPath("native-image-preview.png") });
+  await app.command("Keyboard shortcuts");
+  const shortcuts = app.page.getByRole("dialog", {
+    name: "Keyboard shortcuts",
+    exact: true,
+  });
+  await shortcuts
+    .getByRole("textbox", { name: "Search shortcuts", exact: true })
+    .fill("Fit image to pane");
+  await expect(shortcuts.locator(".shortcut-row")).toContainText("0");
+  await app.page.keyboard.press("Escape");
+  const downloads = path.join(app.temporary, "Downloads");
+  await mkdir(downloads);
+  const external = path.join(downloads, "copied.png");
+  await writeFile(external, bytes);
+  expect(
+    await app.cli(
+      "file",
+      "resolve",
+      "--workspace",
+      workspace,
+      "--path",
+      external,
+    ),
+  ).toMatchObject({ candidates: [{ path: external }] });
+  const automatic = await app.raw(
+    "file",
+    "image",
+    "--workspace",
+    workspace,
+    "--path",
+    external,
+  );
+  expect(automatic.code).not.toBe(0);
+  expect(automatic.stderr).toContain("Automatic image previews are limited");
+  await app.cli("conversation", "show", "--id", chat.id);
+  await app.cli(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    `See [Downloads/copied.png](${external})`,
+  );
+  await transcript
+    .getByRole("link", { name: "Downloads/copied.png", exact: true })
+    .first()
+    .click();
+  const externalView = await imageView(external);
+  await expect(externalView.getByRole("img")).toHaveAttribute("src", /^blob:/);
+  const current = (await app.cli<any>("state")).workspaces.find(
+    (w: any) => w.id === workspace,
+  ).activePaneId;
+  const blob = await externalView.getByRole("img").getAttribute("src");
+  await app.page.evaluate(() => {
+    (window as any).__revokedImageUrls = [];
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (url) => {
+      (window as any).__revokedImageUrls.push(url);
+      revoke(url);
+    };
+  });
+  await app.cli("pane", "close", "--workspace", workspace, "--id", current);
+  await expect
+    .poll(() => app.page.evaluate(() => (window as any).__revokedImageUrls))
+    .toContain(blob);
+  await app.cli("file", "open", "--workspace", workspace, "--path", external);
+  await imageView(external);
+  const state = await app.cli<any>("state");
+  expect(state.browsers).toEqual([]);
+  expect(
+    state.workspaces
+      .find((w: any) => w.id === workspace)
+      .panes.filter((p: any) => p.kind === "preview")
+      .every((p: any) => p.format === "image"),
+  ).toBe(true);
   expect(await readFile(file)).toEqual(bytes);
   const binary = path.join(app.folders[0], "unknown.bin");
   const original = Buffer.from([0, 255, 1, 2, 3]);
@@ -1052,8 +1156,5 @@ test("Image files open as images from CLI, tree and chat without creating editab
   expect(await readFile(binary)).toEqual(original);
   await app.stop();
   await app.start();
-  await imagePage(file);
-  expect(
-    await app.pane(first.paneId).locator("textarea.file-editor").count(),
-  ).toBe(0);
+  await imageView(external);
 });

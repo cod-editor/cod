@@ -1887,3 +1887,27 @@ browser-action-list::part(action):focus-visible {
   min-height: 80px;
   resize: vertical;
 }
+.image-preview-pane {
+  display: block;
+  position: relative;
+  overflow: auto;
+  outline: none;
+}
+.image-preview-canvas {
+  display: grid;
+  place-items: center;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+  height: max-content;
+  padding: var(--space-4);
+}
+.image-preview-canvas img {
+  max-width: none;
+  max-height: none;
+}
+
+.image-preview-status {
+  padding: var(--space-3);
+  color: var(--muted);
+}
