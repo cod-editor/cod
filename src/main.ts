@@ -1,3 +1,4 @@
+import { toggleDevTools } from "./devtools";
 import os from "node:os";
 import { DiagnosticJournal } from "./diagnostics";
 import { watchFile, unwatchFile } from "node:fs";
@@ -181,15 +182,26 @@ function createWindow(): void {
       process.platform === "darwin" ? "darwin" : "linux",
       "shell",
     );
+    const ownsDevTools =
+      match?.command === "devtools.toggle" &&
+      resolveKeybinding(
+        nativeKeyInput(input),
+        process.platform === "darwin" ? "darwin" : "linux",
+        "terminal",
+      )?.command === "devtools.toggle";
     if (
       !match ||
-      (match.command !== "settings" &&
+      (!ownsDevTools &&
+        match.command !== "settings" &&
         !(process.platform === "darwin" && match.command === "tab.close"))
     )
       return;
     event.preventDefault();
-    if (match.dispatch)
-      mainWindow?.webContents.send("cod:command", { command: match.command });
+    if (match.dispatch) {
+      if (ownsDevTools) toggleDevTools(mainWindow!.webContents);
+      else
+        mainWindow?.webContents.send("cod:command", { command: match.command });
+    }
   });
 
   const browserSession = session.fromPartition("persist:cod-browser");
@@ -307,6 +319,20 @@ async function start(): Promise<void> {
       )
         throw new Error("Untrusted keymap request");
     };
+    ipcMain.handle("cod:devtools", (event, id: unknown) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== rendererUrl
+      )
+        throw new Error("Developer Tools rejected from an untrusted renderer");
+      if (id === undefined) toggleDevTools(mainWindow.webContents);
+      else {
+        if (typeof id !== "string")
+          throw new Error("Browser ID must be a string");
+        operations.browserDevTools(id);
+      }
+    });
     ipcMain.handle("cod:settings-open", async (event) => {
       trustedKeymap(event);
       if (!operations.settings.state.error)

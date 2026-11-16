@@ -1,3 +1,4 @@
+import { toggleDevTools } from "../devtools";
 import { SitePermissions, webOrigin } from "../browser/permissions";
 import {
   sitePermissionNames,
@@ -461,6 +462,10 @@ export class BrowserApplicationService {
       if (!match) return;
       event.preventDefault();
       if (!match.dispatch) return;
+      if (match.command === "devtools.toggle") {
+        toggleDevTools(contents);
+        return;
+      }
       // Hiding a pane chooses its replacement after layout is committed. Moving
       // native focus first can revive a stale editor and echo pane.focus back,
       // racing the hide and reopening the pane that was just hidden.
@@ -535,6 +540,17 @@ export class BrowserApplicationService {
     }
   }
 
+  browserDevTools(id: string): void {
+    const browser = this.browser(id);
+    if (browser.workspaceId !== this.store.data.activeWorkspaceId)
+      throw new Error("The inspected page is not in the current workspace");
+    const contents = browser.agentPage
+      ? this.agentPages?.getWebContents(id)
+      : this.browserService?.getWebContents(id);
+    if (!contents || contents.isDestroyed())
+      throw new Error("The inspected page is no longer open");
+    toggleDevTools(contents);
+  }
   browserFocus(id: string): void {
     const browser = this.store.data.browsers.find(
       (item) =>

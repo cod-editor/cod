@@ -9,6 +9,9 @@ import type {
 } from "./types";
 
 const bridge: CodBridge = {
+  toggleDevTools(id) {
+    return ipcRenderer.invoke("cod:devtools", id);
+  },
   onSettings(callback) {
     ipcRenderer.on("cod:settings", (_event, value) => callback(value));
   },
