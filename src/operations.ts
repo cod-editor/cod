@@ -10,6 +10,7 @@ import { TerminalApplicationService } from "./application/terminal-service";
 import { ApplicationStateStore } from "./application/state";
 import type { BrowserWindow, Session } from "electron";
 import { operations } from "./command-catalog";
+import type { BuildInfo } from "./build-info";
 import type {
   AppState,
   BrowserRectangle,
@@ -30,7 +31,10 @@ export class ApplicationOperations {
   onDidChange: ((state: AppState) => void) | undefined;
   onDidTerminal: ((event: TerminalUiEvent) => void) | undefined;
 
-  constructor(dataDirectory: string) {
+  constructor(
+    dataDirectory: string,
+    private readonly runtimeBuild: Readonly<BuildInfo> | null = null,
+  ) {
     this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
     this.files = new FileApplicationService(this.store);
@@ -198,6 +202,7 @@ export class ApplicationOperations {
     switch (request.op) {
       case "capabilities":
         return {
+          runtime: { build: this.runtimeBuild },
           operations,
           providers: {
             codex: {
