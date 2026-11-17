@@ -1935,15 +1935,16 @@ browser-action-list::part(action):focus-visible {
   content-visibility: auto;
   contain-intrinsic-size: auto var(--control-height);
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding-left: calc(var(--tree-depth) * var(--space-3));
+  --picker-row-indent: calc(var(--tree-depth) * var(--space-4));
 }
 .overview-row .overview-item {
   flex: 1;
   min-width: 0;
   text-align: left;
   gap: var(--space-2);
+}
+.overview-row[data-kind="workspace"] .overview-label {
+  font-weight: 600;
 }
 .overview-label {
   white-space: normal;

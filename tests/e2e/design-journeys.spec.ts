@@ -387,7 +387,29 @@ for (const provider of ["codex", "kimi"] as const) {
     await expect(
       pane.getByRole("button", { name: "Remove image", exact: true }),
     ).toBeVisible();
+    await shell.app!.evaluate(({ ipcMain }) => {
+      const original = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      (globalThis as any).releaseImageAdmission = release;
+      (globalThis as any).imageAdmissionStarted = false;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (request.op === "conversation.send") {
+          (globalThis as any).imageAdmissionStarted = true;
+          await gate;
+        }
+        return original(event, request);
+      });
+    });
     await composer.press(`${modifier}+Enter`);
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(() => (globalThis as any).imageAdmissionStarted),
+      )
+      .toBe(true);
     await expect
       .poll(
         async () =>
@@ -408,6 +430,23 @@ for (const provider of ["codex", "kimi"] as const) {
       }>("state")
     ).conversations[0];
     expect(chat.provider).toBe(provider);
+    await expect
+      .poll(async () => (await shell.inspect(chat.id)).status)
+      .toBe("ready");
+    // Session initialization is ready before the separate first send is admitted.
+    // Reproduce that boundary so an idle controller cannot masquerade as delivery.
+    expect(await shell.prompts()).toHaveLength(0);
+    await writeFile(
+      info.outputPath(`${provider}-image-admission.json`),
+      JSON.stringify({
+        status: (await shell.inspect(chat.id)).status,
+        prompts: 0,
+      }),
+    );
+    await shell.app!.evaluate(() =>
+      (globalThis as any).releaseImageAdmission(),
+    );
+    await expect.poll(async () => (await shell.prompts()).length).toBe(1);
     await expect
       .poll(async () => (await shell.inspect(chat.id)).status)
       .toBe("ready");
