@@ -138,6 +138,113 @@ test("Overview keeps selection separate from activation, preserves hierarchy and
   await expect(overview()).toHaveCount(0);
 });
 
+test("Overview uses one compact selection surface with first-line controls at normal and narrow sizes", async ({}, info) => {
+  const first = await app.create("Release planning");
+  const chat = await app.newChat(first, "codex");
+  const label =
+    "Investigate keyboard navigation and preserve drafts while switching between a document, browser and conversation";
+  await app.cli("conversation", "rename", "--id", chat.id, "--name", label);
+  const second = await app.create("Documentation and everyday browsing");
+  const other = await app.newChat(second, "codex");
+  await app.cli(
+    "conversation",
+    "rename",
+    "--id",
+    other.id,
+    "--name",
+    "Review the contributor guide",
+  );
+  await app.cli(
+    "browser",
+    "open",
+    "--workspace",
+    second,
+    "--url",
+    "about:blank",
+  );
+  await app.cli("conversation", "show", "--id", chat.id);
+  await app.page.keyboard.press(`${modifier}+Shift+P`);
+  await app.page
+    .locator("dialog.command-palette")
+    .screenshot({ path: info.outputPath("commands-reference.png") });
+  await app.page.keyboard.press("Escape");
+  await show();
+  await search().fill("a");
+  await row("conversation", chat.id).hover();
+  await expect(row("conversation", chat.id)).toHaveClass(/selected/);
+  for (const narrow of [false, true]) {
+    if (narrow) {
+      await app.app!.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].setContentSize(760, 700),
+      );
+      await app.cli(
+        "settings",
+        "update",
+        "--values",
+        JSON.stringify({ "ui.fontSize": 20 }),
+      );
+    }
+    await expect(row("conversation", chat.id)).toHaveAccessibleName(
+      new RegExp(label),
+    );
+    const geometry = await row("conversation", chat.id).evaluate((button) => {
+      const row = button.parentElement!;
+      const label = button
+        .querySelector(".overview-label")!
+        .getBoundingClientRect();
+      const icon = button.querySelector(".icon")!.getBoundingClientRect();
+      const actions = row
+        .querySelector(".overview-actions")!
+        .getBoundingClientRect();
+      return {
+        rowHeight: row.getBoundingClientRect().height,
+        labelTop: label.top,
+        iconTop: icon.top,
+        actionsTop: actions.top,
+        rowBackground: getComputedStyle(row).backgroundColor,
+        buttonBackground: getComputedStyle(button).backgroundColor,
+        overflow: row.scrollWidth > row.clientWidth,
+      };
+    });
+    if (!narrow) expect(geometry.rowHeight).toBeLessThanOrEqual(28);
+    expect(Math.abs(geometry.iconTop - geometry.labelTop)).toBeLessThan(8);
+    expect(Math.abs(geometry.actionsTop - geometry.labelTop)).toBeLessThan(8);
+    expect(geometry.buttonBackground).toBe("rgba(0, 0, 0, 0)");
+    expect(geometry.rowBackground).toBe("rgb(69, 75, 87)");
+    const parentIcon = await row("workspace", first)
+      .locator(".navigation-item-icon")
+      .boundingBox();
+    const childIcon = await row("conversation", chat.id)
+      .locator(".navigation-item-icon")
+      .boundingBox();
+    expect(childIcon!.x - parentIcon!.x).toBe(16);
+    expect(geometry.overflow).toBe(false);
+    await app.page.screenshot({
+      path: info.outputPath(
+        narrow ? "overview-mixed-narrow.png" : "overview-mixed-normal.png",
+      ),
+    });
+  }
+  await search().press("Tab");
+  const actions = overview().getByRole("button", {
+    name: `Actions for ${label}`,
+    exact: true,
+  });
+  await expect(actions).toBeFocused();
+  expect(
+    await actions.evaluate((node) => getComputedStyle(node).outlineStyle),
+  ).toBe("solid");
+  await overview().screenshot({
+    path: info.outputPath("overview-actions-focus.png"),
+  });
+  await search().press("Escape");
+  await expect(
+    app
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeFocused();
+});
+
 test("Overview rename, pin, move and shared closure actions preserve the query and object identity", async () => {
   const first = await app.create("Invented source");
   const chat = await app.newChat(first, "codex");

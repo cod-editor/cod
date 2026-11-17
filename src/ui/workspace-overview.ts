@@ -286,8 +286,10 @@ export function createWorkspaceOverview(
         }
 
         const row = document.createElement("div");
-        row.className = "overview-row workspace-row tree-row-wrap";
+        row.className =
+          "overview-row workspace-row tree-row-wrap ui-picker-row";
         row.dataset.status = item.status;
+        row.dataset.kind = item.kind;
         row.dataset.navigationKey = item.key;
         const level =
           item.kind === "workspace"
@@ -318,7 +320,7 @@ export function createWorkspaceOverview(
         const leading = icon(item.kind);
         leading.classList.add("navigation-item-icon");
         const button = uiButton("", "quiet", leading);
-        button.classList.add("overview-item");
+        button.classList.add("overview-item", "ui-picker-row-main");
         button.dataset.navigationKey = item.key;
         button.setAttribute("role", "treeitem");
         button.setAttribute("aria-level", String(level));

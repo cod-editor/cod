@@ -439,14 +439,22 @@ export function createConversationViews({
         const dialog = document.createElement("dialog");
         dialog.className = "image-viewer";
         const large = img.cloneNode() as HTMLImageElement;
-        dialog.append(
-          large,
-          iconButton("close", "Close image", () => dialog.close()),
-        );
+        const close = () => {
+          dialog.close();
+          if (preview.isConnected) preview.focus();
+        };
+        dialog.addEventListener("cancel", (event) => {
+          event.preventDefault();
+          close();
+        });
+        dialog.append(large, iconButton("close", "Close image", close));
         document.body.append(dialog);
         dialog.onclose = () => {
+          const restore =
+            dialog.contains(document.activeElement) ||
+            document.activeElement === document.body;
           dialog.remove();
-          if (preview.isConnected) preview.focus();
+          if (restore && preview.isConnected) preview.focus();
         };
         dialog.showModal();
       };
