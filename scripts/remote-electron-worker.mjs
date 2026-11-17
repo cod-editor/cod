@@ -345,9 +345,12 @@ async function recoverEvidence(id) {
   if (names.length !== 1)
     throw Error("Recovery requires exactly one owned frozen input");
   const frozen = path.join(verification, names[0]);
-  const executionCode = Number(
-    (await fs.readFile(path.join(frozen, "exit-code.txt"), "utf8")).trim(),
-  );
+  const recordedExit = (
+    await fs.readFile(path.join(frozen, "exit-code.txt"), "utf8")
+  ).trim();
+  const executionCode = /^\d+$/.test(recordedExit)
+    ? Number(recordedExit)
+    : null;
   if (!recoverableCollection(original, executionCode))
     throw Error(
       "Only collector failures after successful execution can be recovered",

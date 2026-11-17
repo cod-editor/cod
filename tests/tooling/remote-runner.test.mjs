@@ -251,6 +251,8 @@ test("Evidence recovery cannot relabel failed execution or an unrelated runner f
   const failed = { exitCode: 1, error: " Evidence collection: Error: EACCES" };
   assert.equal(recoverableCollection(failed, 0), true);
   assert.equal(recoverableCollection(failed, 1), false);
+  assert.equal(recoverableCollection(failed, null), false);
+  assert.equal(recoverableCollection(failed, undefined), false);
   assert.equal(
     recoverableCollection(
       { exitCode: 1, error: "Test command failed Evidence collection: EACCES" },
