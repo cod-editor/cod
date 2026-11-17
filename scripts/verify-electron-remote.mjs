@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Freeze through the ordinary runner, then transport the immutable input over SSH.
 import { spawn } from "node:child_process";
+import { fullPreflightPassed } from "./remote-electron-worker.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -144,6 +145,7 @@ async function main() {
   let host = process.env.COD_TEST_SSH_HOST,
     id,
     noWait = false,
+    recover = false,
     config;
   while (values.length && values[0] !== "--") {
     const option = values[0];
@@ -156,6 +158,10 @@ async function main() {
     } else if (option === "--result") {
       values.shift();
       id = values.shift();
+    } else if (option === "--recover-evidence") {
+      values.shift();
+      id = values.shift();
+      recover = true;
     } else if (option === "--config") {
       values.shift();
       config = values.shift();
@@ -178,6 +184,9 @@ async function main() {
     throw new Error("Result retrieval requires only a valid run ID");
   if (values.includes("--freeze-only"))
     throw new Error("--freeze-only is reserved for input preparation");
+  const fullCi = values[0] === "--ci";
+  if (fullCi && values.length !== 1)
+    throw new Error("Full preflight accepts no filters or retries");
   const creating = !id;
   id ??= randomUUID();
   const local = path.join(repo, "artifacts/remote-verification", id);
@@ -190,9 +199,26 @@ async function main() {
   if (creating) {
     const prepared = await command(
       path.join(tooling, "scripts/verify-electron-linux.sh"),
-      ["--freeze-only"],
+      ["--freeze-only", ...(fullCi ? ["--ci"] : [])],
       undefined,
-      { env: { ...process.env, COD_TEST_SOURCE_DIR: repo } },
+      {
+        env: {
+          ...process.env,
+          COD_TEST_SOURCE_DIR: repo,
+          ...(fullCi
+            ? {
+                COD_TEST_RUNNER_FILE: path.join(
+                  tooling,
+                  "tests/support/electron/run.sh",
+                ),
+                COD_TEST_PREFLIGHT_DRIVER: path.join(
+                  tooling,
+                  "scripts/ci-preflight.mjs",
+                ),
+              }
+            : {}),
+        },
+      },
     );
     frozen = /^Frozen input and evidence: (.+)$/m.exec(prepared)?.[1];
     if (
@@ -211,8 +237,24 @@ async function main() {
       .digest("hex");
     await fs.writeFile(
       path.join(local, "request.json"),
-      JSON.stringify({ id, host, frozen, expected, args: values }, null, 2) +
-        "\n",
+      JSON.stringify(
+        {
+          id,
+          host,
+          frozen,
+          expected,
+          args: values,
+          ...(fullCi
+            ? {
+                revision: JSON.parse(
+                  await fs.readFile(path.join(frozen, "revision.json"), "utf8"),
+                ).revision,
+              }
+            : {}),
+        },
+        null,
+        2,
+      ) + "\n",
       { mode: 0o600 },
     );
   }
@@ -249,6 +291,14 @@ async function main() {
       path.join(tooling, "scripts/verify-electron-linux.sh"),
       `${host}:${quote(locations.run + "/")}`,
     ]);
+    if (fullCi)
+      await command("rsync", [
+        "-a",
+        "-e",
+        transport,
+        path.join(frozen, "revision.json"),
+        `${host}:${quote(locations.run + "/revision.json")}`,
+      ]);
     const accepted = JSON.parse(await invoke("start", JSON.stringify(values)));
     if (accepted.id !== id || !accepted.accepted)
       throw new Error("Remote acceptance did not match the input");
@@ -261,6 +311,17 @@ async function main() {
       .then(JSON.parse)
       .then((x) => x.expected)
       .catch(() => undefined);
+  }
+  if (recover) {
+    const transport = "ssh " + sshOptions.map(quote).join(" ");
+    await command("rsync", [
+      "-a",
+      "-e",
+      transport,
+      path.join(tooling, "scripts/remote-electron-worker.mjs"),
+      `${host}:${quote(locations.run + "/")}`,
+    ]);
+    await invoke("recover");
   }
   const result = JSON.parse(await invoke("result"));
   if (result.id !== id) throw new Error("Result does not match requested run");
@@ -276,9 +337,47 @@ async function main() {
     path.join(local, "result.json"),
     JSON.stringify(result, null, 2) + "\n",
   );
+  const saved = await fs
+    .readFile(path.join(local, "request.json"), "utf8")
+    .then(JSON.parse)
+    .catch(() => null);
+  let sourceCurrent;
+  if (saved?.args?.[0] === "--ci") {
+    if (
+      result.exitCode === 0 &&
+      !fullPreflightPassed(
+        JSON.parse(
+          await fs.readFile(path.join(local, "output/preflight.json"), "utf8"),
+        ),
+      )
+    )
+      throw new Error("Full preflight lacks complete passing group evidence");
+    const head = (
+      await command("git", ["--no-optional-locks", "rev-parse", "HEAD"])
+    ).trim();
+    const dirty = (
+      await command("git", [
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+      ])
+    ).trim();
+    sourceCurrent = head === saved.revision && !dirty;
+    await fs.writeFile(
+      path.join(local, "source-check.json"),
+      JSON.stringify({ revision: saved.revision, sourceCurrent }, null, 2) +
+        "\n",
+    );
+    if (!sourceCurrent)
+      console.error(
+        "Source changed after full preflight snapshot; this result does not authorize pushing the current tree",
+      );
+  }
   console.log(
     JSON.stringify({
       id,
+      sourceCurrent,
       exitCode: result.exitCode,
       inputIdentity: result.inputIdentity,
       durationMs: result.durationMs,
@@ -292,7 +391,7 @@ async function main() {
       "Result input identity differs from accepted source; retained evidence must be inspected",
     );
   if (result.error) console.error(result.error);
-  process.exitCode = result.exitCode;
+  process.exitCode = result.exitCode || (sourceCurrent === false ? 1 : 0);
 }
 main().catch((error) => {
   console.error(String(error));

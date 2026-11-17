@@ -4,6 +4,11 @@ if ! command -v git >/dev/null 2>&1; then
   apt-get update -qq
   apt-get install -y --no-install-recommends git
 fi
+if [ "${1:-}" = "--ci" ]; then
+  [ "$#" -eq 1 ] || { echo "Full preflight does not accept filters or retries" >&2; exit 2; }
+  mkdir -p /work/jobs
+  exec node /input/run-ci-preflight.mjs /input /output
+fi
 mkdir -p /work/app
 cp -R /input/. /work/app/
 cd /work/app
@@ -14,7 +19,7 @@ chown root:root node_modules/electron/dist/chrome-sandbox
 chmod 4755 node_modules/electron/dist/chrome-sandbox
 runuser -u node -- npm run typecheck
 runuser -u node -- npm run build
-runuser -u node -- node --test tests/browser/diagnostics.test.ts tests/browser/navigation.test.ts tests/browser/web-links.test.ts tests/keyboard/bindings.test.ts tests/state/navigation-model.test.ts tests/tooling/delivery-status.test.mjs
+runuser -u node -- node --test tests/browser/diagnostics.test.ts tests/browser/navigation.test.ts tests/browser/web-links.test.ts tests/keyboard/bindings.test.ts tests/state/navigation-model.test.ts tests/tooling/delivery-status.test.mjs tests/tooling/remote-runner.test.mjs
 runuser -u node -- xvfb-run -a node check-sandbox.mjs
 if [ "${1:-}" = "--services" ]; then
   shift
