@@ -21,9 +21,25 @@ Docker is required. The checked-in Dockerfile builds the default `cod-test-elect
 
 The OrbStack test environment uses an outer Docker seccomp exception for Chromium user namespaces; Chromium's own sandbox stays enabled. The runner checks actual renderer isolation. An unavailable image, display or sandbox is an environment blocker, not permission to add `--no-sandbox`.
 
+## Full pre-push preflight
+
+Before every push, finish the source, formatting and documentation, then commit the final revision locally. This includes documentation-only updates. Focused scenarios are useful during development but do not replace this gate:
+
+```sh
+caffeinate -dimsu npm run test:preflight
+# On the configured private Linux runner, without host builds or GUI:
+node scripts/verify-electron-remote.mjs --config PRIVATE_CONFIG --source SOURCE_DIRECTORY -- --ci
+```
+
+Full mode refuses a dirty or uncommitted checkout and exports the complete Git commit, including README, docs, instructions, formatting configuration and the Check workflow. Ignored profiles, environment files and Git metadata are not exported. It records the revision and a SHA-256 manifest. The existing remote helper may live in another worktree: its versioned execution driver is frozen alongside the source, so it can verify a different committed candidate without changing that candidate. Remote retrieval checks that the checkout still matches the verified clean revision; `source-check.json` must say `sourceCurrent: true`. Recheck HEAD and Git status immediately before pushing. Any later source or configuration change invalidates that full snapshot and requires a new preflight.
+
+The full plan validates the current Check workflow commands and shard matrix, rejecting an unrecognized change instead of silently omitting it. Fast checks run `npm run check`, `npm run build` and the complete `npm run test:unit`. Fresh job directories then run the service tests and each of the three unfiltered `npm run test:e2e -- --shard=N/3 --workers=1` partitions, using their existing builds and sandbox checks. Every group uses a fresh locked install; service or shard failure does not skip the other independent shards. All five group results must pass in `output/preflight.json`; skipped, incomplete, expired or stale runs do not authorize a push. Do not add filters, retries, assertion changes or a sandbox bypass to obtain a pass.
+
+The local full plan runs jobs serially inside the existing 2 CPU / 3 GiB Docker limit, so it takes longer than GitHub's independent parallel machines. Coordinate the shared runner before starting another full job; its finite 45-minute lifetime includes queue time. Its Node 24 Debian Bookworm image, GTK/Xvfb packages, display/keymap and resource limits differ from GitHub's Ubuntu-latest host, and the frozen checkout omits Git metadata. Command, test inventory, shard boundaries and Playwright configuration match; OS behavior and scheduling are not claimed identical. Record these differences, retain cause-proof for failures, and diagnose known races directly. A successful preflight improves confidence rather than proving the absence of flakes. Required green GitHub checks remain the merge gate. If preflight is blocked, report that blocker instead of using the first pushed CI run as a substitute.
+
 ## Feedback and complete CI coverage
 
-Start with `npm run check && npm run build && npm run test:unit` for formatting, all production types and the same unit/protocol checks used in CI. These checks do not establish graphical behavior. Run the affected real-Electron journey next using the isolated runner's existing file and `--grep` selection; there is no automatic change-impact mapper. Keep one local Docker suite at a time on a memory-limited development machine. Full CI remains the merge gate.
+During implementation use focused checks for quick feedback; the complete publication gate is described above. `npm run check && npm run build && npm run test:unit` covers formatting, all production types and the same unit/protocol checks used in CI. These checks do not establish graphical behavior. Run the affected real-Electron journey next using the isolated runner's existing file and `--grep` selection; there is no automatic change-impact mapper. Keep one local Docker suite at a time on a memory-limited development machine. Full CI remains the merge gate.
 
 Native context-menu fixtures wait for Electron's `menu-will-show` event before sending OS keyboard input. Receiving the page's `context-menu` event only establishes the request; input sent earlier can reach the page and select the wrong item once the popup appears. Observe the native item callback to confirm the requested action; never invoke that callback to simulate keyboard activation. A controlled delayed popup covers this ordering without adding sleeps to the ordinary fixture.
 

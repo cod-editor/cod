@@ -117,7 +117,14 @@ async function collect(directory, frozen) {
   async function copy(source, relative = "output") {
     for (const entry of await fs
       .readdir(source, { withFileTypes: true })
-      .catch(() => [])) {
+      .catch(() => [])
+      .then((entries) =>
+        entries.sort(
+          (a, b) =>
+            Number(b.name === "preflight.json") -
+            Number(a.name === "preflight.json"),
+        ),
+      )) {
       const file = path.join(source, entry.name),
         next = path.join(relative, entry.name);
       if (entry.isDirectory()) await copy(file, next);
@@ -250,6 +257,18 @@ async function execute(id) {
             ...process.env,
             COD_LINUX_TEST_IMAGE: image,
             COD_TEST_SOURCE_DIR: source,
+            ...(request.args[0] === "--ci"
+              ? {
+                  COD_TEST_FROZEN_REVISION: (
+                    await json(path.join(directory, "revision.json"))
+                  ).revision,
+                  COD_TEST_RUNNER_FILE: path.join(source, "run-electron.sh"),
+                  COD_TEST_PREFLIGHT_DRIVER: path.join(
+                    source,
+                    "run-ci-preflight.mjs",
+                  ),
+                }
+              : {}),
           },
         },
       );

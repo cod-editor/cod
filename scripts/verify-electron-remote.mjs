@@ -178,6 +178,9 @@ async function main() {
     throw new Error("Result retrieval requires only a valid run ID");
   if (values.includes("--freeze-only"))
     throw new Error("--freeze-only is reserved for input preparation");
+  const fullCi = values[0] === "--ci";
+  if (fullCi && values.length !== 1)
+    throw new Error("Full preflight accepts no filters or retries");
   const creating = !id;
   id ??= randomUUID();
   const local = path.join(repo, "artifacts/remote-verification", id);
@@ -190,9 +193,26 @@ async function main() {
   if (creating) {
     const prepared = await command(
       path.join(tooling, "scripts/verify-electron-linux.sh"),
-      ["--freeze-only"],
+      ["--freeze-only", ...(fullCi ? ["--ci"] : [])],
       undefined,
-      { env: { ...process.env, COD_TEST_SOURCE_DIR: repo } },
+      {
+        env: {
+          ...process.env,
+          COD_TEST_SOURCE_DIR: repo,
+          ...(fullCi
+            ? {
+                COD_TEST_RUNNER_FILE: path.join(
+                  tooling,
+                  "tests/support/electron/run.sh",
+                ),
+                COD_TEST_PREFLIGHT_DRIVER: path.join(
+                  tooling,
+                  "scripts/ci-preflight.mjs",
+                ),
+              }
+            : {}),
+        },
+      },
     );
     frozen = /^Frozen input and evidence: (.+)$/m.exec(prepared)?.[1];
     if (
@@ -211,8 +231,24 @@ async function main() {
       .digest("hex");
     await fs.writeFile(
       path.join(local, "request.json"),
-      JSON.stringify({ id, host, frozen, expected, args: values }, null, 2) +
-        "\n",
+      JSON.stringify(
+        {
+          id,
+          host,
+          frozen,
+          expected,
+          args: values,
+          ...(fullCi
+            ? {
+                revision: JSON.parse(
+                  await fs.readFile(path.join(frozen, "revision.json"), "utf8"),
+                ).revision,
+              }
+            : {}),
+        },
+        null,
+        2,
+      ) + "\n",
       { mode: 0o600 },
     );
   }
@@ -249,6 +285,14 @@ async function main() {
       path.join(tooling, "scripts/verify-electron-linux.sh"),
       `${host}:${quote(locations.run + "/")}`,
     ]);
+    if (fullCi)
+      await command("rsync", [
+        "-a",
+        "-e",
+        transport,
+        path.join(frozen, "revision.json"),
+        `${host}:${quote(locations.run + "/revision.json")}`,
+      ]);
     const accepted = JSON.parse(await invoke("start", JSON.stringify(values)));
     if (accepted.id !== id || !accepted.accepted)
       throw new Error("Remote acceptance did not match the input");
@@ -276,9 +320,38 @@ async function main() {
     path.join(local, "result.json"),
     JSON.stringify(result, null, 2) + "\n",
   );
+  const saved = await fs
+    .readFile(path.join(local, "request.json"), "utf8")
+    .then(JSON.parse)
+    .catch(() => null);
+  let sourceCurrent;
+  if (saved?.args?.[0] === "--ci") {
+    const head = (
+      await command("git", ["--no-optional-locks", "rev-parse", "HEAD"])
+    ).trim();
+    const dirty = (
+      await command("git", [
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+      ])
+    ).trim();
+    sourceCurrent = head === saved.revision && !dirty;
+    await fs.writeFile(
+      path.join(local, "source-check.json"),
+      JSON.stringify({ revision: saved.revision, sourceCurrent }, null, 2) +
+        "\n",
+    );
+    if (!sourceCurrent)
+      console.error(
+        "Source changed after full preflight snapshot; this result does not authorize pushing the current tree",
+      );
+  }
   console.log(
     JSON.stringify({
       id,
+      sourceCurrent,
       exitCode: result.exitCode,
       inputIdentity: result.inputIdentity,
       durationMs: result.durationMs,
@@ -292,7 +365,7 @@ async function main() {
       "Result input identity differs from accepted source; retained evidence must be inspected",
     );
   if (result.error) console.error(result.error);
-  process.exitCode = result.exitCode;
+  process.exitCode = result.exitCode || (sourceCurrent === false ? 1 : 0);
 }
 main().catch((error) => {
   console.error(String(error));
