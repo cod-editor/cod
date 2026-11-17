@@ -1823,7 +1823,7 @@ browser-action-list::part(action):focus-visible {
   content-visibility: auto;
   contain-intrinsic-size: auto var(--control-height);
   display: flex;
-  --picker-row-indent: calc(var(--tree-depth) * var(--space-4));
+  --picker-row-indent: var(--overview-indent, 0px);
 }
 .overview-row .overview-item {
   flex: 1;
@@ -1839,8 +1839,13 @@ browser-action-list::part(action):focus-visible {
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.overview-disclosure {
-  flex: 0 0 var(--control-height);
+.overview-group + .overview-group {
+  margin-top: var(--space-2);
+}
+.overview-edit-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
 }
 .overview-actions {
   opacity: 0;
@@ -1850,14 +1855,7 @@ browser-action-list::part(action):focus-visible {
 .overview-actions:focus-visible {
   opacity: 1;
 }
-.overview-row:has([data-active="true"]) {
-  box-shadow: inset 2px 0 var(--focus);
-}
 .overview-name {
   flex: 1;
   min-width: 0;
-}
-
-.overview-disclosure[aria-expanded="true"] > .icon {
-  transform: rotate(90deg);
 }

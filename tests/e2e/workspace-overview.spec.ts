@@ -36,7 +36,7 @@ async function action(kind: string, id: string, label: string) {
     .click();
 }
 
-test("Overview keeps selection separate from activation, preserves hierarchy and returns the exact draft focus", async ({}, info) => {
+test("Overview keeps selection separate from activation, preserves workspace groups and returns the exact draft focus", async ({}, info) => {
   for (const workspace of (await app.cli<AppState>("state")).workspaces)
     await app.cli("workspace", "close", "--id", workspace.id);
   await app.command("Overview");
@@ -78,8 +78,12 @@ test("Overview keeps selection separate from activation, preserves hierarchy and
     "aria-current",
     "true",
   );
-  await search().press("Alt+ArrowLeft");
-  await expect(row("workspace", first)).toHaveAttribute("aria-current", "true");
+  await expect(row("workspace", first)).toBeVisible();
+  await expect(row("workspace", second)).toBeVisible();
+  await expect(row("conversation", other.id)).toBeVisible();
+  await expect(
+    overview().locator(".overview-list [aria-expanded]"),
+  ).toHaveCount(0);
   await search().fill("shared");
   await expect(row("conversation", chat.id)).toBeVisible();
   await expect(row("conversation", other.id)).toBeVisible();
@@ -199,9 +203,12 @@ test("Overview uses one compact selection surface with first-line controls at no
       return {
         rowHeight: row.getBoundingClientRect().height,
         labelTop: label.top,
+        labelBottom: label.bottom,
+        rowBottom: row.getBoundingClientRect().bottom,
         iconTop: icon.top,
         actionsTop: actions.top,
         rowBackground: getComputedStyle(row).backgroundColor,
+        rowShadow: getComputedStyle(row).boxShadow,
         buttonBackground: getComputedStyle(button).backgroundColor,
         overflow: row.scrollWidth > row.clientWidth,
       };
@@ -209,6 +216,8 @@ test("Overview uses one compact selection surface with first-line controls at no
     if (!narrow) expect(geometry.rowHeight).toBeLessThanOrEqual(28);
     expect(Math.abs(geometry.iconTop - geometry.labelTop)).toBeLessThan(8);
     expect(Math.abs(geometry.actionsTop - geometry.labelTop)).toBeLessThan(8);
+    expect(geometry.labelBottom).toBeLessThanOrEqual(geometry.rowBottom);
+    expect(geometry.rowShadow).toBe("none");
     expect(geometry.buttonBackground).toBe("rgba(0, 0, 0, 0)");
     expect(geometry.rowBackground).toBe("rgb(69, 74, 86)");
     const parentIcon = await row("workspace", first)
@@ -226,7 +235,7 @@ test("Overview uses one compact selection surface with first-line controls at no
     });
   }
   await search().press("Tab");
-  const actions = overview().getByRole("button", {
+  const actions = overview().getByRole("gridcell", {
     name: `Actions for ${label}`,
     exact: true,
   });
@@ -243,6 +252,170 @@ test("Overview uses one compact selection surface with first-line controls at no
       .pane(chat.paneId)
       .getByRole("textbox", { name: "Message", exact: true }),
   ).toBeFocused();
+});
+
+test("Overview exposes valid workspace groups and independently reachable row actions without tree nesting", async ({}, info) => {
+  const first = await app.create("Invented grouped Alpha");
+  const chat = await app.newChat(first, "codex");
+  await app.cli(
+    "conversation",
+    "rename",
+    "--id",
+    chat.id,
+    "--name",
+    "Alpha complete conversation label",
+  );
+  const terminal = await app.cli<{ id: string; paneId: string }>(
+    "terminal",
+    "open",
+    "--workspace",
+    first,
+    "--cwd",
+    app.folders[0],
+  );
+  await expect(
+    app.page.locator(
+      `#workspace-tree [data-navigation-key="terminal:${terminal.id}"]`,
+    ),
+  ).toHaveCount(0);
+  const second = await app.create("Invented grouped Beta");
+  const browser = await app.cli<{ id: string; paneId: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    second,
+    "--url",
+    "about:blank",
+  );
+  await show();
+  const grid = overview().getByRole("grid", { name: "Workspace Overview" });
+  await expect(search()).toHaveAttribute("aria-haspopup", "grid");
+  await expect(
+    grid.getByRole("rowgroup", { name: "Invented grouped Alpha", exact: true }),
+  ).toBeVisible();
+  await expect(
+    grid.getByRole("rowgroup", { name: "Invented grouped Beta", exact: true }),
+  ).toBeVisible();
+  await expect(row("conversation", chat.id)).toBeVisible();
+  await expect(row("terminal", terminal.id)).toBeVisible();
+  await expect(row("browser", browser.id)).toBeVisible();
+  await expect(overview().getByRole("treeitem")).toHaveCount(0);
+  await expect(overview().locator(".overview-disclosure")).toHaveCount(0);
+  const structure = await grid.evaluate((root) =>
+    [...root.children].every(
+      (group) =>
+        group.getAttribute("role") === "rowgroup" &&
+        [...group.children].every(
+          (row) =>
+            row.getAttribute("role") === "row" &&
+            [...row.children].every(
+              (cell) => cell.getAttribute("role") === "gridcell",
+            ),
+        ),
+    ),
+  );
+  expect(structure).toBe(true);
+  const before = await app.cli<AppState>("state");
+  await row("conversation", chat.id).hover();
+  await expect(search()).toBeFocused();
+  await expect(search()).toHaveAttribute(
+    "aria-activedescendant",
+    (await row("conversation", chat.id).getAttribute("id")) as string,
+  );
+  await search().press("Tab");
+  const actions = overview().getByRole("gridcell", {
+    name: "Actions for Alpha complete conversation label",
+    exact: true,
+  });
+  await expect(actions).toBeFocused();
+  await actions.press("Enter");
+  await app.page
+    .locator(".context-menu")
+    .getByRole("button", { name: "Pin tab", exact: true })
+    .click();
+  await expect(row("conversation", chat.id)).toHaveAccessibleName(/Pinned/);
+  expect((await app.cli<AppState>("state")).activeWorkspaceId).toBe(
+    before.activeWorkspaceId,
+  );
+  await expect(search()).toBeFocused();
+  await action("conversation", chat.id, "Rename");
+  const name = overview().getByRole("textbox", {
+    name: "Conversation name",
+    exact: true,
+  });
+  await expect(name).toBeFocused();
+  expect(await name.evaluate((input) => !input.closest("button"))).toBe(true);
+  await name.fill("Cancelled grouped label");
+  await name.press("Escape");
+  await expect(row("conversation", chat.id)).toContainText(
+    "Alpha complete conversation label",
+  );
+  await search().fill("Alpha complete");
+  await expect(row("workspace", first)).toBeVisible();
+  await expect(row("workspace", second)).toHaveCount(0);
+  await expect(row("terminal", terminal.id)).toHaveCount(0);
+  await app.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 720),
+  );
+  await app.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(760);
+  expect(
+    await overview().evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
+  await app.app!.evaluate(({ app }) =>
+    app.setAccessibilitySupportEnabled(true),
+  );
+  const session = await app.page.context().newCDPSession(app.page);
+  const ax = await session.send("Accessibility.getFullAXTree");
+  const root = ax.nodes.find(
+    (node) =>
+      !node.ignored &&
+      node.role?.value === "grid" &&
+      node.name?.value === "Workspace Overview",
+  );
+  expect(root).toBeDefined();
+  const nodes = new Map(ax.nodes.map((node) => [node.nodeId, node]));
+  const descendants = new Set<string>();
+  const visit = (id: string) => {
+    if (descendants.has(id)) return;
+    descendants.add(id);
+    for (const child of nodes.get(id)?.childIds ?? []) visit(child);
+  };
+  visit(root!.nodeId);
+  const exposed = ax.nodes.filter(
+    (node) => descendants.has(node.nodeId) && !node.ignored,
+  );
+  expect(exposed.some((node) => node.role?.value === "rowgroup")).toBe(true);
+  expect(
+    exposed.some(
+      (node) =>
+        node.role?.value === "gridcell" &&
+        node.name?.value?.includes("Alpha complete conversation label"),
+    ),
+  ).toBe(true);
+  expect(exposed.some((node) => node.role?.value === "treeitem")).toBe(false);
+  await writeFile(
+    info.outputPath("overview-accessibility.json"),
+    JSON.stringify(exposed, null, 2),
+  );
+  await session.detach();
+  await overview().screenshot({
+    path: info.outputPath("overview-grouped-filtered.png"),
+  });
+  await search().fill("no matching invented object");
+  await expect(grid).toBeHidden();
+  await expect(search()).not.toHaveAttribute("aria-activedescendant");
+  await expect(overview()).toContainText("No matching items");
+  await search().fill("");
+  await expect(row("terminal", terminal.id)).toBeVisible();
+  await overview().screenshot({
+    path: info.outputPath("overview-grouped-all.png"),
+  });
 });
 
 test("Overview rename, pin, move and shared closure actions preserve the query and object identity", async () => {
@@ -502,12 +675,19 @@ test("Overview reconciles review, streaming and removal updates without losing i
     "--conversation",
     chat.id,
   );
+  const sidebarReview = app.page.locator(
+    `#workspace-tree [data-navigation-key="review:${review.reviewId}"]`,
+  );
+  await expect(sidebarReview).toBeVisible();
+  await sidebarReview.click();
+  await expect(app.page.locator(".review-body")).toBeVisible();
   await show();
   await search().fill("spec.md");
+  await expect(row("review", review.reviewId)).toHaveCount(0);
+  await expect(overview()).toContainText("No matching items");
+  await search().fill("guarded workspace");
   await expect(row("workspace", workspace)).toBeVisible();
-  await expect(row("conversation", chat.id)).toBeVisible();
-  await expect(row("review", review.reviewId)).toBeVisible();
-  await row("review", review.reviewId).click();
+  await row("workspace", workspace).click();
   await expect(app.page.locator(".review-body")).toBeVisible();
   await show();
   await search().fill("guarded");
@@ -581,7 +761,7 @@ test("Overview reconciles review, streaming and removal updates without losing i
     .toBe("ready");
   await app.cli("conversation", "remove", "--id", neighbor.id);
   await expect(row("conversation", neighbor.id)).toHaveCount(0);
-  await expect(row("review", review.reviewId)).toHaveAttribute(
+  await expect(row("conversation", chat.id)).toHaveAttribute(
     "aria-current",
     "true",
   );
@@ -805,6 +985,26 @@ test("Overview returns to a real terminal and browsing a dormant page never load
     const command = `printf '\\n${[...Buffer.from("OVERVIEW_PTY_OK")].map((byte) => "\\" + byte.toString(8)).join("")}\\n'`;
     const middle = Math.floor(command.length / 2);
     await app.page.keyboard.type(command.slice(0, middle));
+    const pid = (
+      await app.cli<{ pid: number }>("terminal", "inspect", "--id", terminal.id)
+    ).pid;
+    await show();
+    await search().fill("terminal workspace");
+    await expect(row("terminal", terminal.id)).toBeVisible();
+    await action("terminal", terminal.id, "Pin tab");
+    await expect(row("terminal", terminal.id)).toHaveAccessibleName(/Pinned/);
+    await row("terminal", terminal.id).click();
+    await expect(input).toBeFocused();
+    expect(
+      (
+        await app.cli<{ pid: number }>(
+          "terminal",
+          "inspect",
+          "--id",
+          terminal.id,
+        )
+      ).pid,
+    ).toBe(pid);
     await show();
     await search().fill("dormant page");
     await expect(row("browser", browser.id)).toBeVisible();

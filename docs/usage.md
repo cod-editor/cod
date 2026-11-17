@@ -21,7 +21,7 @@ Development and packaged builds share the default profile: `~/Library/Applicatio
 
 A new workspace starts with a chat. Enter sends; Shift+Enter inserts a newline. Cmd/Ctrl+Enter also sends. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses files, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
-Use the workspace title, Commands > Overview or Cmd/Ctrl+Shift+O to search workspaces, conversations, browser pages and reviews in one tree. Arrows select, Enter opens and Escape returns to the previous control or native page. The selected item's context menu provides the same management actions as the sidebar, including pinning and inline rename. The sidebar stays available and its visibility is unchanged.
+Use the workspace title, Commands > Overview or Cmd/Ctrl+Shift+O to search workspaces, conversations, browser pages and terminals in one grouped list. Workspace headings switch workspaces; detailed files and reviews stay inside the workspace. Arrows select, Enter opens and Escape returns to the previous control or native page. The selected item's context menu provides the same management actions as the sidebar, including pinning and inline rename. The sidebar stays available and its visibility is unchanged.
 
 Remove from workspace in a session's context menu clears it from the workspace without deleting its native history. Reopen closed tab restores the removed chat and draft; the native session remains available in the provider's CLI. Stop active work and finish pending reviews or form submissions before removing the session.
 
