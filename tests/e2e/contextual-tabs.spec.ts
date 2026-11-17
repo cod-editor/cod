@@ -229,6 +229,12 @@ test("New typing during an untitled save becomes a normal unsaved file revision"
 async function active() {
   return (await state()).workspaces.find((w) => w.id === workspace)!;
 }
+async function selectedAfter(source: string) {
+  // Input dispatch does not await resource creation and its guarded pane.focus.
+  // Wait for the observable selection before capturing the new tab's stable ID.
+  await expect.poll(async () => (await active()).activePaneId).not.toBe(source);
+  return (await active()).activePaneId;
+}
 const plus = (group: string) =>
   app.page.locator(`[data-group-id="${group}"] [data-action="new-tab"]`);
 const menu = () =>
@@ -266,7 +272,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   await plus(group.id).click();
   await app.page.keyboard.press("ArrowDown");
   await app.page.keyboard.press("Enter");
-  const browserPane = (await active()).activePaneId;
+  const browserPane = await selectedAfter(id);
   await expect(
     app
       .pane(browserPane)
@@ -280,14 +286,14 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   ).toContain(browserPane);
   await plus(group.id).click();
   await menu().getByRole("button", { name: "Chat", exact: true }).click();
-  const chatPane = (await active()).activePaneId;
+  const chatPane = await selectedAfter(browserPane);
   await expect(
     app.pane(chatPane).getByRole("textbox", { name: "Message", exact: true }),
   ).toBeFocused();
   expect((await state()).conversations).toHaveLength(0);
   await plus(group.id).click();
   await menu().getByRole("button", { name: "Terminal", exact: true }).click();
-  const terminalPane = (await active()).activePaneId;
+  const terminalPane = await selectedAfter(chatPane);
   await expect(
     app.pane(terminalPane).locator(".xterm-helper-textarea"),
   ).toBeFocused();
@@ -302,7 +308,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
     .getByRole("textbox", { name: "Open file", exact: true })
     .fill("spec.md");
   await picker.getByRole("button", { name: "spec.md", exact: true }).click();
-  const filePane = (await active()).activePaneId;
+  const filePane = await selectedAfter(terminalPane);
   await expect(editor(filePane)).toBeFocused();
   await expect(editor(filePane)).toHaveValue(
     "# Invented specification\n\nInitial text.\n",
@@ -326,8 +332,8 @@ test("Contextual new file is blank, unpinned and adjacent while CLI creation lea
     "true",
   );
   await editor(source).press(`${modifier}+t`);
-  const current = await active(),
-    child = current.activePaneId;
+  const child = await selectedAfter(source),
+    current = await active();
   expect(child).not.toBe(source);
   expect(current.panes.find((p) => p.id === child)).toMatchObject({
     kind: "untitled",
@@ -370,7 +376,7 @@ test("Double click creates exactly one contextual tab only on free tab bar space
   expect((await active()).panes).toHaveLength(before);
   await tabs.dblclick({ position: point });
   await expect.poll(async () => (await active()).panes.length).toBe(before + 1);
-  const child = (await active()).activePaneId;
+  const child = await selectedAfter(source);
   await expect(editor(child)).toBeFocused();
   await expect(editor(child)).toHaveValue("");
   await app.page
@@ -497,7 +503,7 @@ for (const provider of ["codex", "kimi"] as const) {
       .toBe("waiting");
     const records = await app.records();
     await message.press(`${modifier}+t`);
-    const child = (await active()).activePaneId;
+    const child = await selectedAfter(source.paneId);
     const input = app
       .pane(child)
       .getByRole("textbox", { name: "Message", exact: true });

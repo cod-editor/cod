@@ -190,6 +190,9 @@ test("Workspace browser rows retain title, selection, keyboard navigation and re
     contents.sendInputEvent({ type: "keyDown", keyCode: "T", modifiers });
     contents.sendInputEvent({ type: "keyUp", keyCode: "T", modifiers });
   }, pathToFileURL(file).href);
+  await expect
+    .poll(async () => (await state()).activePaneId)
+    .not.toBe(browser.paneId);
   const newPane = (await state()).activePaneId;
   await expect(
     app.pane(newPane).getByRole("textbox", { name: "Address", exact: true }),
