@@ -1115,7 +1115,9 @@ test("Shared picker roles, shortcut columns and menu geometry survive narrow enl
     const menu = app.page.locator("dialog.context-menu");
     await expect(menu).toBeVisible();
     const close = menu.getByRole("button", { name: "Close tab", exact: true });
-    await expect(close.locator("kbd")).toHaveText(/Ctrl.*W/);
+    await expect(close.locator("kbd")).toHaveText(
+      process.platform === "darwin" ? /⌘.*W/ : /Ctrl.*W/,
+    );
     expect((await menu.boundingBox())!.width).toBeGreaterThanOrEqual(220);
     await menu.screenshot({ path: info.outputPath("tab-menu-shortcuts.png") });
     await app.page.keyboard.press("Escape");

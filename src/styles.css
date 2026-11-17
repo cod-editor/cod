@@ -258,17 +258,18 @@ body {
   overflow: hidden;
 }
 .tab-bar {
+  --tab-height: max(32px, calc(1em * var(--ui-line-height) + var(--space-1)));
   display: flex;
   align-items: center;
   flex: none;
-  height: 32px;
+  height: var(--tab-height);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line);
 }
 .tabs {
   display: flex;
   align-self: flex-start;
-  height: 32px;
+  height: var(--tab-height);
   flex: 1;
   min-width: 0;
   overflow: auto;
@@ -277,11 +278,11 @@ body {
 .tab {
   display: flex;
   flex: none;
-  gap: 7px;
+  gap: var(--space-2);
   align-items: center;
   max-width: 240px;
-  height: 32px;
-  padding: 0 8px 0 11px;
+  height: var(--tab-height);
+  padding: 0 var(--space-2);
   border: 0;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -290,22 +291,43 @@ body {
   color: var(--text-muted);
 }
 .tab:hover {
-  background: #353b45;
+  background: var(--element-hover);
 }
 .tab:active {
   background: var(--control-pressed);
 }
 .tab[aria-selected="true"] {
-  border-bottom-color: #282c34;
-  background: #282c34;
+  border-bottom-color: var(--surface-base);
+  background: var(--surface-base);
   color: var(--text-primary);
 }
 .tab-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tab-kind {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+.tab-modified {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-primary);
+}
+.tab > .icon {
+  flex: none;
+}
+.tab:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -2px;
+}
 .tab-close {
+  margin-inline-start: auto;
   opacity: 0;
 }
 .tab-close.tab-pin,
@@ -748,6 +770,7 @@ a {
 /* Review actions stay with their source and draft. */
 .review-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   position: sticky;
@@ -762,7 +785,26 @@ a {
   border: 0;
   background: transparent;
 }
-.review-header > button:last-child {
+.review-context {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 calc(4 * var(--control-height));
+  min-width: 0;
+  max-width: 100%;
+}
+.review-context .review-origin {
+  flex: 1;
+}
+.review-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   margin-left: auto;
 }
 .review-source {
@@ -950,10 +992,6 @@ dialog .form-field {
   color: var(--muted);
   margin-top: 6px;
 }
-.review-header > button:last-child {
-  white-space: nowrap;
-  flex: none;
-}
 .review-comment {
   margin: 8px 0 12px 24px;
   padding: 9px 12px;
@@ -972,8 +1010,10 @@ dialog .form-field {
   margin: 0;
 }
 .review-comment blockquote {
-  margin: 6px 0 0;
-  color: var(--text-placeholder);
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .permission-details {
   white-space: pre-wrap;
@@ -1506,6 +1546,8 @@ browser-action-list::part(action):focus-visible {
 }
 
 .review-document {
+  container-type: inline-size;
+  container-name: review-source;
   white-space: normal;
 }
 .review-source-layout {
@@ -1533,6 +1575,44 @@ browser-action-list::part(action):focus-visible {
   left: 0;
   right: 0;
   margin: 0 var(--space-2);
+}
+.review-anchor-context,
+.review-anchor-label {
+  display: none;
+}
+.review-anchor-context blockquote {
+  margin: var(--space-1) 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+@container review-source (max-width: 32em) {
+  .review-source-layout {
+    flex-direction: column;
+    height: auto;
+  }
+  .review-source-layout > .highlighted-editor {
+    flex: none;
+    width: 100%;
+    height: max(320px, 60vh);
+  }
+  .review-annotations {
+    position: static;
+    width: 100%;
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .review-annotations > [data-review-annotation] {
+    position: static;
+    margin: var(--space-2) 0;
+  }
+  .review-annotations .review-anchor-context {
+    display: block;
+  }
+  .review-annotations .review-anchor-label {
+    display: inline;
+  }
 }
 .review-comment-editor {
   padding: var(--space-2);

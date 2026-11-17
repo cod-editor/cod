@@ -1060,3 +1060,374 @@ test("Diff review keeps unchanged context neutral and anchors keyboard comments 
   );
   await host.screenshot({ path: info.outputPath("unified-diff.png") });
 });
+
+for (const feedback of [false, true])
+  test(`Narrow review toolbar keeps ${feedback ? "Send feedback" : "Approve"} visible through keyboard, resizing and restart`, async ({}, info) => {
+    const workspace = await shell.create("Invented compact review");
+    const origin = await shell.newChat(workspace, "codex");
+    const name = (
+      "Invented long origin " + "with readable review context ".repeat(9)
+    ).slice(0, 240);
+    await shell.cli(
+      "conversation",
+      "rename",
+      "--id",
+      origin.id,
+      "--name",
+      name,
+    );
+    const review = await open(workspace);
+    const label = feedback ? "Send feedback" : "Approve";
+    const host = () => pane(review);
+    const primary = () =>
+      host().getByRole("button", { name: label, exact: true });
+    const round = () =>
+      host().getByRole("combobox", { name: "Round", exact: true });
+    const preview = () => host().locator("[data-preview-toggle]");
+    const resize = async (width: number, size: number) => {
+      await shell.app!.evaluate(
+        ({ BrowserWindow }, width) =>
+          BrowserWindow.getAllWindows()[0].setContentSize(width, 700),
+        width,
+      );
+      await shell.cli(
+        "settings",
+        "update",
+        "--values",
+        JSON.stringify({ "ui.fontSize": size }),
+      );
+      await expect
+        .poll(() => shell.page.evaluate(() => innerWidth))
+        .toBe(width);
+      await expect
+        .poll(() =>
+          primary().evaluate((node) => getComputedStyle(node).fontSize),
+        )
+        .toBe(`${size}px`);
+    };
+    const fit = async (phase: string, compact = false) => {
+      await expect(primary()).toBeVisible();
+      await expect(round()).toHaveValue(review.roundId);
+      await expect(host().locator(".review-origin")).toContainText(name);
+      await expect(host().locator(".review-origin")).toHaveAttribute(
+        "title",
+        `Feedback to ${name}`,
+      );
+      const geometry = await host()
+        .locator(".review-header")
+        .evaluate((header) => {
+          const pane = header.parentElement!.getBoundingClientRect();
+          const controls = [
+            ...header.querySelectorAll<HTMLElement>(
+              "button:not([hidden]), select",
+            ),
+          ].map((control) => {
+            const box = control.getBoundingClientRect();
+            const points = [
+              [box.left + 3, box.top + box.height / 2],
+              [box.right - 3, box.top + box.height / 2],
+              [box.left + box.width / 2, box.top + 3],
+              [box.left + box.width / 2, box.bottom - 3],
+            ];
+            return {
+              label: control.getAttribute("aria-label") || control.textContent,
+              left: box.left,
+              right: box.right,
+              top: box.top,
+              bottom: box.bottom,
+              hits: points.every(([x, y]) => {
+                const hit = document.elementFromPoint(x, y);
+                return hit === control || (!!hit && control.contains(hit));
+              }),
+            };
+          });
+          return {
+            height: header.getBoundingClientRect().height,
+            width: header.clientWidth,
+            scrollWidth: header.scrollWidth,
+            pane: { left: pane.left, right: pane.right },
+            controls,
+          };
+        });
+      await writeFile(
+        info.outputPath(`${phase}-geometry.json`),
+        JSON.stringify(geometry, null, 2),
+      );
+      await shell.page.screenshot({
+        path: info.outputPath(`${phase}-review.png`),
+      });
+      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+      for (const control of geometry.controls) {
+        expect(control.left, control.label ?? "Control").toBeGreaterThanOrEqual(
+          geometry.pane.left,
+        );
+        expect(control.right, control.label ?? "Control").toBeLessThanOrEqual(
+          geometry.pane.right,
+        );
+        expect(control.hits, control.label ?? "Control").toBe(true);
+      }
+      if (compact) expect(geometry.height).toBeLessThanOrEqual(40);
+    };
+    if (feedback) {
+      await comment(review, "Private feedback before resizing");
+      await source(review).focus();
+      await source(review).press(`${modifier}+Shift+M`);
+      await host()
+        .getByRole("textbox", { name: "Comment", exact: true })
+        .fill("Unfinished private note before restart");
+      await expect(primary()).toBeDisabled();
+    }
+    await resize(1280, 14);
+    await fit(`${label}-normal`, true);
+    await resize(800, 20);
+    await fit(`${label}-narrow`);
+    await resize(800, 32);
+    await fit(`${label}-maximum-text`);
+    await resize(1280, 14);
+    await fit(`${label}-resized-wide`, true);
+    await resize(800, 20);
+    await shell.stop();
+    await shell.start();
+    await resize(800, 20);
+    await fit(`${label}-restored`);
+    const detail = await shell.cli<Summary & { originConversationId: string }>(
+      "review",
+      "inspect",
+      "--id",
+      review.reviewId,
+    );
+    expect(detail.originConversationId).toBe(origin.id);
+    expect(detail.currentRoundId).toBe(review.roundId);
+    expect(detail.rounds[0].submission).toBeUndefined();
+    if (feedback) {
+      await expect(
+        host().getByLabel("Draft comment", { exact: true }),
+      ).toContainText("Private feedback before resizing");
+      const pending = host().getByRole("textbox", {
+        name: "Comment",
+        exact: true,
+      });
+      await expect(pending).toHaveValue(
+        "Unfinished private note before restart",
+      );
+      await expect(primary()).toBeDisabled();
+      await tabTo(
+        shell.page,
+        host().getByRole("button", { name: "Save comment", exact: true }),
+      );
+      await shell.page.keyboard.press("Enter");
+      await expect(
+        host().getByLabel("Draft comment", { exact: true }),
+      ).toHaveCount(2);
+    }
+    await expect(primary()).toBeEnabled();
+    await source(review).focus();
+    await tabTo(shell.page, round());
+    await shell.page.keyboard.press("Home");
+    await expect(round()).toHaveValue(review.roundId);
+    const more = host().getByRole("button", {
+      name: "Review actions",
+      exact: true,
+    });
+    await tabTo(shell.page, more);
+    await shell.page.keyboard.press("Enter");
+    await expect(
+      shell.page
+        .locator(".context-menu")
+        .getByRole("button", { name: "Add comment", exact: true }),
+    ).toBeVisible();
+    await shell.page.keyboard.press("Escape");
+    await expect(more).toBeFocused();
+    await tabTo(shell.page, preview());
+    await shell.page.keyboard.press("Space");
+    await expect(
+      host().getByRole("document", { name: "Review preview", exact: true }),
+    ).toBeFocused();
+    await tabTo(shell.page, preview());
+    await shell.page.keyboard.press("Space");
+    await expect(source(review)).toBeVisible();
+    await fit(`${label}-ready`);
+    await tabTo(shell.page, primary());
+    if (feedback) await shell.page.keyboard.press("Enter");
+    else {
+      const box = (await primary().boundingBox())!;
+      await shell.page.mouse.click(
+        box.x + box.width - 3,
+        box.y + box.height / 2,
+      );
+    }
+    await expect
+      .poll(
+        async () =>
+          (await inspect(review)).rounds[0].submission?.delivery.status,
+      )
+      .toBe("acknowledged");
+    const submission = (await inspect(review)).rounds[0].submission!;
+    const packet = JSON.parse(submission.envelope);
+    expect(packet.reviewId).toBe(review.reviewId);
+    expect(packet.roundId).toBe(review.roundId);
+    expect(packet.comments.map((item: { body: string }) => item.body)).toEqual(
+      feedback
+        ? [
+            "Private feedback before resizing",
+            "Unfinished private note before restart",
+          ]
+        : [],
+    );
+    expect(await feedbackPrompts(submission.id)).toHaveLength(1);
+  });
+
+test("Narrow source comments reflow without losing their quote, caret or source viewport", async ({}, info) => {
+  const lines = Array.from(
+    { length: 80 },
+    (_, index) => `Invented paragraph ${index + 1}: exact source anchor.`,
+  );
+  lines[34] = "Anchor A";
+  lines[35] = "Anchor B";
+  const quote = lines.slice(34, 36).join("\n");
+  await writeFile(shell.file, lines.join("\n"));
+  const review = await open(await shell.create("Responsive anchored review"));
+  const host = pane(review);
+  const editor = source(review);
+  const pending = host.getByRole("textbox", { name: "Comment", exact: true });
+  const resize = async (width: number, size: number) => {
+    await shell.app!.evaluate(
+      ({ BrowserWindow }, width) =>
+        BrowserWindow.getAllWindows()[0].setContentSize(width, 700),
+      width,
+    );
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": size }),
+    );
+    await expect.poll(() => shell.page.evaluate(() => innerWidth)).toBe(width);
+  };
+  await resize(1280, 14);
+  await editor.focus();
+  await editor.press(`${modifier}+Home`);
+  for (let index = 0; index < 34; index++) await editor.press("ArrowDown");
+  await editor.press("Home");
+  await editor.press("Shift+ArrowDown");
+  await editor.press("Shift+End");
+  await editor.press(`${modifier}+Shift+M`);
+  await expect(pending).toBeFocused();
+  await shell.page.keyboard.type("Private anchored draft");
+  await pending.press("Home");
+  await pending.press("ArrowRight");
+  await pending.press("Shift+ArrowRight");
+  const selection = await pending.evaluate((node: HTMLTextAreaElement) => [
+    node.selectionStart,
+    node.selectionEnd,
+  ]);
+  const scroll = await editor.evaluate((node) => node.scrollTop);
+  expect(scroll).toBeGreaterThan(100);
+  await resize(800, 20);
+  await expect(pending).toBeFocused();
+  expect(
+    await pending.evaluate((node: HTMLTextAreaElement) => [
+      node.selectionStart,
+      node.selectionEnd,
+    ]),
+  ).toEqual(selection);
+  expect(await editor.evaluate((node) => node.scrollTop)).toBe(scroll);
+  const context = host.locator(".review-comment-editor .review-anchor-context");
+  await expect(context).toBeVisible();
+  await expect(context).toContainText("Lines 35-36");
+  const expectQuote = async (block: Locator) => {
+    expect(await block.textContent()).toBe(quote);
+    const positions = await block.evaluate((node) => {
+      const text = node.firstChild!,
+        split = text.textContent!.indexOf("\n") + 1;
+      const first = document.createRange(),
+        second = document.createRange();
+      first.setStart(text, 0);
+      first.setEnd(text, 1);
+      second.setStart(text, split);
+      second.setEnd(text, split + 1);
+      return {
+        firstBottom: first.getBoundingClientRect().bottom,
+        secondTop: second.getBoundingClientRect().top,
+      };
+    });
+    expect(positions.secondTop).toBeGreaterThan(positions.firstBottom - 1);
+  };
+  await expectQuote(context.locator("blockquote"));
+  const save = host.getByRole("button", { name: "Save comment", exact: true });
+  const cancel = host.getByRole("button", {
+    name: "Cancel comment",
+    exact: true,
+  });
+  for (const button of [save, cancel]) {
+    await button.scrollIntoViewIfNeeded();
+    const readable = await button.evaluate((node) => {
+      const text = node.firstChild!;
+      const words = [...(text.textContent ?? "").matchAll(/\S+/g)];
+      return words.every((word) => {
+        const range = document.createRange();
+        range.setStart(text, word.index!);
+        range.setEnd(text, word.index! + word[0].length);
+        return range.getClientRects().length === 1;
+      });
+    });
+    expect(readable).toBe(true);
+    const box = (await button.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual((await host.boundingBox())!.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(
+      (await host.boundingBox())!.x + (await host.boundingBox())!.width,
+    );
+    expect(
+      await shell.page.evaluate(
+        ({ x, y }) =>
+          document.elementFromPoint(x, y)?.closest("button")?.textContent,
+        { x: box.x + box.width - 3, y: box.y + box.height / 2 },
+      ),
+    ).toContain(await button.textContent());
+  }
+  await host.screenshot({
+    path: info.outputPath("review-source-stacked-comments.png"),
+  });
+  await tabTo(shell.page, save);
+  await shell.page.keyboard.press("Enter");
+  const card = host.getByLabel("Draft comment", { exact: true });
+  await expect(card).toContainText("Private anchored draft");
+  await expect(card.locator(".review-anchor-label")).toHaveText(
+    " / Lines 35-36",
+  );
+  await expectQuote(card.locator("blockquote"));
+  expect(await editor.evaluate((node) => node.scrollTop)).toBe(scroll);
+  await card.focus();
+  await card.press("Enter");
+  await expect(pending).toBeFocused();
+  await pending.fill("Recovered anchored edit");
+  await resize(1280, 14);
+  await expect(pending).toBeFocused();
+  await expect(context).toBeHidden();
+  await resize(800, 20);
+  await shell.stop();
+  await shell.start();
+  await resize(800, 20);
+  const restored = pane(review).getByRole("textbox", {
+    name: "Comment",
+    exact: true,
+  });
+  await expect(restored).toHaveValue("Recovered anchored edit");
+  await expect(
+    pane(review).locator(".review-comment-editor .review-anchor-context"),
+  ).toContainText("Anchor A");
+  expect(
+    await pane(review)
+      .locator(".review-comment-editor .review-anchor-context blockquote")
+      .textContent(),
+  ).toBe(quote);
+  await tabTo(
+    shell.page,
+    pane(review).getByRole("button", { name: "Cancel comment", exact: true }),
+  );
+  await shell.page.keyboard.press("Enter");
+  await expect(
+    pane(review).getByLabel("Draft comment", { exact: true }),
+  ).toContainText("Private anchored draft");
+  expect((await inspect(review)).rounds[0].submission).toBeUndefined();
+});

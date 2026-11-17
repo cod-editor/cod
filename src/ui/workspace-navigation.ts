@@ -352,6 +352,7 @@ export function createWorkspaceNavigation(
         { label: "Open workspace", run: open },
         {
           label: "New chat",
+          command: "chat.new",
           run: () =>
             overrides.newConversation
               ? overrides.newConversation(item.workspaceId)
@@ -359,11 +360,16 @@ export function createWorkspaceNavigation(
                   newConversation(),
                 ),
         },
-        { label: "Rename workspace", run: rename },
-        { label: "Add folder...", run: () => folderDialog(item.workspaceId) },
+        { label: "Rename workspace", command: "workspace.rename", run: rename },
+        {
+          label: "Add folder...",
+          command: "folders.add",
+          run: () => folderDialog(item.workspaceId),
+        },
         null,
         {
           label: "Close workspace",
+          command: "workspace.close",
           run: () => closeWorkspace(workspace, overrides.restoreTree !== false),
         },
       ];
@@ -376,6 +382,7 @@ export function createWorkspaceNavigation(
           null,
           {
             label: pane.pinned ? "Unpin tab" : "Pin tab",
+            command: "tab.togglePin",
             run: () =>
               void invoke("pane.pin", {
                 workspace: workspace.id,
@@ -385,11 +392,13 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Close tab",
+            command: pane.pinned ? undefined : "tab.close",
             run: () =>
               void closeItem(item, true, overrides.restoreTree !== false),
           },
           {
             label: "Close other tabs",
+            command: "tab.closeOthers",
             disabled: !group?.paneIds.some(
               (id) =>
                 id !== pane.id &&
@@ -405,6 +414,7 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Close all tabs",
+            command: "tab.closeAll",
             disabled: !group?.paneIds.some(
               (id) => !workspace.panes.find((p) => p.id === id)?.pinned,
             ),

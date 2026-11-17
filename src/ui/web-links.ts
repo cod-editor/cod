@@ -42,9 +42,14 @@ export function webLinkMenu(
   menu(
     anchor,
     [
-      { label: "Open link", run: () => run("browser.open") },
+      {
+        label: "Open link",
+        command: "link.open",
+        run: () => run("browser.open"),
+      },
       {
         label: "Open in system browser",
+        command: "browser.openExternal",
         run: () => run("browser.open-external"),
       },
     ],
