@@ -436,16 +436,34 @@ export function createCommands(
     if (!workspace || !group) throw new Error("Select a pane first");
     return { workspace, group, sourcePane: group.activePaneId };
   }
+  async function createTab(
+    op:
+      | "pane.new"
+      | "browser.open"
+      | "conversation.draft"
+      | "terminal.open"
+      | "file.new",
+    values: { workspace: string; [key: string]: unknown },
+    intent = keys.beginFocus(),
+  ): Promise<void> {
+    const result = await invoke<{ paneId: string }>(op, {
+      ...values,
+      focus: false,
+    });
+    if (intent.signal.aborted) return;
+    await invoke("pane.focus", {
+      workspace: values.workspace,
+      id: result.paneId,
+    });
+    await keys.focusActiveContent(result.paneId, intent);
+  }
   async function newTab(workspaceId?: string, groupId?: string): Promise<void> {
     const { workspace, group, sourcePane } = tabTarget(workspaceId, groupId);
-    const intent = keys.beginFocus();
-    const result = await invoke<{ paneId: string }>("pane.new", {
+    await createTab("pane.new", {
       workspace: workspace.id,
       group: group.id,
       sameAs: sourcePane,
-      focus: true,
     });
-    await keys.focusActiveContent(result.paneId, intent);
   }
   function chooseTabType(
     anchor: HTMLElement,
@@ -456,15 +474,12 @@ export function createCommands(
     const create = async (
       op: "browser.open" | "conversation.draft" | "terminal.open",
     ) => {
-      const intent = keys.beginFocus();
-      const result = await invoke<{ paneId: string }>(op, {
+      await createTab(op, {
         workspace: workspace.id,
         group: group.id,
         sourcePane,
-        focus: true,
         ...(op === "browser.open" ? { url: "about:blank" } : {}),
       });
-      await keys.focusActiveContent(result.paneId, intent);
     };
     const run = (op: "browser.open" | "conversation.draft" | "terminal.open") =>
       void create(op).catch(() => undefined);
@@ -1178,13 +1193,15 @@ export function createCommands(
         }
         case "files.new":
           if (w && group) {
-            const result = await invoke<{ paneId: string }>("file.new", {
-              workspace: w.id,
-              group: group.id,
-              sourcePane: group.activePaneId,
-              focus: true,
-            });
-            await keys.focusActiveContent(result.paneId, focusIntent);
+            await createTab(
+              "file.new",
+              {
+                workspace: w.id,
+                group: group.id,
+                sourcePane: group.activePaneId,
+              },
+              focusIntent,
+            );
           }
           break;
         case "chat.new":

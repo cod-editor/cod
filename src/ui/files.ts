@@ -2,7 +2,7 @@ import { focusReadyEditor } from "./document-views";
 import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
-import type { Invoke } from "./contracts";
+import type { Invoke, WhenRendered } from "./contracts";
 import type { createFocusManager } from "./focus";
 import { icon, menu } from "./controls";
 interface Entry {
@@ -35,6 +35,7 @@ export class FileTree {
       ReturnType<typeof createFocusManager>,
       "capture" | "restore"
     >,
+    private whenRendered: WhenRendered,
   ) {
     host.tabIndex = 0;
     host.addEventListener("focusin", (event) => {
@@ -455,9 +456,28 @@ export class FileTree {
         ...(line ? { line } : {}),
         ...(target?.paneId ? { replacePane: target.paneId } : {}),
         ...(target?.sourcePane
-          ? { sourcePane: target.sourcePane, group: target.group, focus: true }
+          ? { sourcePane: target.sourcePane, group: target.group, focus: false }
           : {}),
       });
+      if (target?.sourcePane) {
+        if (intent.signal.aborted) return;
+        await this.invoke("pane.focus", {
+          workspace: workspace.id,
+          id: result.paneId,
+        });
+        if (
+          !(await this.whenRendered(() => {
+            if (this.workspace?.id !== workspace.id) return false;
+            return this.workspace.activePaneId === result.paneId &&
+              document.querySelector(`[data-pane-id="${result.paneId}"]`)
+              ? true
+              : undefined;
+          }, intent.signal))
+        ) {
+          intent.abort();
+          return;
+        }
+      }
       requestAnimationFrame(() => {
         if (intent.signal.aborted) return;
         const editor = document.querySelector<HTMLTextAreaElement>(
@@ -466,14 +486,20 @@ export class FileTree {
         if (editor)
           focusReadyEditor(
             editor,
-            () => this.workspace?.id === workspace.id,
+            () =>
+              this.workspace?.id === workspace.id &&
+              this.workspace.activePaneId === result.paneId,
             intent,
           );
         else {
           const image = document.querySelector<HTMLElement>(
             `[data-pane-id="${result.paneId}"] .image-preview-pane`,
           );
-          if (image && this.workspace?.id === workspace.id)
+          if (
+            image &&
+            this.workspace?.id === workspace.id &&
+            this.workspace.activePaneId === result.paneId
+          )
             image.focus({ preventScroll: true });
           intent.abort();
         }

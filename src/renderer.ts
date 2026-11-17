@@ -86,6 +86,7 @@ const projects = new FileTree(
   invoke,
   (workspace) => commands.folder(workspace),
   focus,
+  whenRendered,
 );
 
 const finder = createContentFind(

@@ -126,7 +126,12 @@ export class FileApplicationService {
         workspace.layout =
           removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
       }
-      workspace.activePaneId = existing.id;
+      if (
+        request.sourcePane === undefined ||
+        request.focus === true ||
+        request.focus === "true"
+      )
+        workspace.activePaneId = existing.id;
       return { paneId: existing.id };
     }
     if (request.sourcePane !== undefined) {
@@ -240,7 +245,12 @@ export class FileApplicationService {
           workspace.layout =
             removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
         }
-        workspace.activePaneId = existing.id;
+        if (
+          request.sourcePane === undefined ||
+          request.focus === true ||
+          request.focus === "true"
+        )
+          workspace.activePaneId = existing.id;
         return { paneId: existing.id };
       }
       const launcher =

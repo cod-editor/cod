@@ -1179,3 +1179,119 @@ test("Registered forms create ordinary blank browsers and image previews create 
   await expect(editor(text)).toBeFocused();
   await expect(editor(text)).toHaveValue("");
 });
+
+test("Newer navigation cancels automatic follow while a contextual terminal is being created", async () => {
+  test.skip(
+    process.platform !== "linux",
+    "Controlled live cwd delay uses the isolated Linux process path",
+  );
+  const source = await app.cli<{ id: string; paneId: string }>(
+    "terminal",
+    "open",
+    "--workspace",
+    workspace,
+  );
+  await expect
+    .poll(
+      async () =>
+        (await state()).terminals.find((t) => t.id === source.id)?.status,
+    )
+    .toBe("running");
+  const before = await active(),
+    sourceGroup = before.groups!.find((g) =>
+      g.paneIds.includes(source.paneId),
+    )!;
+  let otherGroup = await app.cli<{ groupId: string }>(
+    "group",
+    "ensure",
+    "--workspace",
+    workspace,
+    "--side",
+    "right",
+  );
+  if (otherGroup.groupId === sourceGroup.id)
+    otherGroup = await app.cli<{ groupId: string }>(
+      "group",
+      "ensure",
+      "--workspace",
+      workspace,
+      "--side",
+      "left",
+    );
+  expect(otherGroup.groupId).not.toBe(sourceGroup.id);
+  const other = await app.cli<{ paneId: string }>(
+    "file",
+    "new",
+    "--workspace",
+    workspace,
+    "--group",
+    otherGroup.groupId,
+    "--focus",
+    "true",
+  );
+  await expect(editor(other.paneId)).toBeEnabled();
+  await app.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    source.paneId,
+  );
+  const input = app.pane(source.paneId).locator(".xterm-helper-textarea");
+  await input.focus();
+  const terminal = (await state()).terminals.find((t) => t.id === source.id)!;
+  await app.app!.evaluate(({}, pid) => {
+    const fs = process.getBuiltinModule("node:fs/promises")!,
+      readlink = fs.readlink;
+    Object.assign(globalThis, {
+      creationCwdPending: false,
+      releaseCreationCwd: false,
+    });
+    Object.defineProperty(fs, "readlink", {
+      value: async (file: string, ...options: unknown[]) => {
+        if (String(file) === `/proc/${pid}/cwd`) {
+          (globalThis as any).creationCwdPending = true;
+          while (!(globalThis as any).releaseCreationCwd)
+            await new Promise((r) => setTimeout(r, 5));
+        }
+        return Reflect.apply(readlink, fs, [file, ...options]);
+      },
+    });
+  }, terminal.pid);
+  try {
+    await input.press(`${modifier}+t`);
+    await expect
+      .poll(() =>
+        app.app!.evaluate(() => (globalThis as any).creationCwdPending),
+      )
+      .toBe(true);
+    await editor(other.paneId).click();
+    await editor(other.paneId).pressSequentially(
+      "Keep my newer focus and text",
+    );
+    await expect
+      .poll(async () => (await active()).activePaneId)
+      .toBe(other.paneId);
+  } finally {
+    await app.app!.evaluate(() => {
+      (globalThis as any).releaseCreationCwd = true;
+    });
+  }
+  await expect.poll(async () => (await state()).terminals.length).toBe(2);
+  expect((await active()).activePaneId).toBe(other.paneId);
+  await expect(editor(other.paneId)).toBeFocused();
+  await expect(editor(other.paneId)).toHaveValue(
+    "Keep my newer focus and text",
+  );
+  const current = await active(),
+    child = (await state()).terminals.find((t) => t.id !== source.id)!;
+  expect(
+    current.groups!.find((g) => g.id === sourceGroup.id)?.paneIds,
+  ).toContain(child.paneId);
+  expect(
+    current.groups!.find((g) => g.id === sourceGroup.id)?.activePaneId,
+  ).toBe(source.paneId);
+  expect(child.cwd).toBe(terminal.cwd);
+  expect(child.pid).not.toBe(terminal.pid);
+});
