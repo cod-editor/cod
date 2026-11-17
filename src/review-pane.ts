@@ -302,7 +302,13 @@ export function reviewPane(
   host.addEventListener("cod:toggle-preview", () => {
     if (!previewButton.hidden) previewButton.click();
   });
-  header.append(roundSelect, originLabel, more, previewButton, submit);
+  const context = document.createElement("div");
+  context.className = "review-context";
+  context.append(roundSelect, originLabel);
+  const controls = document.createElement("div");
+  controls.className = "review-controls";
+  controls.append(more, previewButton, submit);
+  header.append(context, controls);
   host.append(
     header,
     status,
@@ -370,6 +376,7 @@ export function reviewPane(
       documentView &&
       documentSnapshot === snapshot.id;
     if (!reuseDocument) {
+      documentView?.dispose();
       const label = document.createElement("p");
       label.className = "review-source";
       label.textContent =
@@ -774,6 +781,7 @@ export function reviewPane(
     });
     return element;
   }
+  host.addEventListener("cod:dispose-view", () => documentView?.dispose());
   updates.set(host, update);
   update(initial);
   return host;

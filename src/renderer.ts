@@ -53,6 +53,7 @@ const documents = createDocumentViews(
   invoke,
   render,
   setStatus,
+  (key, modified) => layout.documentModified(key, modified),
 );
 const chats = createConversationViews({
   getState: () => state,
@@ -71,6 +72,7 @@ const layout = createPaneLayout(() => state, invoke, {
     commands.chooseTabType(anchor, workspace, group),
   renderPane: (workspace, pane) => workspaceView.pane(workspace, pane),
   saveFile: documents.save,
+  documentModified: documents.modified,
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });

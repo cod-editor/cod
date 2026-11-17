@@ -1,4 +1,5 @@
 import type { CommandId } from "../keyboard";
+import { documentKey, isTextDocument } from "../text-document";
 import { createTabDrag } from "./tab-drag";
 import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
@@ -22,6 +23,7 @@ interface LayoutActions {
   ) => void;
   renderPane: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   saveFile: (workspace: string, pane: string) => Promise<void>;
+  documentModified: (pane: PaneState) => boolean;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   nativeLayout: () => void;
 }
@@ -61,7 +63,13 @@ export function createPaneLayout(
   invoke: Invoke,
   actions: LayoutActions,
 ) {
-  const { renderPane, saveFile, conversationActions, nativeLayout } = actions;
+  const {
+    renderPane,
+    saveFile,
+    conversationActions,
+    nativeLayout,
+    documentModified: isDocumentModified,
+  } = actions;
   const navigationWidths = createNavigationWidths(invoke);
   const drag = createTabDrag(invoke);
   const activeWorkspace = () =>
@@ -453,6 +461,12 @@ export function createPaneLayout(
   }
   const groupViews = new Map<string, HTMLElement>();
   const splitViews = new Map<string, HTMLElement>();
+  function setTabModified(tab: HTMLElement, modified: boolean) {
+    tab.dataset.modified = String(modified);
+    const marker = tab.querySelector<HTMLElement>(".tab-modified");
+    if (marker) marker.hidden = !modified;
+    tab.title = tab.dataset.baseTitle! + (modified ? " - Unsaved changes" : "");
+  }
   function renderGroup(
     workspace: WorkspaceState,
     group: NonNullable<WorkspaceState["groups"]>[number],
@@ -490,7 +504,12 @@ export function createPaneLayout(
       tab.setAttribute("aria-selected", String(id === group.activePaneId));
       tab.tabIndex = id === group.activePaneId ? 0 : -1;
       tab.dataset.tabId = id;
-      tab.title = paneLabel(pane) + (pane.pinned ? " - Pinned tab" : "");
+      tab.dataset.baseTitle =
+        paneLabel(pane) +
+        (pane.kind === "review" ? " - Review snapshot" : "") +
+        (pane.pinned ? " - Pinned tab" : "");
+      if (isTextDocument(pane)) tab.dataset.documentKey = documentKey(pane);
+      else delete tab.dataset.documentKey;
       tab.dataset.pinned = String(!!pane.pinned);
       const iconKind =
         pane.kind === "untitled"
@@ -512,6 +531,22 @@ export function createPaneLayout(
       if (label.textContent !== paneLabel(pane))
         label.textContent = paneLabel(pane);
       if (label.parentNode !== tab) tab.append(label);
+      const kind =
+        tab.querySelector<HTMLElement>(".tab-kind") ??
+        document.createElement("small");
+      kind.className = "tab-kind";
+      kind.textContent = "Review";
+      kind.hidden = pane.kind !== "review";
+      kind.setAttribute("aria-hidden", "true");
+      if (label.nextSibling !== kind) label.after(kind);
+      const modified =
+        tab.querySelector<HTMLElement>(".tab-modified") ??
+        document.createElement("span");
+      modified.className = "tab-modified";
+      modified.title = "Unsaved changes";
+      modified.setAttribute("aria-hidden", "true");
+      if (kind.nextSibling !== modified) kind.after(modified);
+      setTabModified(tab, isDocumentModified(pane));
       const close =
         tab.querySelector<HTMLButtonElement>(".tab-close") ??
         iconButton("close", "Close tab", () => {});
@@ -619,7 +654,7 @@ export function createPaneLayout(
         },
         {
           label: "Close tab",
-          command: "tab.close",
+          command: pane.pinned ? undefined : "tab.close",
           run: () =>
             void invoke("pane.close", {
               workspace: workspace.id,
@@ -888,6 +923,13 @@ export function createPaneLayout(
   }
 
   return {
+    documentModified(key: string, modified: boolean) {
+      for (const group of groupViews.values())
+        for (const tab of group.querySelectorAll<HTMLElement>(
+          ".tab[data-document-key]",
+        ))
+          if (tab.dataset.documentKey === key) setTabModified(tab, modified);
+    },
     dispose: () => navigationWidths.dispose(),
     render: renderWorkspace,
     applySettings: applyWorkspaceSettings,

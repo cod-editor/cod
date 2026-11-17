@@ -65,14 +65,17 @@ export function reviewDocument(
   sourceLayout.append(sourceView, annotations);
   element.append(sourceLayout, rendered);
   const anchored = new Map<HTMLElement, CommentRange>();
+  // The saved source is immutable for this view. Draft/status updates need not
+  // reparse it merely to repeat an unchanged pending editor's anchor quote.
+  const contextAnchors = new WeakMap<HTMLElement, string>();
   function positionAnnotations() {
     sourceLayout.classList.toggle("has-comments", anchored.size > 0);
     let bottom = 0;
     const style = getComputedStyle(editor);
     const lineHeight = parseFloat(style.lineHeight) || 24;
-    for (const [node, range] of [...anchored].sort(
-      (a, b) => a[1].endLine - b[1].endLine,
-    )) {
+    const stacked = getComputedStyle(annotations).position === "static";
+    const ordered = [...anchored].sort((a, b) => a[1].endLine - b[1].endLine);
+    for (const [index, [node, range]] of ordered.entries()) {
       node.contentEditable = "false";
       node.dataset.reviewAnnotation = "true";
       node.style.top = "";
@@ -93,13 +96,16 @@ export function reviewDocument(
         if (block) {
           let sibling: Element = block;
           while (
+            sibling.nextElementSibling !== node &&
             sibling.nextElementSibling?.hasAttribute("data-review-annotation")
           )
             sibling = sibling.nextElementSibling;
-          sibling.after(node);
-        } else rendered.append(node);
+          if (sibling.nextElementSibling !== node) sibling.after(node);
+        } else if (rendered.lastElementChild !== node) rendered.append(node);
       } else {
-        annotations.append(node);
+        if (annotations.children[index] !== node)
+          annotations.insertBefore(node, annotations.children[index] ?? null);
+        if (stacked) continue;
         const top =
           parseFloat(style.paddingTop) +
           (range.endLine - 1) * lineHeight -
@@ -115,6 +121,8 @@ export function reviewDocument(
     }
   }
   editor.addEventListener("scroll", positionAnnotations);
+  const resizeObserver = new ResizeObserver(positionAnnotations);
+  resizeObserver.observe(sourceLayout);
 
   let selected = initial;
   let renderedOnce = false;
@@ -237,13 +245,56 @@ export function reviewDocument(
     element,
     capture,
     focus,
+    dispose() {
+      resizeObserver.disconnect();
+      editor.removeEventListener("scroll", positionAnnotations);
+    },
     clearAnnotations() {
-      for (const node of anchored.keys()) node.remove();
+      for (const node of anchored.keys()) {
+        resizeObserver.unobserve(node);
+        node.remove();
+      }
       anchored.clear();
       sourceLayout.classList.remove("has-comments");
     },
     place(node: HTMLElement, range: CommentRange) {
+      const label =
+        range.startLine === range.endLine
+          ? `Line ${range.startLine}`
+          : `Lines ${range.startLine}-${range.endLine}`;
+      if (node.classList.contains("review-comment-editor")) {
+        let context = node.querySelector<HTMLElement>(".review-anchor-context");
+        if (!context) {
+          context = document.createElement("div");
+          context.className = "review-anchor-context";
+          context.append(
+            document.createElement("span"),
+            document.createElement("blockquote"),
+          );
+          node.prepend(context);
+        }
+        const anchor = `${range.startLine}:${range.endLine}:${range.fragment?.view}:${range.fragment?.start}:${range.fragment?.end}`;
+        if (contextAnchors.get(node) !== anchor) {
+          context.firstElementChild!.textContent = label;
+          context.lastElementChild!.textContent = range.fragment
+            ? documentFragment(source, range.fragment).quote
+            : source
+                .split("\n")
+                .slice(range.startLine - 1, range.endLine)
+                .join("\n");
+          contextAnchors.set(node, anchor);
+        }
+      } else {
+        const caption = node.querySelector(".review-comment-caption");
+        if (caption && !caption.querySelector(".review-anchor-label")) {
+          const anchor = document.createElement("span");
+          anchor.className = "review-anchor-label";
+          anchor.textContent = ` / ${label}`;
+          caption.append(anchor);
+        }
+      }
       anchored.set(node, range);
+      resizeObserver.observe(node);
       positionAnnotations();
     },
     toggle() {

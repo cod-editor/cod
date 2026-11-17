@@ -34,6 +34,7 @@ export function createDocumentViews(
   invoke: Invoke,
   invalidate: () => void,
   setStatus: (message: string) => void,
+  modifiedChanged: (key: string, modified: boolean) => void,
 ) {
   const drafts = new Map<string, string>();
   const originals = new Map<string, string>();
@@ -394,8 +395,13 @@ export function createDocumentViews(
       editor.value = drafts.get(key) ?? originals.get(key) ?? "";
       editor.addEventListener("input", () => {
         const currentKey = editor.dataset.documentKey!;
-        drafts.set(currentKey, editor.value);
-        syncDocumentViews(currentKey, editor.value, editor);
+        const value = editor.value;
+        const original = originals.get(currentKey);
+        const wasModified = (drafts.get(currentKey) ?? original) !== original;
+        drafts.set(currentKey, value);
+        const modified = value !== original;
+        if (modified !== wasModified) modifiedChanged(currentKey, modified);
+        syncDocumentViews(currentKey, value, editor);
         if (!messages.get(pane.id)?.startsWith("Conflict"))
           messages.delete(pane.id);
         const expectedContent =
@@ -405,7 +411,7 @@ export function createDocumentViews(
           persistDraft(currentKey, {
             workspace: workspace.id,
             paneId: pane.id,
-            content: editor.value,
+            content: value,
             expectedContent,
             sourceKey: currentKey,
           });
@@ -593,6 +599,12 @@ export function createDocumentViews(
   const views = new Map<string, HTMLElement>();
   return {
     save: saveFile,
+    modified(pane: PaneState) {
+      if (!isTextDocument(pane)) return false;
+      const key = documentKey(pane),
+        draft = drafts.get(key);
+      return draft !== undefined && draft !== originals.get(key);
+    },
     dispose() {
       clearInterval(refreshTimer);
       window.removeEventListener("focus", refreshOnFocus);

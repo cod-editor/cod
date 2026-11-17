@@ -1301,3 +1301,239 @@ test("Newer navigation cancels automatic follow while a contextual terminal is b
   expect(child.cwd).toBe(terminal.cwd);
   expect(child.pid).not.toBe(terminal.pid);
 });
+
+test("Tabs keep review identity and unsaved state visible beside truncated filenames", async ({}, info) => {
+  await app.page
+    .locator(`[data-navigation-key="workspace:${workspace}"]`)
+    .click({ button: "right" });
+  await expect(
+    app.page
+      .locator("dialog.context-menu")
+      .getByRole("button", { name: "New chat", exact: true })
+      .locator("kbd"),
+  ).toHaveText(process.platform === "darwin" ? /⌘.*N/ : /Ctrl.*N/);
+  await app.page.keyboard.press("Escape");
+  const filename =
+    "An intentionally long document name shared by the source and its review snapshot.md";
+  const file = path.join(app.folders[0], filename);
+  const original = "# Invented source\nOriginal text\n";
+  await writeFile(file, original);
+  const source = await app.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+  );
+  await expect(editor(source.paneId)).toHaveValue(original);
+  const conversation = await app.newChat(workspace, "codex");
+  const review = await app.cli<{ paneId: string }>(
+    "review",
+    "open-document",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+    "--conversation",
+    conversation.id,
+  );
+  const sourceTab = app.page.locator(
+    `[role="tab"][data-tab-id="${source.paneId}"]`,
+  );
+  const reviewTab = app.page.locator(
+    `[role="tab"][data-tab-id="${review.paneId}"]`,
+  );
+  await expect(reviewTab.locator(".tab-kind")).toHaveText("Review");
+  await expect(reviewTab.locator(".tab-kind")).toBeVisible();
+  await expect(sourceTab.locator(".tab-kind")).toBeHidden();
+  await expect(reviewTab).toHaveAttribute("title", /Review snapshot/);
+  expect(
+    await reviewTab
+      .locator(".tab-label")
+      .evaluate((e) => e.scrollWidth > e.clientWidth),
+  ).toBe(true);
+  await app.page.screenshot({
+    path: info.outputPath("source-review-tabs-normal.png"),
+  });
+  await sourceTab.click();
+  const input = editor(source.paneId);
+  const changed = original + "Private invented draft\n";
+  await input.fill(changed);
+  await expect(sourceTab.locator(".tab-modified")).toBeVisible();
+  await expect(sourceTab).toHaveAttribute("title", /Unsaved changes/);
+  await expect(reviewTab.locator(".tab-modified")).toBeHidden();
+  await app.cli(
+    "pane",
+    "pin",
+    "--workspace",
+    workspace,
+    "--id",
+    source.paneId,
+    "--pinned",
+    "true",
+  );
+  await expect(sourceTab.locator(".tab-pin")).toBeVisible();
+  await expect(sourceTab.locator(".tab-modified")).toBeVisible();
+  await sourceTab.click({ button: "right" });
+  await expect(
+    app.page
+      .locator("dialog.context-menu")
+      .getByRole("button", {
+        name: "Close tab",
+        exact: true,
+      })
+      .locator("kbd"),
+  ).toHaveText("");
+  await app.page.keyboard.press("Escape");
+  await app.page.screenshot({
+    path: info.outputPath("source-modified-tabs.png"),
+  });
+  await input.fill(original);
+  await expect(sourceTab.locator(".tab-modified")).toBeHidden();
+  await input.fill(changed);
+  await expect(sourceTab.locator(".tab-modified")).toBeVisible();
+  await input.press(`${modifier}+s`);
+  await expect(sourceTab.locator(".tab-modified")).toBeHidden();
+  expect(await readFile(file, "utf8")).toBe(changed);
+  await input.fill(changed + "Survives restart\n");
+  await expect(sourceTab.locator(".tab-modified")).toBeVisible();
+  await app.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(800, 700),
+  );
+  await app.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await expect(app.page.locator("html")).toHaveCSS("font-size", "20px");
+  await reviewTab.click();
+  const inspectBounds = () =>
+    reviewTab.evaluate((tab) => {
+      const outer = tab.getBoundingClientRect(),
+        badge = tab.querySelector(".tab-kind")!.getBoundingClientRect();
+      return {
+        inside:
+          badge.left >= outer.left &&
+          badge.right <= outer.right &&
+          badge.top >= outer.top &&
+          badge.bottom <= outer.bottom,
+        visible: badge.width > 0,
+        height: outer.height,
+      };
+    });
+  expect(await inspectBounds()).toEqual({
+    inside: true,
+    visible: true,
+    height: 32,
+  });
+  await reviewTab.focus();
+  await app.page.keyboard.press("Tab");
+  await app.page.keyboard.press("Shift+Tab");
+  await expect(reviewTab).toBeFocused();
+  expect(
+    await reviewTab.evaluate((e) => getComputedStyle(e).outlineStyle),
+  ).toBe("solid");
+  await app.page.screenshot({
+    path: info.outputPath("source-review-tabs-narrow.png"),
+  });
+  await app.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 32 }),
+  );
+  await expect(app.page.locator("html")).toHaveCSS("font-size", "32px");
+  const maximum = await inspectBounds();
+  expect(maximum.inside).toBe(true);
+  expect(maximum.height).toBeGreaterThan(32);
+  await app.page.screenshot({
+    path: info.outputPath("source-review-tabs-maximum-text.png"),
+  });
+  await app.stop();
+  await app.start();
+  const restoredSource = app.page.locator(
+    `[role="tab"][data-tab-id="${source.paneId}"]`,
+  );
+  await restoredSource.click();
+  await expect(editor(source.paneId)).toHaveValue(
+    changed + "Survives restart\n",
+  );
+  await expect(restoredSource.locator(".tab-modified")).toBeVisible();
+  await expect(restoredSource.locator(".tab-pin")).toBeVisible();
+  await expect(
+    app.page.locator(`[role="tab"][data-tab-id="${review.paneId}"] .tab-kind`),
+  ).toHaveText("Review");
+});
+
+test("Saving a short source tab does not move a held Close target", async () => {
+  const source = await app.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    app.file,
+  );
+  const original = await readFile(app.file, "utf8");
+  await expect(editor(source.paneId)).toHaveValue(original);
+  const tab = app.page.locator(`[role="tab"][data-tab-id="${source.paneId}"]`);
+  await tab.click();
+  await editor(source.paneId).fill(original + "Changed before closing\n");
+  await expect(tab.locator(".tab-modified")).toBeVisible();
+  await app.app!.evaluate((_, target) => {
+    const fs = process.getBuiltinModule("node:fs/promises")!,
+      rename = fs.rename;
+    Object.assign(globalThis, {
+      tabSaveWaiting: false,
+      tabSaveReleased: false,
+    });
+    fs.rename = async (from, to) => {
+      if (String(to) === target) {
+        (globalThis as any).tabSaveWaiting = true;
+        while (!(globalThis as any).tabSaveReleased)
+          await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return rename(from, to);
+    };
+  }, app.file);
+  let held = false;
+  try {
+    await editor(source.paneId).press(`${modifier}+s`);
+    await expect
+      .poll(() => app.app!.evaluate(() => (globalThis as any).tabSaveWaiting))
+      .toBe(true);
+    await tab.hover();
+    const close = tab.getByRole("button", {
+      name: "Close spec.md",
+      exact: true,
+    });
+    const before = (await close.boundingBox())!;
+    await app.page.mouse.move(
+      before.x + before.width / 2,
+      before.y + before.height / 2,
+    );
+    await app.page.mouse.down();
+    held = true;
+    await app.app!.evaluate(() => {
+      (globalThis as any).tabSaveReleased = true;
+    });
+    await expect(tab.locator(".tab-modified")).toBeHidden();
+    const after = (await close.boundingBox())!;
+    console.log(
+      JSON.stringify({ fixture: "save-during-close-press", before, after }),
+    );
+    expect(Math.abs(after.x - before.x)).toBeLessThan(1);
+    expect(Math.abs(after.y - before.y)).toBeLessThan(1);
+  } finally {
+    await app.app!.evaluate(() => {
+      (globalThis as any).tabSaveReleased = true;
+    });
+    if (held) await app.page.mouse.up();
+  }
+  await expect(tab).toHaveCount(0);
+  expect(await readFile(app.file, "utf8")).toBe(
+    original + "Changed before closing\n",
+  );
+});
