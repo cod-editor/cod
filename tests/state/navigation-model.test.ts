@@ -146,3 +146,72 @@ test("An unlisted active review falls back to its workspace and browser loading 
     ["workspace:alpha", "conversation:chat-a"],
   );
 });
+
+test("Overview groups terminal metadata with chats and pages while the sidebar retains its review tree", () => {
+  const state = fixture();
+  state.workspaces[0].panes.push({
+    kind: "terminal",
+    id: "terminal-pane",
+    terminalId: "terminal-one",
+  });
+  state.terminals.push({
+    id: "terminal-one",
+    paneId: "terminal-pane",
+    workspaceId: "alpha",
+    cwd: "/invented/project shell",
+    status: "running",
+    pid: 123,
+    cols: 80,
+    rows: 24,
+    output: "",
+    sequence: 1,
+  });
+  Object.defineProperty(state.terminals[0], "output", {
+    get() {
+      throw new Error("Navigation must not read PTY output");
+    },
+  });
+  state.reviews = [
+    {
+      id: "review-one",
+      workspaceId: "alpha",
+      originConversationId: "chat-a",
+      target: { kind: "document", path: "/invented/detailed-spec.md" },
+      currentRoundId: "round-one",
+      rounds: [{ id: "round-one", status: "draft" }],
+    },
+  ] as AppState["reviews"];
+  state.workspaces[0].panes.push({
+    kind: "review",
+    id: "review-pane",
+    reviewId: "review-one",
+  });
+  state.workspaces[0].activePaneId = "terminal-pane";
+  const sidebar = projectNavigation(state),
+    overview = projectNavigation(state, "overview");
+  assert(
+    sidebar.some(
+      (item) => item.kind === "review" && item.parent === "conversation:chat-a",
+    ),
+  );
+  assert(!sidebar.some((item) => item.kind === "terminal"));
+  assert(!overview.some((item) => item.kind === "review"));
+  const terminal = overview.find((item) => item.kind === "terminal")!;
+  assert.equal(terminal.parent, "workspace:alpha");
+  assert.equal(terminal.active, true);
+  assert.equal(terminal.status, "running");
+  assert.equal(terminal.hint, "/invented/project shell");
+  assert.equal("output" in terminal, false);
+  assert.deepEqual(
+    visibleNavigation(overview, "alpha project", new Set()).map(
+      (item) => item.key,
+    ),
+    ["workspace:alpha", "terminal:terminal-one"],
+  );
+  assert.deepEqual(
+    visibleNavigation(overview, "alpha", new Set()).map((item) => item.key),
+    ["workspace:alpha", "conversation:chat-a", "terminal:terminal-one"],
+  );
+  state.terminals = [];
+  assert.equal(projectNavigation(state, "overview")[0].active, true);
+});
