@@ -324,12 +324,133 @@ async function execute(id) {
   await writeJson(path.join(root, "previous-source.json"), { id });
   await retainedRuns();
 }
+export function recoverableCollection(result, executionCode) {
+  return (
+    result.exitCode === 1 &&
+    executionCode === 0 &&
+    /^\s*Evidence collection:/.test(result.error ?? "")
+  );
+}
+async function recoverEvidence(id) {
+  const directory = runPath(id),
+    original = await json(path.join(directory, "result.json"));
+  if (original.exitCode === 0 && original.collectionRecovered) return;
+  const verification = path.join(directory, "source/artifacts/verification");
+  const names = (await fs.readdir(verification, { withFileTypes: true }))
+    .filter(
+      (entry) =>
+        entry.isDirectory() && /^electron-[A-Za-z0-9]+$/.test(entry.name),
+    )
+    .map((entry) => entry.name);
+  if (names.length !== 1)
+    throw Error("Recovery requires exactly one owned frozen input");
+  const frozen = path.join(verification, names[0]);
+  const executionCode = Number(
+    (await fs.readFile(path.join(frozen, "exit-code.txt"), "utf8")).trim(),
+  );
+  if (!recoverableCollection(original, executionCode))
+    throw Error(
+      "Only collector failures after successful execution can be recovered",
+    );
+  const manifest = await fs.readFile(
+    path.join(directory, "expected-sha256.txt"),
+    "utf8",
+  );
+  if (
+    (await verifyManifest(path.join(frozen, "input"), manifest)) !==
+    original.inputIdentity
+  )
+    throw Error("Recovery input identity changed");
+  const evidence = path.join(directory, "evidence");
+  const request = await json(path.join(directory, "request.json"));
+  if (request.args[0] === "--ci") {
+    const summary = await json(path.join(evidence, "output/preflight.json"));
+    if (
+      summary.mode !== "full-ci" ||
+      summary.results?.length !== 5 ||
+      summary.results.some((group) => group.status !== "PASS")
+    )
+      throw Error("Full preflight did not pass every group");
+  }
+  await fs
+    .writeFile(
+      path.join(directory, "result-before-collection-recovery.json"),
+      JSON.stringify(original, null, 2) + "\n",
+      { flag: "wx" },
+    )
+    .catch((error) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+  const output = path.join(frozen, "output"),
+    stat = await fs.lstat(output);
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    throw Error("Recovery output must be an owned directory");
+  const dockerfile = await fs.readFile(
+    path.join(directory, "source/tests/support/electron/Dockerfile"),
+  );
+  const image =
+    "cod-test-electron-remote:" +
+    createHash("sha256").update(dockerfile).digest("hex").slice(0, 16);
+  // This bind mount contains only the completed run's output, never host profiles
+  // or other jobs. Repair the ownership needed by ordinary bounded cleanup.
+  await command("docker", [
+    "run",
+    "--rm",
+    "--mount",
+    `type=bind,src=${output},dst=/owned-output`,
+    "--entrypoint",
+    "chown",
+    image,
+    "-R",
+    `${process.getuid()}:${process.getgid()}`,
+    "/owned-output",
+  ]);
+  await fs.rm(output, { recursive: true });
+  let evidenceBytes = 0,
+    evidenceFiles = 0;
+  async function inventory(folder) {
+    for (const item of await fs.readdir(folder, { withFileTypes: true })) {
+      const file = path.join(folder, item.name);
+      if (item.isDirectory()) await inventory(file);
+      else if (
+        item.isFile() &&
+        ![
+          path.join(evidence, "run.log"),
+          path.join(evidence, "input-sha256.txt"),
+        ].includes(file)
+      ) {
+        evidenceFiles++;
+        evidenceBytes += (await fs.stat(file)).size;
+      } else if (!item.isFile())
+        throw Error("Unexpected recovery evidence type");
+    }
+  }
+  await inventory(evidence);
+  if (evidenceFiles > 100 || evidenceBytes > maxEvidence)
+    throw Error("Recovery evidence exceeds bounded collection limits");
+  await writeJson(path.join(directory, "result.json"), {
+    ...original,
+    exitCode: executionCode,
+    executionExitCode: executionCode,
+    error: undefined,
+    collectionRecovered: true,
+    collectionRecoveredAt: new Date().toISOString(),
+    evidenceBytes,
+    evidenceFiles,
+    omittedEvidenceFiles: null,
+  });
+}
 async function main() {
   const [mode, id] = process.argv.slice(2),
     directory = runPath(id);
   if ((await fs.readFile(path.join(root, ".owner"), "utf8")) !== marker)
     throw new Error("Remote root is not owned by this helper");
   if (mode === "execute") return execute(id);
+  if (mode === "recover") {
+    await recoverEvidence(id);
+    console.log(JSON.stringify({ id, recovered: true }));
+    return;
+  }
   if (mode === "start") {
     const args = JSON.parse(
       await new Promise((resolve) => {

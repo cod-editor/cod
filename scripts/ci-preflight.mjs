@@ -188,6 +188,9 @@ async function main() {
     path.join(output, "preflight.json"),
     JSON.stringify({ mode: "full-ci", environment, results }, null, 2) + "\n",
   );
+  // Copied directories are created by the container's root orchestrator; the
+  // unprivileged host collector must be able to remove them after retrieval.
+  await command("chown", ["-R", "node:node", output], "/work", 30_000);
   if (results.some((result) => result.status !== "PASS")) process.exitCode = 1;
 }
 if (

@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   runPath,
   verifyManifest,
+  recoverableCollection,
 } from "../../scripts/remote-electron-worker.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -244,4 +245,18 @@ test("Full freeze captures the clean committed tree including workflow and docs,
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("Evidence recovery cannot relabel failed execution or an unrelated runner failure as passing", () => {
+  const failed = { exitCode: 1, error: " Evidence collection: Error: EACCES" };
+  assert.equal(recoverableCollection(failed, 0), true);
+  assert.equal(recoverableCollection(failed, 1), false);
+  assert.equal(
+    recoverableCollection(
+      { exitCode: 1, error: "Test command failed Evidence collection: EACCES" },
+      0,
+    ),
+    false,
+  );
+  assert.equal(recoverableCollection({ exitCode: 0 }, 0), false);
 });

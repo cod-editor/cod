@@ -144,6 +144,7 @@ async function main() {
   let host = process.env.COD_TEST_SSH_HOST,
     id,
     noWait = false,
+    recover = false,
     config;
   while (values.length && values[0] !== "--") {
     const option = values[0];
@@ -156,6 +157,10 @@ async function main() {
     } else if (option === "--result") {
       values.shift();
       id = values.shift();
+    } else if (option === "--recover-evidence") {
+      values.shift();
+      id = values.shift();
+      recover = true;
     } else if (option === "--config") {
       values.shift();
       config = values.shift();
@@ -305,6 +310,17 @@ async function main() {
       .then(JSON.parse)
       .then((x) => x.expected)
       .catch(() => undefined);
+  }
+  if (recover) {
+    const transport = "ssh " + sshOptions.map(quote).join(" ");
+    await command("rsync", [
+      "-a",
+      "-e",
+      transport,
+      path.join(tooling, "scripts/remote-electron-worker.mjs"),
+      `${host}:${quote(locations.run + "/")}`,
+    ]);
+    await invoke("recover");
   }
   const result = JSON.parse(await invoke("result"));
   if (result.id !== id) throw new Error("Result does not match requested run");
