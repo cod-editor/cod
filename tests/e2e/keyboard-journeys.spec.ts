@@ -147,12 +147,62 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     await reach(app.page, preview);
     await app.page.keyboard.press("Enter");
     await expect(app.page.locator("dialog.image-viewer")).toBeVisible();
+    await reach(
+      app.page,
+      app.page.getByRole("button", { name: "Close image", exact: true }),
+    );
+    await app.page.keyboard.press("Enter");
+    await expect(preview).toBeFocused();
+    await expect(app.page.locator("dialog.image-viewer")).toHaveCount(0);
+    await app.page.evaluate(() => {
+      let released = false;
+      document.addEventListener(
+        "close",
+        (event) => {
+          const dialog = event.target;
+          if (
+            released ||
+            !(dialog instanceof HTMLDialogElement) ||
+            !dialog.classList.contains("image-viewer")
+          )
+            return;
+          event.stopImmediatePropagation();
+          (window as any).releaseImageClose = () => {
+            released = true;
+            const before = document.activeElement?.getAttribute("aria-label");
+            dialog.dispatchEvent(new Event("close"));
+            return {
+              before,
+              after: document.activeElement?.getAttribute("aria-label"),
+            };
+          };
+        },
+        true,
+      );
+    });
+    await app.page.keyboard.press("Enter");
+    await expect(app.page.locator("dialog.image-viewer")).toBeVisible();
     await app.page.keyboard.press("Escape");
+    await expect
+      .poll(() =>
+        app.page.evaluate(() => typeof (window as any).releaseImageClose),
+      )
+      .toBe("function");
     await expect(preview).toBeFocused();
     await reach(
       app.page,
       app.page.getByRole("button", { name: "Remove image", exact: true }),
     );
+    const focusTransition = await app.page.evaluate(() =>
+      (window as any).releaseImageClose(),
+    );
+    await info.attach("image-close-focus", {
+      body: JSON.stringify(focusTransition),
+      contentType: "application/json",
+    });
+    await expect(
+      app.page.getByRole("button", { name: "Remove image", exact: true }),
+    ).toBeFocused();
     await app.page.keyboard.press("Enter");
     await expect(preview).toHaveCount(0);
     await reach(app.page, composer());
@@ -179,6 +229,7 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     ).toHaveLength(0);
     await app.page.keyboard.press(`${modifier}+Enter`);
     await expect.poll(async () => (await app.prompts()).length).toBe(1);
+    expect(JSON.stringify(await app.prompts())).not.toContain("data:image/");
     const allow = app.page.getByRole("button", {
       name: "Allow once",
       exact: true,
