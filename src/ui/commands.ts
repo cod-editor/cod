@@ -21,6 +21,7 @@ import {
   commands as commandDefinitions,
   resolveKeybinding,
   formatShortcut,
+  formatBinding,
   type CommandId,
 } from "../keyboard";
 import {
@@ -32,10 +33,16 @@ import {
 import { createKeyboardNavigation } from "./keyboard-navigation";
 import { paneRegions } from "./pane-layout";
 import { createSearchList } from "./search-list";
+import {
+  rankCommands,
+  validCommandHistory,
+  commandHistoryLimit,
+} from "./command-search";
+import { readPreference, writePreference } from "./preferences";
 import { appearanceDialog, changeTextSize } from "./appearance";
 import { inputDialog, confirmAction } from "./dialogs";
 import { actionButton as paneButton, showActionError } from "./action-feedback";
-import { menu, type MenuAction } from "./controls";
+import { menu, icon, type MenuAction } from "./controls";
 import type {
   AppState,
   PaneState,
@@ -1542,29 +1549,48 @@ export function createCommands(
     dialog.setAttribute("aria-label", "Command palette");
     const input = document.createElement("input");
     input.setAttribute("aria-label", "Filter commands");
-    input.placeholder = "Type a command";
+    input.placeholder = "Search commands...";
+    input.maxLength = 256;
     const list = document.createElement("div");
     list.className = "command-list";
     const definitions = commandDefinitions.filter(
       (command) => command.id !== "palette",
+    );
+    let recent = validCommandHistory(
+      readPreference<unknown>("recent-commands", []),
+      definitions,
     );
     const buttons = new Map<CommandId, HTMLButtonElement>();
     for (const definition of definitions) {
       const name = definition.title;
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = name;
+      button.className = "command-row";
+      const label = document.createElement("span");
+      label.className = "command-name";
+      label.textContent = name;
+      button.append(label);
       button.setAttribute("aria-label", name);
       const shortcut = formatShortcut(definition.id, keyboardPlatform);
-      if (shortcut) {
-        const hint = document.createElement("kbd");
-        hint.textContent = shortcut;
-        hint.setAttribute("aria-hidden", "true");
-        button.append(hint);
-      }
+      const hint = document.createElement("kbd");
+      hint.className = "command-shortcut";
+      hint.textContent = shortcut;
+      hint.setAttribute("aria-hidden", "true");
+      const history = document.createElement("span");
+      history.className = "command-history";
+      history.title = "Recently used";
+      history.setAttribute("aria-hidden", "true");
+      history.append(icon("history"));
+      history.hidden = !recent.includes(definition.id);
+      button.append(hint, history);
       button.dataset.command =
         `${name} ${definition.aliases.join(" ")}`.toLowerCase();
       button.addEventListener("click", () => {
+        recent = [
+          definition.id,
+          ...recent.filter((id) => id !== definition.id),
+        ].slice(0, commandHistoryLimit);
+        writePreference("recent-commands", recent);
         performed = true;
         dialog.close();
         // The next dialog must inherit the original invoker, not the palette
@@ -1576,7 +1602,21 @@ export function createCommands(
       list.append(button);
     }
     const selection = createSearchList(input, list);
-    selection.update();
+    const empty = document.createElement("p");
+    empty.className = "picker-empty";
+    empty.setAttribute("role", "status");
+    empty.textContent = "No matching commands";
+    const filter = () => {
+      const ranked = rankCommands(definitions, input.value, recent);
+      const matched = new Set<CommandId>(ranked.map((command) => command.id));
+      for (const [id, button] of buttons) button.hidden = !matched.has(id);
+      list.replaceChildren(
+        ...ranked.map((command) => buttons.get(command.id)!),
+      );
+      empty.hidden = ranked.length > 0;
+      selection.update();
+    };
+    filter();
     const refresh = () => {
       const workspace = getState().workspaces.find(
         (item) => item.id === context.workspaceId,
@@ -1597,6 +1637,10 @@ export function createCommands(
           pane ?? null,
           conversation,
           context.linkUrl,
+        );
+        button.querySelector("kbd")!.textContent = formatShortcut(
+          id,
+          keyboardPlatform,
         );
         if (button.disabled === !!reason && button.title === (reason ?? ""))
           continue;
@@ -1619,23 +1663,46 @@ export function createCommands(
     };
     refreshPalette = refresh;
     refresh();
-    input.addEventListener("input", () => {
-      for (const button of list.querySelectorAll<HTMLButtonElement>("button")) {
-        button.hidden = !button.dataset.command!.includes(
-          input.value.toLowerCase(),
-        );
-      }
-      selection.update();
-    });
+    input.addEventListener("input", filter);
     dialog.classList.add("picker", "command-palette", "search-picker");
-    dialog.append(input, list);
+    const footer = document.createElement("div");
+    footer.className = "picker-footer";
+    footer.setAttribute("aria-hidden", "true");
+    const runHint = document.createElement("span");
+    runHint.append("Run ");
+    const enter = document.createElement("kbd");
+    enter.textContent = formatBinding(
+      { code: "Enter", surfaces: ["shell"] },
+      keyboardPlatform,
+    );
+    runHint.append(enter);
+    const cancelHint = document.createElement("span");
+    cancelHint.append("Close ");
+    const escape = document.createElement("kbd");
+    escape.textContent = "Esc";
+    cancelHint.append(escape);
+    footer.append(cancelHint, runHint);
+    dialog.append(input, list, empty, footer);
     document.body.append(dialog);
+    const cancel = () => {
+      dialog.close();
+      // Restore now; late native cleanup must not overwrite a newer target.
+      if (!performed) focus.restore(returnFocus);
+    };
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
-      dialog.close();
-      // Restore the invoker's caret now; the native close event may arrive
-      // after a newer focus command or another edit in that same control.
-      if (!performed) focus.restore(returnFocus);
+      cancel();
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (
+        event.clientX < bounds.left ||
+        event.clientX > bounds.right ||
+        event.clientY < bounds.top ||
+        event.clientY > bounds.bottom
+      )
+        cancel();
     });
     dialog.addEventListener("close", () => {
       const restore =

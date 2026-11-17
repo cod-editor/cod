@@ -1,3 +1,4 @@
+import type { CommandId } from "../keyboard";
 import { createTabDrag } from "./tab-drag";
 import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
@@ -608,6 +609,7 @@ export function createPaneLayout(
       const actions: MenuAction[] = [
         {
           label: pane.pinned ? "Unpin tab" : "Pin tab",
+          command: "tab.togglePin",
           run: () =>
             void invoke("pane.pin", {
               workspace: workspace.id,
@@ -617,6 +619,7 @@ export function createPaneLayout(
         },
         {
           label: "Close tab",
+          command: "tab.close",
           run: () =>
             void invoke("pane.close", {
               workspace: workspace.id,
@@ -625,6 +628,11 @@ export function createPaneLayout(
             }),
         },
         ...(["others", "left", "right", "all"] as const).map((scope) => ({
+          command: (scope === "others"
+            ? "tab.closeOthers"
+            : scope === "all"
+              ? "tab.closeAll"
+              : undefined) as CommandId | undefined,
           label: {
             others: "Close other tabs",
             left: "Close tabs to the left",
@@ -651,6 +659,9 @@ export function createPaneLayout(
         })),
         ...([-1, 1] as const).map((delta) => ({
           label: delta < 0 ? "Move tab left" : "Move tab right",
+          command: (delta < 0
+            ? "tab.reorderLeft"
+            : "tab.reorderRight") as CommandId,
           disabled:
             !group.paneIds[group.paneIds.indexOf(id) + delta] ||
             !!workspace.panes.find(
@@ -699,6 +710,7 @@ export function createPaneLayout(
         null,
         {
           label: workspace.zoomedGroupId ? "Restore panes" : "Maximize pane",
+          command: "pane.zoom",
           run: () =>
             void invoke("group.zoom", {
               workspace: workspace.id,
