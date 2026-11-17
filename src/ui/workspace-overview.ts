@@ -47,30 +47,22 @@ export function createWorkspaceOverview(
     const dialog = dialogSurface("Overview");
     dialog.className = "picker search-picker picker-wide workspace-overview";
     const input = document.createElement("input");
-    input.placeholder = "Search workspaces, chats and pages...";
+    input.placeholder = "Search workspaces, chats, pages and terminals...";
     input.setAttribute("aria-label", "Search Overview");
     input.setAttribute("role", "combobox");
     input.setAttribute("aria-expanded", "true");
-    input.setAttribute("aria-haspopup", "tree");
+    input.setAttribute("aria-haspopup", "grid");
     input.setAttribute("aria-autocomplete", "list");
     const list = document.createElement("div");
     list.className = "command-list overview-list";
-    list.setAttribute("role", "tree");
+    list.setAttribute("role", "grid");
     list.setAttribute("aria-label", "Workspace Overview");
     const empty = document.createElement("p");
     empty.className = "settings-note";
     empty.setAttribute("role", "status");
     dialog.append(input, list, empty);
-    const collapsed = new Set<string>();
-    let items = navigation.items();
+    let items = navigation.items("overview");
     const active = items.find((item) => item.active);
-    for (const item of items)
-      if (
-        item.kind === "workspace" &&
-        item.workspaceId !==
-          (active?.workspaceId ?? getState().activeWorkspaceId)
-      )
-        collapsed.add(item.key);
     let selectedKey = active?.key;
     let retainedKey: string | undefined;
     let queryVersion = 0;
@@ -85,11 +77,13 @@ export function createWorkspaceOverview(
     let cancelled = false;
     let edit: { key: string; value: string; saving: boolean } | undefined;
     const selection = createSearchList(input, list, {
-      selector: "button.overview-item",
+      selector: "button.overview-item:not([hidden])",
       onSelect: (row) => {
         highlighted?.setAttribute("aria-selected", "false");
+        highlighted?.parentElement?.setAttribute("aria-selected", "false");
         highlighted = row;
         highlighted?.setAttribute("aria-selected", "true");
+        highlighted?.parentElement?.setAttribute("aria-selected", "true");
         if (row) selectedKey = row.dataset.navigationKey;
         if (actionControl) actionControl.tabIndex = -1;
         actionControl =
@@ -107,7 +101,9 @@ export function createWorkspaceOverview(
       selection.select(row, scroll);
     }
     function open(item: NavigationItem) {
-      const latest = navigation.items().find((row) => row.key === item.key);
+      const latest = navigation
+        .items("overview")
+        .find((row) => row.key === item.key);
       if (latest) perform(() => activate(latest));
     }
     function perform(task: () => Promise<void>) {
@@ -217,16 +213,9 @@ export function createWorkspaceOverview(
           ),
       );
     }
-    function disclosure(item: NavigationItem) {
-      if (collapsed.has(item.key)) collapsed.delete(item.key);
-      else collapsed.add(item.key);
-      signature = "";
-      refresh();
-      input.focus();
-    }
     function refresh() {
       if (!dialog.open) return;
-      items = navigation.items();
+      items = navigation.items("overview");
       if (
         edit &&
         list.querySelector(".overview-name") === document.activeElement
@@ -246,10 +235,9 @@ export function createWorkspaceOverview(
       }
       const previous = visible;
       const query = input.value;
-      visible = visibleNavigation(items, query, collapsed, retainedKey);
+      visible = visibleNavigation(items, query, new Set(), retainedKey);
       const nextSignature = JSON.stringify([
         visible,
-        [...collapsed],
         !!query.trim(),
         edit?.key,
       ]);
@@ -267,21 +255,25 @@ export function createWorkspaceOverview(
       const top = list.scrollTop;
       const editing =
         edit && list.querySelector<HTMLInputElement>(".overview-name");
-      const children = new Set(items.map((item) => item.parent));
       const fragment = document.createDocumentFragment();
+      const groups = new Map<string, HTMLElement>();
+      for (const item of visible) {
+        if (item.kind !== "workspace") continue;
+        const group = document.createElement("div");
+        group.className = "overview-group";
+        group.setAttribute("role", "rowgroup");
+        group.setAttribute("aria-label", item.label);
+        groups.set(item.workspaceId, group);
+        fragment.append(group);
+      }
       const surviving = new Set(items.map((item) => item.key));
       for (const key of rowCache.keys())
         if (!surviving.has(key)) rowCache.delete(key);
       for (const item of visible) {
-        const rowSignature = JSON.stringify([
-          item,
-          children.has(item.key),
-          !!query.trim() || !collapsed.has(item.key),
-          edit?.key === item.key,
-        ]);
+        const rowSignature = JSON.stringify([item, edit?.key === item.key]);
         const cached = rowCache.get(item.key);
         if (cached?.signature === rowSignature) {
-          fragment.append(cached.row);
+          groups.get(item.workspaceId)?.append(cached.row);
           continue;
         }
 
@@ -291,39 +283,18 @@ export function createWorkspaceOverview(
         row.dataset.status = item.status;
         row.dataset.kind = item.kind;
         row.dataset.navigationKey = item.key;
-        const level =
-          item.kind === "workspace"
-            ? 1
-            : item.parent?.startsWith("conversation:")
-              ? 3
-              : 2;
-        row.style.setProperty("--tree-depth", String(level - 1));
-        if (children.has(item.key)) {
-          const toggle = iconButton(
-            "chevron",
-            `Expand or collapse ${item.label}`,
-            () => disclosure(item),
-          );
-          toggle.setAttribute(
-            "aria-expanded",
-            String(!!query.trim() || !collapsed.has(item.key)),
-          );
-          toggle.disabled = !!query.trim();
-          toggle.tabIndex = -1;
-          toggle.classList.add("overview-disclosure");
-          row.append(toggle);
-        } else {
-          const spacer = document.createElement("span");
-          spacer.className = "overview-disclosure";
-          row.append(spacer);
-        }
+        row.setAttribute("role", "row");
+        row.setAttribute("aria-selected", "false");
+        row.style.setProperty(
+          "--overview-indent",
+          item.kind === "workspace" ? "0px" : "var(--space-4)",
+        );
         const leading = icon(item.kind);
         leading.classList.add("navigation-item-icon");
         const button = uiButton("", "quiet", leading);
         button.classList.add("overview-item", "ui-picker-row-main");
         button.dataset.navigationKey = item.key;
-        button.setAttribute("role", "treeitem");
-        button.setAttribute("aria-level", String(level));
+        button.setAttribute("role", "gridcell");
         button.setAttribute("aria-selected", "false");
         button.dataset.active = String(item.active);
         const description = [
@@ -338,11 +309,6 @@ export function createWorkspaceOverview(
           "aria-label",
           `${item.label}${item.kind === "browser" ? "" : ", " + describeNavigationStatus(item.status, item.context)}${item.pinned ? ", Pinned" : ""}`,
         );
-        if (children.has(item.key))
-          button.setAttribute(
-            "aria-expanded",
-            String(!!query.trim() || !collapsed.has(item.key)),
-          );
         button.onclick = () => open(item);
         const label = document.createElement("span");
         label.className = "overview-label";
@@ -377,12 +343,22 @@ export function createWorkspaceOverview(
           editor.onblur = () => {
             if (edit?.key === item.key) void saveEdit(false);
           };
-          label.replaceWith(editor);
+          // Editable content is a sibling cell, not an input nested in a button.
+          button.hidden = true;
+          button.classList.add("selected");
+          row.setAttribute("aria-selected", "true");
+          const cell = document.createElement("div");
+          cell.className = "overview-edit-cell";
+          cell.setAttribute("role", "gridcell");
+          cell.append(editor);
+          row.append(cell);
         }
         const more = iconButton("more", `Actions for ${item.label}`, () =>
           actions(item, more),
         );
         more.classList.add("overview-actions");
+        more.setAttribute("role", "gridcell");
+        more.setAttribute("aria-haspopup", "menu");
         more.tabIndex = -1;
         row.append(more);
         row.oncontextmenu = (event) => {
@@ -390,14 +366,23 @@ export function createWorkspaceOverview(
           actions(item, { x: event.clientX, y: event.clientY });
         };
         rowCache.set(item.key, { signature: rowSignature, row });
-        fragment.append(row);
+        groups.get(item.workspaceId)?.append(row);
       }
       list.replaceChildren(fragment);
       list.scrollTop = top;
       const preferred = [
         ...list.querySelectorAll<HTMLButtonElement>(".overview-item"),
       ].find((row) => row.dataset.navigationKey === selectedKey);
-      selection.update(preferred);
+      if (edit && visible.some((item) => item.key === edit?.key)) {
+        selection.select(undefined);
+        input.removeAttribute("aria-activedescendant");
+        const editingActions = list.querySelector<HTMLButtonElement>(
+          `[data-navigation-key="${edit.key}"] .overview-actions`,
+        );
+        if (editingActions) editingActions.tabIndex = 0;
+      } else selection.update(preferred);
+      list.hidden = !visible.length;
+      input.setAttribute("aria-expanded", String(!!visible.length));
       empty.textContent = items.length ? "No matching items" : "No workspaces";
       empty.hidden = !!visible.length;
     }
@@ -421,26 +406,6 @@ export function createWorkspaceOverview(
         event.preventDefault();
         event.stopPropagation();
         if (item) actions(item, selection.selected() ?? input);
-      } else if (
-        event.altKey &&
-        !input.value.trim() &&
-        ["ArrowLeft", "ArrowRight"].includes(event.key) &&
-        item
-      ) {
-        event.preventDefault();
-        if (event.key === "ArrowLeft") {
-          if (
-            !collapsed.has(item.key) &&
-            items.some((child) => child.parent === item.key)
-          )
-            disclosure(item);
-          else highlight(item.parent, true);
-        } else if (collapsed.has(item.key)) disclosure(item);
-        else
-          highlight(
-            visible.find((child) => child.parent === item.key)?.key,
-            true,
-          );
       }
     });
     function restoreOrigin() {

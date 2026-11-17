@@ -267,9 +267,10 @@ export function createWorkspaceNavigation(
     item: NavigationItem,
     signal?: AbortSignal,
   ): Promise<void> {
-    const current = projectNavigation(getState()).find(
-      (row) => row.key === item.key,
-    );
+    const current = projectNavigation(
+      getState(),
+      item.kind === "review" ? "sidebar" : "overview",
+    ).find((row) => row.key === item.key);
     if (!current || signal?.aborted) return;
     await focusWorkspace(current.workspaceId);
     if (signal?.aborted) return;
@@ -279,7 +280,7 @@ export function createWorkspaceNavigation(
         await invoke("conversation.acknowledge", { id: current.id });
     } else if (current.kind === "review")
       await invoke("review.show", { id: current.id });
-    else if (current.kind === "browser")
+    else if (current.kind === "browser" || current.kind === "terminal")
       await invoke("pane.focus", {
         workspace: current.workspaceId,
         id: current.paneId,
@@ -331,9 +332,10 @@ export function createWorkspaceNavigation(
     } = {},
   ): Array<NavigationAction | null> {
     const state = getState();
-    const current = projectNavigation(state).find(
-      (row) => row.key === item.key,
-    );
+    const current = projectNavigation(
+      state,
+      item.kind === "review" ? "sidebar" : "overview",
+    ).find((row) => row.key === item.key);
     if (!current) return [];
     item = current;
     const workspace = state.workspaces.find((w) => w.id === item.workspaceId)!;
@@ -445,6 +447,8 @@ export function createWorkspaceNavigation(
         },
         ...tabActions,
       ];
+    if (item.kind === "terminal")
+      return [{ label: "Open terminal", run: open }, ...tabActions];
     return [{ label: "Open review", run: open }, ...tabActions];
   }
   let renderedSignature = "";
@@ -673,7 +677,8 @@ export function createWorkspaceNavigation(
 
   return {
     render: renderTree,
-    items: () => projectNavigation(getState()),
+    items: (presentation: "sidebar" | "overview" = "sidebar") =>
+      projectNavigation(getState(), presentation),
     actions: itemActions,
     open: openItem,
     activate: activateConversation,

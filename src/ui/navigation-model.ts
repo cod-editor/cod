@@ -2,7 +2,7 @@ import type { AppState, ConversationState } from "../types";
 import { conversationLabel } from "./message-label.ts";
 
 export type NavigationKind =
-  "workspace" | "conversation" | "browser" | "review";
+  "workspace" | "conversation" | "browser" | "terminal" | "review";
 /** Navigation metadata only: never retain histories, attachments or page content. */
 export interface NavigationItem {
   key: string;
@@ -30,6 +30,8 @@ export function describeNavigationStatus(
     ready: "Completed",
     failed: "Error",
     starting: "Starting",
+    running: "Running",
+    exited: "Exited",
   };
   const text = label[status] ?? "Idle";
   return context ? `${text}: ${context}` : text;
@@ -69,7 +71,10 @@ export function conversationAttention(
       : "";
   return conversation.status;
 }
-export function projectNavigation(state: AppState): NavigationItem[] {
+export function projectNavigation(
+  state: AppState,
+  presentation: "sidebar" | "overview" = "sidebar",
+): NavigationItem[] {
   const result: NavigationItem[] = [];
   for (const workspace of state.workspaces) {
     const root = `workspace:${workspace.id}`;
@@ -78,6 +83,7 @@ export function projectNavigation(state: AppState): NavigationItem[] {
     );
     const reviews = (state.reviews ?? []).filter(
       (r) =>
+        presentation === "sidebar" &&
         r.workspaceId === workspace.id &&
         r.rounds.some(
           (round) =>
@@ -94,6 +100,12 @@ export function projectNavigation(state: AppState): NavigationItem[] {
         (b) =>
           b.workspaceId === workspace.id && b.paneId === workspace.activePaneId,
       ) ||
+      (presentation === "overview" &&
+        state.terminals.some(
+          (terminal) =>
+            terminal.workspaceId === workspace.id &&
+            terminal.paneId === workspace.activePaneId,
+        )) ||
       (activePane?.kind === "review" &&
         reviews.some((r) => r.id === activePane.reviewId));
     const statuses = conversations.map((c) => conversationAttention(state, c));
@@ -192,6 +204,33 @@ export function projectNavigation(state: AppState): NavigationItem[] {
         : browser.url;
       result.push(row);
     }
+    if (presentation === "overview")
+      for (const terminal of state.terminals.filter(
+        (terminal) =>
+          terminal.workspaceId === workspace.id &&
+          workspace.panes.some(
+            (pane) =>
+              pane.kind === "terminal" && pane.terminalId === terminal.id,
+          ),
+      )) {
+        const directory =
+          terminal.cwd.split(/[\\/]/).filter(Boolean).at(-1) || terminal.cwd;
+        const row = item(
+          "terminal",
+          terminal.id,
+          directory ? `Terminal: ${directory}` : "Terminal",
+          root,
+          terminal.paneId,
+          terminal.status,
+          terminal.error ??
+            (terminal.exitCode === undefined
+              ? undefined
+              : `Exit code ${terminal.exitCode}`),
+          terminal.cwd,
+        );
+        row.hint = terminal.cwd;
+        result.push(row);
+      }
     result.push(
       ...reviews
         .filter(
