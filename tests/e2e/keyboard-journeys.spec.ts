@@ -363,6 +363,9 @@ test("Native website keys stay on the page and palette cancellation restores its
     await expect(
       app.page.getByRole("dialog", { name: "Command palette" }),
     ).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("commands-over-native-page.png"),
+    });
     await app.page.keyboard.press("Escape");
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     const restored = await inspect();

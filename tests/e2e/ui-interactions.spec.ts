@@ -885,7 +885,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     );
     expect(overflow).toBe(false);
     const positions = await settings
-      .locator(".setting-row > input")
+      .locator(".setting-row > .setting-control")
       .evaluateAll((nodes) =>
         nodes.map((node) => node.getBoundingClientRect().left),
       );
@@ -910,6 +910,241 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     await app.page.screenshot({
       path: info.outputPath("shared-browser-settings.png"),
     });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Commands ranks tokens and recent activations without losing the cancelled draft", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontFamily": "monospace", "ui.fontSize": 16 }),
+    );
+    const composer = app.page.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill("Keep this invented draft and caret");
+    await composer.evaluate((input: HTMLTextAreaElement) =>
+      input.setSelectionRange(2, 9),
+    );
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    let dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    let query = dialog.getByRole("textbox", { name: "Filter commands" });
+    await query.fill("files tog");
+    await expect(
+      dialog.getByRole("button", { name: "Toggle files", exact: true }),
+    ).toHaveAttribute("aria-current", "true");
+    await query.press("Escape");
+    await expect(composer).toBeFocused();
+    expect(
+      await composer.evaluate((input: HTMLTextAreaElement) => [
+        input.selectionStart,
+        input.selectionEnd,
+      ]),
+    ).toEqual([2, 9]);
+    expect(
+      await app.page.evaluate(() =>
+        localStorage.getItem("cod.ui.recent-commands"),
+      ),
+    ).toBeNull();
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    await app.page.mouse.click(8, 600);
+    await expect(
+      app.page.getByRole("dialog", { name: "Command palette", exact: true }),
+    ).toHaveCount(0);
+    await expect(composer).toBeFocused();
+    expect(
+      await composer.evaluate((input: HTMLTextAreaElement) => [
+        input.selectionStart,
+        input.selectionEnd,
+      ]),
+    ).toEqual([2, 9]);
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    query = dialog.getByRole("textbox", { name: "Filter commands" });
+    await query.fill("files tog");
+    await query.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    await expect(
+      dialog.locator("button.command-row").first(),
+    ).toHaveAccessibleName("Toggle files");
+    await expect(dialog.locator(".command-history:not([hidden])")).toHaveCount(
+      1,
+    );
+    await app.page.screenshot({
+      path: info.outputPath("commands-recent-normal.png"),
+    });
+    await dialog.getByRole("textbox").fill("zzzz invented no match");
+    await expect(dialog.locator(".picker-empty")).toBeVisible();
+    await dialog.getByRole("textbox").press("Enter");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("textbox").press("Escape");
+    await app.stop();
+    await app.start();
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    await expect(
+      dialog.locator("button.command-row").first(),
+    ).toHaveAccessibleName("Toggle files");
+    await dialog.getByRole("textbox").press("Escape");
+    await app.page.evaluate(() =>
+      localStorage.setItem(
+        "cod.ui.recent-commands",
+        JSON.stringify([
+          "removed-command",
+          null,
+          "navigation.toggleFiles",
+          "navigation.toggleFiles",
+        ]),
+      ),
+    );
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    await expect(dialog.locator(".command-history:not([hidden])")).toHaveCount(
+      1,
+    );
+    await dialog.getByRole("textbox").fill("keyb short");
+    await expect(
+      dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }),
+    ).toBeVisible();
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Shared picker roles, shortcut columns and menu geometry survive narrow enlarged text", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontFamily": "monospace", "ui.fontSize": 16 }),
+    );
+    const composer = app.page.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill("Invented unchanged menu draft");
+    await composer.focus();
+    await app.page.keyboard.press(`${modifier}+Shift+P`);
+    const dialog = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    const query = dialog.getByRole("textbox", { name: "Filter commands" });
+    const colors = await dialog.evaluate((node) => ({
+      color: getComputedStyle(node).color,
+      backdrop: getComputedStyle(node, "::backdrop").backgroundColor,
+      placeholder: getComputedStyle(
+        node.querySelector("input")!,
+        "::placeholder",
+      ).color,
+    }));
+    expect(colors.color).toBe("rgb(220, 224, 229)");
+    expect(colors.placeholder).toBe("rgb(135, 138, 152)");
+    expect(colors.backdrop).toBe("rgba(0, 0, 0, 0)");
+    await query.fill("Save file");
+    const save = dialog.getByRole("button", { name: "Save file", exact: true });
+    await expect(save).toBeDisabled();
+    await app.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(800, 700),
+    );
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": 20 }),
+    );
+    const layout = await save.evaluate((node) => {
+      const label = node
+        .querySelector(".command-name")!
+        .getBoundingClientRect();
+      const hint = node.querySelector("kbd")!.getBoundingClientRect();
+      const reason = node
+        .querySelector(".command-disabled-reason")!
+        .getBoundingClientRect();
+      return {
+        labelBottom: label.bottom,
+        labelTop: label.top,
+        hintTop: hint.top,
+        reasonTop: reason.top,
+        overflow: node.scrollWidth > node.clientWidth,
+      };
+    });
+    expect(layout.reasonTop).toBeGreaterThanOrEqual(layout.labelBottom - 1);
+    expect(Math.abs(layout.hintTop - layout.labelTop)).toBeLessThan(4);
+    expect(layout.overflow).toBe(false);
+    await app.page.screenshot({
+      path: info.outputPath("commands-disabled-narrow.png"),
+    });
+    await query.fill("");
+    await app.page.screenshot({
+      path: info.outputPath("commands-enlarged.png"),
+    });
+    await query.press("Escape");
+    await expect(composer).toBeFocused();
+    await app.page.getByRole("tab").first().click({ button: "right" });
+    const menu = app.page.locator("dialog.context-menu");
+    await expect(menu).toBeVisible();
+    const close = menu.getByRole("button", { name: "Close tab", exact: true });
+    await expect(close.locator("kbd")).toHaveText(/Ctrl.*W/);
+    expect((await menu.boundingBox())!.width).toBeGreaterThanOrEqual(220);
+    await menu.screenshot({ path: info.outputPath("tab-menu-shortcuts.png") });
+    await app.page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    const plus = app.page
+      .getByRole("button", { name: "Choose new tab type", exact: true })
+      .first();
+    await plus.click();
+    await expect(plus).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await plus.evaluate((node) => getComputedStyle(node).backgroundColor),
+    ).toBe("rgb(69, 74, 86)");
+    const chooser = app.page.locator("dialog.context-menu");
+    expect((await chooser.boundingBox())!.width).toBeGreaterThanOrEqual(220);
+    await chooser.screenshot({ path: info.outputPath("new-tab-menu.png") });
+    await app.page.keyboard.press("Escape");
+    await expect(plus).not.toHaveAttribute("aria-expanded", "true");
+    await expect(plus).toBeFocused();
+    // Replacing the same trigger before the native close event must not leave
+    // an old popup's expanded state attached to the replacement.
+    await plus.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(app.page.locator("dialog.context-menu")).toHaveCount(1);
+    await expect(plus).toHaveAttribute("aria-expanded", "true");
+    await app.page.keyboard.press("Escape");
+    await expect(plus).not.toHaveAttribute("aria-expanded", "true");
+    await expect(plus).not.toHaveAttribute("aria-controls");
+    await expect(composer).toHaveValue("Invented unchanged menu draft");
   } finally {
     await app.cleanup();
   }
