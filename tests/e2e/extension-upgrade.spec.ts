@@ -145,3 +145,147 @@ test("Packaged extension updates retain the installed identity and storage while
     payload: "Payload 2",
   });
 });
+
+test("Extension authentication windows close independently of the Cod host", async () => {
+  await writeFile(
+    path.join(sources[0], "auth.html"),
+    `<!doctype html><title>Invented authentication window</title><script src="auth.js"></script><body>Invented authentication</body>`,
+  );
+  await writeFile(
+    path.join(sources[0], "auth.js"),
+    "window.IDENTITY = Promise.all([chrome.windows.getCurrent(),chrome.tabs.getCurrent()]).then(([win,tab])=>({windowId:win.id,tabWindowId:tab.windowId}));",
+  );
+  app.environment.COD_BITWARDEN_EXTENSION_PATH = sources[0];
+  await app.start();
+  const id = await installed();
+  const hostId = await app.app!.evaluate(
+    ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id,
+  );
+  const workspace = await app.cli<{ id: string }>(
+    "workspace",
+    "create",
+    "--name",
+    "Invented extension window task",
+  );
+  const browser = await app.cli<{ id: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace.id,
+    "--url",
+    "about:blank",
+  );
+  const callerId = await app.app!.evaluate(
+    async ({ BrowserWindow, session }, id) => {
+      const caller = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          session: session.fromPartition("persist:cod-browser"),
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+      });
+      await caller.loadURL(`chrome-extension://${id}/fixture.html`);
+      return caller.id;
+    },
+    id,
+  );
+  const popup = await app.app!.evaluate(
+    async ({ BrowserWindow }, { callerId, id }) => {
+      return BrowserWindow.fromId(callerId)!.webContents.executeJavaScript(
+        `chrome.windows.create({url: 'chrome-extension://${id}/auth.html', type:'popup', width:360, height:520})`,
+      );
+    },
+    { callerId, id },
+  );
+  expect(popup.id).not.toBe(hostId);
+  expect(popup.id).not.toBe(callerId);
+  const native = await app.app!.evaluate(
+    async ({ BrowserWindow, session }, popupId) => {
+      const win = BrowserWindow.fromId(popupId)!;
+      return {
+        startupIdentity:
+          await win.webContents.executeJavaScript("window.IDENTITY"),
+        nodeExposed: await win.webContents.executeJavaScript(
+          "typeof require !== 'undefined' || typeof process !== 'undefined'",
+        ),
+        sharedSession:
+          win.webContents.session ===
+          session.fromPartition("persist:cod-browser"),
+      };
+    },
+    popup.id,
+  );
+  expect(native).toEqual({
+    startupIdentity: { windowId: popup.id, tabWindowId: popup.id },
+    nodeExposed: false,
+    sharedSession: true,
+  });
+  await app.app!.evaluate(
+    async ({ BrowserWindow }, { callerId, popupId }) => {
+      await BrowserWindow.fromId(callerId)!.webContents.executeJavaScript(
+        `chrome.windows.remove(${popupId})`,
+      );
+    },
+    { callerId, popupId: popup.id },
+  );
+  await expect
+    .poll(() =>
+      app.app!.evaluate(
+        ({ BrowserWindow }, id) => BrowserWindow.fromId(id) === null,
+        popup.id,
+      ),
+    )
+    .toBe(true);
+  expect(
+    await app.app!.evaluate(
+      ({ BrowserWindow }, id) => !!BrowserWindow.fromId(id),
+      hostId,
+    ),
+  ).toBe(true);
+  expect(
+    (await app.cli<{ id: string }>("browser", "inspect", "--id", browser.id))
+      .id,
+  ).toBe(browser.id);
+  const second = await app.app!.evaluate(
+    async ({ BrowserWindow }, { callerId, id }) =>
+      BrowserWindow.fromId(callerId)!.webContents.executeJavaScript(
+        `chrome.windows.create({url:'chrome-extension://${id}/auth.html',type:'popup'})`,
+      ),
+    { callerId, id },
+  );
+  await app.app!.evaluate(
+    ({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.close(),
+    second.id,
+  );
+  await expect
+    .poll(() =>
+      app.app!.evaluate(
+        ({ BrowserWindow }, id) => BrowserWindow.fromId(id) === null,
+        second.id,
+      ),
+    )
+    .toBe(true);
+  expect(
+    await app.app!.evaluate(
+      ({ BrowserWindow }, id) => !!BrowserWindow.fromId(id),
+      hostId,
+    ),
+  ).toBe(true);
+  await app.app!.evaluate(
+    ({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.close(),
+    callerId,
+  );
+  await app.stop();
+  await app.start();
+  expect(
+    (await app.cli<{ id: string }>("browser", "inspect", "--id", browser.id))
+      .id,
+  ).toBe(browser.id);
+  expect(
+    await app.app!.evaluate(
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+    ),
+  ).toBe(1);
+});

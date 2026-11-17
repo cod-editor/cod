@@ -73,6 +73,7 @@ export class BrowserAddons {
   private started = false;
   private loading?: Promise<void>;
   private disposed = false;
+  private extensionWindows = new Set<BrowserWindow>();
   private controllers = new Set<AbortController>();
   private ready: Promise<void>;
   private protectionReady: Promise<void>;
@@ -91,11 +92,66 @@ export class BrowserAddons {
       selectTab: (contents) => options.selectTab(contents),
       removeTab: (contents) => options.removeTab(contents),
       createWindow: async (details) => {
-        if (details.url)
-          await options.createTab(
-            Array.isArray(details.url) ? details.url[0] : details.url,
-          );
-        return options.window;
+        if (this.disposed) throw new Error("Browser add-ons closed");
+        const urls = Array.isArray(details.url)
+          ? details.url
+          : [details.url ?? "about:blank"];
+        if (urls.length !== 1 || details.tabId !== undefined)
+          throw new Error("Extension windows require one new page");
+        const allowed = (value: string) => {
+          try {
+            const url = new URL(value);
+            return (
+              ["http:", "https:"].includes(url.protocol) ||
+              url.href === "about:blank" ||
+              this.allows(url.href)
+            );
+          } catch {
+            return false;
+          }
+        };
+        if (!allowed(urls[0]))
+          throw new Error("Unsupported extension window URL");
+        const popup = new BrowserWindow({
+          show: false,
+          width: details.width ?? 480,
+          height: details.height ?? 600,
+          x: details.left,
+          y: details.top,
+          webPreferences: {
+            session: options.session,
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            nodeIntegrationInSubFrames: false,
+            webviewTag: false,
+          },
+        });
+        this.extensionWindows.add(popup);
+        popup.once("closed", () => this.extensionWindows.delete(popup));
+        popup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+        const preventUnsafeNavigation = (
+          event: Electron.Event,
+          url: string,
+        ) => {
+          if (!allowed(url)) event.preventDefault();
+        };
+        popup.webContents.on("will-navigate", preventUnsafeNavigation);
+        popup.webContents.on("will-redirect", preventUnsafeNavigation);
+        try {
+          // Register/focus before loading: extension startup code can query its
+          // own tab/window immediately, including when it closes an auth dialog.
+          this.extensions.addTab(popup.webContents, popup);
+          if (details.focused === false) popup.showInactive();
+          else popup.show();
+          await popup.loadURL(urls[0]);
+          if (this.disposed || popup.isDestroyed())
+            throw new Error("Extension window closed");
+          return popup;
+        } catch (error) {
+          if (!popup.isDestroyed()) popup.destroy();
+          throw error;
+        }
       },
     });
     this.extensions.on("browser-action-popup-created", (popup) => {
@@ -107,6 +163,10 @@ export class BrowserAddons {
           popup.browserWindow?.show();
         })
         .catch(() => {});
+    });
+    options.window.once("closed", () => {
+      for (const popup of this.extensionWindows)
+        if (!popup.isDestroyed()) popup.destroy();
     });
     this.ready = this.initialize();
     void this.ready.catch(() => {});
@@ -461,6 +521,9 @@ export class BrowserAddons {
   }
   dispose() {
     this.disposed = true;
+    for (const popup of this.extensionWindows)
+      if (!popup.isDestroyed()) popup.destroy();
+    this.extensionWindows.clear();
     this.resolveProtection();
     for (const controller of this.controllers) controller.abort();
     this.engine?.disableBlockingInSession(this.options.session);
