@@ -219,7 +219,7 @@ test("Overview uses one compact selection surface with first-line controls at no
     expect(geometry.labelBottom).toBeLessThanOrEqual(geometry.rowBottom);
     expect(geometry.rowShadow).toBe("none");
     expect(geometry.buttonBackground).toBe("rgba(0, 0, 0, 0)");
-    expect(geometry.rowBackground).toBe("rgb(69, 75, 87)");
+    expect(geometry.rowBackground).toBe("rgb(69, 74, 86)");
     const parentIcon = await row("workspace", first)
       .locator(".navigation-item-icon")
       .boundingBox();
