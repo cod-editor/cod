@@ -10,8 +10,8 @@ import type {
 } from "../types";
 import { normalizeGroups } from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
-import { leaf, replaceLeaf } from "./layout";
-import { requiredString } from "./request";
+import { leaf, replaceLeaf } from "./layout.ts";
+import { requiredString } from "./request.ts";
 
 /** Single owner of application state, transaction ordering and durable snapshots. */
 export class ApplicationStateStore {
