@@ -1,0 +1,23 @@
+/* Settings arranges shared fields, numeric controls and dialog regions. */
+.appearance-settings {
+  width: min(680px, calc(100vw - 2 * var(--space-4)));
+  height: min(720px, calc(100dvh - 2 * var(--space-4)));
+}
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.settings-section h3 {
+  margin: 0 0 var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--ui-font-size);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.settings-font {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}

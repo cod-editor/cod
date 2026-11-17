@@ -51,12 +51,15 @@ export function settingEntry(
   const control = document.createElement("div");
   control.className = "setting-control";
   control.append(input);
-  line.append(label, control);
   const reset = uiButton("", "quiet", icon("reset"));
   reset.classList.add("icon-button", "compact");
   reset.title = `Reset ${title.replace(" · ", " ")}`;
   reset.setAttribute("aria-label", `Reset ${title.replace(" · ", " ")}`);
-  row.append(line, reset);
+  const valueRow = document.createElement("div");
+  valueRow.className = "setting-value";
+  valueRow.append(control, reset);
+  line.append(label, valueRow);
+  row.append(line);
   return { row, input, reset, label, control };
 }
 

@@ -32,7 +32,7 @@ export function showActionError(error: unknown, surface: Element | null): void {
     message.setAttribute("role", "alert");
     const composer = surface.querySelector(".composer");
     if (composer) composer.before(message);
-    else surface.append(message);
+    else (surface.querySelector(".ui-dialog-body") ?? surface).append(message);
   }
   message.textContent = error instanceof Error ? error.message : String(error);
 }
