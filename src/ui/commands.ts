@@ -55,7 +55,15 @@ interface CommandContext {
 interface CommandFeatures {
   whenRendered: WhenRendered;
   focus: ReturnType<typeof createFocusManager>;
-  files: { quickOpen: () => void; search: () => void };
+  files: {
+    quickOpen: (target?: {
+      workspace: WorkspaceState;
+      sourcePane?: string;
+      group?: string;
+      restoreFocus?: () => void;
+    }) => void;
+    search: () => void;
+  };
   layout: {
     toggle: (key: "filesVisible" | "workspacesVisible") => void;
     split: (direction: "right" | "down") => void;
@@ -416,6 +424,82 @@ export function createCommands(
           ?.focus();
     });
     return result;
+  }
+
+  function tabTarget(workspaceId?: string, groupId?: string) {
+    const workspace = workspaceId
+      ? getState().workspaces.find((w) => w.id === workspaceId)
+      : activeWorkspace();
+    const group = workspace?.groups?.find(
+      (g) => g.id === (groupId ?? workspace.activeGroupId),
+    );
+    if (!workspace || !group) throw new Error("Select a pane first");
+    return { workspace, group, sourcePane: group.activePaneId };
+  }
+  async function createTab(
+    op:
+      | "pane.new"
+      | "browser.open"
+      | "conversation.draft"
+      | "terminal.open"
+      | "file.new",
+    values: { workspace: string; [key: string]: unknown },
+    intent = keys.beginFocus(),
+  ): Promise<void> {
+    const result = await invoke<{ paneId: string }>(op, {
+      ...values,
+      focus: false,
+    });
+    if (intent.signal.aborted) return;
+    await invoke("pane.focus", {
+      workspace: values.workspace,
+      id: result.paneId,
+    });
+    await keys.focusActiveContent(result.paneId, intent);
+  }
+  async function newTab(workspaceId?: string, groupId?: string): Promise<void> {
+    const { workspace, group, sourcePane } = tabTarget(workspaceId, groupId);
+    await createTab("pane.new", {
+      workspace: workspace.id,
+      group: group.id,
+      sameAs: sourcePane,
+    });
+  }
+  function chooseTabType(
+    anchor: HTMLElement,
+    workspaceId?: string,
+    groupId?: string,
+  ): void {
+    const { workspace, group, sourcePane } = tabTarget(workspaceId, groupId);
+    const create = async (
+      op: "browser.open" | "conversation.draft" | "terminal.open",
+    ) => {
+      await createTab(op, {
+        workspace: workspace.id,
+        group: group.id,
+        sourcePane,
+        ...(op === "browser.open" ? { url: "about:blank" } : {}),
+      });
+    };
+    const run = (op: "browser.open" | "conversation.draft" | "terminal.open") =>
+      void create(op).catch(() => undefined);
+    menu(anchor, [
+      {
+        label: "Open file",
+        run: () =>
+          projects.quickOpen({
+            workspace,
+            sourcePane,
+            group: group.id,
+            restoreFocus: () => {
+              if (anchor.isConnected) anchor.focus({ preventScroll: true });
+            },
+          }),
+      },
+      { label: "Browser", run: () => run("browser.open") },
+      { label: "Chat", run: () => run("conversation.draft") },
+      { label: "Terminal", run: () => run("terminal.open") },
+    ]);
   }
 
   function reopenTab(intent = keys.beginFocus()): void {
@@ -919,8 +1003,13 @@ export function createCommands(
     )
       return "No response is running";
     if (
-      ["files.save", "review.document"].includes(id) &&
-      !(pane?.kind === "document" && pane.filePath)
+      (id === "files.save" &&
+        !(
+          pane?.kind === "untitled" ||
+          (pane?.kind === "document" && pane.filePath)
+        )) ||
+      (id === "review.document" &&
+        !(pane?.kind === "document" && pane.filePath))
     )
       return "Select an editable file first";
     if (id === "files.preview") {
@@ -1093,17 +1182,25 @@ export function createCommands(
           reopenWorkspace();
           break;
         case "tab.new":
-          if (w) {
-            const result = await invoke<{ paneId: string }>("pane.new", {
-              workspace: w.id,
-              ...(group ? { group: group.id } : {}),
-            });
-            requestAnimationFrame(() =>
-              panes
-                .querySelector<HTMLElement>(
-                  `[data-pane-id="${result.paneId}"] .new-tab button`,
-                )
-                ?.focus(),
+          await newTab(w?.id, group?.id);
+          break;
+        case "tab.chooseType": {
+          const anchor = panes.querySelector<HTMLElement>(
+            `[data-group-id="${group?.id}"] [data-action="new-tab"]`,
+          );
+          if (anchor) chooseTabType(anchor, w?.id, group?.id);
+          break;
+        }
+        case "files.new":
+          if (w && group) {
+            await createTab(
+              "file.new",
+              {
+                workspace: w.id,
+                group: group.id,
+                sourcePane: group.activePaneId,
+              },
+              focusIntent,
             );
           }
           break;
@@ -1173,6 +1270,16 @@ export function createCommands(
           const input = panes.querySelector<HTMLInputElement>(
             `[data-pane-id="${pane?.id}"] input[aria-label="Address"]`,
           );
+          // State can arrive before the queued render updates this field. Once
+          // focused, passive renders intentionally preserve the user's edit.
+          if (input && (browserId || document.activeElement !== input)) {
+            const record =
+              pane?.kind === "browser"
+                ? getState().browsers.find((item) => item.id === pane.browserId)
+                : undefined;
+            if (record)
+              input.value = record.url === "about:blank" ? "" : record.url;
+          }
           input?.focus();
           input?.select();
           break;
@@ -1659,6 +1766,8 @@ export function createCommands(
     focusPanel,
     focusComposer: focusActiveComposer,
     newConversation,
+    newTab,
+    chooseTabType,
     browser: browserDialog,
     terminal: terminalDialog,
     folder: folderDialog,

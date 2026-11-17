@@ -253,7 +253,12 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await app.page.mouse.move(800, 400);
     await app.page.mouse.up();
     await expect(selected).toHaveCount(1);
-    for (const name of ["New tab", "Maximize pane", "Overview", "Provider"]) {
+    for (const name of [
+      "Choose new tab type",
+      "Maximize pane",
+      "Overview",
+      "Provider",
+    ]) {
       const control = app.page
         .getByRole("button", { name, exact: true })
         .first();
@@ -265,7 +270,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
       });
     }
     await app.page
-      .getByRole("button", { name: "New tab", exact: true })
+      .getByRole("button", { name: "Choose new tab type", exact: true })
       .click();
     await app.page.screenshot({ path: info.outputPath("new-tab-choices.png") });
     await app.page.keyboard.press("Escape");
@@ -463,7 +468,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
     await app.page.mouse.up();
     await expect(app.pane(browser.paneId)).toHaveCount(0);
     const add = app.page
-      .getByRole("button", { name: "New tab", exact: true })
+      .getByRole("button", { name: "Choose new tab type", exact: true })
       .first();
     await add.hover();
     const addNode = await add.elementHandle();
@@ -482,8 +487,15 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
     expect(await addNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();
     await expect(
-      app.page.getByRole("region", { name: "New tab", exact: true }),
+      app.page.getByRole("dialog", {
+        name: "Actions",
+        exact: true,
+      }),
     ).toBeVisible();
+    await app.page.keyboard.press("Escape");
+    await expect(
+      app.page.getByRole("dialog", { name: "Actions", exact: true }),
+    ).toHaveCount(0);
     const secondary = await app.cli<{ id: string }>(
       "workspace",
       "create",

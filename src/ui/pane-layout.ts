@@ -13,6 +13,12 @@ import type {
 import type { Invoke, WhenRendered } from "./contracts";
 interface LayoutActions {
   whenRendered: WhenRendered;
+  newTab: (workspace: string, group: string) => Promise<void>;
+  chooseTabType: (
+    anchor: HTMLElement,
+    workspace: string,
+    group: string,
+  ) => void;
   renderPane: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   conversationActions: (conversation: ConversationState) => MenuAction[];
@@ -417,6 +423,7 @@ export function createPaneLayout(
     return build(workspace.groupLayout) ?? document.createElement("div");
   }
   function paneLabel(pane: PaneState): string {
+    if (pane.kind === "untitled") return pane.name;
     if (pane.kind === "conversation") {
       const c = getState().conversations.find(
         (c) => c.id === pane.conversationId,
@@ -485,11 +492,13 @@ export function createPaneLayout(
       tab.title = paneLabel(pane) + (pane.pinned ? " - Pinned tab" : "");
       tab.dataset.pinned = String(!!pane.pinned);
       const iconKind =
-        pane.kind === "document" && !pane.filePath
-          ? "conversation"
-          : pane.kind === "empty" && pane.launcher
-            ? "plus"
-            : pane.kind;
+        pane.kind === "untitled"
+          ? "file"
+          : pane.kind === "document" && !pane.filePath
+            ? "conversation"
+            : pane.kind === "empty" && pane.launcher
+              ? "plus"
+              : pane.kind;
       if (tab.dataset.iconKind !== iconKind) {
         tab.querySelector(":scope > svg")?.remove();
         tab.prepend(icon(iconKind));
@@ -697,6 +706,14 @@ export function createPaneLayout(
             }),
         },
       ];
+      if (pane.kind === "untitled")
+        actions.unshift(
+          {
+            label: "Save as...",
+            run: () => void saveFile(workspace.id, pane.id),
+          },
+          null,
+        );
       if (pane.kind === "document" && pane.filePath)
         actions.unshift(
           { label: "Save", run: () => void saveFile(workspace.id, pane.id) },
@@ -743,21 +760,15 @@ export function createPaneLayout(
     drag.bind(bar, tabs, workspace, group);
     const plus =
       bar.querySelector<HTMLButtonElement>('[data-action="new-tab"]') ??
-      iconButton("plus", "New tab", () => {
-        void invoke<{ paneId: string }>("pane.new", {
-          workspace: workspace.id,
-          group: group.id,
-        }).then(({ paneId }) => {
-          requestAnimationFrame(() =>
-            document
-              .querySelector<HTMLElement>(
-                `[data-pane-id="${paneId}"] .new-tab button`,
-              )
-              ?.focus(),
-          );
-        });
-      });
-    plus.title = shortcutTitle("tab.new", "New tab");
+      iconButton("plus", "Choose new tab type", () => {});
+    plus.onclick = () => actions.chooseTabType(plus, workspace.id, group.id);
+    plus.title = shortcutTitle("tab.chooseType", "Choose new tab type");
+    bar.ondblclick = (event) => {
+      if (event.button !== 0 || (event.target !== bar && event.target !== tabs))
+        return;
+      event.preventDefault();
+      void actions.newTab(workspace.id, group.id).catch(() => undefined);
+    };
     plus.dataset.action = "new-tab";
     const zoom =
       bar.querySelector<HTMLButtonElement>('[data-action="zoom"]') ??

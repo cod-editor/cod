@@ -141,6 +141,24 @@ export class ConversationApplicationService {
     >,
     private readonly views: ConversationViewPort,
   ) {}
+  selection(
+    id: string,
+  ): import("../providers/types").ProviderOptions["current"] {
+    const conversation = this.store.conversation(id);
+    const controller = this.controllers.get(conversation.id);
+    if (!controller && conversation.initialSelection)
+      return { ...conversation.initialSelection };
+    if (!controller)
+      throw new Error(
+        "The source chat model is unavailable. Open the chat or use New chat with provider defaults.",
+      );
+    const selection = controller.getSelection();
+    if (!selection.model)
+      throw new Error(
+        "The source chat model is unavailable. Use New chat with provider defaults.",
+      );
+    return selection;
+  }
   private beginTurn(conversation: ConversationState): string {
     const id = randomUUID();
     (conversation.turns ??= []).push({
@@ -288,7 +306,12 @@ export class ConversationApplicationService {
     const cwd = path.resolve(
       typeof request.cwd === "string"
         ? request.cwd
-        : (workspace.folders[0] ?? process.env.HOME ?? process.cwd()),
+        : ((typeof request.paneId === "string"
+            ? workspace.chatDrafts?.[request.paneId]?.cwd
+            : workspace.chatDrafts?.[workspace.activePaneId]?.cwd) ??
+            workspace.folders[0] ??
+            process.env.HOME ??
+            process.cwd()),
     );
     const nativeId = resume ? requiredString(request, "nativeId") : "";
     const attached = () =>
@@ -338,6 +361,14 @@ export class ConversationApplicationService {
       messages: [],
       tools: [],
       pendingPermissions: [],
+      ...(!resume &&
+      restoreDraft &&
+      workspace.chatDrafts?.[restoreDraft.id]?.provider === provider
+        ? {
+            initialSelection:
+              workspace.chatDrafts[restoreDraft.id].initialSelection,
+          }
+        : {}),
     };
     this.generations.set(id, 0);
     this.store.data.conversations.push(conversation);
@@ -584,7 +615,18 @@ export class ConversationApplicationService {
   ensureController(conversation: ConversationState): Promise<ProviderAdapter> {
     const pending = this.controllerInitializations.get(conversation.id);
     if (pending) return pending;
-    const loading = this.loadController(conversation);
+    const loading = this.loadController(conversation).then(async (adapter) => {
+      const selection = conversation.initialSelection;
+      if (selection) {
+        for (const option of ["model", "reasoning"] as const) {
+          const value = selection[option];
+          if (value && adapter.getSelection()[option] !== value)
+            await adapter.setOption({ option, value });
+          this.assertCurrent(conversation);
+        }
+      }
+      return adapter;
+    });
     this.controllerInitializations.set(conversation.id, loading);
     void loading
       .finally(() => {
@@ -809,6 +851,7 @@ export class ConversationApplicationService {
       if (this.externalTurns.has(conversation.id))
         throw new Error("A turn is already active for this conversation");
       const turnId = this.beginTurn(conversation);
+      delete conversation.initialSelection;
       conversation.messages.push({
         id: randomUUID(),
         turnId,
@@ -1224,7 +1267,9 @@ export class ConversationApplicationService {
               : this.validateImages(request.images);
           const skills = this.validateSkills(request.skills);
           const provider =
-            request.provider === undefined ? undefined : providerId(request);
+            request.provider === undefined
+              ? previous?.provider
+              : providerId(request);
           workspace.chatDrafts ??= {};
           if (trustedUi && request.saveConflict === true) {
             if (!previous)
@@ -1253,6 +1298,10 @@ export class ConversationApplicationService {
           workspace.chatDrafts[pane.id] = {
             text,
             version,
+            ...(previous?.cwd ? { cwd: previous.cwd } : {}),
+            ...(provider === previous?.provider && previous?.initialSelection
+              ? { initialSelection: previous.initialSelection }
+              : {}),
             ...(!trustedUi && previous?.localDraft
               ? { localDraft: previous.localDraft }
               : {}),
@@ -1316,14 +1365,19 @@ export class ConversationApplicationService {
       case "conversation.option": {
         if (request.option !== "model" && request.option !== "reasoning")
           throw new Error("Unknown provider option");
-        return (
-          await this.ensureController(
-            this.store.conversation(requiredString(request, "id")),
-          )
-        ).setOption({
+        const conversation = this.store.conversation(
+          requiredString(request, "id"),
+        );
+        const adapter = await this.ensureController(conversation);
+        const result = await adapter.setOption({
           option: request.option,
           value: requiredString(request, "value"),
         });
+        if (conversation.initialSelection) {
+          conversation.initialSelection = adapter.getSelection();
+          this.store.schedulePersist(true);
+        }
+        return result;
       }
 
       case "conversation.start":

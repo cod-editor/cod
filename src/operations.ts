@@ -68,6 +68,14 @@ export class ApplicationOperations {
   attachAgentPageHost(window: BrowserWindow, session: Session): void {
     this.browsers.attachAgentPageHost(window, session);
   }
+  fileSaveDefault(workspace: string, paneId: string): string {
+    return this.files.saveDefault(workspace, paneId);
+  }
+  fileSaveChoice(
+    path: string,
+  ): Promise<{ path: string; expectedContent?: string }> {
+    return this.files.saveChoice(path);
+  }
   attachBrowserHost(
     window: BrowserWindow,
     session: Session,
@@ -130,6 +138,70 @@ export class ApplicationOperations {
     return this.store.snapshot(forUi);
   }
 
+  private async newContextualTab(request: OperationRequest): Promise<unknown> {
+    const source = await this.store.serialize(() => {
+      const workspace = this.store.workspace(String(request.workspace));
+      const pane = this.store.openingPane(workspace, {
+        ...request,
+        sourcePane: request.sameAs,
+      });
+      const group = workspace.groups!.find((item) =>
+        item.paneIds.includes(pane.id),
+      )!;
+      const conversation =
+        pane.kind === "conversation"
+          ? this.store.conversation(pane.conversationId)
+          : undefined;
+      const draft =
+        pane.kind === "document" && !pane.filePath
+          ? workspace.chatDrafts?.[pane.id]
+          : undefined;
+      return {
+        pane: { ...pane },
+        group: group.id,
+        provider: conversation?.provider ?? draft?.provider ?? "codex",
+        selection: conversation
+          ? this.conversations.selection(conversation.id)
+          : draft?.initialSelection,
+        cwd: conversation?.cwd ?? draft?.cwd,
+      };
+    });
+    const target = {
+      workspace: request.workspace,
+      group: source.group,
+      sourcePane: source.pane.id,
+      focus: request.focus ?? false,
+    };
+    if (source.pane.kind === "browser")
+      return this.browsers.handle({
+        op: "browser.open",
+        ...target,
+        url: "about:blank",
+      });
+    if (source.pane.kind === "terminal") {
+      const cwd = await this.terminals.currentDirectory(source.pane.terminalId);
+      return this.terminals.handle({ op: "terminal.open", ...target, cwd });
+    }
+    if (
+      source.pane.kind === "conversation" ||
+      (source.pane.kind === "document" && !source.pane.filePath)
+    )
+      return this.workspaces.handle({
+        op: "conversation.draft",
+        ...target,
+        provider: source.provider,
+        initialSelection: source.selection,
+        cwd: source.cwd,
+      });
+    if (
+      source.pane.kind === "document" ||
+      source.pane.kind === "untitled" ||
+      source.pane.kind === "preview"
+    )
+      return this.files.handle({ op: "file.new", ...target });
+    return this.workspaces.handle({ op: "pane.new", ...target });
+  }
+
   async dispatch(
     request: OperationRequest,
     trustedUi = false,
@@ -143,6 +215,13 @@ export class ApplicationOperations {
     }
     if (request.op.startsWith("review."))
       return this.reviews.handle(request, trustedUi);
+    if (request.op === "pane.new" && request.sameAs !== undefined) {
+      if (request.sourcePane !== undefined)
+        throw new Error("Choose sameAs or sourcePane, not both");
+      if (typeof request.sameAs !== "string" || !request.sameAs)
+        throw new Error("sameAs must be a source tab ID");
+      return this.newContextualTab(request);
+    }
     if (request.op === "settings.get") return this.settings.state;
     if (request.op === "settings.update") {
       const result = await this.settings.update(

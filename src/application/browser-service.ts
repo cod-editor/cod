@@ -785,13 +785,20 @@ export class BrowserApplicationService {
           : this.store.openingPane(workspace, request);
       const paneId =
         !source &&
+        request.sourcePane === undefined &&
         ((active.kind === "document" &&
           !active.filePath &&
           !active.draftChat) ||
           (active.kind === "empty" && active.launcher))
           ? active.id
           : randomUUID();
-      if (paneId === active.id)
+      if (request.sourcePane !== undefined)
+        this.store.insertPane(
+          workspace,
+          { id: paneId, kind: "browser", browserId: id },
+          request,
+        );
+      else if (paneId === active.id)
         workspace.panes[workspace.panes.indexOf(active)] = {
           id: paneId,
           pinned: active.pinned,
@@ -815,7 +822,8 @@ export class BrowserApplicationService {
             second: leaf(paneId),
           });
       }
-      if (!source) workspace.activePaneId = paneId;
+      if (!source && request.sourcePane === undefined)
+        workspace.activePaneId = paneId;
       const record: BrowserState = {
         id,
         paneId,
