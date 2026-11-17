@@ -13,8 +13,8 @@ If required feasibility gates have not passed, use cod-feasibility for dependent
 3. Write or adapt behavioral tests for the checkpoint, then implement the smallest vertical slice that satisfies them. Tests drive the real Electron app for user-visible outcomes; use fakes for repeatable provider behavior, not proof of native compatibility.
 4. Route UI and CLI through shared application operations. Explicitly target background resources, preserve native provider identity and expose unsupported capabilities honestly.
 5. Keep external browser pages isolated from privileged app APIs. Preserve unsaved documents and draft review comments across relevant failure paths.
-6. Run affected checks, format changed files and inspect the diff. Invoke cod-verify for the checkpoint's verification procedure.
-7. Update existing user or contract documentation only when behavior or limitations change. Keep per-run results and handoffs in ignored artifacts. Commit coherent checkpoints; publish only through an authorized PR.
+6. Run focused checks while implementing, format changed files and inspect the diff. Invoke cod-verify for the checkpoint's verification procedure.
+7. Finalize relevant documentation and commit the coherent source, then satisfy the mandatory [AGENTS pre-push gate](../../../AGENTS.md#execution-and-verification) using [full preflight](../../../tests/README.md#full-pre-push-preflight). Keep that revision unchanged through publication; report a blocker rather than using CI as the first full run. Publish through the authorized PR and still require green GitHub checks. Keep raw evidence in ignored artifacts.
 8. After verified delivery, complete [delivery cleanup](#delivery-cleanup) before marking the checkpoint done. Cleanup does not end an authorized backlog; continue to the next agreed item.
 
 Keep runtime instructions for agents using Cod distinct from these development skills. Add runtime documentation as commands become real; do not teach nonexistent commands.
