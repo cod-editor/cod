@@ -1270,6 +1270,16 @@ export function createCommands(
           const input = panes.querySelector<HTMLInputElement>(
             `[data-pane-id="${pane?.id}"] input[aria-label="Address"]`,
           );
+          // State can arrive before the queued render updates this field. Once
+          // focused, passive renders intentionally preserve the user's edit.
+          if (input && (browserId || document.activeElement !== input)) {
+            const record =
+              pane?.kind === "browser"
+                ? getState().browsers.find((item) => item.id === pane.browserId)
+                : undefined;
+            if (record)
+              input.value = record.url === "about:blank" ? "" : record.url;
+          }
           input?.focus();
           input?.select();
           break;

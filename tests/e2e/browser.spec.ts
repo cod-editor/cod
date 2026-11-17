@@ -2104,6 +2104,72 @@ test("Selecting an address stays quiet; explicit suggestions exclude the current
   expect((await inspect(other.id)).url).toBe(origin + "/quiet-alternative");
 });
 
+test("Address selection uses current navigation state before a pending render and retains an active edit", async () => {
+  const workspace = await shell.create("Address render fixture");
+  const current = await open(workspace, "/address-before-render");
+  await remote("/address-before-render", "document.title");
+  const address = shell
+    .pane(current.paneId)
+    .getByRole("textbox", { name: "Address", exact: true });
+  await expect(address).toHaveValue(origin + "/address-before-render");
+  await shell.page.evaluate(() => {
+    const original = window.requestAnimationFrame.bind(window),
+      pending: FrameRequestCallback[] = [];
+    Object.assign(globalThis, {
+      addressStateUrl: "",
+      releaseAddressRender: () => {
+        window.requestAnimationFrame = original;
+        for (const callback of pending) original(callback);
+      },
+    });
+    window.cod.onState((state) => {
+      (globalThis as any).addressStateUrl = state.browsers.at(-1)?.url;
+    });
+    window.requestAnimationFrame = (callback) => {
+      pending.push(callback);
+      return 0;
+    };
+  });
+  try {
+    await shell.cli(
+      "browser",
+      "navigate",
+      "--id",
+      current.id,
+      "--url",
+      origin + "/address-after-render",
+    );
+    await remote("/address-after-render", "document.title");
+    await expect
+      .poll(() =>
+        shell.page.evaluate(() => (globalThis as any).addressStateUrl),
+      )
+      .toBe(origin + "/address-after-render");
+    await pageKey("/address-after-render", "L", [
+      process.platform === "darwin" ? "meta" : "control",
+    ]);
+    await expect(address).toBeFocused();
+    await expect(address).toHaveValue(origin + "/address-after-render");
+    expect(
+      await address.evaluate((input: HTMLInputElement) => [
+        input.selectionStart,
+        input.selectionEnd,
+      ]),
+    ).toEqual([0, (origin + "/address-after-render").length]);
+  } finally {
+    await shell.page.evaluate(() => (globalThis as any).releaseAddressRender());
+  }
+  await address.fill("An unfinished address edit");
+  await address.press(`${modifier}+l`);
+  await expect(address).toHaveValue("An unfinished address edit");
+  expect(
+    await address.evaluate((input: HTMLInputElement) => [
+      input.selectionStart,
+      input.selectionEnd,
+    ]),
+  ).toEqual([0, "An unfinished address edit".length]);
+});
+
 test("Address suggestions discard dismissed and superseded replies and wait for committed composition", async () => {
   const workspace = await shell.create("Delayed address fixture");
   await open(workspace, "/delayed-alternative");
