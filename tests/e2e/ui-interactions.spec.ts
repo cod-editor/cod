@@ -864,7 +864,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
       name: "Settings",
       exact: true,
     });
-    const buttons = settings.locator(".ui-actions button");
+    const buttons = settings.locator(".ui-dialog-actions button");
     const heights = await buttons.evaluateAll((nodes) =>
       nodes.map((node) => node.getBoundingClientRect().height),
     );
@@ -878,6 +878,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     await input.press("Tab");
     const overflow = await settings.evaluate((dialog) =>
       [...dialog.querySelectorAll("button,input,select")].some((node) => {
+        if (!node.getClientRects().length) return false;
         const rect = node.getBoundingClientRect(),
           bounds = dialog.getBoundingClientRect();
         return rect.right > bounds.right || rect.left < bounds.left;
@@ -885,7 +886,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     );
     expect(overflow).toBe(false);
     const positions = await settings
-      .locator(".setting-row > .setting-control")
+      .locator(".setting-row .setting-control")
       .evaluateAll((nodes) =>
         nodes.map((node) => node.getBoundingClientRect().left),
       );

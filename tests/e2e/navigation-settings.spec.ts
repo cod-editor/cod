@@ -928,6 +928,20 @@ test("Settings groups readable font choices and adjusts values without losing li
     expect(
       await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth),
     ).toBe(true);
+    const fieldBounds = (await dialog
+      .getByRole("spinbutton", { name: "Interface text size", exact: true })
+      .boundingBox())!;
+    const resetBounds = (await dialog
+      .getByRole("button", { name: "Reset Interface Font size", exact: true })
+      .boundingBox())!;
+    expect(
+      Math.abs(
+        resetBounds.y +
+          resetBounds.height / 2 -
+          fieldBounds.y -
+          fieldBounds.height / 2,
+      ),
+    ).toBeLessThan(2);
     await expect(
       dialog.getByRole("button", { name: "Done", exact: true }),
     ).toBeInViewport();

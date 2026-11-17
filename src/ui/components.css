@@ -341,7 +341,16 @@ option {
 .setting-row > label {
   margin: 0;
 }
+.setting-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
 .setting-control {
+  display: flex;
+  justify-content: flex-end;
+  flex: 1;
   min-width: 0;
 }
 .setting-control > input,
