@@ -261,6 +261,10 @@ export function appearanceDialog(
   error.setAttribute("role", "status");
   const list = document.createElement("div");
   list.className = "settings-sections";
+  const empty = document.createElement("p");
+  empty.className = "picker-empty";
+  empty.textContent = "No matching settings";
+  empty.hidden = true;
   const sections = new Map<string, HTMLElement>();
   const section = (name: string) => {
     let element = sections.get(name);
@@ -450,6 +454,7 @@ export function appearanceDialog(
       element.hidden = [
         ...element.querySelectorAll<HTMLElement>(".settings-entry"),
       ].every((row) => row.hidden);
+    empty.hidden = [...sections.values()].some((section) => !section.hidden);
   };
   search.oninput = filter;
   search.value = initialQuery;
@@ -499,7 +504,7 @@ export function appearanceDialog(
   done.onclick = close;
   actions.append(utilities, done);
   header.append(search, error);
-  body.append(list);
+  body.append(list, empty);
   refresh();
   dialog.onclose = () => {
     document.removeEventListener("cod:settings-changed", refresh);

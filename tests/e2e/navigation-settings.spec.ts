@@ -916,7 +916,15 @@ test("Settings groups readable font choices and adjusts values without losing li
       }),
     ).toBeVisible();
     await expect(family).toBeHidden();
+    await search.fill("No invented setting matches this query");
+    const empty = dialog.getByText("No matching settings", { exact: true });
+    await expect(empty).toBeVisible();
+    await expect(dialog.getByRole("heading", { level: 3 })).toHaveCount(0);
+    await dialog.screenshot({
+      path: info.outputPath("settings-empty-search.png"),
+    });
     await search.fill("");
+    await expect(empty).toBeHidden();
     await app.page.setViewportSize({ width: 460, height: 640 });
     await app.cli(
       "settings",
