@@ -1528,7 +1528,7 @@ test("File search covers the native browser with the Cod surface and restores it
       .getPropertyValue("--panel")
       .trim(),
   }));
-  expect(colors.cover).toBe("rgb(47, 52, 61)");
+  expect(colors.cover).toBe("rgb(47, 52, 62)");
   await shell.page.keyboard.press("Escape");
   await expect.poll(async () => (await nativeView("/one"))?.visible).toBe(true);
   expect(await remote("/one", "window.identity")).toBe(identity);

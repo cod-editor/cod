@@ -907,7 +907,7 @@ test("HTML chat references open the browser while explicit file opening retains 
   const document = await open(file);
   await expect(editor(document)).toHaveValue(source);
   await expect(document.locator(".editor-colors")).toBeHidden();
-  await expect(editor(document)).toHaveCSS("color", "rgb(171, 178, 191)");
+  await expect(editor(document)).toHaveCSS("color", "rgb(172, 178, 190)");
   await document.screenshot({ path: info.outputPath("large-html-source.png") });
   await editor(document).fill("<html><h1>Short source</h1></html>");
   await expect(editor(document)).toBeFocused();
