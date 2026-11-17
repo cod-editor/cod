@@ -13,6 +13,7 @@ export function rollbackState(
     "tools",
     "pendingPermissions",
     "metadata",
+    "initialSelection",
     "error",
     "historyPartial",
     "completionRevision",

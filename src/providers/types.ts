@@ -111,6 +111,7 @@ export interface ProviderAdapter {
   discover(): Promise<Conversation[]>;
   inspect(section: InspectionSection): Promise<ProviderInspection>;
   getOptions(): Promise<ProviderOptions>;
+  getSelection(): ProviderOptions["current"];
   setOption(selection: ProviderSelection): Promise<ProviderOptions>;
   /** Resolves after the native turn finishes, not merely after prompt acceptance. */
   resolveSkills(

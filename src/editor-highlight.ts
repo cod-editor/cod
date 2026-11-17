@@ -70,7 +70,7 @@ export function highlightedEditor(
     wrapper.dataset.highlighted = String(highlighted);
     code.hidden = !highlighted;
     code.innerHTML = highlighted
-      ? highlight(editor.value, language) + "\n"
+      ? highlight(editor.value, wrapper.dataset.language ?? "plaintext") + "\n"
       : "";
     for (const token of code.querySelectorAll("span"))
       token.setAttribute("data-syntax-token", token.className);

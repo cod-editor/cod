@@ -479,6 +479,28 @@ async function start(): Promise<void> {
       });
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
+    ipcMain.handle(
+      "cod:choose-save-file",
+      async (event, workspace: string, paneId: string) => {
+        const parent = mainWindow;
+        if (
+          !parent ||
+          event.sender !== parent.webContents ||
+          event.senderFrame !== parent.webContents.mainFrame ||
+          event.senderFrame.url !== rendererUrl
+        )
+          throw new Error("Save chooser rejected from an untrusted renderer");
+        const defaultPath = operations.fileSaveDefault(workspace, paneId);
+        const result = await dialog.showSaveDialog(parent, {
+          title: "Save file",
+          defaultPath,
+          properties: ["createDirectory", "showOverwriteConfirmation"],
+        });
+        return result.canceled || !result.filePath
+          ? null
+          : operations.fileSaveChoice(result.filePath);
+      },
+    );
     ipcMain.handle("cod:invoke", async (event, request: OperationRequest) => {
       if (
         event.sender !== mainWindow?.webContents ||

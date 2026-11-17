@@ -4,6 +4,7 @@ import { highlightedEditor, setChangedLines } from "../editor-highlight";
 import { reconcileView } from "./view-reconcile";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+import { documentKey, isTextDocument } from "../text-document";
 export function focusReadyEditor(
   editor: HTMLTextAreaElement,
   stillWanted: () => boolean,
@@ -45,13 +46,107 @@ export function createDocumentViews(
   const lineLoading = new Set<string>();
   const lineJumped = new Set<string>();
   const savingFiles = new Set<string>();
+  const draftWrites = new Map<string, Promise<unknown>>();
+  const failedDraftWrites = new Set<string>();
+  const paneKeys = new Map<string, string>();
+  const saveAs = new Map<
+    string,
+    { key: string; content: string; completed: boolean }
+  >();
+  function pruneBuffers(): void {
+    const documents = getState().workspaces.flatMap((workspace) =>
+      workspace.panes.filter(isTextDocument),
+    );
+    const open = new Set(documents.map(documentKey));
+    const openIds = new Set(documents.map((pane) => pane.id));
+    for (const pending of saveAs.values()) open.add(pending.key);
+    for (const key of originals.keys())
+      if (
+        !open.has(key) &&
+        !savingFiles.has(key) &&
+        !draftWrites.has(key) &&
+        !failedDraftWrites.has(key)
+      ) {
+        drafts.delete(key);
+        originals.delete(key);
+        versions.delete(key);
+      }
+    for (const [id, key] of paneKeys)
+      if (
+        !openIds.has(id) &&
+        !loading.has(id) &&
+        !saveAs.has(id) &&
+        !savingFiles.has(key) &&
+        !draftWrites.has(key) &&
+        !failedDraftWrites.has(key)
+      ) {
+        paneKeys.delete(id);
+        messages.delete(id);
+        lineCache.delete(id);
+        lineJumped.delete(id);
+        failedLoads.delete(id);
+      }
+  }
+  function persistDraft(key: string, values: Record<string, unknown>): void {
+    const write = invoke("file.draft", values, { reportError: false });
+    draftWrites.set(key, write);
+    void write.then(
+      () => {
+        if (draftWrites.get(key) !== write) return;
+        draftWrites.delete(key);
+        failedDraftWrites.delete(key);
+        pruneBuffers();
+      },
+      () => {
+        if (draftWrites.get(key) !== write) return;
+        draftWrites.delete(key);
+        failedDraftWrites.add(key);
+        setStatus(
+          "Could not save this file draft. Keep Cod open and retry before closing.",
+        );
+      },
+    );
+  }
   function fileKey(paneId: string): string {
     for (const workspace of getState().workspaces) {
       const pane = workspace.panes.find((pane) => pane.id === paneId);
-      if (pane?.kind === "document")
-        return pane.canonicalPath ?? pane.filePath ?? paneId;
+      if (pane && isTextDocument(pane)) {
+        const key = documentKey(pane),
+          previous = paneKeys.get(paneId),
+          pending = saveAs.get(paneId);
+        const editor = panes.querySelector<HTMLTextAreaElement>(
+          `[data-pane-id="${paneId}"] textarea.file-editor`,
+        );
+        const renderedKey = editor?.dataset.documentKey;
+        const oldKey = renderedKey?.startsWith("untitled:")
+          ? renderedKey
+          : previous;
+        if (key.startsWith("untitled:") && previous && previous !== key) {
+          const content = drafts.get(previous);
+          if (content !== undefined) drafts.set(key, content);
+          originals.set(key, "");
+        }
+        if (oldKey && oldKey !== key && oldKey.startsWith("untitled:")) {
+          const content = drafts.get(oldKey);
+          if (pending || !originals.has(key))
+            originals.set(key, pending?.content ?? originals.get(oldKey) ?? "");
+          if (content !== undefined) drafts.set(key, content);
+        }
+        paneKeys.set(paneId, key);
+        if (
+          pending?.completed &&
+          key !== pending.key &&
+          renderedKey !== pending.key
+        ) {
+          originals.delete(pending.key);
+          drafts.delete(pending.key);
+          versions.delete(pending.key);
+          saveAs.delete(paneId);
+        }
+        return key;
+      }
     }
-    return paneId;
+    return paneKeys.get(paneId) ?? paneId;
   }
   function syncDocumentViews(
     key: string,
@@ -177,6 +272,51 @@ export function createDocumentViews(
     }
     savingFiles.add(key);
     try {
+      const pane = getState()
+        .workspaces.find((item) => item.id === workspaceId)
+        ?.panes.find((item) => item.id === paneId);
+      if (pane?.kind === "untitled") {
+        const choice = await window.cod.chooseSaveFile(workspaceId, paneId);
+        if (!choice) return;
+        const latest = drafts.get(key) ?? originals.get(key) ?? "";
+        saveAs.set(paneId, { key, content: latest, completed: false });
+        const result = await invoke<{
+          saved: boolean;
+          conflict: boolean;
+          path?: string;
+        }>("file.save-as", {
+          workspace: workspaceId,
+          paneId,
+          path: choice.path,
+          content: latest,
+          ...(choice.expectedContent === undefined
+            ? {}
+            : { expectedContent: choice.expectedContent }),
+        });
+        if (result.conflict) {
+          saveAs.delete(paneId);
+          messages.set(
+            paneId,
+            "Conflict: the destination changed. Your untitled text is retained; choose its destination again.",
+          );
+          setStatus("Destination changed; untitled text retained");
+        } else {
+          const pending = saveAs.get(paneId)!;
+          pending.completed = true;
+          const next = fileKey(paneId),
+            newer = drafts.get(next);
+          messages.delete(paneId);
+          lineCache.delete(paneId);
+          if (next !== key && newer === latest) drafts.delete(next);
+          setStatus(
+            newer !== undefined && newer !== latest
+              ? "Saved previous revision; newer edits remain unsaved"
+              : "File saved",
+          );
+        }
+        invalidate();
+        return;
+      }
       const result = await invoke<{ saved: boolean; conflict: boolean }>(
         "file.save",
         {
@@ -217,9 +357,10 @@ export function createDocumentViews(
       }
       invalidate();
     } catch {
+      saveAs.delete(paneId);
       messages.set(
         paneId,
-        "The file could not be saved. Your local draft is still open.",
+        "Save did not complete. Your draft is retained; check the destination before retrying.",
       );
       invalidate();
     } finally {
@@ -233,7 +374,7 @@ export function createDocumentViews(
   ): HTMLElement {
     const body = document.createElement("div");
     body.className = "pane-body";
-    if (pane.kind === "document" && pane.filePath) {
+    if (isTextDocument(pane)) {
       const editor = document.createElement("textarea");
       editor.className = "file-editor";
       editor.setAttribute("aria-label", "File contents");
@@ -252,20 +393,27 @@ export function createDocumentViews(
           : "Loading file...";
       editor.value = drafts.get(key) ?? originals.get(key) ?? "";
       editor.addEventListener("input", () => {
-        drafts.set(key, editor.value);
-        syncDocumentViews(key, editor.value, editor);
+        const currentKey = editor.dataset.documentKey!;
+        drafts.set(currentKey, editor.value);
+        syncDocumentViews(currentKey, editor.value, editor);
         if (!messages.get(pane.id)?.startsWith("Conflict"))
           messages.delete(pane.id);
-        const expectedContent = originals.get(key);
+        const expectedContent =
+          originals.get(currentKey) ??
+          (currentKey.startsWith("untitled:") ? "" : undefined);
         if (expectedContent !== undefined)
-          void invoke("file.draft", {
+          persistDraft(currentKey, {
             workspace: workspace.id,
             paneId: pane.id,
             content: editor.value,
             expectedContent,
-          }).catch(() => undefined);
+            sourceKey: currentKey,
+          });
       });
-      const highlighted = highlightedEditor(editor, pane.filePath);
+      const highlighted = highlightedEditor(
+        editor,
+        pane.kind === "document" ? (pane.filePath ?? "") : "",
+      );
       if (lineCache.has(pane.id))
         setChangedLines(highlighted, lineCache.get(pane.id)!);
       else if (!lineLoading.has(pane.id)) {
@@ -275,6 +423,7 @@ export function createDocumentViews(
           paneId: pane.id,
         })
           .then((result) => {
+            if (fileKey(pane.id) !== key) return;
             lineCache.set(pane.id, result.lines);
             const current = panes.querySelector<HTMLElement>(
               `[data-pane-id="${pane.id}"] .highlighted-editor`,
@@ -284,10 +433,18 @@ export function createDocumentViews(
           .catch(() => {
             lineCache.set(pane.id, []);
           })
-          .finally(() => lineLoading.delete(pane.id));
+          .finally(() => {
+            lineLoading.delete(pane.id);
+            if (!lineCache.has(pane.id)) invalidate();
+          });
       }
       body.append(highlighted);
-      if (pane.line && originals.has(key) && !lineJumped.has(pane.id)) {
+      if (
+        pane.kind === "document" &&
+        pane.line &&
+        originals.has(key) &&
+        !lineJumped.has(pane.id)
+      ) {
         lineJumped.add(pane.id);
         const position = editor.value
           .split("\n")
@@ -329,6 +486,7 @@ export function createDocumentViews(
       message.setAttribute("role", "status");
       message.textContent = messages.get(pane.id)!;
       if (
+        pane.kind === "document" &&
         messages.get(pane.id)?.startsWith("Conflict") &&
         !failedLoads.has(pane.id)
       ) {
@@ -362,6 +520,14 @@ export function createDocumentViews(
             },
           );
         message.append(" ", reload);
+      }
+      if (
+        pane.kind === "untitled" &&
+        messages.get(pane.id)?.startsWith("Conflict")
+      ) {
+        const retry = uiButton("Save as...");
+        retry.onclick = () => void saveFile(workspace.id, pane.id);
+        message.append(" ", retry);
       }
       if (failedLoads.has(pane.id)) {
         const retry = document.createElement("button");
@@ -448,6 +614,7 @@ export function createDocumentViews(
           !getState().workspaces.some((w) => w.panes.some((p) => p.id === id))
         )
           views.delete(id);
+      pruneBuffers();
     },
   };
 }

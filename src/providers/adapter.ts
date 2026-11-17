@@ -68,6 +68,7 @@ export class NativeAdapter implements ProviderAdapter {
   private selection: NativeSelection;
   private inspection = new NativeInspection();
   private optionsBusy = false;
+  private selectionChanges = 0;
   private optionWaiters: Array<() => void> = [];
   private cancellationSequence = 0;
   constructor(provider: ProviderId, options: AdapterOptions) {
@@ -328,13 +329,32 @@ export class NativeAdapter implements ProviderAdapter {
       ),
     );
   }
-  setOption(selection: ProviderSelection) {
+  getSelection(): ProviderOptions["current"] {
+    this.ensureOpen();
+    if (!this.id || this.binding)
+      throw new ProviderOptionError(
+        "not-ready",
+        "The source chat model is not ready",
+      );
+    if (this.selectionChanges)
+      throw new ProviderOptionError(
+        "busy",
+        "The source chat model is still changing",
+      );
+    return this.selection.snapshot();
+  }
+  async setOption(selection: ProviderSelection) {
     const captured = { ...selection };
-    return this.optionOperation(() =>
-      this.selection.set(captured, this.id!, (method, params) =>
-        this.rpc!.request(method, params),
-      ),
-    );
+    this.selectionChanges++;
+    try {
+      return await this.optionOperation(() =>
+        this.selection.set(captured, this.id!, (method, params) =>
+          this.rpc!.request(method, params),
+        ),
+      );
+    } finally {
+      this.selectionChanges--;
+    }
   }
   async resolveSkills(
     text: string,

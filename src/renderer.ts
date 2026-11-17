@@ -66,6 +66,9 @@ const chats = createConversationViews({
 });
 const layout = createPaneLayout(() => state, invoke, {
   whenRendered,
+  newTab: (workspace, group) => commands.newTab(workspace, group),
+  chooseTabType: (anchor, workspace, group) =>
+    commands.chooseTabType(anchor, workspace, group),
   renderPane: (workspace, pane) => workspaceView.pane(workspace, pane),
   saveFile: documents.save,
   conversationActions: (c) => commands.conversationActions(c),
@@ -82,6 +85,8 @@ const projects = new FileTree(
   document.querySelector("#project-panel")!,
   invoke,
   (workspace) => commands.folder(workspace),
+  focus,
+  whenRendered,
 );
 
 const finder = createContentFind(

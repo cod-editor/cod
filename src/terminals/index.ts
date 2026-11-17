@@ -1,4 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
+import { terminalDirectory } from "./cwd.ts";
 
 const OUTPUT_LIMIT = 1024 * 1024;
 const INPUT_LIMIT = 1024 * 1024;
@@ -301,6 +302,18 @@ export class TerminalService {
       this.reportError(record, error);
       throw error;
     }
+  }
+
+  async currentDirectory(id: string): Promise<string> {
+    const record = this.requireTerminal(id);
+    if (record.status === "running") {
+      const directory = await terminalDirectory(record.pid);
+      if (record.status !== "running" || record.closePromise)
+        throw new Error("The source terminal closed");
+      validateDirectory(directory);
+      record.cwd = directory;
+    } else validateDirectory(record.cwd);
+    return record.cwd;
   }
 
   snapshot(id: string): TerminalSnapshot {

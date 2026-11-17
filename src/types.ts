@@ -15,6 +15,12 @@ export interface DocumentPane {
   line?: number;
 }
 
+export interface UntitledPane {
+  id: string;
+  kind: "untitled";
+  name: string;
+}
+
 export interface ConversationPane {
   id: string;
   kind: "conversation";
@@ -76,6 +82,7 @@ export interface EmptyPane {
 export type PaneState = (
   | EmptyPane
   | DocumentPane
+  | UntitledPane
   | ConversationPane
   | TerminalPane
   | BrowserPane
@@ -109,6 +116,7 @@ export interface DiffPane {
 export interface FileDraft {
   content: string;
   expectedContent: string;
+  version?: string;
 }
 
 export interface ConversationTurn {
@@ -156,6 +164,7 @@ export interface QueuedMessage {
 }
 
 export interface ConversationState {
+  initialSelection?: import("./providers/types").ProviderOptions["current"];
   queuedMessages?: QueuedMessage[];
   queuePaused?: boolean;
   displayName?: string;
@@ -230,6 +239,7 @@ export interface WorkspaceSettings {
   filesWidth?: number;
 }
 export interface WorkspaceState {
+  untitledSequence?: number;
   closedTabs?: Array<{
     pane: PaneState;
     groupId?: string;
@@ -252,6 +262,8 @@ export interface WorkspaceState {
         images?: import("./providers/types").ImageAttachment[];
       };
       provider?: ProviderId;
+      initialSelection?: import("./providers/types").ProviderOptions["current"];
+      cwd?: string;
       skills?: Array<{ name: string; path: string }>;
       images?: import("./providers/types").ImageAttachment[];
     }
@@ -304,6 +316,10 @@ export interface CodBridge {
   onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
   openKeymap(): Promise<void>;
   chooseDirectory(): Promise<string | null>;
+  chooseSaveFile(
+    workspace: string,
+    paneId: string,
+  ): Promise<{ path: string; expectedContent?: string } | null>;
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;

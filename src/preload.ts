@@ -30,6 +30,9 @@ const bridge: CodBridge = {
   chooseDirectory() {
     return ipcRenderer.invoke("cod:choose-directory") as Promise<string | null>;
   },
+  chooseSaveFile(workspace: string, paneId: string) {
+    return ipcRenderer.invoke("cod:choose-save-file", workspace, paneId);
+  },
   invoke<T>(request: OperationRequest): Promise<T> {
     return ipcRenderer.invoke("cod:invoke", request) as Promise<T>;
   },

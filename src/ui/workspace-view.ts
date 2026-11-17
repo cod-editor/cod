@@ -223,6 +223,9 @@ export function createWorkspaceView(
         `${conversation?.provider ?? "Agent"} conversation`,
       );
       if (conversation) content = chats.conversation(conversation);
+    } else if (pane.kind === "untitled") {
+      container.setAttribute("aria-label", `File pane ${pane.name}`);
+      content = documents.view(workspace, pane);
     } else if (pane.kind === "document") {
       container.setAttribute(
         "aria-label",

@@ -42,9 +42,12 @@ async function blank(group?: string) {
   return result;
 }
 
-test("New tab opens persistent choices in its target pane and replaces itself with each content type", async ({}, info) => {
+test("Fallback new tab retains persistent choices and replaces itself with each content type", async ({}, info) => {
   const original = await state();
-  await app.page.getByRole("button", { name: "New tab", exact: true }).click();
+  await blank();
+  await chooser()
+    .getByRole("button", { name: "Open file", exact: true })
+    .focus();
   await expect(chooser()).toBeVisible();
   await expect(app.page.getByRole("dialog")).toHaveCount(0);
   await expect(
@@ -87,8 +90,9 @@ test("New tab opens persistent choices in its target pane and replaces itself wi
   expect((await state()).groups).toHaveLength(original.groups!.length);
   await app.page.keyboard.press(`${modifier}+t`);
   await expect(
-    chooser().getByRole("button", { name: "Open file", exact: true }),
-  ).toBeFocused();
+    app.page.getByRole("textbox", { name: "File contents", exact: true }),
+  ).toHaveValue("");
+  await blank(original.groups![0].id);
   const browserId = (await state()).activePaneId;
   await chooser()
     .getByRole("button", { name: "Open file", exact: true })
@@ -186,10 +190,13 @@ test("Workspace browser rows retain title, selection, keyboard navigation and re
     contents.sendInputEvent({ type: "keyDown", keyCode: "T", modifiers });
     contents.sendInputEvent({ type: "keyUp", keyCode: "T", modifiers });
   }, pathToFileURL(file).href);
-  await expect(
-    chooser().getByRole("button", { name: "Open file", exact: true }),
-  ).toBeFocused();
+  await expect
+    .poll(async () => (await state()).activePaneId)
+    .not.toBe(browser.paneId);
   const newPane = (await state()).activePaneId;
+  await expect(
+    app.pane(newPane).getByRole("textbox", { name: "Address", exact: true }),
+  ).toBeFocused();
   expect(
     (await state()).groups!.find((g) => g.paneIds.includes(newPane))!.id,
   ).toBe(sourceGroup);

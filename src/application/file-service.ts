@@ -9,6 +9,8 @@ import {
   open,
   chmod,
   rename,
+  link,
+  unlink,
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type {
@@ -22,6 +24,11 @@ import { changedLines } from "../git-lines";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
 import { leaf, replaceLeaf, removeLeaf } from "./layout";
+import {
+  documentKey,
+  isTextDocument,
+  type TextDocument,
+} from "../text-document";
 
 async function readTextFile(file: string): Promise<string> {
   const bytes = await readFile(file);
@@ -32,6 +39,52 @@ async function readTextFile(file: string): Promise<string> {
 
 export class FileApplicationService {
   constructor(private readonly store: ApplicationStateStore) {}
+  saveDefault(workspaceId: string, paneId: string): string {
+    const { workspace, pane } = this.filePane({
+      op: "file.read",
+      workspace: workspaceId,
+      paneId,
+    });
+    if (pane.kind !== "untitled")
+      throw new Error("This file already has a path");
+    return path.join(workspace.folders[0] ?? os.homedir(), pane.name);
+  }
+  async saveChoice(
+    file: string,
+  ): Promise<{ path: string; expectedContent?: string }> {
+    const target = path.resolve(file);
+    try {
+      if (!(await stat(target)).isFile())
+        throw new Error("Choose a regular text file destination");
+      return { path: target, expectedContent: await readTextFile(target) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { path: target };
+      throw error;
+    }
+  }
+  async newFile(request: OperationRequest): Promise<{ paneId: string }> {
+    return this.store.change(() => {
+      const workspace = this.store.workspace(
+        requiredString(request, "workspace"),
+      );
+      const sequence = workspace.untitledSequence ?? 0;
+      if (
+        !Number.isSafeInteger(sequence) ||
+        sequence < 0 ||
+        sequence >= Number.MAX_SAFE_INTEGER
+      )
+        throw new Error("Invalid untitled file sequence");
+      const pane: import("../types").UntitledPane = {
+        id: randomUUID(),
+        kind: "untitled",
+        name: `Untitled ${sequence + 1}`,
+      };
+      workspace.untitledSequence = sequence + 1;
+      this.store.insertPane(workspace, pane, request);
+      return { paneId: pane.id };
+    });
+  }
   async openFile(request: OperationRequest): Promise<{ paneId: string }> {
     const filePath = await realpath(
       path.resolve(requiredString(request, "path")),
@@ -73,8 +126,28 @@ export class FileApplicationService {
         workspace.layout =
           removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
       }
-      workspace.activePaneId = existing.id;
+      if (
+        request.sourcePane === undefined ||
+        request.focus === true ||
+        request.focus === "true"
+      )
+        workspace.activePaneId = existing.id;
       return { paneId: existing.id };
+    }
+    if (request.sourcePane !== undefined) {
+      const id = randomUUID();
+      this.store.insertPane(
+        workspace,
+        {
+          id,
+          kind: "document",
+          filePath,
+          canonicalPath,
+          ...(line ? { line } : {}),
+        },
+        request,
+      );
+      return { paneId: id };
     }
     let pane = opening;
     if (pane.kind === "empty" && pane.launcher) {
@@ -172,11 +245,21 @@ export class FileApplicationService {
           workspace.layout =
             removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
         }
-        workspace.activePaneId = existing.id;
+        if (
+          request.sourcePane === undefined ||
+          request.focus === true ||
+          request.focus === "true"
+        )
+          workspace.activePaneId = existing.id;
         return { paneId: existing.id };
       }
       const launcher =
         opening.kind === "empty" && opening.launcher ? opening : undefined;
+      if (request.sourcePane !== undefined) {
+        const id = randomUUID();
+        this.store.insertPane(workspace, { id, ...resource }, request);
+        return { paneId: id };
+      }
       if (launcher) {
         workspace.panes[workspace.panes.indexOf(launcher)] = {
           id: launcher.id,
@@ -201,17 +284,25 @@ export class FileApplicationService {
     });
   }
   async saveDraft(request: OperationRequest): Promise<{ saved: true }> {
-    const { pane } = this.filePane(request);
-    if (pane.kind !== "document") throw new Error("Not a document");
+    const { pane } = this.filePane(request, true);
     if (
       typeof request.content !== "string" ||
       typeof request.expectedContent !== "string"
     )
       throw new Error("Draft content and expectedContent must be strings");
-    const canonical = pane.canonicalPath ?? (await realpath(pane.filePath!));
+    const canonical = documentKey(pane);
+    const previous = this.store.data.drafts[canonical];
+    const formerUntitled =
+      pane.kind === "document" && request.sourceKey === `untitled:${pane.id}`;
     this.store.data.drafts[canonical] = {
       content: request.content,
-      expectedContent: request.expectedContent,
+      expectedContent:
+        pane.kind === "untitled"
+          ? ""
+          : formerUntitled && previous
+            ? previous.expectedContent
+            : request.expectedContent,
+      ...(pane.kind === "untitled" ? { version: randomUUID() } : {}),
     };
     this.store.schedulePersist();
     return { saved: true };
@@ -220,6 +311,7 @@ export class FileApplicationService {
     request: OperationRequest,
   ): Promise<{ lines: number[]; error?: string }> {
     const { pane } = this.filePane(request);
+    if (pane.kind === "untitled") return { lines: [] };
     if (pane.kind !== "document") throw new Error("Not a document");
     const file = await realpath(pane.filePath!);
     const service = this.projects(request),
@@ -354,21 +446,41 @@ export class FileApplicationService {
       : { candidates: [] };
   }
 
-  filePane(request: OperationRequest): {
+  filePane(
+    request: OperationRequest,
+    includeClosed = false,
+  ): {
     workspace: WorkspaceState;
-    pane: Extract<PaneState, { kind: "document" }>;
+    pane: TextDocument;
   } {
-    const workspace = this.store.workspace(
-      requiredString(request, "workspace"),
-    );
-    const pane = this.store.pane(workspace, requiredString(request, "paneId"));
-    if (pane.kind !== "document" || !pane.filePath)
+    const workspaceId = requiredString(request, "workspace");
+    const workspace =
+      this.store.data.workspaces.find((item) => item.id === workspaceId) ??
+      (includeClosed
+        ? this.store.data.closedWorkspaces?.find(
+            (item) => item.workspace.id === workspaceId,
+          )?.workspace
+        : undefined);
+    if (!workspace) throw new Error("Workspace not found");
+    const id = requiredString(request, "paneId");
+    const pane =
+      workspace.panes.find((item) => item.id === id) ??
+      (includeClosed
+        ? workspace.closedTabs?.find((item) => item.pane.id === id)?.pane
+        : undefined);
+    if (!pane || !isTextDocument(pane))
       throw new Error("Pane has no open file");
     return { workspace, pane };
   }
 
   async fileVersion(request: OperationRequest): Promise<{ version: string }> {
     const { pane } = this.filePane(request);
+    if (pane.kind === "untitled")
+      return {
+        version:
+          this.store.data.drafts[documentKey(pane)]?.version ??
+          "untitled:empty",
+      };
     try {
       const metadata = await stat(pane.filePath!, { bigint: true });
       return {
@@ -385,7 +497,14 @@ export class FileApplicationService {
     version?: string;
   }> {
     const { pane } = this.filePane(request);
-    if (pane.kind !== "document") throw new Error("Pane has no open file");
+    if (pane.kind === "untitled") {
+      const draft = this.store.data.drafts[documentKey(pane)];
+      return {
+        content: "",
+        version: draft?.version ?? "untitled:empty",
+        ...(draft ? { draft: structuredClone(draft) } : {}),
+      };
+    }
     let canonical = pane.canonicalPath ?? path.resolve(pane.filePath!);
     try {
       canonical = await realpath(pane.filePath!);
@@ -434,11 +553,103 @@ export class FileApplicationService {
     return { saved: true, conflict: false };
   }
 
+  async saveUntitled(
+    request: OperationRequest,
+  ): Promise<{ saved: boolean; conflict: boolean; path?: string }> {
+    const { workspace, pane } = this.filePane(request);
+    if (pane.kind !== "untitled")
+      throw new Error("Save As requires an untitled file");
+    const content = request.content;
+    if (typeof content !== "string") throw new Error("content must be text");
+    const targetPath = path.resolve(requiredString(request, "path"));
+    const directory = await realpath(path.dirname(targetPath));
+    let target = path.join(directory, path.basename(targetPath));
+    const expected = request.expectedContent;
+    if (expected !== undefined && typeof expected !== "string")
+      throw new Error("expectedContent must be text");
+    let exists = false,
+      mode = 0o644;
+    try {
+      const metadata = await stat(target);
+      if (!metadata.isFile())
+        throw new Error("Choose a regular text file destination");
+      mode = metadata.mode;
+      target = await realpath(target);
+      exists = true;
+      if (expected === undefined || (await readTextFile(target)) !== expected)
+        return { saved: false, conflict: true };
+      if (
+        workspace.panes.some(
+          (item) =>
+            item.id !== pane.id &&
+            item.kind === "document" &&
+            item.canonicalPath === target,
+        )
+      )
+        throw new Error(
+          "The destination is already open. Save through its tab or choose another file.",
+        );
+      const destinationDraft = this.store.data.drafts[target];
+      if (
+        destinationDraft &&
+        destinationDraft.content !== destinationDraft.expectedContent
+      )
+        throw new Error(
+          "The destination has unsaved text. Save it first or choose another file.",
+        );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (expected !== undefined) return { saved: false, conflict: true };
+    }
+    const temporary = path.join(directory, `.cod-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, content, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      await chmod(temporary, mode);
+      if (exists) {
+        if ((await readTextFile(target)) !== expected)
+          return { saved: false, conflict: true };
+        await rename(temporary, target);
+      } else {
+        try {
+          await link(temporary, target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST")
+            return { saved: false, conflict: true };
+          throw error;
+        }
+      }
+    } finally {
+      await unlink(temporary).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+    const oldKey = documentKey(pane);
+    workspace.panes[workspace.panes.indexOf(pane)] = {
+      id: pane.id,
+      pinned: pane.pinned,
+      kind: "document",
+      filePath: targetPath,
+      canonicalPath: target,
+    };
+    this.store.data.drafts[target] = { content, expectedContent: content };
+    delete this.store.data.drafts[oldKey];
+    return { saved: true, conflict: false, path: target };
+  }
+
   async handle(
     request: OperationRequest,
     _trustedUi = false,
   ): Promise<unknown> {
     switch (request.op) {
+      case "file.new":
+        return this.newFile(request);
+
+      case "file.save-as":
+        return this.store.change(() => this.saveUntitled(request));
       case "file.open":
         return this.openFile(request);
 
