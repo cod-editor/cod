@@ -296,6 +296,14 @@ async function execute(id) {
       }
       if (exitCode === 0 && !frozen)
         throw new Error("Successful run has no frozen input evidence");
+      if (
+        exitCode === 0 &&
+        request.args[0] === "--ci" &&
+        !fullPreflightPassed(
+          await json(path.join(frozen, "output/preflight.json")),
+        )
+      )
+        throw new Error("Full preflight lacks complete passing group evidence");
     }
   } catch (caught) {
     error = String(caught);
@@ -323,6 +331,23 @@ async function execute(id) {
   await writeJson(path.join(directory, "result.json"), result);
   await writeJson(path.join(root, "previous-source.json"), { id });
   await retainedRuns();
+}
+export function fullPreflightPassed(summary) {
+  const names = [
+    "Fast checks",
+    "Service tests",
+    "Electron shard 1/3",
+    "Electron shard 2/3",
+    "Electron shard 3/3",
+  ];
+  return (
+    summary?.mode === "full-ci" &&
+    Array.isArray(summary.results) &&
+    summary.results.length === names.length &&
+    summary.results.every(
+      (group, index) => group?.name === names[index] && group.status === "PASS",
+    )
+  );
 }
 export function recoverableCollection(result, executionCode) {
   return (
@@ -368,11 +393,7 @@ async function recoverEvidence(id) {
   const request = await json(path.join(directory, "request.json"));
   if (request.args[0] === "--ci") {
     const summary = await json(path.join(evidence, "output/preflight.json"));
-    if (
-      summary.mode !== "full-ci" ||
-      summary.results?.length !== 5 ||
-      summary.results.some((group) => group.status !== "PASS")
-    )
+    if (!fullPreflightPassed(summary))
       throw Error("Full preflight did not pass every group");
   }
   await fs

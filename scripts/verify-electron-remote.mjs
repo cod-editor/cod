@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Freeze through the ordinary runner, then transport the immutable input over SSH.
 import { spawn } from "node:child_process";
+import { fullPreflightPassed } from "./remote-electron-worker.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -342,6 +343,15 @@ async function main() {
     .catch(() => null);
   let sourceCurrent;
   if (saved?.args?.[0] === "--ci") {
+    if (
+      result.exitCode === 0 &&
+      !fullPreflightPassed(
+        JSON.parse(
+          await fs.readFile(path.join(local, "output/preflight.json"), "utf8"),
+        ),
+      )
+    )
+      throw new Error("Full preflight lacks complete passing group evidence");
     const head = (
       await command("git", ["--no-optional-locks", "rev-parse", "HEAD"])
     ).trim();

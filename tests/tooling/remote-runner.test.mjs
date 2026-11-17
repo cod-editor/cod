@@ -17,6 +17,7 @@ import {
   runPath,
   verifyManifest,
   recoverableCollection,
+  fullPreflightPassed,
 } from "../../scripts/remote-electron-worker.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -261,4 +262,37 @@ test("Evidence recovery cannot relabel failed execution or an unrelated runner f
     false,
   );
   assert.equal(recoverableCollection({ exitCode: 0 }, 0), false);
+});
+
+test("Full result requires every distinct CI group to pass, not just a successful runner exit", () => {
+  const results = [
+    "Fast checks",
+    "Service tests",
+    "Electron shard 1/3",
+    "Electron shard 2/3",
+    "Electron shard 3/3",
+  ].map((name) => ({ name, status: "PASS" }));
+  assert.equal(fullPreflightPassed({ mode: "full-ci", results }), true);
+  assert.equal(fullPreflightPassed(undefined), false);
+  assert.equal(fullPreflightPassed({ mode: "selected", results }), false);
+  assert.equal(
+    fullPreflightPassed({ mode: "full-ci", results: results.slice(1) }),
+    false,
+  );
+  assert.equal(
+    fullPreflightPassed({
+      mode: "full-ci",
+      results: [...results.slice(0, 4), results[3]],
+    }),
+    false,
+  );
+  assert.equal(
+    fullPreflightPassed({
+      mode: "full-ci",
+      results: results.map((group, index) =>
+        index === 2 ? { ...group, status: "SKIP" } : group,
+      ),
+    }),
+    false,
+  );
 });
