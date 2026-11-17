@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
@@ -565,11 +566,14 @@ test("Searchable settings apply font, terminal cursor and external edits live an
       .toBe("bar");
     await dialog.getByRole("searchbox").fill("");
     await dialog
-      .getByRole("textbox", { name: "Editor Font family" })
-      .fill("monospace");
-    await dialog
-      .getByRole("textbox", { name: "Editor Font family" })
-      .press("Tab");
+      .getByRole("combobox", { name: "Editor Font family" })
+      .selectOption("monospace");
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values["editor.fontFamily"],
+      )
+      .toBe("monospace");
     await app.page.screenshot({
       path: info.outputPath("searchable-settings.png"),
     });
@@ -596,6 +600,19 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     await app.page.keyboard.press(`${modifier}+,`);
     await expect(dialog.getByRole("status")).toContainText("Invalid JSON");
     await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
+    expect(await readFile(file, "utf8")).toBe("broken JSON");
+    // Browser preferences have independent ownership; changing one must not
+    // hide the unresolved appearance-file failure or re-enable its writes.
+    await dialog
+      .getByRole("combobox", { name: "Search engine", exact: true })
+      .selectOption("bing");
+    await expect
+      .poll(() => app.cli("browser", "settings"))
+      .toEqual({ searchEngine: "bing" });
+    await expect(dialog.getByRole("status")).toContainText("Invalid JSON");
+    await expect(
+      dialog.getByRole("button", { name: "Reset defaults", exact: true }),
+    ).toBeDisabled();
     expect(await readFile(file, "utf8")).toBe("broken JSON");
     await writeFile(file, JSON.stringify(saved));
     await expect(dialog.getByRole("status")).toBeEmpty();
@@ -734,6 +751,343 @@ test("Global reset reports a partial failure without claiming browser settings c
     expect(appearance.values["ui.fontSize"]).toBe(14);
     await rm(library, { recursive: true });
     await rename(library + ".saved", library);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Settings native selectors retain keyboard selection and cancellation", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.command("Settings...");
+    const dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .fill("cursor shape");
+    const cursor = dialog.getByRole("combobox", {
+      name: "Terminal Cursor shape",
+      exact: true,
+    });
+    await expect(cursor).toHaveValue("block");
+    const rect = (await cursor.boundingBox())!;
+    const origin = await app.app!.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      return {
+        bounds: win.getContentBounds(),
+        nativeId: win.getNativeWindowHandle().readUInt32LE(0),
+      };
+    });
+    await execute("xdotool", [
+      "windowfocus",
+      "--sync",
+      String(origin.nativeId),
+    ]);
+    await execute("xdotool", [
+      "mousemove",
+      "--sync",
+      String(Math.round(origin.bounds.x + rect.x + rect.width / 2)),
+      String(Math.round(origin.bounds.y + rect.y + rect.height / 2)),
+      "click",
+      "1",
+    ]);
+    const capture = await app.app!.evaluate(async ({ desktopCapturer }) => {
+      const screens = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 1280, height: 1024 },
+      });
+      return screens[0]?.thumbnail.toPNG().toString("base64");
+    });
+    if (capture)
+      await writeFile(
+        info.outputPath("native-settings-selector.png"),
+        Buffer.from(capture, "base64"),
+      );
+    await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
+    await expect(cursor).toHaveValue("block");
+    await expect(cursor).toBeFocused();
+    await cursor.selectOption("underline");
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values[
+            "terminal.cursorStyle"
+          ],
+      )
+      .toBe("underline");
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Settings groups readable font choices and adjusts values without losing live preferences", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    await app.command("Settings...");
+    let dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    for (const name of ["Interface", "Editor", "Chat", "Terminal", "Browser"])
+      await expect(
+        dialog.getByRole("heading", { name, exact: true }),
+      ).toBeVisible();
+    await expect(
+      dialog.getByText("Interface · Font family", { exact: true }),
+    ).toHaveCount(0);
+    const family = dialog.getByRole("combobox", {
+      name: "Editor Font family",
+      exact: true,
+    });
+    await expect(family.locator("option:checked")).toHaveText("System default");
+    await family.selectOption({ label: "Custom…" });
+    const custom = dialog.getByRole("textbox", {
+      name: "Editor custom font family",
+      exact: true,
+    });
+    await expect(custom).toBeFocused();
+    const familyName =
+      "Invented Mono with a deliberately long family name for compact settings";
+    const value = `'${familyName}', monospace`;
+    await custom.fill(value);
+    await custom.press("Tab");
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values["editor.fontFamily"],
+      )
+      .toBe(value);
+    await expect(family.locator("option:checked")).toHaveText(familyName);
+    const row = dialog.locator('[data-setting-key="editor.fontSize"]');
+    const size = row.getByRole("spinbutton", {
+      name: "Editor text size",
+      exact: true,
+    });
+    await size.fill("20");
+    await size.press("Tab");
+    await row.getByRole("button", { name: /^Increase/ }).click();
+    await expect(size).toHaveValue("21");
+    await size.fill("40");
+    await size.press("Tab");
+    await expect(row.getByRole("button", { name: /^Increase/ })).toBeDisabled();
+    await row.getByRole("button", { name: /^Decrease/ }).click();
+    await expect(size).toHaveValue("39");
+    await row
+      .getByRole("button", { name: "Reset Editor Font size", exact: true })
+      .click();
+    await expect(size).toHaveValue("16");
+    await expect(row.getByRole("button", { name: /^Increase/ })).toBeEnabled();
+    await expect(
+      row.getByRole("button", { name: "Reset Editor Font size", exact: true }),
+    ).toBeHidden();
+    await dialog.screenshot({ path: info.outputPath("settings-sections.png") });
+    const search = dialog.getByRole("searchbox", { name: "Search settings" });
+    const before = await search.boundingBox();
+    await search.fill("terminal cursor");
+    await expect(
+      dialog.getByRole("heading", { name: "Terminal", exact: true }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("heading", { name: "Interface", exact: true }),
+    ).toBeHidden();
+    await expect(
+      dialog.getByRole("heading", { name: "Editor", exact: true }),
+    ).toBeHidden();
+    expect((await search.boundingBox())!.y).toBeCloseTo(before!.y, 0);
+    await expect(
+      dialog.getByRole("button", { name: "Done", exact: true }),
+    ).toBeVisible();
+    await search.fill("Interface text size");
+    await expect(
+      dialog.getByRole("spinbutton", {
+        name: "Interface text size",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(family).toBeHidden();
+    await search.fill("");
+    await app.page.setViewportSize({ width: 460, height: 640 });
+    await app.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": 22 }),
+    );
+    await expect(app.page.locator("html")).toHaveCSS("font-size", "22px");
+    expect(
+      await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    await expect(
+      dialog.getByRole("button", { name: "Done", exact: true }),
+    ).toBeInViewport();
+    await dialog.screenshot({
+      path: info.outputPath("settings-narrow-enlarged.png"),
+    });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await app.stop();
+    await app.start();
+    expect(
+      (await app.cli<any>("settings", "get")).values["editor.fontFamily"],
+    ).toBe(value);
+    await app.command("Settings...");
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await dialog
+      .getByRole("combobox", { name: "Editor Font family", exact: true })
+      .selectOption({ label: "System default" });
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<any>("settings", "get")).values["editor.fontFamily"],
+      )
+      .toBe("ui-monospace, SFMono-Regular, Menlo, monospace");
+    await expect(
+      dialog
+        .getByRole("combobox", { name: "Editor Font family", exact: true })
+        .locator("option:checked"),
+    ).toHaveText("System default");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Settings-related input dialogs retain native submission and exact cancel focus", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const workspace = await app.create("Dialog composition fixture");
+    const chat = await app.newChat(workspace, "codex");
+    const composer = app
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("retained unsent message");
+    await composer.evaluate((node: HTMLTextAreaElement) =>
+      node.setSelectionRange(2, 7),
+    );
+    await app.command("Chat maximum width");
+    let dialog = app.page.getByRole("dialog", {
+      name: "Chat maximum width",
+      exact: true,
+    });
+    let value = dialog.getByRole("spinbutton", {
+      name: "Chat maximum width (pixels)",
+      exact: true,
+    });
+    await value.fill("1250");
+    await value.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue("retained unsent message");
+    expect(
+      await composer.evaluate((node: HTMLTextAreaElement) => [
+        node.selectionStart,
+        node.selectionEnd,
+      ]),
+    ).toEqual([2, 7]);
+    await app.command("Chat maximum width");
+    dialog = app.page.getByRole("dialog", {
+      name: "Chat maximum width",
+      exact: true,
+    });
+    value = dialog.getByRole("spinbutton", {
+      name: "Chat maximum width (pixels)",
+      exact: true,
+    });
+    await value.fill("1250");
+    await value.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    const state = await app.cli<{
+      workspaces: Array<{ id: string; settings?: { chatMaxWidth?: number } }>;
+    }>("state");
+    expect(
+      state.workspaces.find((item) => item.id === workspace)?.settings
+        ?.chatMaxWidth,
+    ).toBe(1250);
+    await expect(composer).toHaveValue("retained unsent message");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Settings returns native page focus and field selection after Done and Escape", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    const file = path.join(app.folders[0], "settings-focus.html");
+    await writeFile(
+      file,
+      '<!doctype html><title>Invented Settings focus</title><input id="field" value="abcdefghij">',
+    );
+    const url = pathToFileURL(file).href;
+    await app.start();
+    const workspace = await app.create("Native Settings focus");
+    await app.cli("browser", "open", "--workspace", workspace, "--url", url);
+    const inspect = () =>
+      app.app!.evaluate(async ({ webContents }, url) => {
+        const wc = webContents
+          .getAllWebContents()
+          .find((item) => item.getURL() === url);
+        if (!wc) return null;
+        return {
+          focused: wc.isFocused(),
+          ...(await wc.executeJavaScript(
+            "({value:field.value,start:field.selectionStart,end:field.selectionEnd})",
+          )),
+        };
+      }, url);
+    await expect.poll(inspect).not.toBeNull();
+    await app.app!.evaluate(async ({ webContents }, url) => {
+      const wc = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === url)!;
+      await wc.executeJavaScript("field.focus();field.setSelectionRange(2,7)");
+      wc.focus();
+    }, url);
+    const key = (keyCode: string, mod = false) =>
+      app.app!.evaluate(
+        ({ webContents }, { url, keyCode, mod }) => {
+          const wc = webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === url)!;
+          const modifiers: Array<"control" | "meta"> = mod
+            ? [process.platform === "darwin" ? "meta" : "control"]
+            : [];
+          wc.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+          wc.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+        },
+        { url, keyCode, mod },
+      );
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    await key(",", true);
+    let dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await expect
+      .poll(inspect)
+      .toMatchObject({ focused: true, start: 2, end: 7 });
+    await key("Right");
+    await expect
+      .poll(inspect)
+      .toMatchObject({ focused: true, value: "abcdefghij", start: 7, end: 7 });
+    await key(",", true);
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await expect(dialog).toBeVisible();
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .press("Escape");
+    await expect
+      .poll(inspect)
+      .toMatchObject({ focused: true, value: "abcdefghij", start: 7, end: 7 });
   } finally {
     await app.cleanup();
   }

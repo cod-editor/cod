@@ -1,4 +1,5 @@
 @import "./ui/components.css";
+@import "./ui/settings.css";
 /* One Dark application chrome. Content surfaces share the same compact scale. */
 :root {
   color-scheme: dark;

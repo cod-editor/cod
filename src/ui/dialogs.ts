@@ -1,4 +1,5 @@
-import { uiButton, actionRow, dialogSurface } from "./primitives";
+import { uiButton, dialogRegions, dialogSurface } from "./primitives";
+let formSequence = 0;
 import { formField } from "./form-field";
 import { actionButton } from "./action-feedback";
 interface InputDialog {
@@ -28,9 +29,9 @@ export function inputDialog(options: InputDialog): void {
       : undefined;
   const dialog = dialogSurface(options.title);
   dialog.setAttribute("aria-label", options.title);
-  const title = document.createElement("h2");
-  title.textContent = options.title;
+  const { body, actions } = dialogRegions(dialog, options.title);
   const form = document.createElement("form");
+  form.id = `input-dialog-form-${++formSequence}`;
   const input = document.createElement("input");
   input.setAttribute("aria-label", options.label);
   input.type = options.type ?? "text";
@@ -43,15 +44,43 @@ export function inputDialog(options: InputDialog): void {
   const error = document.createElement("div");
   error.className = "dialog-error";
   error.setAttribute("role", "alert");
-  const actions = actionRow();
-  const cancel = actionButton("Cancel", async () => dialog.close());
+  const restore = () => {
+    if (!previous?.isConnected || document.querySelector("dialog[open]"))
+      return;
+    previous.focus({ preventScroll: true });
+    if (
+      selection &&
+      (previous instanceof HTMLTextAreaElement ||
+        previous instanceof HTMLInputElement)
+    ) {
+      if (selection.start !== null && selection.end !== null)
+        previous.setSelectionRange(
+          selection.start,
+          selection.end,
+          selection.direction ?? undefined,
+        );
+      previous.scrollTop = selection.top;
+      previous.scrollLeft = selection.left;
+    }
+  };
+  let closing = false;
+  const close = () => {
+    closing = true;
+    dialog.close();
+    restore();
+  };
+  dialog.oncancel = (event) => {
+    event.preventDefault();
+    close();
+  };
+  const cancel = actionButton("Cancel", async () => close());
+  cancel.classList.add("quiet");
   const submit = uiButton(options.submitLabel, "primary");
   submit.type = "submit";
-  submit.className = "primary";
-  submit.textContent = options.submitLabel;
+  submit.setAttribute("form", form.id);
   actions.append(cancel, submit);
-  form.append(label, error, actions);
-  dialog.append(title, form);
+  form.append(label, error);
+  body.append(form);
   document.body.append(dialog);
   let completed = false,
     busy = false;
@@ -77,28 +106,11 @@ export function inputDialog(options: InputDialog): void {
     }
   };
   dialog.onclose = () => {
+    const abandoned =
+      dialog.contains(document.activeElement) ||
+      document.activeElement === document.body;
     dialog.remove();
-    if (
-      !completed &&
-      previous?.isConnected &&
-      !document.querySelector("dialog[open]")
-    ) {
-      previous.focus({ preventScroll: true });
-      if (
-        selection &&
-        (previous instanceof HTMLTextAreaElement ||
-          previous instanceof HTMLInputElement)
-      ) {
-        if (selection.start !== null && selection.end !== null)
-          previous.setSelectionRange(
-            selection.start,
-            selection.end,
-            selection.direction ?? undefined,
-          );
-        previous.scrollTop = selection.top;
-        previous.scrollLeft = selection.left;
-      }
-    }
+    if (!closing && !completed && abandoned) restore();
   };
   dialog.showModal();
   input.focus();
@@ -112,18 +124,18 @@ export function confirmAction(
 ): void {
   const dialog = dialogSurface(title);
   dialog.setAttribute("aria-label", title);
-  const heading = document.createElement("h2");
-  heading.textContent = title;
-  const body = document.createElement("p");
-  body.textContent = text;
-  const actions = actionRow();
+  const { body, actions } = dialogRegions(dialog, title);
+  const description = document.createElement("p");
+  description.textContent = text;
   const cancel = actionButton("Cancel", async () => dialog.close());
   const accept = actionButton(label, async () => {
     await action();
     dialog.close();
   });
+  cancel.classList.add("quiet");
+  accept.classList.add("primary");
   actions.append(cancel, accept);
-  dialog.append(heading, body, actions);
+  body.append(description);
   document.body.append(dialog);
   dialog.onclose = () => dialog.remove();
   dialog.showModal();
