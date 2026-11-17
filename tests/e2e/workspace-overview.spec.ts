@@ -355,7 +355,7 @@ test("Overview exposes valid workspace groups and independently reachable row ac
   await expect(row("workspace", second)).toHaveCount(0);
   await expect(row("terminal", terminal.id)).toHaveCount(0);
   await app.app!.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(660, 720),
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 720),
   );
   await app.cli(
     "settings",
@@ -363,7 +363,7 @@ test("Overview exposes valid workspace groups and independently reachable row ac
     "--values",
     JSON.stringify({ "ui.fontSize": 20 }),
   );
-  await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(660);
+  await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(760);
   expect(
     await overview().evaluate((node) => node.scrollWidth <= node.clientWidth),
   ).toBe(true);
