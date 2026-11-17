@@ -278,8 +278,7 @@ export function createWorkspaceOverview(
         }
 
         const row = document.createElement("div");
-        row.className =
-          "overview-row workspace-row tree-row-wrap ui-picker-row";
+        row.className = "overview-row workspace-row ui-picker-row";
         row.dataset.status = item.status;
         row.dataset.kind = item.kind;
         row.dataset.navigationKey = item.key;
