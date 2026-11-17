@@ -757,6 +757,10 @@ test("Global reset reports a partial failure without claiming browser settings c
 });
 
 test("Settings native selectors retain keyboard selection and cancellation", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "Native select automation uses isolated X11; macOS desktop must remain untouched",
+  );
   const app = new ChatApp();
   await app.prepare();
   try {
