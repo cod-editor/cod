@@ -10,6 +10,8 @@ import type {
 } from "../types";
 import { normalizeGroups } from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
+import { leaf, replaceLeaf } from "./layout";
+import { requiredString } from "./request";
 
 /** Single owner of application state, transaction ordering and durable snapshots. */
 export class ApplicationStateStore {
@@ -191,6 +193,9 @@ export class ApplicationStateStore {
     );
     return structuredClone({
       ...this.data,
+      // Editors read their resource through file.read; unrelated navigation does
+      // not need every open or recoverable file buffer's text.
+      drafts: {},
       conversations: this.data.conversations.map((conversation) => {
         if (
           conversation.workspaceId === workspace?.id &&
@@ -233,9 +238,16 @@ export class ApplicationStateStore {
     if (!workspace) throw new Error(`Workspace not found: ${id}`);
     return workspace;
   }
-  /** A delayed choice can only replace the blank tab the user selected. */
+  /** Resolve a stable source, or replace only the blank tab the user selected. */
   openingPane(workspace: WorkspaceState, request: OperationRequest): PaneState {
-    const id = request.replacePane;
+    if (
+      request.focus !== undefined &&
+      ![true, false, "true", "false"].includes(request.focus as boolean)
+    )
+      throw new Error("focus must be true or false");
+    if (request.replacePane !== undefined && request.sourcePane !== undefined)
+      throw new Error("Choose replacePane or sourcePane, not both");
+    const id = request.replacePane ?? request.sourcePane;
     if (id !== undefined && typeof id !== "string")
       throw new Error("replacePane must be a pane ID");
     const pane =
@@ -244,13 +256,74 @@ export class ApplicationStateStore {
         : workspace.panes.find((item) => item.id === id);
     if (!pane)
       throw new Error(
-        "The blank tab was closed. Open a new tab and choose again.",
+        request.sourcePane !== undefined
+          ? "The source tab was closed. Choose a tab in the target pane again."
+          : "The blank tab was closed. Open a new tab and choose again.",
       );
-    if (id !== undefined && !(pane.kind === "empty" && pane.launcher))
+    if (
+      request.replacePane !== undefined &&
+      !(pane.kind === "empty" && pane.launcher)
+    )
       throw new Error(
         "The blank tab was changed. Open a new tab and choose again.",
       );
+    if (request.sourcePane !== undefined) {
+      normalizeGroups(workspace);
+      const owner = workspace.groups!.find((group) =>
+        group.paneIds.includes(pane.id),
+      );
+      if (!owner || (request.group !== undefined && request.group !== owner.id))
+        throw new Error(
+          "The source tab moved. Choose a tab in the target pane again.",
+        );
+    }
     return pane;
+  }
+
+  /** Insert fresh content in a stable source group without type-based splitting. */
+  insertPane(
+    workspace: WorkspaceState,
+    pane: PaneState,
+    request: OperationRequest,
+  ): void {
+    if (
+      request.focus !== undefined &&
+      ![true, false, "true", "false"].includes(request.focus as boolean)
+    )
+      throw new Error("focus must be true or false");
+    normalizeGroups(workspace);
+    const group =
+      request.group === undefined
+        ? workspace.groups!.find((item) =>
+            item.paneIds.includes(
+              String(request.sourcePane ?? workspace.activePaneId),
+            ),
+          )
+        : workspace.groups!.find((item) => item.id === request.group);
+    if (!group) throw new Error("Target group not found");
+    const sourceId =
+      request.sourcePane === undefined
+        ? group.activePaneId
+        : requiredString(request, "sourcePane");
+    if (!group.paneIds.includes(sourceId))
+      throw new Error("The source tab closed or moved");
+    if (workspace.panes.some((item) => item.id === pane.id))
+      throw new Error("Tab already exists");
+    workspace.panes.push(pane);
+    workspace.layout = replaceLeaf(workspace.layout, sourceId, {
+      type: "split",
+      direction: "right",
+      ratio: 0.5,
+      first: leaf(sourceId),
+      second: leaf(pane.id),
+    });
+    group.paneIds.splice(group.paneIds.indexOf(sourceId) + 1, 0, pane.id);
+    if (request.focus === true || request.focus === "true") {
+      group.activePaneId = pane.id;
+      group.hidden = false;
+      workspace.activePaneId = pane.id;
+      workspace.activeGroupId = group.id;
+    }
   }
   pane(workspace: WorkspaceState, id: string): PaneState {
     const pane = workspace.panes.find((item) => item.id === id);
@@ -329,6 +402,9 @@ export class ApplicationStateStore {
       return result;
     } catch (error) {
       rollbackState(this.data, before, original);
+      // Native events can expose an in-flight mutation while persistence waits.
+      // Publish the restored model too, so observers cannot keep a phantom tab/path.
+      if (options.notify !== false) this.notify();
       throw error;
     }
   }

@@ -185,11 +185,13 @@ export const commands = [
   entry("tab.new", "New tab", "Tabs", [
     key("KeyT", { mod: true, platform: "darwin" }),
     key("KeyT", { mod: true, platform: "linux" }, [
-      ...cod,
+      ...host,
       "browser",
       "agent-page",
     ]),
   ]),
+  entry("tab.chooseType", "Choose new tab type", "Tabs", []),
+  entry("files.new", "New file", "Files", []),
   entry("tab.reopen", "Reopen closed tab", "Tabs", [
     key("KeyT", { mod: true, shift: true }),
   ]),

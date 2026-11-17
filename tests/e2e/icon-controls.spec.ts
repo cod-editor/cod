@@ -143,7 +143,10 @@ for (const scale of [1, 1.5, 2]) {
             await square(button);
           }
           for (const button of [
-            bar.getByRole("button", { name: "New tab", exact: true }),
+            bar.getByRole("button", {
+              name: "Choose new tab type",
+              exact: true,
+            }),
             bar.getByRole("button", { name: "Maximize pane", exact: true }),
             disabled,
           ]) {

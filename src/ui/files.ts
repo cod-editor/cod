@@ -3,6 +3,7 @@ import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+import type { createFocusManager } from "./focus";
 import { icon, menu } from "./controls";
 interface Entry {
   name: string;
@@ -30,6 +31,10 @@ export class FileTree {
     private host: HTMLElement,
     private invoke: Invoke,
     private addFolder: (workspace: string) => void,
+    private focus: Pick<
+      ReturnType<typeof createFocusManager>,
+      "capture" | "restore"
+    >,
   ) {
     host.tabIndex = 0;
     host.addEventListener("focusin", (event) => {
@@ -423,7 +428,12 @@ export class FileTree {
   private async openFile(
     path: string,
     line?: number,
-    target?: { workspace: WorkspaceState; paneId?: string },
+    target?: {
+      workspace: WorkspaceState;
+      paneId?: string;
+      sourcePane?: string;
+      group?: string;
+    },
   ): Promise<void> {
     const workspace = target?.workspace ?? this.workspace;
     if (!workspace) return;
@@ -444,6 +454,9 @@ export class FileTree {
         path,
         ...(line ? { line } : {}),
         ...(target?.paneId ? { replacePane: target.paneId } : {}),
+        ...(target?.sourcePane
+          ? { sourcePane: target.sourcePane, group: target.group, focus: true }
+          : {}),
       });
       requestAnimationFrame(() => {
         if (intent.signal.aborted) return;
@@ -473,16 +486,30 @@ export class FileTree {
   search(path?: string): void {
     this.openPicker(false, path);
   }
-  quickOpen(target?: { workspace: WorkspaceState; paneId: string }): void {
+  quickOpen(target?: {
+    workspace: WorkspaceState;
+    paneId?: string;
+    sourcePane?: string;
+    group?: string;
+    restoreFocus?: () => void;
+  }): void {
     this.openPicker(true, undefined, target);
   }
   private openPicker(
     files: boolean,
     path?: string,
-    target?: { workspace: WorkspaceState; paneId: string },
+    target?: {
+      workspace: WorkspaceState;
+      paneId?: string;
+      sourcePane?: string;
+      group?: string;
+      restoreFocus?: () => void;
+    },
   ): void {
     const workspace = target?.workspace ?? this.workspace;
     if (!workspace) return;
+    const previous = this.focus.capture();
+    let performed = false;
     const dialog = document.createElement("dialog");
     dialog.className = "picker search-picker";
     dialog.setAttribute("aria-label", files ? "Open file" : "Search workspace");
@@ -495,7 +522,22 @@ export class FileTree {
     results.setAttribute("aria-label", "Search results");
     dialog.append(input, results);
     document.body.append(dialog);
-    dialog.onclose = () => dialog.remove();
+    const restore = () => {
+      if (target?.restoreFocus) target.restoreFocus();
+      else this.focus.restore(previous);
+    };
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      dialog.close();
+      restore();
+    };
+    dialog.onclose = () => {
+      const abandoned =
+        dialog.contains(document.activeElement) ||
+        document.activeElement === document.body;
+      dialog.remove();
+      if (!performed && abandoned) restore();
+    };
     const selection = createSearchList(input, results);
     let generation = 0,
       timer: ReturnType<typeof setTimeout>;
@@ -524,6 +566,7 @@ export class FileTree {
         }
         button.title = match.path;
         button.onclick = () => {
+          performed = true;
           dialog.close();
           // A failed open must report on a live surface, not this closing dialog.
           dialog.remove();

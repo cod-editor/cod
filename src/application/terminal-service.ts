@@ -31,6 +31,16 @@ export class TerminalApplicationService {
   shutdown() {
     return this.processes.dispose();
   }
+  async currentDirectory(id: string): Promise<string> {
+    const source = this.terminal(id);
+    // Restored native handoff terminals deliberately have no owned process.
+    // A fresh shell still uses their recorded directory and no native command.
+    if (source.status === "exited" || source.status === "failed")
+      return source.cwd;
+    const cwd = await this.processes.currentDirectory(id);
+    this.syncTerminal(source);
+    return cwd;
+  }
   terminalShell(): { shell?: string; args?: string[] } {
     const shell = process.env.COD_TERMINAL_SHELL;
     const encoded = process.env.COD_TERMINAL_ARGS;
@@ -104,7 +114,14 @@ export class TerminalApplicationService {
       ...this.terminalShell(),
     });
     const terminal: TerminalState = { ...snapshot, paneId: "", sequence: 0 };
-    terminal.paneId = this.attachTerminal(workspace, id, target);
+    if (request.sourcePane !== undefined) {
+      terminal.paneId = randomUUID();
+      this.store.insertPane(
+        workspace,
+        { id: terminal.paneId, kind: "terminal", terminalId: id },
+        request,
+      );
+    } else terminal.paneId = this.attachTerminal(workspace, id, target);
     this.store.data.terminals.push(terminal);
     try {
       await this.store.persist();

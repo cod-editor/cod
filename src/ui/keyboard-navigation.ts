@@ -48,6 +48,8 @@ export function createKeyboardNavigation(
     if (!host) return;
     if (
       pane.kind === "browser" &&
+      getState().browsers.find((b) => b.id === pane.browserId)?.url !==
+        "about:blank" &&
       !getState().browsers.find((b) => b.id === pane.browserId)?.error
     ) {
       nativeFocus(pane.browserId);
@@ -58,13 +60,15 @@ export function createKeyboardNavigation(
       pane.kind === "conversation" ||
       (pane.kind === "document" && !pane.filePath)
         ? ".composer textarea"
-        : pane.kind === "document"
+        : pane.kind === "document" || pane.kind === "untitled"
           ? ".file-editor"
           : pane.kind === "terminal"
             ? ".xterm-helper-textarea"
-            : pane.kind === "review"
-              ? '.review-line[tabindex="0"], .review-document > .highlighted-editor:not([hidden]) textarea, .review-markdown:not([hidden])'
-              : ".browser-failure button";
+            : pane.kind === "browser"
+              ? 'input[aria-label="Address"]'
+              : pane.kind === "review"
+                ? '.review-line[tabindex="0"], .review-document > .highlighted-editor:not([hidden]) textarea, .review-markdown:not([hidden])'
+                : ".browser-failure button";
     const target =
       host.querySelector<HTMLElement>(primary) ??
       host.querySelector<HTMLElement>(
@@ -79,8 +83,11 @@ export function createKeyboardNavigation(
         () => workspace()?.activePaneId === pane.id,
         intent,
       );
-    else if (target) target.focus({ preventScroll: true });
-    else {
+    else if (target) {
+      target.focus({ preventScroll: true });
+      if (target instanceof HTMLInputElement && pane.kind === "browser")
+        target.select();
+    } else {
       host.tabIndex = 0;
       host.focus({ preventScroll: true });
     }

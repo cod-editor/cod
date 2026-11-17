@@ -3,9 +3,14 @@ import { conversationRemovalReason } from "../conversation-actions";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import type { OperationRequest, SplitDirection } from "../types";
+import type {
+  OperationRequest,
+  SplitDirection,
+  WorkspaceState,
+} from "../types";
 import { normalizeGroups, replaceGroup } from "../workspace-layout";
 import { ApplicationStateStore } from "./state";
+import { documentKey } from "../text-document";
 import { requiredString, requiredName, object } from "./request";
 import {
   leaf,
@@ -410,7 +415,7 @@ export class WorkspaceApplicationService {
           }
         : {}),
     });
-    if (workspace.closedTabs.length > 50) workspace.closedTabs.shift();
+    this.pruneClosedTabs(workspace);
     if (pane.kind === "browser") {
       this.browsers.removeBrowser(this.browsers.browser(pane.browserId));
       return { paneId: pane.id };
@@ -496,8 +501,7 @@ export class WorkspaceApplicationService {
             },
             conversation: saved,
           });
-        if (workspace.closedTabs && workspace.closedTabs.length > 50)
-          workspace.closedTabs.shift();
+        this.pruneClosedTabs(workspace);
         this.store.data.conversations = this.store.data.conversations.filter(
           (item) => item.id !== id,
         );
@@ -513,6 +517,26 @@ export class WorkspaceApplicationService {
       }
     });
     return result;
+  }
+
+  private pruneClosedTabs(workspace: WorkspaceState): void {
+    if (!workspace.closedTabs) return;
+    const retainedDraft = (
+      item: NonNullable<WorkspaceState["closedTabs"]>[number],
+    ) =>
+      item.pane.kind === "untitled" &&
+      !!this.store.data.drafts[documentKey(item.pane)]?.content;
+    const ordinary = workspace.closedTabs.filter(
+      (item) => !retainedDraft(item),
+    );
+    for (const expired of ordinary.slice(
+      0,
+      Math.max(0, ordinary.length - 50),
+    )) {
+      workspace.closedTabs.splice(workspace.closedTabs.indexOf(expired), 1);
+      if (expired.pane.kind === "untitled")
+        delete this.store.data.drafts[documentKey(expired.pane)];
+    }
   }
 
   async reopenPane(request: OperationRequest): Promise<{ paneId: string }> {
@@ -991,6 +1015,47 @@ export class WorkspaceApplicationService {
               this.store.workspace(this.createWorkspace("Untitled").id))
             : this.store.workspace(requiredString(request, "workspace"));
           const target = this.store.openingPane(workspace, request);
+          if (request.sourcePane !== undefined) {
+            const id = randomUUID();
+            const provider = request.provider === "kimi" ? "kimi" : "codex";
+            if (
+              request.provider !== undefined &&
+              !["codex", "kimi"].includes(String(request.provider))
+            )
+              throw new Error("Unsupported provider");
+            if (
+              request.initialSelection !== undefined &&
+              (!request.initialSelection ||
+                typeof request.initialSelection !== "object" ||
+                Array.isArray(request.initialSelection))
+            )
+              throw new Error("Initial model selection must be an object");
+            const selection = object(request.initialSelection);
+            for (const [key, value] of Object.entries(selection))
+              if (
+                !["model", "reasoning"].includes(key) ||
+                typeof value !== "string" ||
+                !value.trim() ||
+                value.length > 512
+              )
+                throw new Error("Invalid initial model selection");
+            if (request.cwd !== undefined && typeof request.cwd !== "string")
+              throw new Error("cwd must be a directory path");
+            this.store.insertPane(
+              workspace,
+              { id, kind: "document", draftChat: true },
+              request,
+            );
+            (workspace.chatDrafts ??= {})[id] = {
+              text: "",
+              provider,
+              ...(Object.keys(selection).length
+                ? { initialSelection: selection }
+                : {}),
+              ...(typeof request.cwd === "string" ? { cwd: request.cwd } : {}),
+            };
+            return { workspaceId: workspace.id, paneId: id };
+          }
           const launcher =
             target.kind === "empty" && target.launcher ? target : undefined;
           const empty =
@@ -1099,33 +1164,23 @@ export class WorkspaceApplicationService {
           const workspace = this.store.workspace(
             requiredString(request, "workspace"),
           );
-          normalizeGroups(workspace);
-          const groupId = request.group ?? workspace.activeGroupId;
-          const group = workspace.groups!.find((item) => item.id === groupId);
-          if (!group) throw new Error("Target group not found");
           const paneId = randomUUID();
-          workspace.panes.push({ id: paneId, kind: "empty", launcher: true });
-          workspace.layout = replaceLeaf(
-            workspace.layout,
-            workspace.activePaneId,
+          if (request.sourcePane !== undefined)
+            this.store.openingPane(workspace, request);
+          this.store.insertPane(
+            workspace,
+            { id: paneId, kind: "empty", launcher: true },
             {
-              type: "split",
-              direction: "right",
-              ratio: 0.5,
-              first: leaf(workspace.activePaneId),
-              second: leaf(paneId),
+              ...request,
+              focus: request.focus ?? true,
             },
           );
-          group.paneIds.splice(
-            group.paneIds.indexOf(group.activePaneId) + 1,
-            0,
+          return {
             paneId,
-          );
-          group.activePaneId = paneId;
-          group.hidden = false;
-          workspace.activePaneId = paneId;
-          workspace.activeGroupId = group.id;
-          return { paneId, groupId: group.id };
+            groupId: workspace.groups!.find((group) =>
+              group.paneIds.includes(paneId),
+            )!.id,
+          };
         });
 
       case "pane.split":

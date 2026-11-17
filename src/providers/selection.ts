@@ -44,6 +44,19 @@ export class NativeSelection {
   update(value: unknown) {
     this.kimi = value;
   }
+  snapshot(): ProviderOptions["current"] {
+    if (this.provider === "kimi") return { ...this.kimiOptions().current };
+    const effective = { ...this.current, ...this.pending };
+    // An old model's acknowledged effort is not an override for a newly
+    // selected model. Copy the same next-turn configuration we actually send.
+    if (
+      this.pending.model &&
+      this.pending.model !== this.current.model &&
+      !this.pending.reasoning
+    )
+      delete effective.reasoning;
+    return effective;
+  }
   overrides() {
     return {
       ...(this.pending.model ? { model: this.pending.model } : {}),
