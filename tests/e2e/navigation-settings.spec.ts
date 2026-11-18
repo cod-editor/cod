@@ -1054,7 +1054,14 @@ test("Settings returns native page focus and field selection after Done and Esca
     const url = pathToFileURL(file).href;
     await app.start();
     const workspace = await app.create("Native Settings focus");
-    await app.cli("browser", "open", "--workspace", workspace, "--url", url);
+    const browser = await app.cli<{ id: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
     const inspect = () =>
       app.app!.evaluate(async ({ webContents }, url) => {
         const wc = webContents
@@ -1069,26 +1076,86 @@ test("Settings returns native page focus and field selection after Done and Esca
         };
       }, url);
     await expect.poll(inspect).not.toBeNull();
+    await expect
+      .poll(
+        async () =>
+          (
+            await app.cli<{ visible: boolean }>(
+              "browser",
+              "inspect",
+              "--id",
+              browser.id,
+            )
+          ).visible,
+      )
+      .toBe(true);
+    await app.page
+      .getByRole("textbox", { name: "Address", exact: true })
+      .click();
+    if (process.platform === "linux") {
+      const point = await app.app!.evaluate(
+        async ({ BrowserWindow, webContents }, url) => {
+          const wc = webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === url)!;
+          const host = BrowserWindow.getAllWindows().find((window) =>
+            window.contentView.children.some(
+              (view) => (view as any).webContents?.id === wc.id,
+            ),
+          )!;
+          const view = host.contentView.children.find(
+            (view) => (view as any).webContents?.id === wc.id,
+          )!;
+          const viewport = view.getBounds(),
+            origin = host.getContentBounds();
+          const field = await wc.executeJavaScript(
+            "(()=>{const r=field.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()",
+          );
+          host.focus();
+          return {
+            x: Math.round(origin.x + viewport.x + field.x),
+            y: Math.round(origin.y + viewport.y + field.y),
+          };
+        },
+        url,
+      );
+      await execute("xdotool", [
+        "mousemove",
+        "--sync",
+        String(point.x),
+        String(point.y),
+        "click",
+        "--clearmodifiers",
+        "1",
+      ]);
+    } else
+      await app.app!.evaluate(async ({ webContents }, url) => {
+        const wc = webContents
+          .getAllWebContents()
+          .find((w) => w.getURL() === url)!;
+        await wc.executeJavaScript("field.focus()");
+        wc.focus();
+      }, url);
     await app.app!.evaluate(async ({ webContents }, url) => {
       const wc = webContents
         .getAllWebContents()
         .find((item) => item.getURL() === url)!;
-      await wc.executeJavaScript("field.focus();field.setSelectionRange(2,7)");
-      wc.focus();
+      await wc.executeJavaScript("field.setSelectionRange(2,7)");
     }, url);
-    const key = (keyCode: string, mod = false) =>
+    const key = (keyCode: string, mod = false, shift = false) =>
       app.app!.evaluate(
-        ({ webContents }, { url, keyCode, mod }) => {
+        ({ webContents }, { url, keyCode, mod, shift }) => {
           const wc = webContents
             .getAllWebContents()
             .find((item) => item.getURL() === url)!;
-          const modifiers: Array<"control" | "meta"> = mod
+          const modifiers: Array<"control" | "meta" | "shift"> = mod
             ? [process.platform === "darwin" ? "meta" : "control"]
             : [];
+          if (shift) modifiers.push("shift");
           wc.sendInputEvent({ type: "keyDown", keyCode, modifiers });
           wc.sendInputEvent({ type: "keyUp", keyCode, modifiers });
         },
-        { url, keyCode, mod },
+        { url, keyCode, mod, shift },
       );
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     await key(",", true);
@@ -1098,6 +1165,7 @@ test("Settings returns native page focus and field selection after Done and Esca
     });
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
     await expect
       .poll(inspect)
       .toMatchObject({ focused: true, start: 2, end: 7 });
@@ -1111,9 +1179,143 @@ test("Settings returns native page focus and field selection after Done and Esca
     await dialog
       .getByRole("searchbox", { name: "Search settings" })
       .press("Escape");
+    await expect(dialog).toHaveCount(0);
     await expect
       .poll(inspect)
       .toMatchObject({ focused: true, value: "abcdefghij", start: 7, end: 7 });
+    await key("P", true, true);
+    const palette = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    await palette
+      .getByRole("textbox", { name: "Filter commands" })
+      .fill("Browser settings");
+    await palette
+      .getByRole("button", { name: "Browser settings", exact: true })
+      .click();
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await expect(
+      dialog.getByRole("searchbox", { name: "Search settings" }),
+    ).toHaveValue("browser");
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect
+      .poll(inspect)
+      .toMatchObject({ focused: true, value: "abcdefghij", start: 7, end: 7 });
+    await key(",", true);
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await dialog
+      .getByRole("button", { name: "Keyboard shortcuts", exact: true })
+      .click();
+    const shortcuts = app.page.getByRole("dialog", {
+      name: "Keyboard shortcuts",
+      exact: true,
+    });
+    await expect(shortcuts).toBeVisible();
+    await shortcuts
+      .getByRole("textbox", { name: "Search shortcuts", exact: true })
+      .press("Escape");
+    await expect(shortcuts).toHaveCount(0);
+    await expect
+      .poll(inspect)
+      .toMatchObject({ focused: true, value: "abcdefghij", start: 7, end: 7 });
+    await key(",", true);
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await expect(dialog).toBeVisible();
+    await app.cli("browser", "close", "--id", browser.id);
+    await expect.poll(inspect).toBeNull();
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .press("Escape");
+    await expect(dialog).toHaveCount(0);
+    const header = app.page.getByRole("button", {
+      name: "Overview",
+      exact: true,
+    });
+    await header.focus();
+    await app.page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(header).toBeFocused();
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Settings preserves a shell field selection and late cleanup respects newer focus", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const input = app.page.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await input.fill("Invented retained settings draft");
+    await input.evaluate((node: HTMLTextAreaElement) =>
+      node.setSelectionRange(3, 9, "backward"),
+    );
+    await input.press(`${modifier}+,`);
+    let dialog = app.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await dialog.evaluate((dialog) => {
+      const hold = (event: Event) => {
+        event.stopImmediatePropagation();
+        (window as any).releaseSettingsClose = () => {
+          dialog.removeEventListener("close", hold, true);
+          dialog.dispatchEvent(new Event("close", { bubbles: true }));
+        };
+      };
+      dialog.addEventListener("close", hold, true);
+    });
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(input).toBeFocused();
+    const selection = () =>
+      input.evaluate((node: HTMLTextAreaElement) => [
+        node.selectionStart,
+        node.selectionEnd,
+        node.selectionDirection,
+      ]);
+    expect(await selection()).toEqual([3, 9, "backward"]);
+    await expect
+      .poll(() =>
+        app.page.evaluate(() => typeof (window as any).releaseSettingsClose),
+      )
+      .toBe("function");
+    const header = app.page.getByRole("button", {
+      name: "Overview",
+      exact: true,
+    });
+    await header.focus();
+    await app.page.evaluate(() => (window as any).releaseSettingsClose());
+    await app.page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(header).toBeFocused();
+    await expect(input).toHaveValue("Invented retained settings draft");
+    await input.focus();
+    await input.press(`${modifier}+,`);
+    dialog = app.page.getByRole("dialog", { name: "Settings", exact: true });
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .fill("font");
+    await dialog
+      .getByRole("searchbox", { name: "Search settings" })
+      .press("Escape");
+    await expect(input).toBeFocused();
+    expect(await selection()).toEqual([3, 9, "backward"]);
   } finally {
     await app.cleanup();
   }
