@@ -313,6 +313,50 @@ test("S3 workspace search uses both explicit roots, shows truncation and opens k
   await expect(results).toContainText(/truncat|limit/i);
 });
 
+test("S3 Markdown source keeps identifiers and unfinished emphasis from coloring later blocks", async () => {
+  const file = path.join(app.folders[0], "checklist.md");
+  const source = [
+    "- [x] **First.** item_one",
+    "- [x] **Second.** запись_данных",
+    "",
+    "## Next heading",
+    "",
+    "Keep _actual emphasis_ and __actual bold__.",
+    "",
+    "```text",
+    "code_name *literal*",
+    "",
+    "still code",
+    "```",
+    "",
+    "Ordinary text.",
+  ].join("\n");
+  await writeFile(file, source);
+  const pane = await open(file);
+  const colors = pane.locator(".editor-colors");
+  await expect(editor(pane)).toHaveValue(source);
+  await expect(colors.locator(".hljs-section")).toHaveText("## Next heading");
+  await expect(colors.locator(".hljs-emphasis")).toHaveText(
+    "_actual emphasis_",
+  );
+  await expect(colors.locator(".hljs-strong")).toHaveText([
+    "**First.**",
+    "**Second.**",
+    "__actual bold__",
+  ]);
+  await expect(colors.locator(".hljs-code")).toContainText("still code");
+
+  await editor(pane).fill(
+    source + "\n\nEditing *something\n\n## Still a heading",
+  );
+  await expect(colors.locator(".hljs-section").last()).toHaveText(
+    "## Still a heading",
+  );
+  await expect(colors.locator(".hljs-emphasis").last()).toHaveText(
+    "*something",
+  );
+});
+
 test("S3 Markdown preview renders highlighted code and Mermaid without executing embedded content", async ({}, testInfo) => {
   const file = path.join(app.folders[0], "preview.md");
   await writeFile(

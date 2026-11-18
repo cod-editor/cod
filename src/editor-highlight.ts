@@ -1,4 +1,5 @@
 import hljs from "highlight.js/lib/core";
+import type { LanguageFn, Mode, ModeCallback } from "highlight.js";
 import typescript from "highlight.js/lib/languages/typescript";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
@@ -7,12 +8,58 @@ import markdown from "highlight.js/lib/languages/markdown";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
 import xml from "highlight.js/lib/languages/xml";
+
+const preventIdentifierEmphasis: ModeCallback = (match, response) => {
+  const preceding = match.input?.slice(
+    Math.max(0, (match.index ?? 0) - 2),
+    match.index,
+  );
+  if (preceding && /[\p{L}\p{M}\p{N}_]$/u.test(preceding))
+    response.ignoreMatch();
+};
+
+const preventIdentifierEnd: ModeCallback = (match, response) => {
+  const following = match.input?.slice((match.index ?? 0) + match[0].length);
+  if (match[0] && following && /^[\p{L}\p{M}\p{N}_]/u.test(following))
+    response.ignoreMatch();
+};
+
+const editorMarkdown: LanguageFn = (api) => {
+  const grammar = markdown(api);
+  const visited = new Set<Mode>();
+  const adjust = (mode: Mode) => {
+    if (visited.has(mode)) return;
+    visited.add(mode);
+    if (mode.className === "emphasis" || mode.className === "strong") {
+      for (const variant of mode.variants ?? []) {
+        if (
+          variant.begin instanceof RegExp &&
+          variant.begin.source.startsWith("_")
+        ) {
+          variant["on:begin"] = preventIdentifierEmphasis;
+          variant["on:end"] = preventIdentifierEnd;
+        }
+        // Recover at a paragraph boundary while an inline edit is incomplete.
+        // Leave fenced and indented code modes free to span blank lines.
+        if (variant.end instanceof RegExp)
+          variant.end = new RegExp(
+            `${variant.end.source}|(?=\\r?\\n[ \\t]*\\r?\\n)`,
+          );
+      }
+    }
+    for (const child of [...(mode.contains ?? []), ...(mode.variants ?? [])])
+      if (child !== "self") adjust(child);
+  };
+  adjust(grammar);
+  return grammar;
+};
+
 for (const [name, definition] of Object.entries({
   typescript,
   javascript,
   python,
   json,
-  markdown,
+  markdown: editorMarkdown,
   bash,
   css,
   xml,
