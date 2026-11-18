@@ -217,6 +217,13 @@ test("PDF chat references and file tree use the same native document viewer", as
     await tree
       .getByRole("treeitem", { name: "report.pdf", exact: true })
       .click();
+    await expect
+      .poll(async () =>
+        (await app.cli<{ browsers: PdfTab[] }>("state")).browsers.some(
+          (tab) => tab.url === pathToFileURL(file).href,
+        ),
+      )
+      .toBe(true);
     let state = await app.cli<{ browsers: PdfTab[] }>("state");
     const fileTab = state.browsers.find(
       (tab) => tab.url === pathToFileURL(file).href,
