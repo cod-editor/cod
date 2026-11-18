@@ -217,6 +217,15 @@ function createWindow(): void {
     session.fromPartition("cod-agent-pages"),
   );
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("close", (event) => {
+    // A window close precedes window-all-closed/before-quit. Enter durable
+    // shutdown while native views still exist, rather than treating their
+    // destruction as explicit tab-close events.
+    if (initialized && !quitting) {
+      event.preventDefault();
+      app.quit();
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -721,12 +730,13 @@ if (ownsInstance) void start();
 else app.quit();
 app.on("window-all-closed", () => app.quit());
 let quitting = false;
+let shutdown: Promise<void> | undefined;
 app.on("before-quit", (event) => {
   commandServer?.close();
   commandServer = null;
   if (initialized && !quitting) {
     event.preventDefault();
-    void operations.shutdown().finally(() => {
+    shutdown ??= operations.shutdown().finally(() => {
       quitting = true;
       app.quit();
     });
