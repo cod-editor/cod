@@ -1093,6 +1093,10 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
             .groups!.length,
       )
       .toBe(3);
+    // The backend may publish the split before its renderer frame is committed.
+    await expect(
+      app.page.getByRole("separator", { name: "Resize panes", exact: true }),
+    ).toHaveCount(2);
     const splitBefore = JSON.stringify(
       (await state(app)).workspaces.find((item) => item.id === workspace)!
         .groupLayout,
