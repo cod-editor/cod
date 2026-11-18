@@ -1,5 +1,5 @@
 import hljs from "highlight.js/lib/core";
-import type { LanguageFn, Mode, ModeCallback } from "highlight.js";
+import type { LanguageFn, Mode } from "highlight.js";
 import typescript from "highlight.js/lib/languages/typescript";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
@@ -28,41 +28,35 @@ import sql from "highlight.js/lib/languages/sql";
 import swift from "highlight.js/lib/languages/swift";
 import yaml from "highlight.js/lib/languages/yaml";
 
-const preventIdentifierEmphasis: ModeCallback = (match, response) => {
-  const preceding = match.input?.slice(
-    Math.max(0, (match.index ?? 0) - 2),
-    match.index,
-  );
-  if (preceding && /[\p{L}\p{M}\p{N}_]$/u.test(preceding))
-    response.ignoreMatch();
-};
-
-const preventIdentifierEnd: ModeCallback = (match, response) => {
-  const following = match.input?.slice((match.index ?? 0) + match[0].length);
-  if (match[0] && following && /^[\p{L}\p{M}\p{N}_]/u.test(following))
-    response.ignoreMatch();
-};
-
 const editorMarkdown: LanguageFn = (api) => {
   const grammar = markdown(api);
+  // Highlight.js applies the language's flags when it compiles the combined
+  // matcher. Check identifier boundaries there instead of rejecting matches
+  // in callbacks, which can rescan the remaining input for every underscore.
+  grammar.unicodeRegex = true;
+  const identifier = String.raw`[\p{L}\p{M}\p{N}_]`;
   const visited = new Set<Mode>();
   const adjust = (mode: Mode) => {
     if (visited.has(mode)) return;
     visited.add(mode);
     if (mode.className === "emphasis" || mode.className === "strong") {
       for (const variant of mode.variants ?? []) {
-        if (
+        const underscoreBegin =
           variant.begin instanceof RegExp &&
           variant.begin.source.startsWith("_")
-        ) {
-          variant["on:begin"] = preventIdentifierEmphasis;
-          variant["on:end"] = preventIdentifierEnd;
-        }
+            ? variant.begin.source
+            : undefined;
+        if (underscoreBegin)
+          variant.begin = new RegExp(
+            `(?<!${identifier})${underscoreBegin}`,
+            "u",
+          );
         // Recover at a paragraph boundary while an inline edit is incomplete.
         // Leave fenced and indented code modes free to span blank lines.
         if (variant.end instanceof RegExp)
           variant.end = new RegExp(
-            `${variant.end.source}|(?=\\r?\\n[ \\t]*\\r?\\n)`,
+            `${variant.end.source}${underscoreBegin ? `(?!${identifier})` : ""}|(?=\\r?\\n[ \\t]*\\r?\\n)`,
+            "u",
           );
       }
     }
