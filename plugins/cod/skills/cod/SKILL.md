@@ -1,5 +1,5 @@
 ---
-name: cod-runtime
+name: cod
 description: Operate the running Cod desktop workspace through codctl. Use when managing Cod workspaces, panes, files, native conversations and supported application controls.
 ---
 

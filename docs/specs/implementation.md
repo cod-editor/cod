@@ -105,6 +105,8 @@ Reference: inspection of upstream [Zed pane source](https://github.com/zed-indus
 
 ## Attention and plugin ownership
 
+The shipped integration has one source tree at `plugins/cod`, containing its README, `skills/cod/SKILL.md` and `hooks/status-hook.mjs`; development skills stay in `.agents/skills`. Development, packaged applications and frozen verification use this same tree. Relocating source files does not change installed `cod-integration` payload paths, manifest ownership keys or Kimi's `skills/cod/SKILL.md` destination. An existing managed installation can update through the normal preview and backup flow while preserving unrelated configuration and native trust requirements.
+
 The provider plugin owns task-status policy. Cod owns technical connection state, status storage, CLI reporting and presentation. A failed process or pending permission cannot be hidden by a stale plugin-ready report. Pending review remains visible until submitted, and hook lifecycle reports cannot overwrite explicit review status.
 
 Technical `ready` means idle; it is not itself a new notification. A successful native completion advances a revision. Explicit chat activation or acknowledgment marks that revision read; a later completion becomes visible again. Options discovery, resume and cancelled turns do not create new completion attention. Completion and acknowledgment revisions persist through restart. Workspace and child rows use the same status meaning and marker.

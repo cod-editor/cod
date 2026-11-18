@@ -37,7 +37,7 @@ npm run codctl -- file open --workspace WORKSPACE_ID --path /path/to/spec.md
 npm run codctl -- state
 ```
 
-CLI creation stays in the background unless focus is explicitly requested. Set `COD_DATA_DIR` and `COD_SOCKET_PATH` for a separate application instance. Runtime operating instructions are in [runtime-skills/cod/SKILL.md](../runtime-skills/cod/SKILL.md).
+CLI creation stays in the background unless focus is explicitly requested. Set `COD_DATA_DIR` and `COD_SOCKET_PATH` for a separate application instance. Instructions for agents using Cod are in [plugins/cod/skills/cod/SKILL.md](../plugins/cod/skills/cod/SKILL.md).
 
 ## Features and limits
 
@@ -57,7 +57,7 @@ New browser tabs show pinned sites shared across workspaces. Use the `+` tile to
 - Session commands (`/help`, `/status`, `/skills`, `/plugins`, `/config`, `/agents`) inspect native data without sending a prompt. Codex skill selection attaches the native skill to the next prompt. Configuration and plugin changes, and direct child-agent control, remain in the native client. Token usage appears only after provider telemetry; account limits are available only when Codex supplies them.
 - Bitwarden is pinned and bundled in packages. Its installed path stays within the Cod profile across package updates. Upgrading from older releases that loaded it directly from a timestamped package may require one final sign-in; their old extension storage is preserved without attempting a partial authentication migration. After the first vault login, reload an already-open page once before autofill. The verified save path is the extension's vault UI; automatic capture of a submitted login is not established. Extension authentication windows close independently of Cod; end-to-end passkey authentication is not yet verified. Arbitrary extensions are unsupported.
 - Ad blocking uses an existing engine with a per-site toggle. Fixture tests do not establish equivalence to AdGuard on every site. Camera, microphone, location, notification, clipboard, fullscreen and pointer-lock requests require an explicit per-site decision. Choose Allow once, Always allow or Block; use Site permissions in Commands or the site-protection menu to revoke remembered access. OS-level permission can still be required. Screen sharing and device selectors for USB/Bluetooth are not implemented.
-- The optional [status integration](../runtime-plugins/cod/README.md) installs hooks only after a profile preview. Native trust and authentication requirements still apply; successful installation is not proof that the provider executed its hooks.
+- The optional [status integration](../plugins/cod/README.md) installs hooks only after a profile preview. Native trust and authentication requirements still apply; successful installation is not proof that the provider executed its hooks.
 - Terminal processes do not survive quitting Cod. Restored terminals use fresh shells and never replay old commands. Disowned or HUP-resistant jobs are outside ordinary foreground cleanup guarantees.
 - Registered HTML artifacts may submit to their originating conversation. General agent browser control, a mailbox and cloud execution are out of scope.
 - Recent graphical acceptance used isolated Linux Electron. The current macOS bundle has CLI/PTY checks and a local ad-hoc signature; it is not notarized, and its final GUI and system default-browser action have not been verified on macOS.
@@ -85,7 +85,7 @@ On macOS, prefix long jobs with `caffeinate -dimsu`. Native provider and officia
 
 ## Package locally
 
-Run `npm run build`, then `node scripts/package.mjs`. The package is written to `release/cod-PLATFORM-ARCH-TIMESTAMP/`, with the application, a `codctl` launcher and input hashes. It includes the pinned Bitwarden extension and runtime instructions, but no provider credentials or development dependencies. Packaging uses the host platform's Electron and PTY prebuilds; cross-copying dependencies between macOS and Linux is unsupported.
+Run `npm run build`, then `node scripts/package.mjs`. The package is written to `release/cod-PLATFORM-ARCH-TIMESTAMP/`, with the application, a `codctl` launcher and input hashes. It includes the pinned Bitwarden extension and Cod integration, but no provider credentials or development dependencies. Packaging uses the host platform's Electron and PTY prebuilds; cross-copying dependencies between macOS and Linux is unsupported.
 
 On macOS the script signs the bundle ad hoc. `node tests/support/electron/check-package.mjs release/PACKAGE_DIRECTORY` checks its signature, CLI, native PTY and included assets without opening a window. This does not replace isolated graphical release testing or notarization.
 

@@ -53,12 +53,12 @@ if (
   );
 await access(path.join(bundle, "Contents/Resources/cod.icns"));
 const skill = await readFile(
-  path.join(app, "runtime-skills/cod/SKILL.md"),
+  path.join(app, "plugins/cod/skills/cod/SKILL.md"),
   "utf8",
 );
 if (!skill.includes("COD_NODE_PATH"))
   throw new Error("Packaged skill is stale");
-await access(path.join(app, "runtime-plugins/cod/status-hook.mjs"));
+await access(path.join(app, "plugins/cod/hooks/status-hook.mjs"));
 const ptyScript = `
 const pty = require(${JSON.stringify(path.join(app, "node_modules/@homebridge/node-pty-prebuilt-multiarch"))});
 const terminal = pty.spawn('/bin/sh', ['-c', 'test -t 0 && test -t 1 && test -t 2 && printf COD_PACKAGE_PTY_OK'], { cols: 80, rows: 24, env: process.env });
@@ -79,7 +79,7 @@ console.log(
       cli: "PASS real packaged Electron-as-Node CLI help",
       pty: "PASS packaged native PTY with three TTY descriptors",
       originalLogoSha256: logoHash,
-      runtimeSkillAndPlugin: "PASS included",
+      agentPlugin: "PASS included",
       macOSGui: "BLOCKED: active desktop must not be used",
       notarization: "NOT_PERFORMED",
     },

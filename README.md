@@ -28,7 +28,7 @@ Linux needs Electron's system libraries and a graphical session. macOS packages 
 
 ## More
 
-[Usage, settings and limitations](docs/usage.md) - [Agent instructions](runtime-skills/cod/SKILL.md) - [Testing](tests/README.md).
+[Usage, settings and limitations](docs/usage.md) - [Agent instructions](plugins/cod/skills/cod/SKILL.md) - [Testing](tests/README.md).
 
 Working on Cod? Read the [working agreements](AGENTS.md), [vision](docs/vision.md) and [contracts](docs/specs/implementation.md).
 

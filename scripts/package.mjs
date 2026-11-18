@@ -218,23 +218,14 @@ try {
     JSON.stringify(await digest(dist, await files(dist)))
   )
     throw new Error("Dist changed while packaging; use a frozen build");
-  await cp(
-    path.join(root, "runtime-skills"),
-    path.join(app, "runtime-skills"),
-    {
-      recursive: true,
-      filter: async (source) => {
-        if ((await lstat(source)).isSymbolicLink())
-          throw new Error("Runtime skill symlinks are not permitted");
-        return !path.basename(source).startsWith(".");
-      },
+  await cp(path.join(root, "plugins"), path.join(app, "plugins"), {
+    recursive: true,
+    filter: async (source) => {
+      if ((await lstat(source)).isSymbolicLink())
+        throw new Error("Plugin symlinks are not permitted");
+      return !path.basename(source).startsWith(".");
     },
-  );
-  await cp(
-    path.join(root, "runtime-plugins"),
-    path.join(app, "runtime-plugins"),
-    { recursive: true },
-  );
+  });
   await cp(path.join(install, "node_modules"), path.join(app, "node_modules"), {
     recursive: true,
     verbatimSymlinks: true,
@@ -286,13 +277,7 @@ try {
         notarized: false,
         asar: false,
         sourceHashes: before,
-        includedAppRoots: [
-          "dist",
-          "runtime-skills",
-          "runtime-plugins",
-          "package.json",
-          "node_modules",
-        ],
+        includedAppRoots: ["dist", "plugins", "package.json", "node_modules"],
         verification: "Packaging only; launch/PTY/CLI smoke required",
       },
       null,

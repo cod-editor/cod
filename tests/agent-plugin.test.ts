@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, realpath, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  writeFile,
+  realpath,
+  rm,
+  mkdir,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -72,7 +79,84 @@ for (const provider of ["codex", "claude", "kimi"] as const) {
     }
   });
 }
-test("install rejects config races and edited owned runtime scripts", async () => {
+for (const provider of ["codex", "claude", "kimi"] as const) {
+  test(`${provider}: a packaged plugin tree upgrades existing managed payloads without changing profile destinations`, async () => {
+    const directory = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "cod-plugin-upgrade-")),
+    );
+    try {
+      const profilePath = path.join(directory, "profile");
+      const bundleRoot = path.join(directory, "package");
+      await mkdir(profilePath);
+      const skillPath = path.join(
+        bundleRoot,
+        "plugins/cod/skills/cod/SKILL.md",
+      );
+      const hookPath = path.join(
+        bundleRoot,
+        "plugins/cod/hooks/status-hook.mjs",
+      );
+      const skill = await readFile("plugins/cod/skills/cod/SKILL.md", "utf8");
+      assert.match(skill, /^---\nname: cod\n/);
+      const hook = await readFile("plugins/cod/hooks/status-hook.mjs", "utf8");
+      await mkdir(path.dirname(skillPath), { recursive: true });
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      // Reproduce the previously shipped payload and its normal ownership manifest.
+      await writeFile(
+        skillPath,
+        skill.replace("name: cod\n", "name: cod-runtime\n"),
+      );
+      await writeFile(hookPath, hook);
+      const options = { provider, profilePath, bundleRoot };
+      const before = await inspectIntegration(options);
+      await installIntegration({
+        ...options,
+        expectedPreviewHash: before.previewHash,
+      });
+      const destination = path.join(profilePath, "cod-integration");
+      const oldManifest = JSON.parse(
+        await readFile(path.join(destination, "manifest.json"), "utf8"),
+      );
+      await writeFile(skillPath, skill);
+      const preview = await inspectIntegration(options);
+      assert.ok(
+        preview.changes.some(
+          (change) => change.path === path.join(destination, "SKILL.md"),
+        ),
+      );
+      const installed = await installIntegration({
+        ...options,
+        expectedPreviewHash: preview.previewHash,
+      });
+      assert.ok(installed.backups.length > 0);
+      assert.equal(
+        await readFile(path.join(destination, "SKILL.md"), "utf8"),
+        skill,
+      );
+      assert.equal(
+        await readFile(path.join(destination, "status-hook.mjs"), "utf8"),
+        hook,
+      );
+      if (provider === "kimi")
+        assert.equal(
+          await readFile(path.join(profilePath, "skills/cod/SKILL.md"), "utf8"),
+          skill,
+        );
+      const manifest = JSON.parse(
+        await readFile(path.join(destination, "manifest.json"), "utf8"),
+      );
+      assert.deepEqual(
+        Object.keys(manifest.hashes),
+        Object.keys(oldManifest.hashes),
+      );
+      assert.equal(manifest.command, oldManifest.command);
+      assert.equal((await inspectIntegration(options)).installed, true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+test("install rejects config races and edited owned hook scripts", async () => {
   const profilePath = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "cod-plugin-")),
   );
@@ -172,7 +256,7 @@ test("hook events invoke status CLI for the bound conversation, not payload iden
       cli,
       `import{appendFileSync}from'node:fs';appendFileSync(process.env.RECORDING,JSON.stringify(process.argv.slice(2))+'\\n')`,
     );
-    const hook = path.resolve("runtime-plugins/cod/status-hook.mjs");
+    const hook = path.resolve("plugins/cod/hooks/status-hook.mjs");
     const invoke = (
       event: Record<string, unknown>,
       extra: Record<string, string> = {},

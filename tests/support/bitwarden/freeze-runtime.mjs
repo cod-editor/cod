@@ -26,8 +26,7 @@ async function manifest(root) {
     }
   }
   await walk("dist");
-  await walk("runtime-skills");
-  await walk("runtime-plugins");
+  await walk("plugins");
   for (const name of ["package.json", "package-lock.json"])
     hashes[name] = createHash("sha256")
       .update(await readFile(path.join(root, name)))
@@ -43,8 +42,7 @@ export async function freezeRuntime(checkout, destination, evidence) {
   // copy remains independent if the checkout is subsequently rebuilt/reinstalled.
   for (const name of [
     "dist",
-    "runtime-skills",
-    "runtime-plugins",
+    "plugins",
     "node_modules",
     "package.json",
     "package-lock.json",
