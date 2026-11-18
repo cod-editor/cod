@@ -1,3 +1,4 @@
+import { backgroundActivity } from "./background-activity";
 import { webLinkMenu } from "./web-links";
 import { actionRow, uiButton } from "./primitives";
 import { showActionError } from "./action-feedback";
@@ -1102,6 +1103,18 @@ export function createConversationViews({
     actions.append(provider);
     if (!conversation.handoffTerminalId)
       actions.append(modelChoices(conversation));
+    if (conversation.backgroundActivities?.length)
+      actions.append(
+        backgroundActivity(
+          conversation.backgroundActivities,
+          conversation.status === "ready",
+          views
+            .get("chat:" + conversation.id)
+            ?.querySelector<HTMLDetailsElement>(".composer-background")?.open ??
+            false,
+          invalidate,
+        ),
+      );
     if (
       !conversation.handoffTerminalId &&
       ["working", "waiting"].includes(conversation.status)

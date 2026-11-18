@@ -11,6 +11,7 @@ export function rollbackState(
     "messages",
     "turns",
     "tools",
+    "backgroundActivities",
     "pendingPermissions",
     "metadata",
     "initialSelection",

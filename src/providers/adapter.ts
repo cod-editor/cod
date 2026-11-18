@@ -1,3 +1,4 @@
+import { CodexBackground } from "./codex-background.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
 import { NativeSelection } from "./selection.ts";
@@ -61,6 +62,7 @@ export class NativeAdapter implements ProviderAdapter {
   private id: string | null = null;
   private active?: ActiveTurn;
   private finishedTurns = new Set<string>();
+  private readonly background = new CodexBackground();
   private approvals = new Map<string, Approval>();
   private readonly controllerId = randomUUID();
   private permissionSequence = 0;
@@ -544,6 +546,14 @@ export class NativeAdapter implements ProviderAdapter {
     if (this.closed || this.failure) return;
     const p = message.params;
     const origin = this.provider === "codex" ? p.threadId : p.sessionId;
+    // Native activity can outlive its turn. Track it without admitting late
+    // messages, approvals or turns from unrelated threads.
+    if (this.provider === "codex" && this.id) {
+      for (const update of this.background.finishTurn(this.id, message))
+        this.emit({ type: "background", ...update });
+      const update = this.background.observe(this.id, message);
+      if (update) this.emit({ type: "background", ...update });
+    }
     if (origin !== this.id || !this.id) {
       if (message.id !== undefined)
         this.rpc?.reject(

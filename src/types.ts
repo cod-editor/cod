@@ -1,4 +1,5 @@
 import type {
+  BackgroundActivity,
   PermissionOption,
   ProviderId,
   ProviderState,
@@ -186,6 +187,7 @@ export interface ConversationState {
   messages: ConversationMessage[];
   tools: ToolActivity[];
   pendingPermissions: PendingPermission[];
+  backgroundActivities?: BackgroundActivity[];
   metadata?: unknown;
   error?: string;
   historyPartial?: boolean;

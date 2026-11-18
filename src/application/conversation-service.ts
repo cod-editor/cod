@@ -1,4 +1,7 @@
-import { conversationHandoffReason } from "../conversation-actions";
+import {
+  backgroundWithUnknownState,
+  conversationHandoffReason,
+} from "../conversation-actions";
 import { parseProviderCommand } from "../provider-commands";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -953,6 +956,17 @@ export class ConversationApplicationService {
       (item) => item.id === id,
     );
     if (!conversation) return;
+    if (event.type === "background") {
+      const activities = conversation.backgroundActivities ?? [];
+      const next = activities.filter((item) => item.id !== event.removeId);
+      const index = next.findIndex((item) => item.id === event.activity.id);
+      if (index < 0) next.push(event.activity);
+      else next[index] = event.activity;
+      conversation.backgroundActivities = next.slice(-64);
+      this.store.notify(true);
+      this.store.schedulePersist(event.activity.state !== "running");
+      return;
+    }
     const resume = this.resumeContexts.get(id);
     if (resume) {
       if (event.type === "state" && event.state === "starting")
@@ -993,6 +1007,9 @@ export class ConversationApplicationService {
           }
         }
         conversation.status = event.state;
+        if (event.state === "failed" || event.state === "closed")
+          conversation.backgroundActivities =
+            backgroundWithUnknownState(conversation);
         break;
       }
       case "text":
@@ -1483,6 +1500,8 @@ export class ConversationApplicationService {
 
   restoreInterrupted(): void {
     for (const conversation of this.store.data.conversations) {
+      conversation.backgroundActivities =
+        backgroundWithUnknownState(conversation);
       if (conversation.queuedMessages?.length) {
         conversation.queuePaused = true;
         for (const message of conversation.queuedMessages)

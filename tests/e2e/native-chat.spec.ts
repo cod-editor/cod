@@ -395,7 +395,12 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     await expect(transcript(chat)).not.toContainText("DONE [hold] cancel-me");
     await shell.send(chat.id, "[crash] invented-failure");
     await expect.poll(() => status(chat.id)).toBe("failed");
-    await expect(pane.getByText(/failed|exited|error/i).first()).toBeVisible();
+    const failure = pane.getByRole("status", {
+      name: "Conversation status",
+      exact: true,
+    });
+    await expect(failure).toBeVisible();
+    await expect(failure).toContainText("Provider failed:");
     await shell.send(chat.id, "explicit-recovery");
     await expect.poll(() => status(chat.id)).toBe("ready");
     expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
@@ -1346,6 +1351,216 @@ async function queueFixture(
   await writeFile(destination + ".tmp", JSON.stringify({ id, text }));
   await rename(destination + ".tmp", destination);
 }
+
+async function backgroundFixture(
+  chat: Pick<Chat, "nativeId">,
+  id: string,
+  events: unknown[],
+) {
+  const destination = path.join(
+    shell.recording + ".sessions",
+    chat.nativeId + ".queue.json",
+  );
+  await writeFile(destination + ".tmp", JSON.stringify({ id, events }));
+  await rename(destination + ".tmp", destination);
+}
+
+test("Codex late background results preserve the parent reply, composer and native continuation", async () => {
+  await shell.configure({ codex: { backgroundActivity: true } });
+  const workspace = await shell.create("Background checks");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Check the fixture in a child");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(transcript(chat)).toContainText(
+    "Tests are running in the background.",
+  );
+  const pane = shell.pane(chat.paneId);
+  const summary = pane.locator(
+    ".composer-actions details.composer-background summary",
+  );
+  await expect(summary).toHaveText("In background · 1 subagent · 1 command");
+  const list = pane.getByRole("list", { name: "Background activity" });
+  await expect(list).toBeHidden();
+  await summary.focus();
+  await summary.press("Enter");
+  await expect(list).toBeVisible();
+  await expect
+    .poll(() =>
+      list.evaluate((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(
+            x + width / 2,
+            y + Math.min(height / 2, 10),
+          ),
+        );
+      }),
+    )
+    .toBe(true);
+  const close = await shell.raw("workspace", "close", "--id", workspace);
+  expect(close.code).not.toBe(0);
+  expect(close.stderr).toContain("Workspace has running agents or terminals");
+  await shell.page.setViewportSize({ width: 750, height: 650 });
+  await expect(list).toBeVisible();
+  await shell.page.screenshot({
+    path: test.info().outputPath("background-activity-narrow.png"),
+  });
+  await shell.page.setViewportSize({ width: 1280, height: 800 });
+  await expect(list).toContainText("/root/checker");
+  await expect(list).toContainText("echo test checks");
+  await expect(list).not.toContainText("unrelated work");
+  await summary.press("Escape");
+  await expect(summary).toBeFocused();
+  await expect(list).toBeHidden();
+  await summary.click();
+  const input = pane.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Keep this unrelated draft");
+
+  const child = "invented-child";
+  const childResult = {
+    method: "item/completed",
+    params: {
+      threadId: child,
+      turnId: "child-turn",
+      item: {
+        type: "agentMessage",
+        id: "child-result",
+        phase: "final_answer",
+        text: "Invented child result",
+      },
+    },
+  };
+  const childDone = {
+    method: "item/completed",
+    params: {
+      threadId: chat.nativeId,
+      turnId: "turn-1",
+      item: {
+        type: "subAgentActivity",
+        id: "child-done",
+        kind: "completed",
+        agentThreadId: child,
+      },
+    },
+  };
+  await backgroundFixture(chat, "child-done", [
+    childResult,
+    childDone,
+    childDone,
+  ]);
+  await expect(summary).toHaveText("In background · 1 command");
+  await expect(list).toContainText("Invented child result");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this unrelated draft");
+
+  const commandDone = {
+    method: "item/completed",
+    params: {
+      threadId: child,
+      turnId: "child-turn",
+      item: {
+        type: "commandExecution",
+        id: "invented-shell",
+        status: "completed",
+        aggregatedOutput: "Invented checked output",
+        exitCode: 0,
+      },
+    },
+  };
+  await backgroundFixture(chat, "shell-done", [commandDone, commandDone]);
+  await expect(summary).toHaveText("Background activity");
+  await expect(list).toContainText("Invented checked output");
+  await expect(
+    list.getByText("Invented checked output", { exact: true }),
+  ).toHaveCount(1);
+  await expect
+    .poll(async () => (await inspectQueuedChat(chat.id)).turns?.length)
+    .toBe(1);
+  await expect(input).toBeFocused();
+
+  const turn = { id: "native-continuation", status: "inProgress" };
+  await backgroundFixture(chat, "native-continuation", [
+    { method: "turn/started", params: { threadId: chat.nativeId, turn } },
+    {
+      method: "item/completed",
+      params: {
+        threadId: chat.nativeId,
+        turnId: turn.id,
+        item: {
+          type: "agentMessage",
+          id: "native-follow-up",
+          phase: "final_answer",
+          text: "Native follow-up kept.",
+        },
+      },
+    },
+    {
+      method: "turn/completed",
+      params: {
+        threadId: chat.nativeId,
+        turn: { ...turn, status: "completed" },
+      },
+    },
+  ]);
+  await expect(transcript(chat)).toContainText("Native follow-up kept.");
+  await expect
+    .poll(async () => (await inspectQueuedChat(chat.id)).turns?.length)
+    .toBe(2);
+  const state = await inspectQueuedChat(chat.id);
+  expect(
+    state.messages.filter((message) => message.role === "user"),
+  ).toHaveLength(1);
+  expect(state.backgroundActivities).toHaveLength(2);
+  await expect(input).toBeFocused();
+  await shell.page.screenshot({
+    path: test.info().outputPath("background-activity.png"),
+  });
+});
+
+test("Codex running background state becomes unknown on restart", async () => {
+  await shell.configure({ codex: { backgroundActivity: "legacy" } });
+  const workspace = await shell.create("Interrupted checks");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Check the fixture");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect
+    .poll(
+      async () =>
+        (await inspectQueuedChat(chat.id)).backgroundActivities?.length,
+    )
+    .toBe(3);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-background summary"),
+  ).toHaveText("In background · 1 subagent · 2 commands");
+  await backgroundFixture(chat, "legacy-child-done", [
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "invented-child",
+        turn: { id: "child-turn", status: "completed" },
+      },
+    },
+  ]);
+  await expect(
+    shell.pane(chat.paneId).locator(".composer-background summary"),
+  ).toHaveText("In background · 2 commands");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  const pane = shell.pane(chat.paneId);
+  await expect(pane.locator(".composer-background summary")).toHaveText(
+    "Background activity",
+  );
+  await pane.locator(".composer-background summary").click();
+  await expect(
+    pane.getByRole("list", { name: "Background activity" }),
+  ).toContainText("State unknown");
+  expect(
+    (await inspectQueuedChat(chat.id)).backgroundActivities?.map(
+      (item) => item.state,
+    ),
+  ).toEqual(["completed", "unknown", "unknown"]);
+});
 
 test("Queued Codex turns update the transcript and attention without stealing focus", async () => {
   const workspace = await shell.create("Queued completions");

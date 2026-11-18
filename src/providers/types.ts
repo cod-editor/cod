@@ -19,11 +19,24 @@ export interface TurnOutcome {
   status: "completed" | "cancelled";
   nativeReason: string;
 }
+export interface BackgroundActivity {
+  id: string;
+  kind: "agent" | "command";
+  label: string;
+  owner?: string;
+  state: "running" | "completed" | "interrupted" | "failed" | "unknown";
+  startedAt: number;
+  finishedAt?: number;
+  result?: string;
+  exitCode?: number;
+}
+
 export type ProviderEvent = {
   provider: ProviderId;
   nativeId: string | null;
 } & (
   | { type: "state"; state: ProviderState }
+  | { type: "background"; activity: BackgroundActivity; removeId?: string }
   | { type: "turn-started"; nativeTurnId: string }
   | {
       type: "text";

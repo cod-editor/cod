@@ -167,16 +167,19 @@ export function toolCaption(info: Record<string, unknown> | null): string {
 // Update only the clock text, without rebuilding the transcript or moving focus.
 export function updateLiveActivity(root: ParentNode = document): void {
   for (const label of root.querySelectorAll<HTMLElement>(
-    "[data-activity-started]",
+    "[data-activity-started], .composer-background[open] [data-background-started]",
   )) {
-    const start = Date.parse(label.dataset.activityStarted!);
+    const background = label.dataset.backgroundStarted;
+    const start = background
+      ? Number(background)
+      : Date.parse(label.dataset.activityStarted!);
     if (!Number.isFinite(start)) continue;
     const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
     const elapsed =
       seconds < 60
         ? `${seconds}s`
         : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    label.textContent = `Working · ${elapsed}`;
+    label.textContent = background ? ` · ${elapsed}` : `Working · ${elapsed}`;
   }
 }
 

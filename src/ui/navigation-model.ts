@@ -1,3 +1,4 @@
+import { hasRunningBackground } from "../conversation-actions.ts";
 import type { AppState, ConversationState } from "../types";
 import { conversationLabel } from "./message-label.ts";
 
@@ -25,6 +26,7 @@ export function describeNavigationStatus(
 ): string {
   const label: Record<string, string> = {
     working: "Working",
+    background: "In background",
     waiting: "Needs attention",
     review: "Review requested",
     ready: "Completed",
@@ -56,6 +58,14 @@ export function conversationAttention(
     )
   )
     return "review";
+  if (
+    conversation.taskStatus === "failed" ||
+    conversation.taskStatus === "waiting" ||
+    conversation.taskStatus === "review"
+  )
+    return conversation.taskStatus;
+  if (hasRunningBackground(conversation))
+    return conversation.status === "working" ? "working" : "background";
   if (
     conversation.taskStatus === "ready" &&
     conversation.taskStatusAcknowledgedAt &&
@@ -110,8 +120,8 @@ export function projectNavigation(
         reviews.some((r) => r.id === activePane.reviewId));
     const statuses = conversations.map((c) => conversationAttention(state, c));
     const status =
-      ["failed", "waiting", "review", "ready", "working"].find((s) =>
-        statuses.includes(s),
+      ["failed", "waiting", "review", "background", "ready", "working"].find(
+        (s) => statuses.includes(s),
       ) ?? "";
     const context = status
       ? conversations.find((_, index) => statuses[index] === status)

@@ -1,5 +1,23 @@
 import type { AppState, ConversationState } from "./types";
 
+export function hasRunningBackground(conversation: ConversationState): boolean {
+  return (
+    conversation.backgroundActivities?.some(
+      (item) => item.state === "running",
+    ) ?? false
+  );
+}
+
+export function backgroundWithUnknownState(
+  conversation: ConversationState,
+): ConversationState["backgroundActivities"] {
+  const { backgroundActivities } = conversation;
+  if (!hasRunningBackground(conversation)) return backgroundActivities;
+  return backgroundActivities?.map((item) =>
+    item.state === "running" ? { ...item, state: "unknown" } : item,
+  );
+}
+
 /** Shared removal policy; controller reservations are additionally checked by the host. */
 export function conversationRemovalReason(
   state: AppState,
@@ -25,6 +43,8 @@ export function conversationRemovalReason(
     conversation.pendingPermissions.length
   )
     return "Stop the current response before removing this chat.";
+  if (hasRunningBackground(conversation))
+    return "Wait for background work to finish before removing this chat.";
   const feedback = pendingFeedback(state, conversation);
   if (feedback === "review")
     return "Finish the pending review before removing its originating chat.";
@@ -47,6 +67,8 @@ export function conversationHandoffReason(
     conversation.pendingPermissions.length
   )
     return "Finish or interrupt the active response first";
+  if (hasRunningBackground(conversation))
+    return "Wait for background work to finish before continuing in CLI.";
   const feedback = pendingFeedback(state, conversation);
   if (feedback === "review")
     return "Finish the pending review before continuing its originating chat in CLI.";
