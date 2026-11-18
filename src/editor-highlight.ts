@@ -8,6 +8,25 @@ import markdown from "highlight.js/lib/languages/markdown";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
 import xml from "highlight.js/lib/languages/xml";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import diff from "highlight.js/lib/languages/diff";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import go from "highlight.js/lib/languages/go";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import lua from "highlight.js/lib/languages/lua";
+import makefile from "highlight.js/lib/languages/makefile";
+import perl from "highlight.js/lib/languages/perl";
+import php from "highlight.js/lib/languages/php";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import scss from "highlight.js/lib/languages/scss";
+import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
+import yaml from "highlight.js/lib/languages/yaml";
 
 const preventIdentifierEmphasis: ModeCallback = (match, response) => {
   const preceding = match.input?.slice(
@@ -63,26 +82,109 @@ for (const [name, definition] of Object.entries({
   bash,
   css,
   xml,
+  c,
+  cpp,
+  csharp,
+  diff,
+  dockerfile,
+  go,
+  ini,
+  java,
+  kotlin,
+  lua,
+  makefile,
+  perl,
+  php,
+  ruby,
+  rust,
+  scss,
+  sql,
+  swift,
+  yaml,
 }))
   hljs.registerLanguage(name, definition);
+
+const languageByExtension = new Map(
+  Object.entries({
+    bash: "bash",
+    c: "c",
+    cc: "cpp",
+    cjs: "javascript",
+    cpp: "cpp",
+    cs: "csharp",
+    css: "css",
+    cts: "typescript",
+    cxx: "cpp",
+    diff: "diff",
+    dockerfile: "dockerfile",
+    go: "go",
+    h: "c",
+    hh: "cpp",
+    hpp: "cpp",
+    htm: "xml",
+    html: "xml",
+    hxx: "cpp",
+    ini: "ini",
+    java: "java",
+    js: "javascript",
+    json: "json",
+    json5: "json",
+    jsonc: "json",
+    jsx: "javascript",
+    kt: "kotlin",
+    kts: "kotlin",
+    lua: "lua",
+    markdown: "markdown",
+    md: "markdown",
+    mk: "makefile",
+    mjs: "javascript",
+    mts: "typescript",
+    patch: "diff",
+    php: "php",
+    pl: "perl",
+    pm: "perl",
+    py: "python",
+    pyi: "python",
+    rb: "ruby",
+    rs: "rust",
+    scss: "scss",
+    sh: "bash",
+    sql: "sql",
+    svg: "xml",
+    swift: "swift",
+    toml: "ini",
+    ts: "typescript",
+    tsx: "typescript",
+    xml: "xml",
+    yaml: "yaml",
+    yml: "yaml",
+    zsh: "bash",
+  }),
+);
+const languageByFilename = new Map(
+  Object.entries({
+    ".bash_profile": "bash",
+    ".bashrc": "bash",
+    ".profile": "bash",
+    ".zprofile": "bash",
+    ".zshrc": "bash",
+    gemfile: "ruby",
+    gnumakefile: "makefile",
+    makefile: "makefile",
+    rakefile: "ruby",
+  }),
+);
+
 export function languageFor(path: string): string {
+  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
+  const named = languageByFilename.get(filename);
+  if (named) return named;
+  if (/^(?:dockerfile|containerfile)(?:\..+)?$/.test(filename))
+    return "dockerfile";
+  const dot = filename.lastIndexOf(".");
   return (
-    (
-      {
-        ts: "typescript",
-        tsx: "typescript",
-        js: "javascript",
-        jsx: "javascript",
-        mjs: "javascript",
-        py: "python",
-        json: "json",
-        md: "markdown",
-        sh: "bash",
-        css: "css",
-        html: "xml",
-        xml: "xml",
-      } as Record<string, string>
-    )[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"
+    (dot > 0 ? languageByExtension.get(filename.slice(dot + 1)) : undefined) ??
+    "plaintext"
   );
 }
 export function highlight(value: string, language: string): string {
