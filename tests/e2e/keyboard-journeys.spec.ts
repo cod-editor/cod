@@ -109,6 +109,92 @@ async function observeInvocations(page: Page) {
   });
   return { operations, close: () => session.detach() };
 }
+// Keep bounded metadata for failures that a test-event-only trace cannot explain.
+async function observeLayoutFocus(page: Page) {
+  await page.evaluate(() => {
+    const events: unknown[] = [];
+    const identities = new WeakMap<Element, number>();
+    let sequence = 0;
+    const identity = (node: Element) => {
+      if (!identities.has(node)) identities.set(node, ++sequence);
+      return identities.get(node);
+    };
+    const describe = (node: Element | null) =>
+      node
+        ? {
+            identity: identity(node),
+            tag: node.tagName,
+            role: node.getAttribute("role"),
+            label: node.getAttribute("aria-label")?.slice(0, 100),
+            pane: node.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId,
+            separator: [
+              ...document.querySelectorAll('[role="separator"]'),
+            ].indexOf(node),
+            connected: node.isConnected,
+          }
+        : null;
+    const record = (event: string, node: Element | null, extra = {}) => {
+      events.push({
+        time: performance.now(),
+        event,
+        target: describe(node),
+        active: describe(document.activeElement),
+        documentFocused: document.hasFocus(),
+        ...extra,
+      });
+      if (events.length > 96) events.shift();
+    };
+    const controller = new AbortController();
+    const original = HTMLElement.prototype.focus;
+    const traced: typeof original = function (this: HTMLElement, ...args) {
+      record("focus-call", this, { stack: new Error().stack?.slice(0, 1800) });
+      return original.apply(this, args);
+    };
+    HTMLElement.prototype.focus = traced;
+    for (const name of ["focusin", "focusout", "keydown"])
+      document.addEventListener(
+        name,
+        (event) =>
+          record(name, event.target as Element, {
+            key: (event as KeyboardEvent).key,
+          }),
+        { capture: true, signal: controller.signal },
+      );
+    for (const name of ["focus", "blur"])
+      window.addEventListener(
+        name,
+        () => record("window-" + name, document.activeElement),
+        { signal: controller.signal },
+      );
+    Object.assign(window, {
+      layoutFocusDiagnostics: {
+        snapshot: () => ({
+          events,
+          active: describe(document.activeElement),
+          documentFocused: document.hasFocus(),
+          separators: [...document.querySelectorAll('[role="separator"]')].map(
+            describe,
+          ),
+        }),
+        dispose: () => {
+          controller.abort();
+          if (HTMLElement.prototype.focus === traced)
+            HTMLElement.prototype.focus = original;
+        },
+      },
+    });
+  });
+  return async (failed: boolean) =>
+    page.evaluate((failed) => {
+      const probe = (window as any).layoutFocusDiagnostics;
+      if (!probe) return undefined;
+      const snapshot = failed ? probe.snapshot() : undefined;
+      probe.dispose();
+      delete (window as any).layoutFocusDiagnostics;
+      return snapshot;
+    }, failed);
+}
+
 async function state(app: ChatApp) {
   return app.cli<AppState>("state");
 }
@@ -998,6 +1084,7 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
     await expect(
       app.page.getByRole("textbox", { name: "Message", exact: true }),
     ).toHaveValue("preserved second draft");
+    const finishFocusDiagnostics = await observeLayoutFocus(app.page);
     await command(app.page, "Split below");
     await expect
       .poll(
@@ -1006,6 +1093,10 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
             .groups!.length,
       )
       .toBe(3);
+    // The backend may publish the split before its renderer frame is committed.
+    await expect(
+      app.page.getByRole("separator", { name: "Resize panes", exact: true }),
+    ).toHaveCount(2);
     const splitBefore = JSON.stringify(
       (await state(app)).workspaces.find((item) => item.id === workspace)!
         .groupLayout,
@@ -1023,7 +1114,27 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
         ),
       )
       .not.toBe(splitBefore);
-    await expect(divider).toBeFocused();
+    try {
+      await expect(divider).toBeFocused();
+    } catch (error) {
+      const focus = await finishFocusDiagnostics(true).catch(() => undefined);
+      const native = await app
+        .app!.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((window) => ({
+            focused: window.isFocused(),
+            destroyed: window.isDestroyed(),
+            contentsFocused: window.webContents.isFocused(),
+          })),
+        )
+        .catch(() => undefined);
+      await info.attach("layout-focus-failure", {
+        body: JSON.stringify({ focus, native }),
+        contentType: "application/json",
+      });
+      throw error;
+    } finally {
+      await finishFocusDiagnostics(false).catch(() => undefined);
+    }
     // Traversing to the separator may activate a neighboring pane. Return to
     // the top-right group with its pane shortcut before choosing the tab.
     await app.page.keyboard.press("Alt+2");

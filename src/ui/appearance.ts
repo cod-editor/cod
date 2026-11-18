@@ -206,6 +206,7 @@ function fontChoice(
 export function appearanceDialog(
   shortcuts?: () => void,
   initialQuery = "",
+  restoreNativeOrigin?: () => void,
 ): void {
   if (document.querySelector("dialog[open]")) return;
   const origin = document.activeElement as HTMLElement | null;
@@ -224,6 +225,10 @@ export function appearanceDialog(
       : undefined;
   const restore = () => {
     if (document.querySelector("dialog[open]")) return;
+    if (restoreNativeOrigin) {
+      restoreNativeOrigin();
+      return;
+    }
     if (!origin?.isConnected) return;
     origin.focus({ preventScroll: true });
     if (
@@ -254,6 +259,12 @@ export function appearanceDialog(
   };
   const search = document.createElement("input");
   search.type = "search";
+  search.onkeydown = (event) => {
+    if (event.key !== "Escape" || event.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
   search.placeholder = "Search settings…";
   search.setAttribute("aria-label", "Search settings");
   const error = document.createElement("p");

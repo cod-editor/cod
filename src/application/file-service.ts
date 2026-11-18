@@ -1,5 +1,6 @@
 import { isUtf8 } from "node:buffer";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   realpath,
@@ -38,7 +39,12 @@ async function readTextFile(file: string): Promise<string> {
 }
 
 export class FileApplicationService {
-  constructor(private readonly store: ApplicationStateStore) {}
+  constructor(
+    private readonly store: ApplicationStateStore,
+    private readonly openBrowser: (
+      request: OperationRequest,
+    ) => Promise<{ paneId: string }>,
+  ) {}
   saveDefault(workspaceId: string, paneId: string): string {
     const { workspace, pane } = this.filePane({
       op: "file.read",
@@ -89,6 +95,17 @@ export class FileApplicationService {
     const filePath = await realpath(
       path.resolve(requiredString(request, "path")),
     );
+    if (/\.pdf$/i.test(filePath)) {
+      if (request.line !== undefined)
+        throw new Error("PDF documents do not have editable source lines");
+      if (!(await stat(filePath)).isFile())
+        throw new Error("File path is not a regular file");
+      return this.openBrowser({
+        ...request,
+        op: "browser.open",
+        url: pathToFileURL(filePath).href,
+      });
+    }
     if (/\.(png|jpe?g|gif|webp|apng)$/i.test(filePath))
       return this.openResourcePane({
         ...request,

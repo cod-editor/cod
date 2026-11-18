@@ -37,7 +37,9 @@ export class ApplicationOperations {
   ) {
     this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
-    this.files = new FileApplicationService(this.store);
+    this.files = new FileApplicationService(this.store, (request) =>
+      this.browsers.openBrowser(request),
+    );
     this.browsers = new BrowserApplicationService(this.store, {
       isActive: (id) => this.conversations.isActive(id),
       send: (request) => this.conversations.sendConversation(request),

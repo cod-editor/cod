@@ -105,6 +105,22 @@ export function createCommands(
     features.focusNativeView,
     features.whenRendered,
   );
+  function prepareDialogOrigin(origin: ReturnType<typeof focus.capture>): void {
+    // Retain the invoker without focusing a native page behind the next modal.
+    if (origin.browserId) focus.native(origin.browserId);
+    else focus.restore(origin);
+  }
+  function openSettings(initialQuery = ""): void {
+    const origin = focus.capture();
+    appearanceDialog(
+      () => {
+        prepareDialogOrigin(origin);
+        showKeyboardShortcuts(focus);
+      },
+      initialQuery,
+      origin.browserId ? () => focus.restore(origin) : undefined,
+    );
+  }
   const focusTargets = createFocusTargets(getState, invoke, focus, keys);
   const overview = createWorkspaceOverview(
     getState,
@@ -1161,14 +1177,9 @@ export function createCommands(
         case "shortcuts":
           showKeyboardShortcuts(focus);
           break;
-        case "settings": {
-          const origin = focus.capture();
-          appearanceDialog(() => {
-            focus.restore(origin);
-            showKeyboardShortcuts(focus);
-          });
+        case "settings":
+          openSettings();
           break;
-        }
         case "workspace.new":
           workspaceDialog("create");
           break;
@@ -1263,7 +1274,7 @@ export function createCommands(
           );
           break;
         case "browser.settings":
-          appearanceDialog(() => showKeyboardShortcuts(focus), "browser");
+          openSettings("browser");
           break;
         case "browser.history":
           browserHistory(invoke, async (url) => {
@@ -1595,7 +1606,11 @@ export function createCommands(
         dialog.close();
         // The next dialog must inherit the original invoker, not the palette
         // or a transient native focus restoration while close is dispatched.
-        focus.restore(returnFocus);
+        if (
+          ["settings", "browser.settings", "shortcuts"].includes(definition.id)
+        )
+          prepareDialogOrigin(returnFocus);
+        else focus.restore(returnFocus);
         void execute(definition.id, undefined, context);
       });
       buttons.set(definition.id, button);
