@@ -205,7 +205,14 @@ export class BrowserService {
       if (!navigable(url)) event.preventDefault();
     });
     contents.on("will-frame-navigate", (event) => {
-      if (!navigable(event.url)) event.preventDefault();
+      // Chromium renders PDF streams in its built-in component extension frame.
+      // This does not admit extension URLs as top-level pages or user popups.
+      const pdfFrame =
+        !event.isMainFrame &&
+        event.url.startsWith(
+          "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/",
+        );
+      if (!pdfFrame && !navigable(event.url)) event.preventDefault();
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.setWindowOpenHandler((details) => {
