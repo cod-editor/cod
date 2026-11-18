@@ -554,6 +554,69 @@ test("Browser AC3 background views preserve focus and shared cookies survive res
   expect((await inspect(two.id)).url).toBe(origin + "/two");
 });
 
+test("Closing the main window retains browser tabs and navigation for restart", async () => {
+  const workspace = await shell.create("Window close recovery");
+  const first = await open(workspace, "/one");
+  const second = await open(workspace, "/two");
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    second.id,
+    "--url",
+    origin + "/background",
+  );
+  const inactiveWorkspace = await shell.create("Inactive pinned recovery");
+  const pinned = await open(inactiveWorkspace, "/inactive-pinned");
+  await shell.cli(
+    "pane",
+    "pin",
+    "--workspace",
+    inactiveWorkspace,
+    "--id",
+    pinned.paneId,
+    "--pinned",
+    "true",
+  );
+  await shell.cli("workspace", "focus", "--id", workspace);
+  const app = shell.app!;
+  const closed = app.waitForEvent("close");
+  await app.evaluate(({ BrowserWindow }) => {
+    const host = BrowserWindow.getAllWindows().find((window) =>
+      window.webContents.getURL().endsWith("/index.html"),
+    );
+    if (!host) throw new Error("Fixture main window missing");
+    setTimeout(() => {
+      host.close();
+      if (!host.isDestroyed()) host.close();
+    }, 0);
+  });
+  await closed;
+  shell.app = undefined;
+  const saved = JSON.parse(
+    await readFile(path.join(shell.data, "state.json"), "utf8"),
+  );
+  expect(saved.browsers.map((item: BrowserRecord) => item.id)).toEqual([
+    first.id,
+    second.id,
+    pinned.id,
+  ]);
+  expect(
+    saved.workspaces
+      .find((item: any) => item.id === inactiveWorkspace)
+      .panes.find((item: any) => item.id === pinned.paneId).pinned,
+  ).toBe(true);
+  await shell.start();
+  expect((await inspect(pinned.id)).url).toBe(origin + "/inactive-pinned");
+  expect(await nativeView("/inactive-pinned")).toBeNull();
+  expect((await inspect(first.id)).url).toBe(origin + "/one");
+  expect((await inspect(second.id)).url).toBe(origin + "/background");
+  await shell.cli("browser", "back", "--id", second.id);
+  await expect
+    .poll(async () => (await inspect(second.id)).url)
+    .toBe(origin + "/two");
+});
+
 test("Browser AC4 real uploads, visible downloads and popup opener work through integrated views", async () => {
   const workspace = await shell.create("Browser transfers");
   const record = await open(workspace);
