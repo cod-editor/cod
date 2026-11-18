@@ -1,5 +1,9 @@
 import { tabInsertionIndex } from "../tab-order";
-import { conversationRemovalReason } from "../conversation-actions";
+import {
+  backgroundWithUnknownState,
+  conversationRemovalReason,
+  hasRunningBackground,
+} from "../conversation-actions";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -155,6 +159,8 @@ export class WorkspaceApplicationService {
       this.store.data.workspaces.push(record.workspace);
       for (const conversation of record.conversations) {
         conversation.status = "ready";
+        conversation.backgroundActivities =
+          backgroundWithUnknownState(conversation);
         conversation.pendingPermissions = [];
         conversation.error = undefined;
         this.store.data.conversations.push(conversation);
@@ -1129,7 +1135,8 @@ export class WorkspaceApplicationService {
             (this.store.data.conversations.some(
               (item) =>
                 item.workspaceId === id &&
-                ["working", "waiting", "starting"].includes(item.status),
+                (["working", "waiting", "starting"].includes(item.status) ||
+                  hasRunningBackground(item)),
             ) ||
               this.store.data.terminals.some(
                 (item) =>

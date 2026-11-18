@@ -222,6 +222,9 @@ export class ApplicationStateStore {
             : [],
           tools: [],
           turns: undefined,
+          backgroundActivities: conversation.backgroundActivities?.map(
+            ({ result: _result, ...item }) => item,
+          ),
           metadata: undefined,
         };
       }),
@@ -385,6 +388,7 @@ export class ApplicationStateStore {
         messages: [],
         tools: [],
         turns: undefined,
+        backgroundActivities: undefined,
         metadata: undefined,
       })),
     });

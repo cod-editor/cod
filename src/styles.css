@@ -152,6 +152,9 @@ body {
 .workspace-row.review-row {
   padding-left: 44px;
 }
+.workspace-row[data-status="background"] > .icon:not(.navigation-pin),
+.workspace-row[data-status="background"] .navigation-item-icon,
+.workspace-row[data-status="background"] > .tree-disclosure,
 .workspace-row[data-status="working"] > .icon:not(.navigation-pin),
 .workspace-row[data-status="working"] .navigation-item-icon,
 .workspace-row[data-status="working"] > .tree-disclosure,
@@ -1942,4 +1945,45 @@ browser-action-list::part(action):focus-visible {
 .overview-name {
   flex: 1;
   min-width: 0;
+}
+
+.composer-background {
+  min-width: 0;
+}
+
+.composer-background summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.composer-background-list {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 100%;
+  z-index: 1;
+  max-height: min(240px, 35vh);
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow-wrap: anywhere;
+}
+
+.composer-background-list li + li {
+  margin-top: 8px;
+}
+
+.composer-background-list pre {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.composer:has(.composer-background) {
+  position: relative;
+}
+
+.composer:has(.composer-background[open]) {
+  overflow: visible;
 }

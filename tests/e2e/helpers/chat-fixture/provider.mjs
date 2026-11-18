@@ -177,6 +177,12 @@ function complete(cancelled = false) {
   if (tool) {
     tool.status = cancelled ? "failed" : "completed";
     tool.aggregatedOutput = "invented-output";
+    if (provider === "codex")
+      notify("item/completed", {
+        threadId: nativeId,
+        turnId: active.turnId,
+        item: tool,
+      });
   }
   persist();
   record("completed", { nativeId, cancelled });
@@ -348,6 +354,15 @@ function receive(message, external = false) {
           readFileSync(path.join(historyDirectory, filename), "utf8"),
         );
         if (queued.id === lastQueueId || active) return;
+        if (
+          configuration().backgroundActivity &&
+          Array.isArray(queued.events)
+        ) {
+          lastQueueId = queued.id;
+          for (const { method, params } of queued.events)
+            notify(method, params);
+          return;
+        }
         lastQueueId = queued.id;
         receive(
           {
@@ -454,6 +469,59 @@ function receive(message, external = false) {
       turnId: active.turnId,
       item: active.turn.items[0],
     });
+  }
+  if (provider === "codex" && configuration().backgroundActivity) {
+    const turnId = active.turnId;
+    const child = "invented-child";
+    const command = {
+      type: "commandExecution",
+      id: "invented-shell",
+      command: "echo test checks",
+      status: "inProgress",
+    };
+    notify("item/completed", {
+      threadId: nativeId,
+      turnId,
+      item:
+        configuration().backgroundActivity === "legacy"
+          ? {
+              type: "collabAgentToolCall",
+              tool: "spawnAgent",
+              status: "completed",
+              id: "spawn-child",
+              senderThreadId: nativeId,
+              receiverThreadIds: [child],
+              agentsStates: { [child]: { status: "pendingInit" } },
+            }
+          : {
+              type: "subAgentActivity",
+              id: "spawn-child",
+              kind: "started",
+              agentThreadId: child,
+              agentPath: "/root/checker",
+            },
+    });
+    notify("item/started", {
+      threadId: "unrelated-thread",
+      turnId,
+      item: { ...command, command: "unrelated work" },
+    });
+    notify("item/started", {
+      threadId: child,
+      turnId: "child-turn",
+      item: command,
+    });
+    if (configuration().backgroundActivity === "legacy") {
+      const rootCommand = {
+        ...command,
+        id: "invented-root-shell",
+        command: "echo parent check",
+      };
+      notify("item/started", { threadId: nativeId, turnId, item: rootCommand });
+    }
+    text("Tests are running in the background.");
+    complete();
+    return;
   }
   if (configuration().finalOnly) {
     later(() => {
