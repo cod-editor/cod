@@ -1,4 +1,5 @@
 import hljs from "highlight.js/lib/core";
+import type { LanguageFn, Mode } from "highlight.js";
 import typescript from "highlight.js/lib/languages/typescript";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
@@ -7,35 +8,177 @@ import markdown from "highlight.js/lib/languages/markdown";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
 import xml from "highlight.js/lib/languages/xml";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import diff from "highlight.js/lib/languages/diff";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import go from "highlight.js/lib/languages/go";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import lua from "highlight.js/lib/languages/lua";
+import makefile from "highlight.js/lib/languages/makefile";
+import perl from "highlight.js/lib/languages/perl";
+import php from "highlight.js/lib/languages/php";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import scss from "highlight.js/lib/languages/scss";
+import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
+import yaml from "highlight.js/lib/languages/yaml";
+
+const editorMarkdown: LanguageFn = (api) => {
+  const grammar = markdown(api);
+  // Highlight.js applies the language's flags when it compiles the combined
+  // matcher. Check identifier boundaries there instead of rejecting matches
+  // in callbacks, which can rescan the remaining input for every underscore.
+  grammar.unicodeRegex = true;
+  const identifier = String.raw`[\p{L}\p{M}\p{N}_]`;
+  const visited = new Set<Mode>();
+  const adjust = (mode: Mode) => {
+    if (visited.has(mode)) return;
+    visited.add(mode);
+    if (mode.className === "emphasis" || mode.className === "strong") {
+      for (const variant of mode.variants ?? []) {
+        const underscoreBegin =
+          variant.begin instanceof RegExp &&
+          variant.begin.source.startsWith("_")
+            ? variant.begin.source
+            : undefined;
+        if (underscoreBegin)
+          variant.begin = new RegExp(
+            `(?<!${identifier})${underscoreBegin}`,
+            "u",
+          );
+        // Recover at a paragraph boundary while an inline edit is incomplete.
+        // Leave fenced and indented code modes free to span blank lines.
+        if (variant.end instanceof RegExp)
+          variant.end = new RegExp(
+            `${variant.end.source}${underscoreBegin ? `(?!${identifier})` : ""}|(?=\\r?\\n[ \\t]*\\r?\\n)`,
+            "u",
+          );
+      }
+    }
+    for (const child of [...(mode.contains ?? []), ...(mode.variants ?? [])])
+      if (child !== "self") adjust(child);
+  };
+  adjust(grammar);
+  return grammar;
+};
+
 for (const [name, definition] of Object.entries({
   typescript,
   javascript,
   python,
   json,
-  markdown,
+  markdown: editorMarkdown,
   bash,
   css,
   xml,
+  c,
+  cpp,
+  csharp,
+  diff,
+  dockerfile,
+  go,
+  ini,
+  java,
+  kotlin,
+  lua,
+  makefile,
+  perl,
+  php,
+  ruby,
+  rust,
+  scss,
+  sql,
+  swift,
+  yaml,
 }))
   hljs.registerLanguage(name, definition);
+
+const languageByExtension = new Map(
+  Object.entries({
+    bash: "bash",
+    c: "c",
+    cc: "cpp",
+    cjs: "javascript",
+    cpp: "cpp",
+    cs: "csharp",
+    css: "css",
+    cts: "typescript",
+    cxx: "cpp",
+    diff: "diff",
+    dockerfile: "dockerfile",
+    go: "go",
+    h: "c",
+    hh: "cpp",
+    hpp: "cpp",
+    htm: "xml",
+    html: "xml",
+    hxx: "cpp",
+    ini: "ini",
+    java: "java",
+    js: "javascript",
+    json: "json",
+    json5: "json",
+    jsonc: "json",
+    jsx: "javascript",
+    kt: "kotlin",
+    kts: "kotlin",
+    lua: "lua",
+    markdown: "markdown",
+    md: "markdown",
+    mk: "makefile",
+    mjs: "javascript",
+    mts: "typescript",
+    patch: "diff",
+    php: "php",
+    pl: "perl",
+    pm: "perl",
+    py: "python",
+    pyi: "python",
+    rb: "ruby",
+    rs: "rust",
+    scss: "scss",
+    sh: "bash",
+    sql: "sql",
+    svg: "xml",
+    swift: "swift",
+    toml: "ini",
+    ts: "typescript",
+    tsx: "typescript",
+    xml: "xml",
+    yaml: "yaml",
+    yml: "yaml",
+    zsh: "bash",
+  }),
+);
+const languageByFilename = new Map(
+  Object.entries({
+    ".bash_profile": "bash",
+    ".bashrc": "bash",
+    ".profile": "bash",
+    ".zprofile": "bash",
+    ".zshrc": "bash",
+    gemfile: "ruby",
+    gnumakefile: "makefile",
+    makefile: "makefile",
+    rakefile: "ruby",
+  }),
+);
+
 export function languageFor(path: string): string {
+  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
+  const named = languageByFilename.get(filename);
+  if (named) return named;
+  if (/^(?:dockerfile|containerfile)(?:\..+)?$/.test(filename))
+    return "dockerfile";
+  const dot = filename.lastIndexOf(".");
   return (
-    (
-      {
-        ts: "typescript",
-        tsx: "typescript",
-        js: "javascript",
-        jsx: "javascript",
-        mjs: "javascript",
-        py: "python",
-        json: "json",
-        md: "markdown",
-        sh: "bash",
-        css: "css",
-        html: "xml",
-        xml: "xml",
-      } as Record<string, string>
-    )[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"
+    (dot > 0 ? languageByExtension.get(filename.slice(dot + 1)) : undefined) ??
+    "plaintext"
   );
 }
 export function highlight(value: string, language: string): string {

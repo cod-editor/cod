@@ -669,8 +669,12 @@ a {
   color: #c678dd;
 }
 .hljs-string,
-.hljs-title {
+.hljs-title,
+.hljs-addition {
   color: #98c379;
+}
+.hljs-deletion {
+  color: #e06c75;
 }
 .hljs-number,
 .hljs-literal {
