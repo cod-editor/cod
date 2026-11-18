@@ -62,8 +62,7 @@ test("Freeze-only copies uncommitted input, excludes private artifacts and never
       "src",
       "scripts",
       "tests/support/electron",
-      "runtime-skills",
-      "runtime-plugins",
+      "plugins",
       "assets",
       "bin",
     ])
@@ -73,6 +72,18 @@ test("Freeze-only copies uncommitted input, excludes private artifacts and never
         path.join(directory, "tests/support/electron", name),
         "invented runner fixture\n",
       );
+    await mkdir(path.join(directory, "plugins/cod/skills/cod"), {
+      recursive: true,
+    });
+    await mkdir(path.join(directory, "plugins/cod/hooks"), { recursive: true });
+    await writeFile(
+      path.join(directory, "plugins/cod/skills/cod/SKILL.md"),
+      "invented skill\n",
+    );
+    await writeFile(
+      path.join(directory, "plugins/cod/hooks/status-hook.mjs"),
+      "invented hook\n",
+    );
     await writeFile(path.join(directory, "src", "uncommitted.txt"), "before\n");
     await writeFile(
       path.join(directory, "src", ".env.local"),
@@ -113,6 +124,19 @@ test("Freeze-only copies uncommitted input, excludes private artifacts and never
     assert.deepEqual(await readdir(path.join(frozen, "input/src")), [
       "uncommitted.txt",
     ]);
+    for (const [name, contents] of [
+      ["skills/cod/SKILL.md", "invented skill\n"],
+      ["hooks/status-hook.mjs", "invented hook\n"],
+    ]) {
+      await writeFile(
+        path.join(directory, "plugins/cod", name),
+        "changed source\n",
+      );
+      assert.equal(
+        await readFile(path.join(frozen, "input/plugins/cod", name), "utf8"),
+        contents,
+      );
+    }
     const manifest = await readFile(
       path.join(frozen, "input-sha256.txt"),
       "utf8",

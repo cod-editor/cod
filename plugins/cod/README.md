@@ -1,6 +1,8 @@
 # Cod status integration
 
-Install through Cod's explicit integration preview for a selected provider profile. The installer preserves unrelated settings, backs up modified files, rejects edited managed hooks/scripts and requires a fresh preview when inputs change. It never modifies a profile on startup or grants native hook trust. Runtime files and the operating skill are copied into the profile's `cod-integration` directory.
+Install through Cod's explicit integration preview for a selected provider profile. The installer preserves unrelated settings, backs up modified files, rejects edited managed hooks/scripts and requires a fresh preview when inputs change. It never modifies a profile on startup or grants native hook trust. The hook and operating skill are copied into the profile's `cod-integration` directory.
+
+The source lives together here: [operating skill](skills/cod/SKILL.md) and [status hook](hooks/status-hook.mjs). Installed profile paths stay unchanged.
 
 The hook policy reports working on a submitted prompt and after a tool returns, waiting on an approval request, and ready on turn stop. Reports carry `source: hook`; the application preserves an explicit review status instead of overwriting it with a lifecycle report. Codex and Claude SessionStart supplies the operating skill through additionalContext. Hooks never approve permissions, submit reviews or block the provider. Technical process failures remain application state. Hooks with no Cod conversation/socket binding are inert; child-agent events with explicit child identity are ignored. The runner uses environment-bound identity, never a target supplied in hook input.
 
@@ -17,5 +19,3 @@ Kimi also receives the skill at `$KIMI_CODE_HOME/skills/cod/SKILL.md`, its docum
 All three integrations register SessionStart, UserPromptSubmit, PermissionRequest, PostToolUse and Stop. Provider execution can reject or skip hooks independently of successful installation. Isolated installer and event-to-CLI tests do not prove authenticated native hook execution. Current native trust/authentication limitations must remain visible in release verification.
 
 Run `node --test tests/agent-plugin.test.ts` for temporary-profile merge, backup, idempotence, edit/conflict rejection and event-routing checks. Tests never modify the user's real provider profiles.
-
-`node experiments/verification/native-plugin-config.mjs` checks installed native parsers without a model prompt. It does not bypass hook trust or supply authentication; successful parsing is distinct from actual hook execution.

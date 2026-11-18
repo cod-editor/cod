@@ -83,11 +83,11 @@ export async function inspectIntegration(
   const runnerPath = path.join(directory, "status-hook.mjs");
   const command = `ELECTRON_RUN_AS_NODE=1 ${quote(options.nodePath ?? process.execPath)} ${quote(runnerPath)} ${quote(options.provider)}`;
   const runner = await readFile(
-    path.join(root, "runtime-plugins/cod/status-hook.mjs"),
+    path.join(root, "plugins/cod/hooks/status-hook.mjs"),
     "utf8",
   );
   const skill = await readFile(
-    path.join(root, "runtime-skills/cod/SKILL.md"),
+    path.join(root, "plugins/cod/skills/cod/SKILL.md"),
     "utf8",
   );
   const payloads: Record<string, string> = {

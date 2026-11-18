@@ -37,7 +37,7 @@ if [ "$full_ci" = true ]; then
   case "$revision" in *[!a-f0-9]*|'') echo "Invalid frozen revision" >&2; exit 2;; esac
   printf '{"revision":"%s"}\n' "$revision" > "$run_dir/revision.json"
 else
-  for input in package.json package-lock.json playwright.config.ts tsconfig.json src scripts tests runtime-skills runtime-plugins assets; do
+  for input in package.json package-lock.json playwright.config.ts tsconfig.json src scripts tests plugins assets; do
     (cd "$repo_dir" && tar --exclude='*/artifacts' --exclude='*/node_modules' --exclude='*/test-results' --exclude='*/reports' --exclude='*/.git' --exclude='*/.env' --exclude='*/.env.*' -cf - "$input") | (cd "$run_dir/input" && tar -xf -)
   done
   for input in .github .agents AGENTS.md README.md .prettierrc.json .prettierignore .gitignore LICENSE docs; do

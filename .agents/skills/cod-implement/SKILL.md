@@ -17,7 +17,7 @@ If required feasibility gates have not passed, use cod-feasibility for dependent
 7. Finalize relevant documentation and commit the coherent source, then satisfy the mandatory [AGENTS pre-push gate](../../../AGENTS.md#execution-and-verification) using [full preflight](../../../tests/README.md#full-pre-push-preflight). Keep that revision unchanged through publication; report a blocker rather than using CI as the first full run. Publish through the authorized PR and still require green GitHub checks. Keep raw evidence in ignored artifacts.
 8. After verified delivery, complete [delivery cleanup](#delivery-cleanup) before marking the checkpoint done. Cleanup does not end an authorized backlog; continue to the next agreed item.
 
-Keep runtime instructions for agents using Cod distinct from these development skills. Add runtime documentation as commands become real; do not teach nonexistent commands.
+Keep instructions for agents using Cod distinct from these development skills. Extend the shipped skill as commands become real; do not teach nonexistent commands.
 Do not restore the previous role system, require a separate tests PR, add cloud abstractions or implement deferred features merely because historical files did so.
 
 ## Delivery cleanup
