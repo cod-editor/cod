@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "node:http";
-import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
 interface BrowserRecord {
@@ -2156,6 +2156,161 @@ test("Reopening a browser tab restores Back and Forward without extra history re
   await expect
     .poll(async () => (await inspect(record.id)).url)
     .toBe(origin + "/two");
+});
+
+test("A failed native file reopen preserves the pinned closed entry and can be retried", async () => {
+  const workspace = await shell.create("Recover a closed local page");
+  const file = path.join(shell.folders[0], "recover local page.html");
+  const markup = "<title>Recovered local page</title><h1>Local fixture</h1>";
+  await writeFile(file, markup);
+  const url = pathToFileURL(file).href;
+  const browser = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    url,
+  );
+  await shell.cli(
+    "pane",
+    "pin",
+    "--workspace",
+    workspace,
+    "--id",
+    browser.paneId,
+    "--pinned",
+    "true",
+  );
+  const live = await shell.workspace(workspace);
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    browser.paneId,
+    "--include-pinned",
+    "true",
+  );
+  const appState = () => shell.cli<import("../../src/types").AppState>("state");
+  const saved = (await appState()).workspaces
+    .find((item) => item.id === workspace)
+    ?.closedTabs?.at(-1);
+  expect(saved?.pane.id).toBe(browser.paneId);
+  await unlink(file);
+
+  const failed = await shell.raw("pane", "reopen", "--workspace", workspace);
+  expect(failed.code).not.toBe(0);
+  const afterFailure = await appState();
+  const closedWorkspace = afterFailure.workspaces.find(
+    (item) => item.id === workspace,
+  )!;
+  expect(closedWorkspace.closedTabs?.at(-1)).toEqual(saved);
+  expect(closedWorkspace.panes.some((pane) => pane.id === browser.paneId)).toBe(
+    false,
+  );
+  expect(afterFailure.browsers.some((item) => item.id === browser.id)).toBe(
+    false,
+  );
+
+  await writeFile(file, markup);
+  const reopened = await shell.cli<{ paneId: string }>(
+    "pane",
+    "reopen",
+    "--workspace",
+    workspace,
+  );
+  expect(reopened.paneId).toBe(browser.paneId);
+  const afterRetry = await appState();
+  const reopenedWorkspace = afterRetry.workspaces.find(
+    (item) => item.id === workspace,
+  )!;
+  expect(
+    reopenedWorkspace.closedTabs?.some(
+      (item) => item.pane.id === browser.paneId,
+    ),
+  ).not.toBe(true);
+  expect(
+    reopenedWorkspace.panes.filter((pane) => pane.id === browser.paneId),
+  ).toEqual([saved?.pane]);
+  const group = live.groups?.find((item) =>
+    item.paneIds.includes(browser.paneId),
+  );
+  expect(
+    reopenedWorkspace.groups?.find((item) => item.id === group?.id)?.paneIds,
+  ).toEqual(group?.paneIds);
+  expect(
+    afterRetry.browsers.filter((item) => item.id === browser.id),
+  ).toHaveLength(1);
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        ({ webContents }, address) =>
+          webContents
+            .getAllWebContents()
+            .find(
+              (item) => item.getURL() === address && !item.isLoadingMainFrame(),
+            )
+            ?.getTitle(),
+        url,
+      ),
+    )
+    .toBe("Recovered local page");
+});
+
+test("An in-flight browser reopen keeps the closed entry private and admits it only once", async () => {
+  const workspace = await shell.create("Admit a closed page once");
+  const release = () => {
+    slowResponse?.end("<title>Delayed browser fixture</title>");
+    slowResponse = undefined;
+  };
+  const opened = open(workspace, "/slow");
+  await expect.poll(() => Boolean(slowResponse)).toBe(true);
+  release();
+  const browser = await opened;
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    browser.paneId,
+  );
+  requests = [];
+
+  const appState = () => shell.cli<import("../../src/types").AppState>("state");
+  const before = (await appState()).workspaces.find(
+    (item) => item.id === workspace,
+  )!;
+  const reopening = shell.raw("pane", "reopen", "--workspace", workspace);
+  try {
+    await expect.poll(() => Boolean(slowResponse)).toBe(true);
+    const pending = await appState();
+    expect(pending.workspaces.find((item) => item.id === workspace)).toEqual(
+      before,
+    );
+    expect(pending.browsers.some((item) => item.id === browser.id)).toBe(false);
+    const second = await shell.raw("pane", "reopen", "--workspace", workspace);
+    expect(second.code).not.toBe(0);
+  } finally {
+    // Release the actual native request even if a transaction assertion fails.
+    release();
+    await reopening;
+  }
+
+  const result = await reopening;
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ paneId: browser.paneId });
+  const restored = await appState();
+  const active = restored.workspaces.find((item) => item.id === workspace)!;
+  expect(
+    active.panes.filter((pane) => pane.id === browser.paneId),
+  ).toHaveLength(1);
+  expect(
+    restored.browsers.filter((item) => item.id === browser.id),
+  ).toHaveLength(1);
+  expect(requests.filter((route) => route === "/slow")).toEqual(["/slow"]);
 });
 
 test("Restoring tab history never resubmits a POST form", async () => {

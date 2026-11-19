@@ -388,6 +388,8 @@ export class BrowserService {
     workspaceId: string;
     url: string;
     deferNavigation?: boolean;
+    navigation?: BrowserNavigation;
+    beforeNavigation?: () => Promise<void>;
     restoredFailure?: {
       url: string;
       error: string;
@@ -399,6 +401,7 @@ export class BrowserService {
     const url = safeUrl(input.url, this.options.isAllowedExtensionUrl);
     const resource = this.createResource(input);
     try {
+      if (input.beforeNavigation) await input.beforeNavigation();
       const saved = normalizeNavigation(input.restoredFailure?.navigation);
       const previous = saved?.entries.filter(
         (entry) =>
@@ -410,6 +413,8 @@ export class BrowserService {
           entries: [...previous, { url: "about:blank", title: "" }],
           index: previous.length,
         });
+      else if (input.navigation)
+        await this.restoreNavigation(input.id, input.navigation);
       else if (!input.deferNavigation) await this.load(resource, url);
       if (input.restoredFailure) {
         resource.restoredFailure = true;
@@ -647,7 +652,7 @@ export class BrowserService {
   }
   close(id: string, contents?: WebContents) {
     const resource = this.resources.get(id);
-    if (!resource) return;
+    if (!resource || (contents && contents !== resource.contents)) return;
     resource.diagnostics?.dispose();
     this.resources.delete(id);
     for (const popup of resource.popups)

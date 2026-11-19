@@ -7,7 +7,7 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import type { OperationRequest, WorkspaceState } from "../types";
+import type { BrowserState, OperationRequest, WorkspaceState } from "../types";
 import {
   assertWorkspaceLayout,
   groupLeaf,
@@ -40,6 +40,7 @@ export class WorkspaceApplicationService {
       | "requestClose"
       | "loadAgentPage"
       | "restoreBrowser"
+      | "withReopenedBrowser"
     >,
     private readonly terminals: Pick<
       TerminalApplicationService,
@@ -501,53 +502,49 @@ export class WorkspaceApplicationService {
       });
       return { paneId: opened.paneId };
     }
-    if (closed.browser) {
-      if (closed.browser.agentPage)
-        await this.browsers.loadAgentPage(closed.browser);
-      else {
-        this.store.data.browsers.push(closed.browser);
-        try {
-          await this.browsers.restoreBrowser(closed.browser);
-        } catch (error) {
-          this.browsers.removeBrowser(closed.browser);
-          throw error;
+    const commit = (browser?: BrowserState) =>
+      this.store.change(() => {
+        if (
+          this.store.closing ||
+          !this.store.data.workspaces.includes(workspace) ||
+          workspace.closedTabs?.at(-1) !== closed
+        )
+          throw new Error("The closed tab list changed. Try reopening again.");
+        if (
+          closed.conversation &&
+          this.store.data.conversations.some(
+            (active) =>
+              active.id !== closed.conversation!.id &&
+              active.provider === closed.conversation!.provider &&
+              active.nativeId === closed.conversation!.nativeId,
+          )
+        )
+          throw new Error(
+            "This native session is already open. Use its existing chat.",
+          );
+        workspace.closedTabs!.pop();
+        if (
+          closed.conversation &&
+          !this.store.data.conversations.some(
+            (item) => item.id === closed.conversation!.id,
+          )
+        ) {
+          closed.conversation.paneId = closed.pane.id;
+          this.store.data.conversations.push(closed.conversation);
+          workspace.lastConversationId = closed.conversation.id;
         }
-      }
-    }
-    return this.store.change(() => {
-      if (workspace.closedTabs?.at(-1) !== closed)
-        throw new Error("The closed tab list changed. Try reopening again.");
-      if (
-        closed.conversation &&
-        this.store.data.conversations.some(
-          (active) =>
-            active.id !== closed.conversation!.id &&
-            active.provider === closed.conversation!.provider &&
-            active.nativeId === closed.conversation!.nativeId,
-        )
-      )
-        throw new Error(
-          "This native session is already open. Use its existing chat.",
-        );
-      workspace.closedTabs!.pop();
-      if (
-        closed.conversation &&
-        !this.store.data.conversations.some(
-          (item) => item.id === closed.conversation!.id,
-        )
-      ) {
-        closed.conversation.paneId = closed.pane.id;
-        this.store.data.conversations.push(closed.conversation);
-        workspace.lastConversationId = closed.conversation.id;
-      }
-      if (!workspace.panes.some((pane) => pane.id === closed.pane.id))
-        workspace.panes.push(closed.pane);
-      if (closed.browser?.agentPage)
-        this.store.data.browsers.push(closed.browser);
-      workspace.activePaneId = closed.pane.id;
-      this.restoreTabPosition(workspace, closed.pane.id, closed);
-      return { paneId: closed.pane.id };
-    });
+        if (!workspace.panes.some((pane) => pane.id === closed.pane.id))
+          workspace.panes.push(closed.pane);
+        if (browser) this.store.data.browsers.push(browser);
+        workspace.activePaneId = closed.pane.id;
+        this.restoreTabPosition(workspace, closed.pane.id, closed);
+        return { paneId: closed.pane.id };
+      });
+    if (closed.browser?.agentPage)
+      await this.browsers.loadAgentPage(closed.browser);
+    else if (closed.browser)
+      return this.browsers.withReopenedBrowser(closed.browser, commit);
+    return commit(closed.browser);
   }
 
   private restoreTabPosition(
