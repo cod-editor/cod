@@ -25,6 +25,7 @@ import {
   type CommandId,
 } from "../keyboard";
 import {
+  isReviewCommentSave,
   keyboardPlatform,
   keyboardSurface,
   showKeyboardShortcuts,
@@ -1819,6 +1820,8 @@ export function createCommands(
       const openDialog = [...document.querySelectorAll("dialog[open]")].at(-1);
       if (openDialog && !openDialog.classList.contains("workspace-overview"))
         return;
+      // Give the comment form first claim on its private-save shortcut.
+      if (isReviewCommentSave(event)) return;
       const match = resolveKeybinding(
         {
           ...event,

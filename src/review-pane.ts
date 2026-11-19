@@ -1,7 +1,12 @@
 import { diffHunks } from "./diff-hunks";
 import { uiButton, actionRow, toolbar } from "./ui/primitives";
 import { reviewDocument } from "./ui/review-document";
-import { shortcutTitle } from "./ui/keyboard-ui";
+import { formatBinding } from "./keyboard";
+import {
+  isReviewCommentSave,
+  keyboardPlatform,
+  shortcutTitle,
+} from "./ui/keyboard-ui";
 import { conversationLabel } from "./ui/message-label";
 import { readPreference, writePreference } from "./ui/preferences";
 import { iconButton, menu } from "./ui/controls";
@@ -93,8 +98,10 @@ export function reviewPane(
     input = document.createElement("textarea");
   input.setAttribute("aria-label", "Comment");
   form.hidden = true;
+  let savingComment = false;
   const save = button("Save comment", async () => {
-    if (!detail || staleEditor) return;
+    if (!detail || staleEditor || savingComment) return;
+    savingComment = true;
     let restoreSelection = form.contains(document.activeElement);
     const movedFocus = (event: FocusEvent) => {
       if (
@@ -123,7 +130,23 @@ export function reviewPane(
       status.textContent = "";
     } finally {
       document.removeEventListener("focusin", movedFocus, true);
+      savingComment = false;
     }
+  });
+  const saveShortcut = formatBinding(
+    { code: "Enter", mod: true, surfaces: ["review"] },
+    keyboardPlatform,
+  );
+  save.title = `Save comment (${saveShortcut})`;
+  save.setAttribute(
+    "aria-keyshortcuts",
+    keyboardPlatform === "darwin" ? "Meta+Enter" : "Control+Enter",
+  );
+  form.addEventListener("keydown", (event) => {
+    if (!isReviewCommentSave(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) save.click();
   });
   form.append(
     input,

@@ -254,6 +254,66 @@ test("Review AC1 keyboard drafts are private on every socket surface and survive
   expect(JSON.stringify(await inspect(review))).not.toContain(body);
 });
 
+test("Review comment Mod+Enter saves a private multiline draft even with a conflicting submit binding", async () => {
+  await shell.stop();
+  await writeFile(
+    path.join(shell.data, "keymap.json"),
+    JSON.stringify({ "chat.send": null, "review.submit": ["Mod+Enter"] }),
+  );
+  await shell.start();
+  const keymap = await shell.page.evaluate(() => window.cod.getKeymap());
+  expect(keymap.error).toBeUndefined();
+  expect(keymap.overrides["review.submit"]).toEqual(["Mod+Enter"]);
+
+  const review = await open(await shell.create("Invented keyboard review"));
+  const editor = source(review);
+  await editor.focus();
+  await editor.press("ArrowDown");
+  await editor.press(`${modifier}+Shift+M`);
+  const host = pane(review);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await expect(input).toBeFocused();
+  const save = host.getByRole("button", { name: "Save comment", exact: true });
+  await expect(save).toHaveAttribute(
+    "aria-keyshortcuts",
+    process.platform === "darwin" ? "Meta+Enter" : "Control+Enter",
+  );
+  await input.fill("First point");
+  await input.press("Enter");
+  await input.pressSequentially("Second point");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Third point");
+  await expect(input).toHaveValue("First point\nSecond point\nThird point");
+  const chord = {
+    key: "Enter",
+    code: "Enter",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+  };
+  await input.dispatchEvent("keydown", { ...chord, isComposing: true });
+  await input.dispatchEvent("keydown", { ...chord, repeat: true });
+  await expect(input).toBeFocused();
+  expect((await inspect(review)).rounds[0].commentCount).toBe(0);
+
+  await input.press(`${modifier}+Enter`);
+  await expect(input).toBeHidden();
+  await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
+    /First point\s+Second point\s+Third point/,
+  );
+  await expect(editor).toBeFocused();
+  expect((await inspect(review)).rounds[0]).toMatchObject({
+    status: "draft",
+    commentCount: 1,
+  });
+  expect((await inspect(review)).rounds[0].submission).toBeUndefined();
+  expect(await shell.prompts()).toHaveLength(0);
+
+  await editor.press(`${modifier}+Enter`);
+  await expect
+    .poll(async () => (await inspect(review)).rounds[0].submission?.id)
+    .toBeTruthy();
+});
+
 test("Review AC2 separate real repositories retain old/new diff anchors and private comments", async ({}, testInfo) => {
   const workspace = await shell.create("Two repository reviews");
   const origin = await shell.newChat(workspace, "codex");
@@ -1079,14 +1139,21 @@ test("Diff review keeps unchanged context neutral and anchors keyboard comments 
       .filter({ hasText: /unchanged 1$/ }),
   ).toHaveCount(1);
   const canonical = await realpath(file);
-  await comment(
-    review,
-    "Removed line needs discussion",
-    host.getByRole("button", { name: `Old line 3 ${canonical}`, exact: true }),
-  );
+  const removed = host.getByRole("button", {
+    name: `Old line 3 ${canonical}`,
+    exact: true,
+  });
+  await removed.focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await expect(input).toBeFocused();
+  await input.fill("Removed line needs discussion");
+  await input.press(`${modifier}+Enter`);
   await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
     "Removed line needs discussion",
   );
+  await expect(removed).toBeFocused();
+  expect((await inspect(review)).rounds[0].submission).toBeUndefined();
   await host.screenshot({ path: info.outputPath("unified-diff.png") });
 });
 
