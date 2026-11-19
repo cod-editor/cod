@@ -52,7 +52,11 @@ export class SitePermissions {
     this.options = options;
     options.session.setPermissionCheckHandler(
       (contents, permission, origin, details) => {
-        if (this.disposed) return false;
+        if (
+          this.disposed ||
+          (permission === "clipboard-sanitized-write" && !contents)
+        )
+          return false;
         try {
           const requesting = webOrigin(
             details.securityOrigin || details.requestingUrl || origin,

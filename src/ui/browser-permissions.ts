@@ -21,7 +21,15 @@ export function updateSiteRequests(
     row.setAttribute("role", "region");
     row.setAttribute("aria-label", "Site permission request");
     const message = document.createElement("p");
-    message.textContent = `${request.origin} wants to use ${request.permissions.map((key) => sitePermissionNames[key].toLowerCase()).join(" and ")}${request.topOrigin !== request.origin ? ` inside ${request.topOrigin}` : ""}.`;
+    const names = request.permissions
+      .map((key) => sitePermissionNames[key].toLowerCase())
+      .join(" and ");
+    const action = request.permissions.some(
+      (key) => key === "clipboard-read" || key === "clipboard-sanitized-write",
+    )
+      ? names
+      : `use ${names}`;
+    message.textContent = `${request.origin} wants to ${action}${request.topOrigin !== request.origin ? ` inside ${request.topOrigin}` : ""}.`;
     const actions = document.createElement("div");
     actions.className = "dialog-actions";
     for (const [decision, label] of [
