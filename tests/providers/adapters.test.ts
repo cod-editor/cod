@@ -155,6 +155,25 @@ for (const provider of ["codex", "kimi"] as const) {
     }
   });
 }
+test("Codex history page timeout keeps the bound controller available", async () => {
+  const { adapter, events } = setup("codex", "no-history-ack");
+  try {
+    await adapter.resume("codex-native");
+    assert.ok(adapter.earlierHistory);
+    await assert.rejects(
+      adapter.earlierHistory("invented-page"),
+      /Provider request timed out: thread\/items\/list/,
+    );
+    assert.equal(events.filter((e) => e.type === "error").length, 0);
+    assert.equal(
+      (await adapter.send("invented follow-up")).status,
+      "completed",
+    );
+  } finally {
+    await adapter.dispose();
+  }
+});
+
 test("Codex resume rejects substituted native identity", async () => {
   const { adapter } = setup("codex", "wrong-id");
   try {

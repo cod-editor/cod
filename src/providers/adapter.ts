@@ -61,6 +61,7 @@ export class NativeAdapter implements ProviderAdapter {
   private closed = false;
   private failure?: Error;
   private id: string | null = null;
+  private resumeTailCursor?: string;
   private active?: ActiveTurn;
   private finishedTurns = new Set<string>();
   private readonly background = new CodexBackground();
@@ -226,8 +227,18 @@ export class NativeAdapter implements ProviderAdapter {
         );
       this.id = id;
       this.selection.bind(data);
-      if (this.provider === "codex" && resumeId)
+      if (this.provider === "codex" && resumeId) {
+        const turns = object(data.thread).turns;
+        if (
+          !Array.isArray(turns) ||
+          !turns.some((turn) => {
+            const items = object(turn).items;
+            return Array.isArray(items) && items.length > 0;
+          })
+        )
+          this.resumeTailCursor = string(data.itemsBackwardsCursor);
         this.emit({ type: "history", details: data.thread });
+      }
       this.state("ready");
       return {
         provider: this.provider,
@@ -243,6 +254,28 @@ export class NativeAdapter implements ProviderAdapter {
       this.replay = false;
     }
   }
+  async earlierHistory(cursor: string) {
+    this.ensureOpen();
+    if (this.provider !== "codex" || !this.id || this.binding)
+      throw new Error("Codex history requires a bound conversation");
+    const result = object(
+      await this.rpc!.request(
+        "thread/items/list",
+        { threadId: this.id, cursor, sortDirection: "desc", limit: 50 },
+        undefined,
+        "read-only",
+      ),
+    );
+    const nextCursor = string(result.nextCursor) || undefined;
+    if (!Array.isArray(result.data) || nextCursor === cursor)
+      throw new Error("Codex returned an invalid history page");
+    return {
+      items: result.data,
+      nextCursor,
+      startsAtTail: cursor === this.resumeTailCursor,
+    };
+  }
+
   async discover(): Promise<Conversation[]> {
     await this.initialize();
     const result: Conversation[] = [];

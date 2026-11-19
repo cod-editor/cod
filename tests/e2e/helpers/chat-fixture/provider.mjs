@@ -296,6 +296,39 @@ function receive(message, external = false) {
     });
     return;
   }
+  if (message.method === "thread/items/list" && configuration().pagedHistory) {
+    const items = history
+      .flatMap(({ id: turnId, items }) =>
+        items.map((item) => ({ turnId, item })),
+      )
+      .reverse();
+    const offset = Number(params.cursor?.match(/^fixture-items-(\d+)$/)?.[1]);
+    if (
+      configuration().earlierHistoryError ||
+      params.threadId !== nativeId ||
+      params.sortDirection !== "desc" ||
+      params.limit !== 50 ||
+      !Number.isSafeInteger(offset)
+    ) {
+      write({
+        id: message.id,
+        error: { code: -32000, message: "Invented history page failure" },
+      });
+      return;
+    }
+    const data = items.slice(offset, offset + 3);
+    const next = offset + data.length;
+    later(
+      () =>
+        reply(message, {
+          data,
+          nextCursor: next < items.length ? "fixture-items-" + next : null,
+          backwardsCursor: null,
+        }),
+      configuration().earlierHistoryDelayMs ?? 0,
+    );
+    return;
+  }
   if (
     ["thread/start", "session/new", "thread/resume", "session/load"].includes(
       message.method,
@@ -314,7 +347,7 @@ function receive(message, external = false) {
     if (
       provider === "codex" &&
       message.method === "thread/resume" &&
-      configuration().partialTail
+      (configuration().partialTail || configuration().pagedHistory)
     ) {
       const last = history.at(-1);
       const assistant = last?.items
@@ -327,6 +360,9 @@ function receive(message, external = false) {
           turns: last && assistant ? [{ ...last, items: [assistant] }] : [],
         },
         turnsBackwardsCursor: "fixture-older-page",
+        ...(configuration().pagedHistory && last
+          ? { itemsBackwardsCursor: "fixture-items-0" }
+          : {}),
       });
     } else
       reply(

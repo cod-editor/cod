@@ -805,12 +805,13 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(transcript(chat)).toContainText(
     "STREAM [hold] after-partial-load",
   );
-  const restored = await shell.inspect(chat.id);
+  const restored = await inspectQueuedChat(chat.id);
   const assistant = restored.messages
     .filter((message) => message.role === "assistant")
     .map((message) => message.text)
     .join("\n");
   expect(assistant.split(`DONE ${original}`).length - 1).toBe(1);
+  await expandActivity(shell.pane(chat.paneId));
   const rendered = await transcript(chat).innerText();
   expect(rendered.indexOf(`DONE ${original}`)).toBeLessThan(
     rendered.indexOf("[hold] after-partial-load"),
@@ -820,12 +821,132 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
       .pane(chat.paneId)
       .getByText("Earlier messages are not shown", { exact: true }),
   ).toBeVisible();
-  // Keeping cached context or showing only authoritative partial history are valid;
-  // if cached leading text remains, its original position must remain before the tail.
-  if (rendered.includes(`STREAM ${original}`))
-    expect(rendered.indexOf(`STREAM ${original}`)).toBeLessThan(
-      rendered.indexOf(`DONE ${original}`),
-    );
+  expect(
+    restored.messages.filter((message) =>
+      message.text.includes(`STREAM ${original}`),
+    ),
+  ).toHaveLength(1);
+  expect(rendered.indexOf(`STREAM ${original}`)).toBeLessThan(
+    rendered.indexOf(`DONE ${original}`),
+  );
+  expect(
+    restored.tools.filter((tool) => tool.id === ordered.tools[0].id),
+  ).toHaveLength(1);
+});
+
+test("Chat Codex earlier native pages preserve focus, retry and render overlapping items once", async () => {
+  const workspace = await shell.create("Earlier native history");
+  const nativeId = "codex-fixture-older-items";
+  const nativeHistory = shell.recording + ".sessions";
+  await mkdir(nativeHistory, { recursive: true });
+  const assistant = (id: string, text: string) => ({
+    id,
+    type: "agentMessage",
+    text,
+  });
+  await writeFile(
+    path.join(nativeHistory, nativeId + ".json"),
+    JSON.stringify([
+      {
+        id: "older-turn",
+        status: "completed",
+        items: [
+          {
+            id: "old-question",
+            type: "userMessage",
+            content: [{ type: "text", text: "Earlier fixture prompt" }],
+          },
+          {
+            id: "old-command",
+            type: "commandExecution",
+            command: "earlier fixture command",
+            status: "completed",
+          },
+          assistant("old-answer", "Earlier fixture answer"),
+        ],
+      },
+      {
+        id: "latest-turn",
+        status: "completed",
+        items: [
+          {
+            id: "new-question",
+            type: "userMessage",
+            content: [{ type: "text", text: "Latest fixture prompt" }],
+          },
+          assistant("new-answer", "Latest fixture answer"),
+        ],
+      },
+    ]),
+  );
+  await shell.configure({
+    codex: { pagedHistory: true, earlierHistoryError: true },
+  });
+  const chat = await shell.cli<{ id: string; paneId: string }>(
+    "conversation",
+    "resume",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--cwd",
+    shell.folders[0],
+    "--native-id",
+    nativeId,
+  );
+  const view = transcript(chat);
+  const pane = shell.pane(chat.paneId);
+  const earlier = view.getByRole("button", {
+    name: "Earlier messages",
+    exact: true,
+  });
+  const composer = pane.getByRole("textbox", { name: "Message", exact: true });
+  await expect(view).toContainText("Latest fixture answer");
+  await expect(view).not.toContainText("Earlier fixture prompt");
+  await composer.fill("Preserved draft");
+  await earlier.click();
+  await expect(pane.getByRole("alert")).toContainText(
+    "Invented history page failure",
+  );
+  await expect(
+    view.getByText("Latest fixture answer", { exact: true }),
+  ).toHaveCount(1);
+  await expect(earlier).toBeVisible();
+
+  await shell.configure({
+    codex: { pagedHistory: true, earlierHistoryDelayMs: 350 },
+  });
+  await earlier.click();
+  await expect(earlier).toHaveAttribute("aria-busy", "true");
+  await composer.focus();
+  await composer.press("End");
+  await composer.press("!");
+  await expect(view).toContainText("Earlier fixture answer");
+  await expect(view).not.toContainText("Earlier fixture prompt");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("Preserved draft!");
+
+  await earlier.click();
+  await expect(view).toContainText("Earlier fixture prompt");
+  await expect(earlier).toHaveCount(0);
+  await expect(view.getByText("Earlier messages are not shown")).toHaveCount(0);
+  const restored = await shell.inspect(chat.id);
+  expect(restored.messages.map((message) => message.text)).toEqual([
+    "Earlier fixture prompt",
+    "Earlier fixture answer",
+    "Latest fixture prompt",
+    "Latest fixture answer",
+  ]);
+  expect(restored.tools).toHaveLength(1);
+  expect(await shell.prompts()).toEqual([]);
+  const pages = (await shell.records()).filter(
+    (record) => record.message?.method === "thread/items/list",
+  );
+  expect(pages.map((record) => record.message?.params?.cursor)).toEqual([
+    "fixture-items-0",
+    "fixture-items-0",
+    "fixture-items-3",
+  ]);
 });
 
 async function removalMenu(id: string) {

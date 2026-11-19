@@ -187,6 +187,7 @@ export class RpcTransport {
     method: string,
     params: unknown,
     timeout = this.timeout,
+    mode?: "read-only",
   ): Promise<unknown> {
     if (this.closing || this.closed || this.failure)
       return Promise.reject(
@@ -199,7 +200,7 @@ export class RpcTransport {
         const error = new Error(`Provider request timed out: ${method}`);
         reject(error);
         // A timed-out mutation has an unknown outcome: do not reuse its controller.
-        this.fail(error);
+        if (mode !== "read-only") this.fail(error);
       }, timeout);
       this.pending.set(id, { resolve, reject, timer });
       try {

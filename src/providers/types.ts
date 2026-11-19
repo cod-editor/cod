@@ -129,6 +129,11 @@ export interface ProviderAdapter {
   resume(nativeId: string): Promise<Conversation>;
   discover(): Promise<Conversation[]>;
   inspect(section: InspectionSection): Promise<ProviderInspection>;
+  earlierHistory?(cursor: string): Promise<{
+    items: unknown[];
+    nextCursor?: string;
+    startsAtTail: boolean;
+  }>;
   getOptions(): Promise<ProviderOptions>;
   getSelection(): ProviderOptions["current"];
   setOption(selection: ProviderSelection): Promise<ProviderOptions>;
