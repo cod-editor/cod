@@ -962,7 +962,7 @@ test("HTML chat references open the browser while explicit file opening retains 
     .first()
     .click();
   await expect(
-    app.page.getByRole("textbox", { name: "Address", exact: true }),
+    app.page.getByRole("combobox", { name: "Address", exact: true }),
   ).toHaveValue(/file:.*report\.html$/);
   await expect
     .poll(() =>
@@ -1057,7 +1057,7 @@ test("Image files open in Cod preview from CLI, tree and external chat paths wit
   expect(
     await app
       .pane(first.paneId)
-      .getByRole("textbox", { name: "Address", exact: true })
+      .getByRole("combobox", { name: "Address", exact: true })
       .count(),
   ).toBe(0);
   expect(

@@ -68,7 +68,7 @@ export function createTabDrag(invoke: Invoke) {
         ...tabs.querySelectorAll<HTMLElement>("[data-tab-id]"),
       ].filter((tab) => tab.dataset.tabId !== dragged?.id);
       let index = others.findIndex((tab) => {
-        const rect = tab.getBoundingClientRect();
+        const rect = tab.parentElement!.getBoundingClientRect();
         return x < rect.left + rect.width / 2;
       });
       if (index < 0) index = others.length;
@@ -79,7 +79,9 @@ export function createTabDrag(invoke: Invoke) {
         index,
       );
       const before = others[index];
-      const rect = (before ?? others.at(-1))?.getBoundingClientRect();
+      const rect = (
+        before ?? others.at(-1)
+      )?.parentElement?.getBoundingClientRect();
       const bounds = bar.getBoundingClientRect();
       const viewport = tabs.getBoundingClientRect();
       const left = rect ? (before ? rect.left : rect.right) : viewport.left;

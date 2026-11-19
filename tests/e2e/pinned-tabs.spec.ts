@@ -79,13 +79,13 @@ test("Pin actions preserve background selection, replace close with unpin and pr
   expect((await ws()).activePaneId).toBe(second.paneId);
   expect(order(await ws(), first.groupId)[0]).toBe(first.paneId);
   await expect(
-    tab(first.paneId).getByRole("button", {
+    tab(first.paneId).locator("..").getByRole("button", {
       name: "Unpin New tab",
       exact: true,
     }),
   ).toBeVisible();
   await expect(
-    tab(first.paneId).getByRole("button", {
+    tab(first.paneId).locator("..").getByRole("button", {
       name: "Close New tab",
       exact: true,
     }),
@@ -115,10 +115,12 @@ test("Pin actions preserve background selection, replace close with unpin and pr
   await expect(tab(first.paneId)).toBeFocused();
   await app.page.screenshot({ path: info.outputPath("pinned-tab.png") });
   await tab(first.paneId)
+    .locator("..")
     .getByRole("button", { name: "Unpin New tab", exact: true })
     .click();
   await expect(tab(first.paneId)).toHaveAttribute("data-pinned", "false");
   await tab(first.paneId)
+    .locator("..")
     .getByRole("button", { name: "Close New tab", exact: true })
     .click();
   await expect(tab(first.paneId)).toHaveCount(0);
@@ -146,7 +148,7 @@ test("Native browser shortcuts and CLI aliases preserve a pinned page; explicit 
   await expect(
     app
       .pane(browser.paneId)
-      .getByRole("textbox", { name: "Address", exact: true }),
+      .getByRole("combobox", { name: "Address", exact: true }),
   ).toBeVisible();
   await app.app!.evaluate(({ webContents }, url) => {
     const page = webContents
@@ -200,7 +202,7 @@ test("Pinned and ordinary dragging clamps to the correct segment and cross-pane 
   const marker = (await app.page
     .locator(".tab-insertion-marker")
     .boundingBox())!;
-  const boundary = (await tab(b.paneId).boundingBox())!;
+  const boundary = (await tab(b.paneId).locator("..").boundingBox())!;
   expect(Math.abs(marker.x - (boundary.x + boundary.width))).toBeLessThan(3);
   await app.page.mouse.up();
   expect(order(await ws(), a.groupId).slice(0, 2)).toEqual([

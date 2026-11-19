@@ -278,7 +278,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   await expect(
     app
       .pane(browserPane)
-      .getByRole("textbox", { name: "Address", exact: true }),
+      .getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   expect(
     (await active()).panes.find((p) => p.id === browserPane),
@@ -708,7 +708,7 @@ test("Type menu retains the background group target and rejects a moved source w
     .toBe(right.groupId);
   const source = (await active()).activePaneId;
   await expect(
-    app.pane(source).getByRole("textbox", { name: "Address", exact: true }),
+    app.pane(source).getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   await app.cli("pane", "focus", "--workspace", workspace, "--id", left);
   await app.page.setViewportSize({ width: 720, height: 650 });
@@ -1136,7 +1136,7 @@ test("Registered forms create ordinary blank browsers and image previews create 
     .not.toBe(form.paneId);
   const childPane = (await active()).activePaneId;
   await expect(
-    app.pane(childPane).getByRole("textbox", { name: "Address", exact: true }),
+    app.pane(childPane).getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   const child = (await state()).browsers.find((b) => b.paneId === childPane)!;
   expect(child.url).toBe("about:blank");
@@ -1376,6 +1376,15 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
   const reviewTab = app.page.locator(
     `[role="tab"][data-tab-id="${review.paneId}"]`,
   );
+  const reviewName = `${path.basename(file)} - Review snapshot`;
+  await expect(sourceTab).toHaveAccessibleName(path.basename(file));
+  await expect(reviewTab).toHaveAccessibleName(reviewName);
+  await expect(reviewTab.getByRole("button")).toHaveCount(0);
+  const reviewAction = reviewTab.locator("..").getByRole("button", {
+    name: `Close ${reviewName}`,
+    exact: true,
+  });
+  await expect(reviewAction).toHaveAccessibleName(`Close ${reviewName}`);
   await expect(reviewTab.locator(".tab-kind")).toHaveText("Review");
   await expect(reviewTab.locator(".tab-kind")).toBeVisible();
   await expect(sourceTab.locator(".tab-kind")).toBeHidden();
@@ -1405,7 +1414,7 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
     "--pinned",
     "true",
   );
-  await expect(sourceTab.locator(".tab-pin")).toBeVisible();
+  await expect(sourceTab.locator("..").locator(".tab-pin")).toBeVisible();
   await expect(sourceTab.locator(".tab-modified")).toBeVisible();
   await sourceTab.click({ button: "right" });
   const closePinned = app.page
@@ -1442,7 +1451,7 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
   await reviewTab.click();
   const inspectBounds = () =>
     reviewTab.evaluate((tab) => {
-      const outer = tab.getBoundingClientRect(),
+      const outer = tab.parentElement!.getBoundingClientRect(),
         badge = tab.querySelector(".tab-kind")!.getBoundingClientRect();
       return {
         inside:
@@ -1464,7 +1473,9 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
   await app.page.keyboard.press("Shift+Tab");
   await expect(reviewTab).toBeFocused();
   expect(
-    await reviewTab.evaluate((e) => getComputedStyle(e).outlineStyle),
+    await reviewTab.evaluate(
+      (e) => getComputedStyle(e.parentElement!).outlineStyle,
+    ),
   ).toBe("solid");
   await app.page.screenshot({
     path: info.outputPath("source-review-tabs-narrow.png"),
@@ -1492,7 +1503,7 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
     changed + "Survives restart\n",
   );
   await expect(restoredSource.locator(".tab-modified")).toBeVisible();
-  await expect(restoredSource.locator(".tab-pin")).toBeVisible();
+  await expect(restoredSource.locator("..").locator(".tab-pin")).toBeVisible();
   await expect(
     app.page.locator(`[role="tab"][data-tab-id="${review.paneId}"] .tab-kind`),
   ).toHaveText("Review");
@@ -1536,7 +1547,7 @@ test("Saving a short source tab does not move a held Close target", async () => 
       .poll(() => app.app!.evaluate(() => (globalThis as any).tabSaveWaiting))
       .toBe(true);
     await tab.hover();
-    const close = tab.getByRole("button", {
+    const close = tab.locator("..").getByRole("button", {
       name: "Close spec.md",
       exact: true,
     });

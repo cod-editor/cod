@@ -82,14 +82,16 @@ for (const scale of [1, 1.5, 2]) {
       );
       const tab = (id: string) =>
         app.page.locator(`[role=tab][data-tab-id="${id}"]`);
-      const close = tab(short.paneId).getByRole("button", {
+      const close = tab(short.paneId).locator("..").getByRole("button", {
         name: "Close spec.md",
         exact: true,
       });
-      const unpin = tab(pinned.paneId).getByRole("button", {
-        name: `Unpin ${longName}`,
-        exact: true,
-      });
+      const unpin = tab(pinned.paneId)
+        .locator("..")
+        .getByRole("button", {
+          name: `Unpin ${longName}`,
+          exact: true,
+        });
       const bar = app.page.locator(
         `.tab-group[data-group-id="${group}"] .tab-bar`,
       );

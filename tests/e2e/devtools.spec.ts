@@ -205,7 +205,7 @@ test("Native page keys and Commands inspect the invocation's exact page rather t
   await closeInspector(first.url);
   await app
     .pane(first.paneId)
-    .getByRole("textbox", { name: "Address", exact: true })
+    .getByRole("combobox", { name: "Address", exact: true })
     .focus();
   await app.page.keyboard.press("F12");
   await expect.poll(() => owner().then((s) => s.open)).toBe(true);
