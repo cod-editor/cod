@@ -23,7 +23,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
 if (argv.includes("--help")) {
   console.log(
-    "Usage: node scripts/package.mjs [--dist PATH]\nPackages the host platform using installed prebuilt Electron and fresh locked production dependencies. Does not build, publish or launch. macOS bundles receive a local ad-hoc signature.",
+    "Usage: node scripts/package.mjs [--dist PATH]\nPackages the host platform using installed prebuilt Electron and fresh locked production dependencies. Does not build, publish or launch. macOS bundles receive a local ad-hoc signature. COD_PACKAGE_VERSION can set a release preview version.",
   );
   process.exit(0);
 }
@@ -35,6 +35,17 @@ const dist = path.resolve(root, argv[1] ?? "dist");
 const manifest = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
+const previewVersion = process.env.COD_PACKAGE_VERSION;
+if (
+  previewVersion !== undefined &&
+  (process.platform !== "darwin" ||
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.(0|[1-9]\d*)$/.test(
+      previewVersion,
+    ))
+)
+  throw new Error("Expected a macOS version of the form X.Y.Z-preview.N");
+const applicationVersion = previewVersion ?? manifest.version;
+
 const electron = JSON.parse(
   await readFile(path.join(root, "node_modules/electron/package.json"), "utf8"),
 );
@@ -153,6 +164,12 @@ try {
       CFBundleDisplayName: "Cod",
       CFBundleIdentifier: "dev.cod.desktop",
       CFBundleIconFile: "cod.icns",
+      ...(previewVersion
+        ? {
+            CFBundleShortVersionString: previewVersion.split("-")[0],
+            CFBundleVersion: previewVersion.split("-")[0],
+          }
+        : {}),
     }))
       await run("/usr/libexec/PlistBuddy", [
         "-c",
@@ -236,7 +253,7 @@ try {
       {
         name: "cod",
         productName: "Cod",
-        version: manifest.version,
+        version: applicationVersion,
         private: true,
         main: "dist/main.cjs",
         dependencies: manifest.dependencies ?? {},
@@ -271,7 +288,7 @@ try {
         platform: process.platform,
         arch: process.arch,
         electron: electron.version,
-        applicationVersion: manifest.version,
+        applicationVersion,
         signedByThisScript: process.platform === "darwin",
         signingIdentity: process.platform === "darwin" ? "ad-hoc" : null,
         notarized: false,
