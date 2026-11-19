@@ -1807,6 +1807,38 @@ browser-action-list::part(action):focus-visible {
   line-height: var(--chat-line-height, 1.65);
 }
 
+.review-diff-comparison,
+.review-diff-file {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) max-content minmax(
+      0,
+      max-content
+    );
+  gap: var(--space-1);
+}
+.review-diff-comparison {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+}
+.review-diff-file {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: var(--ui-font-size);
+}
+.review-diff-path {
+  display: flex;
+  min-width: 0;
+}
+.review-diff-comparison > span,
+.review-diff-path > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-diff-path > :last-child {
+  flex: none;
+  max-width: 100%;
+}
 .review-diff-hunk {
   margin: var(--space-2) 0;
   padding: var(--space-1) var(--space-2);

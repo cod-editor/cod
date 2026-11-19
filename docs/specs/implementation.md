@@ -202,7 +202,7 @@ Scripted provider subprocesses verify deterministic protocol and UI behavior. Se
 
 Official-extension checks must exercise login/unlock, generation, saving, actual content-script autofill and restart against an invented vault. Ad-blocking fixtures verify network/cosmetic integration and host exceptions; representative public-site comparisons are needed to claim AdGuard-comparable effectiveness. Keep real account data, screenshots, logs and per-run evidence in ignored local artifacts.
 
-Diff reviews render the saved unified diff in hunk order: context appears once with both line numbers, additions and removals retain their own side, and missing-final-newline markers remain visible. Existing snapshots use their saved diff text and manifest without migration. Comment selections must stay within one file, hunk and side; context supports either side so old-side anchors remain valid.
+Diff reviews render the saved unified diff in hunk order: context appears once with both line numbers, additions and removals retain their own side, and missing-final-newline markers remain visible. Existing snapshots use their saved diff text and manifest without migration. Comment selections must stay within one file, hunk and side; context supports either side so old-side anchors remain valid. Each file has one repository-relative heading, with both paths shown only for an actual rename or copy. Comparison labels use the supplied refs and shorten literal commit hashes. Full paths and resolved revisions remain available in descriptions. Long path prefixes and refs ellipsize in narrow panes without altering line scrolling or anchor coordinates.
 
 ## Interface composition
 

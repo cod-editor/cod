@@ -15,6 +15,30 @@ import type { Invoke } from "./ui/contracts";
 import type { ReviewService } from "./reviews/index";
 type Detail = Awaited<ReturnType<ReviewService["detail"]>>;
 type Range = import("./reviews/snapshots").Range;
+function revisionLabels(ref: string, commit: string | null) {
+  const literalCommit = commit !== null && commit.startsWith(ref.toLowerCase());
+  return {
+    display: literalCommit
+      ? ref.slice(0, 12)
+      : ref.replace(/^refs\/heads\//, ""),
+    full: !commit ? ref : literalCommit ? commit : `${ref} (${commit})`,
+  };
+}
+function labelPart(text: string): HTMLElement {
+  const part = document.createElement("span");
+  part.textContent = text;
+  return part;
+}
+
+function diffPathLabel(path: string): HTMLElement {
+  const label = document.createElement("span");
+  label.className = "review-diff-path";
+  const basename = path.lastIndexOf("/") + 1;
+  if (basename) label.append(labelPart(path.slice(0, basename)));
+  label.append(labelPart(path.slice(basename)));
+  return label;
+}
+
 const updates = new WeakMap<HTMLElement, (state: AppState) => void>();
 export function updateReview(element: HTMLElement, state: AppState) {
   updates.get(element)?.(state);
@@ -487,17 +511,30 @@ export function reviewPane(
     if (!reuseDocument) {
       const label = document.createElement("p");
       label.className = "review-source";
-      label.textContent =
+      const sourcePath =
         detail.target.kind === "document"
           ? detail.target.path
           : detail.target.repoRoot;
+      label.textContent = sourcePath;
       label.title = `Saved revision ${snapshot.hash}`;
       content.replaceChildren(label);
       if (detail.target.kind === "diff") {
         const comparison = document.createElement("p");
-        comparison.textContent = detail.target.base
-          ? `${detail.target.base} (${snapshot.base}) → ${detail.target.head} (${snapshot.head})`
-          : "Local tracked changes (saved working-tree diff)";
+        comparison.className = "review-diff-comparison";
+        if (detail.target.base && detail.target.head) {
+          const base = revisionLabels(detail.target.base, snapshot.base);
+          const head = revisionLabels(detail.target.head, snapshot.head);
+          comparison.append(
+            labelPart(base.display),
+            " → ",
+            labelPart(head.display),
+          );
+          comparison.title = `${base.full} → ${head.full}`;
+          comparison.setAttribute("aria-description", comparison.title);
+        } else {
+          comparison.textContent =
+            "Local tracked changes (saved working-tree diff)";
+        }
         content.append(comparison);
       }
       ranges = [];
@@ -601,14 +638,28 @@ export function reviewPane(
       } else {
         documentView = undefined;
         const files = diffHunks(snapshot.text);
+        const repoPrefix = sourcePath.endsWith("/")
+          ? sourcePath
+          : `${sourcePath}/`;
         for (const [fileIndex, file] of snapshot.files.entries()) {
-          for (const [side, path] of [
-            ["Old", file.oldPath],
-            ["New", file.newPath],
-          ] as const) {
-            if (!path) continue;
+          const paths = [...new Set([file.oldPath, file.newPath])].filter(
+            (filePath) => filePath !== null,
+          );
+          if (paths.length) {
             const heading = document.createElement("h3");
-            heading.textContent = `${side}: ${path}`;
+            heading.className = "review-diff-file";
+            paths.forEach((filePath, index) => {
+              if (index) heading.append(" → ");
+              heading.append(
+                diffPathLabel(
+                  filePath.startsWith(repoPrefix)
+                    ? filePath.slice(repoPrefix.length)
+                    : filePath,
+                ),
+              );
+            });
+            heading.title = paths.join(" → ");
+            heading.setAttribute("aria-description", heading.title);
             content.append(heading);
           }
           for (const [hunkIndex, hunk] of (files[fileIndex] ?? []).entries()) {
