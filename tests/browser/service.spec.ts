@@ -524,3 +524,39 @@ test("Listing tabs during native destruction never reads destroyed WebContents",
     "surviving",
   );
 });
+
+test("Late destruction of an old native view leaves the replacement's history intact", async () => {
+  await open("reopened");
+  await application.evaluate(async (_electron, origin) => {
+    const { service } = (globalThis as any).browserFixture;
+    const old = service.getWebContents("reopened");
+    const close = old.close.bind(old);
+    // Hold the actual teardown until the replacement has started restoring.
+    old.close = () => {};
+    service.close("reopened");
+    const destroyed = new Promise<void>((resolve) =>
+      old.once("destroyed", resolve),
+    );
+    await service.open({
+      id: "reopened",
+      workspaceId: "reopened",
+      url: "about:blank",
+      deferNavigation: true,
+    });
+    const restored = service.restoreNavigation("reopened", {
+      entries: [
+        { url: origin + "/one", title: "First page" },
+        { url: origin + "/two", title: "Restored page" },
+      ],
+      index: 1,
+    });
+    close({ waitForBeforeUnload: false });
+    await Promise.all([destroyed, restored]);
+  }, origin);
+  expect((await call("snapshot", "reopened")).canGoBack).toBe(true);
+  expect(await js("reopened", "document.querySelector('h1').textContent")).toBe(
+    "/two",
+  );
+  await call("back", "reopened");
+  await url("reopened", "/one");
+});

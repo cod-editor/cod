@@ -729,11 +729,11 @@ export class BrowserApplicationService {
       ...service.list(),
       ...(this.agentPages?.list() ?? []),
     ]) {
-      const itemService = this.store.data.browsers.find(
+      const record = this.store.data.browsers.find(
         (browser) => browser.id === item.id,
-      )?.agentPage
-        ? this.agentPages!
-        : service;
+      );
+      if (!record) continue;
+      const itemService = record.agentPage ? this.agentPages! : service;
       const rect = rectangles.find((rect) => rect && rect.id === item.id);
       const visible = Boolean(
         rect &&
@@ -884,6 +884,56 @@ export class BrowserApplicationService {
     await this.loadBrowser(record, url);
     return structuredClone(this.browser(record.id));
   }
+  async withReopenedBrowser<T>(
+    saved: BrowserState,
+    commit: (browser: BrowserState) => Promise<T>,
+  ): Promise<T> {
+    const service = this.requireBrowserService();
+    const { id, workspaceId } = saved;
+    if (this.browserAdmissions.has(id))
+      throw new Error("This browser tab is already being reopened");
+    const admission = new AbortController();
+    this.browserAdmissions.set(id, admission);
+    const navigation = normalizeNavigation(saved.navigation);
+    let prepared = false;
+    try {
+      // The native view stays hidden and the saved record stays untouched
+      // until its pane and browser record can be published together.
+      const snapshot = await service.open({
+        id,
+        workspaceId,
+        url: saved.error ? "about:blank" : saved.url,
+        ...(saved.error
+          ? { restoredFailure: { ...saved, error: saved.error } }
+          : {
+              navigation:
+                navigation?.entries[navigation.index]?.url === saved.url
+                  ? navigation
+                  : undefined,
+              beforeNavigation: () =>
+                this.browserAddons?.whenReady(admission.signal) ??
+                Promise.resolve(),
+            }),
+      });
+      prepared = true;
+      if (this.store.closing) throw new Error("Cod is shutting down");
+      return await commit({
+        ...saved,
+        ...snapshot,
+        url: snapshot.url || saved.url,
+        nativeTabId: service.getWebContents(id).id,
+        permissionRequests: undefined,
+        permissionDenied: undefined,
+      });
+    } catch (error) {
+      if (prepared) service.close(id);
+      throw error;
+    } finally {
+      if (this.browserAdmissions.get(id) === admission)
+        this.browserAdmissions.delete(id);
+    }
+  }
+
   async restoreBrowser(record: BrowserState): Promise<void> {
     const pending = this.browserInitializations.get(record.id);
     if (pending) {
