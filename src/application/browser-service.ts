@@ -49,6 +49,7 @@ export class BrowserApplicationService {
   private browserAdmissions = new Map<string, AbortController>();
   private browserInitializations = new Map<string, Promise<unknown>>();
   private browserWindow?: BrowserWindow;
+  private overviewCapturePending = false;
   constructor(
     private readonly store: ApplicationStateStore,
     private readonly conversations: BrowserConversationPort,
@@ -620,6 +621,49 @@ export class BrowserApplicationService {
       workspace.activePaneId = browser.paneId;
       this.store.notify();
       this.store.schedulePersist();
+    }
+  }
+
+  async browserOverviewBackdrop(ids: unknown) {
+    const service = this.browserService;
+    const workspace = this.store.data.activeWorkspaceId;
+    if (
+      !service ||
+      !workspace ||
+      this.store.closing ||
+      this.overviewCapturePending ||
+      !Array.isArray(ids) ||
+      ids.length > 4 ||
+      !ids.every((id) => typeof id === "string")
+    )
+      return [];
+    const visible = new Set(
+      service
+        .list()
+        .filter(
+          (item) =>
+            item.workspaceId === workspace && item.visible && !item.error,
+        )
+        .map((item) => item.id),
+    );
+    this.overviewCapturePending = true;
+    try {
+      const captures = await Promise.all(
+        [...new Set<string>(ids)]
+          .filter((id) => visible.has(id))
+          .map(async (id) => {
+            const frame = await service
+              .captureOverviewBackdrop(id)
+              .catch(() => undefined);
+            return frame && { id, ...frame };
+          }),
+      );
+      return workspace === this.store.data.activeWorkspaceId &&
+        !this.store.closing
+        ? captures.filter((capture) => !!capture)
+        : [];
+    } finally {
+      this.overviewCapturePending = false;
     }
   }
 

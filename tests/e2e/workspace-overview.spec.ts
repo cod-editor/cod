@@ -531,12 +531,16 @@ test("Overview rename, pin, move and shared closure actions preserve the query a
   ).toBeFocused();
 });
 
-test("Overview native entry cancels back to the exact page field and guarded closure preserves the page on Stay", async () => {
+test("Overview keeps browser pixels visible and restores native focus and state", async ({}, info) => {
   const workspace = await app.create("Invented browser workspace");
   const file = path.join(app.folders[0], "overview-page.html");
   await writeFile(
     file,
-    '<!doctype html><title>Invented Overview form</title><input id="field" value="Invented native draft">',
+    `<!doctype html><title>Invented Overview form</title>
+     <style>body {background:#147dc1;height:250vh}
+     input {position:fixed;left:12px;top:12px}</style>
+     <input id="field" value="Invented native draft">
+     <script>window.fixtureIdentity = Math.random()</script>`,
   );
   const browser = await app.cli<{ id: string; paneId: string }>(
     "browser",
@@ -558,6 +562,11 @@ test("Overview native entry cancels back to the exact page field and guarded clo
     .app!.context()
     .pages()
     .find((page) => page.url() === pathToFileURL(file).href)!;
+  const identity = await site.evaluate(() => {
+    window.scrollTo(0, 240);
+    return (window as Window & { fixtureIdentity?: number }).fixtureIdentity;
+  });
+  await expect.poll(() => site.evaluate(() => window.scrollY)).toBe(240);
   await site.locator("input").focus();
   await site
     .locator("input")
@@ -575,8 +584,50 @@ test("Overview native entry cancels back to the exact page field and guarded clo
     contents.sendInputEvent({ type: "keyUp", keyCode: "O", modifiers });
   }, pathToFileURL(file).href);
   await expect(search()).toBeFocused();
+  const backdrop = app
+    .pane(browser.paneId)
+    .locator(".browser-overview-backdrop");
+  await expect(backdrop).toBeVisible();
+  await expect
+    .poll(() =>
+      backdrop.evaluate((image: HTMLImageElement) => image.naturalWidth),
+    )
+    .toBeGreaterThan(0);
+  const box = (await backdrop.boundingBox())!;
+  const sample = {
+    x: Math.floor(box.x + 20),
+    y: Math.floor(box.y + box.height - 20),
+  };
+  await expect
+    .poll(() =>
+      app.app!.evaluate(async ({ BrowserWindow }, point) => {
+        const image =
+          await BrowserWindow.getAllWindows()[0].webContents.capturePage({
+            ...point,
+            width: 1,
+            height: 1,
+          });
+        const [blue, green, red] = image.toBitmap();
+        return (
+          Math.abs(red - 20) + Math.abs(green - 125) + Math.abs(blue - 193)
+        );
+      }, sample),
+    )
+    .toBeLessThan(15);
+  await app.page.screenshot({
+    path: info.outputPath("overview-over-browser.png"),
+  });
   await search().fill("form");
   await search().press("Escape");
+  await expect(backdrop).toHaveCount(0);
+  expect(
+    await site.evaluate(() => ({
+      identity: (window as Window & { fixtureIdentity?: number })
+        .fixtureIdentity,
+      scroll: window.scrollY,
+    })),
+  ).toEqual({ identity, scroll: 240 });
+
   await expect
     .poll(() =>
       app.app!.evaluate(({ webContents }) =>
@@ -635,6 +686,77 @@ test("Overview native entry cancels back to the exact page field and guarded clo
   await search().press("Escape");
   await app.cli("pane", "reopen", "--workspace", workspace);
   await expect(app.pane(browser.paneId)).toBeVisible();
+});
+
+test("Overview keeps split browser backdrops in their own panes and discards them on workspace change", async () => {
+  const other = await app.create("Invented empty workspace");
+  const workspace = await app.create("Invented split browser workspace");
+  async function openPage(name: string, sourcePane?: string) {
+    const file = path.join(app.folders[0], name + ".html");
+    await writeFile(
+      file,
+      `<!doctype html><title>Invented ${name}</title><p>Fixture page</p>`,
+    );
+    return app.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      pathToFileURL(file).href,
+      ...(sourcePane ? ["--source-pane", sourcePane, "--focus", "true"] : []),
+    );
+  }
+  const left = await openPage("alpha");
+  const split = await app.cli<{ paneId: string }>(
+    "pane",
+    "split",
+    "--workspace",
+    workspace,
+    "--id",
+    left.paneId,
+    "--direction",
+    "right",
+  );
+  const right = await openPage("beta", split.paneId);
+  await expect
+    .poll(async () => {
+      const state = await app.cli<AppState>("state");
+      return [left, right].map(
+        ({ id }) =>
+          !!state.browsers.find((browser) => browser.id === id)?.visible,
+      );
+    })
+    .toEqual([true, true]);
+  const image = (pane: string) =>
+    app.pane(pane).locator(".browser-overview-backdrop");
+  await show();
+  for (const pane of [left.paneId, right.paneId]) {
+    const view = app.pane(pane).locator(".browser-content");
+    await expect(image(pane)).toBeVisible();
+    expect(await image(pane).boundingBox()).toEqual(await view.boundingBox());
+  }
+  await expect
+    .poll(async () => {
+      const state = await app.cli<AppState>("state");
+      return [left, right].map(
+        ({ id }) =>
+          state.browsers.find((browser) => browser.id === id)?.visible,
+      );
+    })
+    .toEqual([false, false]);
+  const box = (await image(left.paneId).boundingBox())!;
+  await app.page.mouse.click(box.x + 12, box.y + box.height - 12);
+  await expect(overview()).toHaveCount(0);
+  await expect(app.page.locator(".browser-overview-backdrop")).toHaveCount(0);
+  await show();
+  await expect(image(left.paneId)).toBeVisible();
+  await app.cli("workspace", "focus", "--id", other);
+  await expect(app.page.locator(".browser-overview-backdrop")).toHaveCount(0);
+  await search().press("Escape");
+  await expect(overview()).toHaveCount(0);
+  await app.cli("workspace", "focus", "--id", workspace);
+  await expect(app.page.locator(".browser-overview-backdrop")).toHaveCount(0);
 });
 
 test("Overview reconciles review, streaming and removal updates without losing input, selected IDs or closure guards", async () => {

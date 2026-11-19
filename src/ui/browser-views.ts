@@ -25,21 +25,110 @@ export function createBrowserViews(
       flushBrowserLayout();
     });
   }
+  let overviewDialog: HTMLDialogElement | null = null;
+  const backdrops = new Map<
+    HTMLImageElement,
+    { pageUrl: string; objectUrl: string }
+  >();
+  function removeBackdrop(image: HTMLImageElement, objectUrl: string) {
+    image.remove();
+    URL.revokeObjectURL(objectUrl);
+    backdrops.delete(image);
+  }
+  function updateOverviewBackdrops(
+    dialog: HTMLDialogElement | null,
+    visibleSlots: Map<string, HTMLElement>,
+  ): void {
+    if (!dialog && !overviewDialog) return;
+    const state = getState();
+    const workspace = state.workspaces.find(
+      ({ id }) => id === state.activeWorkspaceId,
+    );
+    const browser = (id: string) =>
+      getState().browsers.find((record) => record.id === id);
+    for (const [image, { pageUrl, objectUrl }] of backdrops) {
+      const id = image.parentElement?.dataset.browserId ?? "";
+      const source = browser(id);
+      if (
+        !dialog ||
+        dialog !== overviewDialog ||
+        visibleSlots.get(id) !== image.parentElement ||
+        source?.workspaceId !== workspace?.id ||
+        source?.url !== pageUrl
+      )
+        removeBackdrop(image, objectUrl);
+    }
+    if (dialog === overviewDialog) return;
+    overviewDialog = dialog;
+    if (!dialog || !workspace) return;
+    const targets = state.browsers
+      .filter(
+        (item) =>
+          item.workspaceId === workspace.id &&
+          !item.agentPage &&
+          visibleSlots.has(item.id),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.paneId === workspace.activePaneId) -
+          Number(a.paneId === workspace.activePaneId),
+      )
+      .slice(0, 4)
+      .map(({ id }) => id);
+    if (!targets.length) return;
+    // Request the last visible frame before sending the ordered native hide.
+    void window.cod
+      .browserOverviewBackdrop(targets)
+      .then((captures) => {
+        if (
+          overviewDialog !== dialog ||
+          !dialog.open ||
+          getState().activeWorkspaceId !== workspace.id
+        )
+          return;
+        for (const { id, url, bytes } of captures) {
+          const target = visibleSlots.get(id);
+          const source = browser(id);
+          if (
+            !target ||
+            !panes.contains(target) ||
+            target.hidden ||
+            source?.url !== url ||
+            source.workspaceId !== workspace.id
+          )
+            continue;
+          const image = document.createElement("img");
+          image.className = "browser-overview-backdrop";
+          image.alt = "";
+          image.setAttribute("aria-hidden", "true");
+          const objectUrl = URL.createObjectURL(
+            new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+          );
+          backdrops.set(image, { pageUrl: url, objectUrl });
+          image.src = objectUrl;
+          target.append(image);
+        }
+      })
+      .catch(() => undefined);
+  }
   function flushBrowserLayout(): void {
+    const slots = new Map(
+      [...panes.querySelectorAll<HTMLElement>(".browser-content")]
+        .filter((element) => !element.hidden && element.getClientRects().length)
+        .map((element) => [element.dataset.browserId!, element]),
+    );
+    updateOverviewBackdrops(
+      document.querySelector<HTMLDialogElement>(
+        "dialog.workspace-overview[open]",
+      ),
+      slots,
+    );
     const rectangles = document.querySelector("dialog[open]")
       ? []
-      : [...panes.querySelectorAll<HTMLElement>(".browser-content")]
-          .filter((element) => !element.hidden)
-          .map((element) => {
-            const rect = element.getBoundingClientRect();
-            return {
-              id: element.dataset.browserId!,
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-            };
-          });
+      : [...slots].map(([id, element]) => {
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return { id, x, y, width, height };
+        });
     window.cod.browserLayout(rectangles);
   }
   const resizeObserver = new ResizeObserver(scheduleBrowserLayout);
@@ -436,6 +525,9 @@ export function createBrowserViews(
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleBrowserLayout);
       document.removeEventListener("scroll", scheduleBrowserLayout, true);
+      for (const [image, { objectUrl }] of backdrops)
+        removeBackdrop(image, objectUrl);
+      overviewDialog = null;
       browserPanes.clear();
       homes.clear();
       window.cod.browserLayout([]);

@@ -470,6 +470,15 @@ async function start(): Promise<void> {
       )
         operations.browserLayout(rectangles);
     });
+    ipcMain.handle("cod:browser-overview-backdrop", (event, ids: unknown) => {
+      if (
+        event.sender !== mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== rendererUrl
+      )
+        return [];
+      return operations.browserOverviewBackdrop(ids);
+    });
     ipcMain.handle("cod:choose-directory", async (event) => {
       const parent = mainWindow;
       if (

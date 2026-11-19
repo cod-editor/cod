@@ -584,9 +584,22 @@ body {
   background: transparent;
 }
 .browser-content {
+  position: relative;
   flex: 1;
   min-height: 1px;
   background: var(--panel);
+}
+.browser-overview-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  visibility: hidden;
+}
+body:has(.workspace-overview[open]) .browser-overview-backdrop {
+  visibility: visible;
 }
 .browser-status {
   font-size: calc(var(--ui-font-size) - 2px);
