@@ -680,3 +680,92 @@ test("Exact source and formatted Markdown fragments survive restart and reject f
     );
     assert.equal(comments[1].anchor.fragment?.view, "markdown");
   }));
+
+test("Cancelling a review preserves its private snapshot and wins or loses against submission atomically", () =>
+  fixture(async ({ file, make }) => {
+    const service = make();
+    const open = () =>
+      service.openDocument({
+        workspaceId: "workspace",
+        originConversationId: "target",
+        path: file,
+      });
+    const original = await open();
+    const input = {
+      id: original.id,
+      roundId: original.currentRoundId,
+      expectedVersion: original.version,
+    };
+    const saved = await service.addComment({
+      ...input,
+      body: "Unsent fixture feedback",
+      range: { startLine: 2, endLine: 2 },
+    });
+    const draft = { ...input, expectedVersion: saved.version };
+    const outcomes = await Promise.allSettled([
+      service.cancel(draft),
+      service.submit({ ...draft, conversationId: "target", requestId: "lost" }),
+    ]);
+    assert.deepEqual(
+      outcomes.map((outcome) => outcome.status),
+      ["fulfilled", "rejected"],
+    );
+
+    const restarted = make();
+    const history = await restarted.detail(original.id);
+    assert.equal(history.rounds[0].status, "cancelled");
+    assert.equal(history.rounds[0].submission, undefined);
+    assert.equal(history.rounds[0].comments[0].body, "Unsent fixture feedback");
+    assert.equal(
+      history.snapshots[original.snapshotId].text,
+      "first\nselected line\nlast\n",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(await restarted.inspect(original.id)),
+      /Unsent fixture feedback/,
+    );
+    await assert.rejects(
+      restarted.deleteComment({
+        ...draft,
+        expectedVersion: history.version,
+        commentId: history.rounds[0].comments[0].id,
+      }),
+      /Only the current draft round is editable/,
+    );
+    const current = await restarted.refresh({
+      id: original.id,
+      expectedRoundId: original.currentRoundId,
+      expectedVersion: history.version,
+    });
+    assert.deepEqual(
+      current.rounds.map((round) => [round.status, round.commentCount]),
+      [
+        ["cancelled", 1],
+        ["draft", 0],
+      ],
+    );
+
+    const other = await restarted.openDocument({
+      workspaceId: "workspace",
+      originConversationId: "target",
+      path: file,
+    });
+    const target = {
+      id: other.id,
+      roundId: other.currentRoundId,
+      expectedVersion: other.version,
+    };
+    const reverse = await Promise.allSettled([
+      restarted.submit({
+        ...target,
+        conversationId: "target",
+        requestId: "won",
+      }),
+      restarted.cancel(target),
+    ]);
+    assert.deepEqual(
+      reverse.map((outcome) => outcome.status),
+      ["fulfilled", "rejected"],
+    );
+    assert.equal((await restarted.inspect(other.id)).status, "submitted");
+  }));

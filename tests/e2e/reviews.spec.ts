@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
 import { tabTo, modifier } from "./helpers/workspace-app";
+import type { AppState } from "../../src/types";
 interface Opened {
   reviewId: string;
   roundId: string;
@@ -1606,4 +1607,155 @@ test("Review follows the current round, respects deliberate history, and preserv
     "Third invented revision",
   );
   expect(await shell.prompts()).toHaveLength(0);
+});
+
+test("Cancel review leaves history and resolves waiters without delivering to a working chat", async () => {
+  const workspace = await shell.create("Cancel review fixture");
+  const chat = await shell.newChat(workspace, "kimi");
+  await shell.send(chat.id, "[hold] continuing fixture");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("working");
+  const document = await open(workspace);
+  await comment(document, "Saved but never sent");
+  const folder = shell.folders[0];
+  const gitOptions = {
+    cwd: folder,
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    },
+  };
+  execFileSync("git", ["add", "--", path.basename(shell.file)], gitOptions);
+  execFileSync("git", ["commit", "-qm", "Invented baseline"], gitOptions);
+  await writeFile(shell.file, "first line\nchanged diff fixture\nlast line\n");
+  const diff = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    chat.id,
+  );
+  const report = await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    chat.id,
+    "--status",
+    "review",
+  );
+  expect(report.taskStatus).toBe("review");
+  const outside = await socketRequest({
+    op: "review.cancel",
+    id: document.reviewId,
+    roundId: document.roundId,
+    expectedVersion: (await inspect(document)).version,
+  });
+  expect(outside.ok).toBe(false);
+  const conversation = async () =>
+    (
+      await shell.cli<Pick<AppState, "conversations">>("state")
+    ).conversations.find((c) => c.id === chat.id)!;
+  const show = (review: Opened) =>
+    shell.cli("review", "show", "--id", review.reviewId);
+  const actions = (review: Opened) =>
+    pane(review).getByRole("button", { name: "Review actions", exact: true });
+  const cancelItem = () =>
+    shell.page
+      .getByRole("dialog", { name: "Actions", exact: true })
+      .getByRole("button", { name: "Cancel review", exact: true });
+  const round = (review: Opened) =>
+    pane(review).getByRole("combobox", { name: "Round", exact: true });
+  const cancelled = (review: Opened) => ({
+    status: "cancelled",
+    reviewId: review.reviewId,
+    roundId: review.roundId,
+  });
+
+  await show(document);
+  await source(document).focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const editor = pane(document).getByRole("textbox", {
+    name: "Comment",
+    exact: true,
+  });
+  await editor.fill("Unfinished separate comment");
+  await actions(document).click();
+  await cancelItem().click();
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue("Unfinished separate comment");
+  await expect(pane(document).getByRole("status")).toContainText(
+    "Save or cancel the unfinished comment",
+  );
+  expect((await inspect(document)).rounds[0].status).toBe("draft");
+  await pane(document)
+    .getByRole("button", { name: "Cancel comment", exact: true })
+    .click();
+  const waiter = waitProcess(document, document.roundId, 10000);
+  await tabTo(shell.page, actions(document));
+  await shell.page.keyboard.press("Enter");
+  await shell.page.keyboard.press("ArrowDown");
+  await expect(cancelItem()).toBeFocused();
+  await shell.page.keyboard.press("Enter");
+
+  const outcome = await waiter.result;
+  expect(outcome.code, outcome.stderr).toBe(0);
+  expect(JSON.parse(outcome.stdout)).toEqual(cancelled(document));
+  await expect(round(document).locator("option:checked")).toHaveText(
+    "Round 1 (cancelled)",
+  );
+  await expect(actions(document)).toBeFocused();
+  await expect(
+    pane(document).getByLabel("Unsent comment", { exact: true }),
+  ).toContainText("Saved but never sent");
+  await expect(source(document)).toContainText("selected review line");
+  await expect(
+    pane(document).getByRole("button", { name: "Send feedback", exact: true }),
+  ).toBeHidden();
+  expect(JSON.stringify(await inspect(document))).not.toContain(
+    "Saved but never sent",
+  );
+  expect((await inspect(diff)).rounds[0].status).toBe("draft");
+  expect((await conversation()).taskStatus).toBe("review");
+  expect((await conversation()).status).toBe("working");
+
+  await show(diff);
+  await expect(
+    pane(diff).getByRole("button", { name: "Approve", exact: true }),
+  ).toBeEnabled();
+  await actions(diff).click();
+  await cancelItem().click();
+  await expect(round(diff).locator("option:checked")).toHaveText(
+    "Round 1 (cancelled)",
+  );
+  await expect(
+    pane(diff).getByRole("button", { name: "Approve", exact: true }),
+  ).toBeHidden();
+  await expect
+    .poll(async () => (await conversation()).taskStatus)
+    .toBeUndefined();
+  expect((await conversation()).status).toBe("working");
+  expect(await shell.prompts()).toHaveLength(1);
+  await shell.stop();
+  await shell.start();
+  await show(document);
+  await expect(round(document).locator("option:checked")).toHaveText(
+    "Round 1 (cancelled)",
+  );
+  await expect(
+    pane(document).getByLabel("Unsent comment", { exact: true }),
+  ).toContainText("Saved but never sent");
+  expect((await conversation()).taskStatus).toBeUndefined();
+  const reconnected = await waitProcess(diff, diff.roundId, 200).result;
+  expect(reconnected.code, reconnected.stderr).toBe(0);
+  expect(JSON.parse(reconnected.stdout)).toEqual(cancelled(diff));
+  expect(await shell.prompts()).toHaveLength(1);
 });

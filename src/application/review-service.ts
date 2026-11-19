@@ -50,8 +50,26 @@ export class ReviewApplicationService {
     await this.reviews.reconcileOrigins();
     this.store.data.reviews = await this.reviews.list();
   }
-  async refreshReviews(): Promise<void> {
-    this.store.data.reviews = await this.reviews.list();
+  async refreshReviews(finishedOrigin?: string): Promise<void> {
+    const reviews = await this.reviews.list();
+    this.store.data.reviews = reviews;
+    const origin = finishedOrigin
+      ? this.store.data.conversations.find(
+          (conversation) => conversation.id === finishedOrigin,
+        )
+      : undefined;
+    if (
+      origin?.taskStatus === "review" &&
+      !reviews.some(
+        (review) =>
+          review.originConversationId === origin.id &&
+          review.status === "draft",
+      )
+    ) {
+      origin.taskStatus = undefined;
+      origin.taskStatusContext = undefined;
+      this.store.schedulePersist(true);
+    }
     this.store.notify();
   }
   async reviewOperation(
@@ -201,22 +219,7 @@ export class ReviewApplicationService {
           requiredString(request, "conversation"),
         requestId: requiredString(request, "requestId"),
       });
-      await this.refreshReviews();
-      if (summary.originConversationId) {
-        const origin = this.store.conversation(summary.originConversationId);
-        if (
-          origin.taskStatus === "review" &&
-          !this.store.data.reviews?.some(
-            (review) =>
-              review.id !== id &&
-              review.originConversationId === origin.id &&
-              review.status === "draft",
-          )
-        ) {
-          origin.taskStatus = undefined;
-          origin.taskStatusContext = undefined;
-        }
-      }
+      await this.refreshReviews(summary.originConversationId);
       // Submission is durable before delivery starts; waiters never wait for a model turn.
       void this.deliverReview(id, requiredString(request, "round")).catch(
         () => undefined,
@@ -234,6 +237,11 @@ export class ReviewApplicationService {
       };
       const range = request.range as import("../reviews/snapshots").Range;
       switch (request.op) {
+        case "review.cancel": {
+          const cancelled = await this.reviews.cancel(mutation);
+          await this.refreshReviews(cancelled.originConversationId);
+          return cancelled;
+        }
         case "review.comment-add":
           result = await this.reviews.addComment({
             ...mutation,
@@ -377,6 +385,7 @@ export class ReviewApplicationService {
     const mutation = [
       "review.refresh",
       "review.submit",
+      "review.cancel",
       "review.comment-add",
       "review.comment-edit",
       "review.comment-delete",
