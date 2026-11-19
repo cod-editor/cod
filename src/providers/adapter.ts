@@ -24,6 +24,7 @@ import type {
   ProviderState,
   ProviderOptions,
   ProviderSelection,
+  ToolResult,
   TurnOutcome,
 } from "./types.ts";
 
@@ -531,6 +532,55 @@ export class NativeAdapter implements ProviderAdapter {
     })();
     return result;
   }
+  async sendToolResult(
+    result: ToolResult,
+    requireDispatchedTurn: boolean,
+  ): Promise<string> {
+    this.ensureOpen();
+    if (this.provider !== "codex")
+      throw new Error("Tool results are only supported in Codex conversations");
+    if (!this.id || this.binding)
+      throw new Error("Create or resume a native conversation first");
+    if (requireDispatchedTurn && !this.active)
+      throw new Error("A message is being prepared for this conversation");
+
+    try {
+      const started = object(
+        await this.rpc!.request("turn/start", {
+          threadId: this.id,
+          input: [],
+          toolOutput: { ...result, retain: true },
+          ...(this.active ? {} : this.selection.overrides()),
+        }),
+      );
+      this.ensureOpen();
+      const turnId = string(object(started.turn).id);
+      if (!turnId) throw new Error("Provider omitted native turn identity");
+      // Codex may respond before turn/started. Claim the accepted turn before
+      // permitting a pending user message to start another turn.
+      this.observeCodexTurnStart(turnId);
+      return turnId;
+    } catch (error) {
+      throw new Error(
+        `Tool result delivery was not confirmed. Inspect native history before resending. ${errorOf(error).message}`,
+      );
+    }
+  }
+
+  private observeCodexTurnStart(turnId: string): void {
+    if (this.active || this.binding || this.finishedTurns.has(turnId)) return;
+    this.active = {
+      id: turnId,
+      external: true,
+      buffer: [],
+      resolve: () => {},
+      reject: () => {},
+      timer: this.turnTimer(),
+    };
+    this.emit({ type: "turn-started", nativeTurnId: turnId });
+    this.state("working");
+  }
+
   private turnTimer() {
     return setTimeout(
       () => {
@@ -603,22 +653,9 @@ export class NativeAdapter implements ProviderAdapter {
       if (
         message.method === "turn/started" &&
         message.id === undefined &&
-        turnId &&
-        !this.active &&
-        !this.binding &&
-        !this.finishedTurns.has(turnId)
-      ) {
-        this.active = {
-          id: turnId,
-          external: true,
-          buffer: [],
-          resolve: () => {},
-          reject: () => {},
-          timer: this.turnTimer(),
-        };
-        this.emit({ type: "turn-started", nativeTurnId: turnId });
-        this.state("working");
-      }
+        turnId
+      )
+        this.observeCodexTurnStart(turnId);
       if (!this.active || turnId !== this.active.id) {
         if (message.id !== undefined)
           this.rpc?.reject(
@@ -696,6 +733,7 @@ export class NativeAdapter implements ProviderAdapter {
             "fileChange",
             "mcpToolCall",
             "dynamicToolCall",
+            "functionCallOutput",
             "webSearch",
             "collabAgentToolCall",
           ].includes(String(item.type))

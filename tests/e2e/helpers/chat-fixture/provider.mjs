@@ -427,6 +427,27 @@ function receive(message, external = false) {
       });
     return;
   }
+  const toolResult = params.toolOutput;
+  const recordToolResult = () => {
+    const item = {
+      id: `result-${active.turnId}-${active.turn.items.length}`,
+      type: "functionCallOutput",
+      name: toolResult.name,
+      namespace: toolResult.namespace,
+      output: toolResult.output,
+    };
+    if (toolResult.retain) {
+      active.turn.items.push(item);
+      persist();
+    }
+    for (const method of ["item/started", "item/completed"])
+      notify(method, { threadId: nativeId, turnId: active.turnId, item });
+  };
+  if (provider === "codex" && toolResult && active) {
+    reply(message, { turn: { id: active.turnId, status: "inProgress" } });
+    recordToolResult();
+    return;
+  }
   const prompt = (params.input ?? params.prompt ?? [])
     .map((part) => part.text ?? "")
     .join("");
@@ -439,13 +460,15 @@ function receive(message, external = false) {
   active.turn = {
     id: active.turnId,
     status: "inProgress",
-    items: [
-      {
-        id: `user-${active.turnId}`,
-        type: "userMessage",
-        content: [{ type: "text", text: prompt }],
-      },
-    ],
+    items: toolResult
+      ? []
+      : [
+          {
+            id: `user-${active.turnId}`,
+            type: "userMessage",
+            content: [{ type: "text", text: prompt }],
+          },
+        ],
   };
   history.push(active.turn);
   persist();
@@ -459,6 +482,14 @@ function receive(message, external = false) {
       threadId: nativeId,
       turn: { id: active.turnId, status: "inProgress" },
     });
+    if (toolResult) {
+      recordToolResult();
+      later(() => {
+        text("Tool result received.");
+        complete();
+      }, 100);
+      return;
+    }
     notify("item/started", {
       threadId: nativeId,
       turnId: active.turnId,

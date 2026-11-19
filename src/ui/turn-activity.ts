@@ -141,6 +141,8 @@ export function groupTurnActivity(
 
 export function toolCaption(info: Record<string, unknown> | null): string {
   if (!info) return "Tool";
+  if (info.type === "functionCallOutput")
+    return `Tool result · ${[info.namespace, info.name].filter(Boolean).join(".")}`;
   for (const key of ["title", "command", "name", "toolName", "tool"]) {
     if (typeof info[key] === "string" && info[key]) return String(info[key]);
   }
@@ -186,6 +188,8 @@ export function updateLiveActivity(root: ParentNode = document): void {
 export function compactToolCaption(
   info: Record<string, unknown> | null,
 ): string {
+  if (info?.type === "functionCallOutput")
+    return toolCaption(info).slice(0, 100);
   if (typeof info?.title === "string" && info.title.trim())
     return info.title.trim().slice(0, 100);
   if (Array.isArray(info?.commandActions)) {
