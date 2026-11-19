@@ -102,7 +102,7 @@ async function update(values: Partial<Settings>): Promise<void> {
 }
 export function changeTextSize(amount: number | "reset"): void {
   const pane = document.activeElement?.closest(".pane");
-  const surface = pane?.querySelector(".file-editor")
+  const surface = pane?.querySelector(".file-editor, .review-source-editor")
     ? "editor"
     : pane?.querySelector(".composer")
       ? "chat"

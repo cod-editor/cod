@@ -67,7 +67,7 @@ export function createKeyboardNavigation(
             : pane.kind === "browser"
               ? 'input[aria-label="Address"]'
               : pane.kind === "review"
-                ? '.review-line[tabindex="0"], .review-document > .highlighted-editor:not([hidden]) textarea, .review-markdown:not([hidden])'
+                ? '.review-line[tabindex="0"], .review-source-layout:not([hidden]) .review-source-editor, .review-markdown:not([hidden])'
                 : ".browser-failure button";
     const target =
       host.querySelector<HTMLElement>(primary) ??

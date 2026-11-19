@@ -141,7 +141,7 @@ export function reviewPane(
       focusSelection();
     }
   });
-  function openComment(commentId?: string, body = "") {
+  function openComment(commentId?: string, body = "", anchor?: Range) {
     if (pending?.body.trim()) {
       const sameComment = commentId === pending.editing;
       status.textContent = sameComment
@@ -155,7 +155,7 @@ export function reviewPane(
       return;
     }
     if (!commentId && documentView) {
-      textRange = documentView.capture();
+      textRange = anchor ?? documentView.capture();
       if (!textRange) {
         status.textContent = "Select a text fragment first";
         return;
@@ -192,7 +192,7 @@ export function reviewPane(
   });
   function focusSelection() {
     if (documentView) {
-      documentView.focus();
+      documentView.focus(textRange);
       return;
     }
     const line = buttons[selection];
@@ -333,7 +333,7 @@ export function reviewPane(
     const focusedLine = focused?.classList.contains("review-line")
       ? focused.getAttribute("aria-label")
       : undefined;
-    const scrollTop = host.scrollTop;
+    const { scrollTop, scrollLeft } = host;
     const round =
       detail.rounds.find((r) => r.id === selectedRound) ??
       detail.rounds.at(-1)!;
@@ -370,13 +370,14 @@ export function reviewPane(
           "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
       }
     }
-    documentView?.clearAnnotations();
     const reuseDocument =
       snapshot.kind === "document" &&
       documentView &&
       documentSnapshot === snapshot.id;
+    documentView?.clearAnnotations(
+      reuseDocument && !form.hidden ? form : undefined,
+    );
     if (!reuseDocument) {
-      documentView?.dispose();
       const label = document.createElement("p");
       label.className = "review-source";
       label.textContent =
@@ -480,7 +481,9 @@ export function reviewPane(
           (range) => {
             textRange = range;
           },
-          () => addComment.click(),
+          (range) => {
+            if (!addComment.disabled) openComment(undefined, "", range);
+          },
           (message) => {
             status.textContent = message;
           },
@@ -652,6 +655,7 @@ export function reviewPane(
       detail.target.kind !== "document" || detail.rounds.length < 2;
     addComment.disabled =
       round.status !== "draft" || round.id !== detail.currentRoundId;
+    documentView?.setCommenting(!addComment.disabled);
     submit.textContent = round.comments.length ? "Send feedback" : "Approve";
     submit.disabled =
       round.status !== "draft" ||
@@ -714,6 +718,7 @@ export function reviewPane(
         target.focus({ preventScroll: true });
     }
     host.scrollTop = scrollTop;
+    host.scrollLeft = scrollLeft;
   }
   async function reload() {
     const generation = ++loading;
@@ -781,7 +786,6 @@ export function reviewPane(
     });
     return element;
   }
-  host.addEventListener("cod:dispose-view", () => documentView?.dispose());
   updates.set(host, update);
   update(initial);
   return host;

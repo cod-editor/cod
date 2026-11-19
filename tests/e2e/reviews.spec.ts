@@ -88,7 +88,11 @@ async function comment(
   body: string,
   target: Locator = source(review),
 ) {
-  if (await target.evaluate((node) => node instanceof HTMLTextAreaElement)) {
+  if (
+    await target.evaluate((node) =>
+      node.classList.contains("review-source-editor"),
+    )
+  ) {
     await tabTo(shell.page, target);
     await target.press(`${modifier}+Home`);
     await target.press("ArrowDown");
@@ -759,8 +763,8 @@ test("Review keyboard ranges and comment edits keep immutable quotes and show di
     .getByRole("button", { name: "Save comment", exact: true })
     .click();
   const comments = pane(review).getByLabel("Draft comment", { exact: true });
-  await expect(source(review)).toHaveValue(/first line/);
-  await expect(source(review)).toHaveValue(/selected review line/);
+  await expect(source(review)).toContainText("first line");
+  await expect(source(review)).toContainText("selected review line");
   await comments.click();
   await pane(review)
     .getByRole("textbox", { name: "Comment", exact: true })
@@ -776,8 +780,8 @@ test("Review keyboard ranges and comment edits keep immutable quotes and show di
   await expect(pane(review).getByRole("status")).toContainText(
     "Changed on disk",
   );
-  await expect(source(review)).toHaveValue(/first line/);
-  await expect(source(review)).toHaveValue(/selected review line/);
+  await expect(source(review)).toContainText("first line");
+  await expect(source(review)).toContainText("selected review line");
   await pane(review).screenshot({
     path: testInfo.outputPath("review-keyboard-range.png"),
   });
@@ -821,15 +825,37 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
   const host = pane(review);
   const editor = source(review);
   await expect(editor).toBeVisible();
-  const immutableSource = await editor.inputValue();
+  await editor.focus();
+  await editor.press(`${modifier}+F`);
+  const find = shell.page.getByRole("textbox", {
+    name: "Find in current content",
+    exact: true,
+  });
+  await find.fill("Hello **world**");
+  await expect(
+    shell.page.getByRole("status", { name: "Find results" }),
+  ).toHaveText("1 of 1");
+  await find.press("Escape");
+  const immutableSource = await editor
+    .locator(".review-source-text")
+    .allTextContents();
   await editor.focus();
   await shell.page.keyboard.type("Must not edit the saved revision");
-  await expect(editor).toHaveValue(immutableSource);
-  await editor.evaluate((node) => {
-    const input = node as HTMLTextAreaElement;
-    const start = input.value.indexOf("world");
-    input.setSelectionRange(start, start + 5);
-  });
+  expect(await editor.locator(".review-source-text").allTextContents()).toEqual(
+    immutableSource,
+  );
+  await editor
+    .locator('[data-source-line="3"] .review-source-text')
+    .evaluate((node) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        const start = text.textContent!.indexOf("world");
+        if (start < 0) continue;
+        window.getSelection()!.setBaseAndExtent(text, start, text, start + 5);
+        return;
+      }
+      throw new Error("Expected a highlighted source fragment");
+    });
   await shell.page.keyboard.press(`${modifier}+Shift+M`);
   await host
     .getByRole("textbox", { name: "Comment", exact: true })
@@ -838,7 +864,9 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
   await expect(
     host.getByLabel("Draft comment", { exact: true }).locator("blockquote"),
   ).toHaveText("world");
-  await expect(host.locator(".editor-colors .hljs-section")).toBeVisible();
+  await expect(
+    host.locator(".review-source-editor .hljs-section"),
+  ).toBeVisible();
   await host.screenshot({ path: info.outputPath("review-source.png") });
   const eye = host.locator("[data-preview-toggle]");
   await eye.click();
@@ -867,7 +895,7 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
   ).toHaveText(["world", "world"]);
   await host.screenshot({ path: info.outputPath("review-preview.png") });
   await eye.click();
-  await expect(editor).toHaveValue(/Hello \*\*world\*\*/);
+  await expect(editor).toContainText("Hello **world**");
   await shell.stop();
   await shell.start();
   await expect(
@@ -1277,7 +1305,7 @@ for (const feedback of [false, true])
     expect(await feedbackPrompts(submission.id)).toHaveLength(1);
   });
 
-test("Narrow source comments reflow without losing their quote, caret or source viewport", async ({}, info) => {
+test("Inline source comments keep their anchor, quote and caret when a pane narrows", async ({}, info) => {
   const lines = Array.from(
     { length: 80 },
     (_, index) => `Invented paragraph ${index + 1}: exact source anchor.`,
@@ -1290,6 +1318,8 @@ test("Narrow source comments reflow without losing their quote, caret or source 
   const host = pane(review);
   const editor = source(review);
   const pending = host.getByRole("textbox", { name: "Comment", exact: true });
+  const viewport = host.locator(".review-body");
+  const lastAnchor = host.locator('[data-source-line="36"]');
   const resize = async (width: number, size: number) => {
     await shell.app!.evaluate(
       ({ BrowserWindow }, width) =>
@@ -1321,7 +1351,7 @@ test("Narrow source comments reflow without losing their quote, caret or source 
     node.selectionStart,
     node.selectionEnd,
   ]);
-  const scroll = await editor.evaluate((node) => node.scrollTop);
+  const scroll = await viewport.evaluate((node) => node.scrollTop);
   expect(scroll).toBeGreaterThan(100);
   await resize(800, 20);
   await expect(pending).toBeFocused();
@@ -1331,10 +1361,15 @@ test("Narrow source comments reflow without losing their quote, caret or source 
       node.selectionEnd,
     ]),
   ).toEqual(selection);
-  expect(await editor.evaluate((node) => node.scrollTop)).toBe(scroll);
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBeGreaterThan(
+    100,
+  );
   const context = host.locator(".review-comment-editor .review-anchor-context");
   await expect(context).toBeVisible();
   await expect(context).toContainText("Lines 35-36");
+  await expect(lastAnchor.locator("+ .review-comment-editor")).toContainText(
+    "Anchor A",
+  );
   const expectQuote = async (block: Locator) => {
     expect(await block.textContent()).toBe(quote);
     const positions = await block.evaluate((node) => {
@@ -1386,7 +1421,7 @@ test("Narrow source comments reflow without losing their quote, caret or source 
     ).toContain(await button.textContent());
   }
   await host.screenshot({
-    path: info.outputPath("review-source-stacked-comments.png"),
+    path: info.outputPath("review-source-inline-range.png"),
   });
   await tabTo(shell.page, save);
   await shell.page.keyboard.press("Enter");
@@ -1396,14 +1431,19 @@ test("Narrow source comments reflow without losing their quote, caret or source 
     " / Lines 35-36",
   );
   await expectQuote(card.locator("blockquote"));
-  expect(await editor.evaluate((node) => node.scrollTop)).toBe(scroll);
+  await expect(lastAnchor.locator("+ .review-comment")).toContainText(
+    "Private anchored draft",
+  );
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBeGreaterThan(
+    100,
+  );
   await card.focus();
   await card.press("Enter");
   await expect(pending).toBeFocused();
   await pending.fill("Recovered anchored edit");
   await resize(1280, 14);
   await expect(pending).toBeFocused();
-  await expect(context).toBeHidden();
+  await expect(context).toBeVisible();
   await resize(800, 20);
   await shell.stop();
   await shell.start();
@@ -1430,4 +1470,71 @@ test("Narrow source comments reflow without losing their quote, caret or source 
     pane(review).getByLabel("Draft comment", { exact: true }),
   ).toContainText("Private anchored draft");
   expect((await inspect(review)).rounds[0].submission).toBeUndefined();
+});
+
+test("Document Review scrolls long lines at the bottom and opens comments from the gutter", async ({}, info) => {
+  const lines = Array.from({ length: 75 }, (_, index) =>
+    index === 3
+      ? "Invented long review line ".repeat(40)
+      : `Invented line ${index + 1}`,
+  );
+  await writeFile(shell.file, lines.join("\n"));
+  const review = await open(await shell.create("Inline source review"));
+  const host = pane(review);
+  const viewport = host.locator(".review-body");
+  const line = host.locator('[data-source-line="4"]');
+  await expect(line).toContainText(lines[3]);
+  const bounds = await viewport.evaluate((node) => ({
+    width: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+    height: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    bottom: node.getBoundingClientRect().bottom,
+    paneBottom: node.parentElement!.getBoundingClientRect().bottom,
+  }));
+  expect(bounds.scrollWidth).toBeGreaterThan(bounds.width);
+  expect(bounds.scrollHeight).toBeGreaterThan(bounds.height);
+  expect(Math.abs(bounds.bottom - bounds.paneBottom)).toBeLessThanOrEqual(1);
+
+  await line.hover({ position: { x: 35, y: 10 } });
+  await host
+    .getByRole("button", { name: "Add comment to line 4", exact: true })
+    .click();
+  const form = line.locator("+ .review-comment-editor");
+  const comment = form.getByRole("textbox", { name: "Comment", exact: true });
+  await expect(comment).toBeFocused();
+  await comment.fill("Comment tied to the long line");
+  await expect(form.locator("blockquote")).toHaveText(lines[3].trim());
+
+  await viewport.evaluate((node) => {
+    node.scrollLeft = 600;
+  });
+  expect(await viewport.evaluate((node) => node.scrollLeft)).toBeGreaterThan(
+    300,
+  );
+  const save = form.getByRole("button", { name: "Save comment", exact: true });
+  const button = (await save.boundingBox())!;
+  const viewportBox = (await viewport.boundingBox())!;
+  expect(button.x).toBeGreaterThanOrEqual(viewportBox.x);
+  expect(button.x + button.width).toBeLessThanOrEqual(
+    viewportBox.x + viewportBox.width,
+  );
+  const header = host.locator(".review-header");
+  await expect(header.getByLabel("Round", { exact: true })).toBeVisible();
+  expect(
+    await header.evaluate((node) => {
+      const { x, y } = node.getBoundingClientRect();
+      return node.contains(document.elementFromPoint(x + 3, y + 3));
+    }),
+  ).toBe(true);
+  await host.screenshot({
+    path: info.outputPath("review-inline-horizontal.png"),
+  });
+  await save.click();
+  const card = line.locator("+ .review-comment");
+  await expect(card).toContainText("Comment tied to the long line");
+  await expect(card.locator("blockquote")).toHaveText(lines[3].trim());
+  await expect(
+    host.getByRole("button", { name: "Send feedback" }),
+  ).toBeVisible();
 });
