@@ -16,6 +16,7 @@ export function updateReview(element: HTMLElement, state: AppState) {
 }
 export function reviewPane(
   id: string,
+  paneId: string,
   initial: AppState,
   invoke: Invoke,
 ): HTMLElement {
@@ -46,6 +47,11 @@ export function reviewPane(
     staleEditor = false;
   const remember = () => {
     if (!detail) return;
+    if (staleEditor && pending) {
+      pending = { ...pending, body: input.value };
+      writePreference(`review-editor.${id}`, pending);
+      return;
+    }
     pending = {
       roundId: selectedRound,
       snapshotId: detail.rounds.find((r) => r.id === selectedRound)!.snapshotId,
@@ -63,6 +69,8 @@ export function reviewPane(
     staleEditor = false;
   };
   let textRange: Range | undefined;
+  let presentationToken: string | undefined;
+  let presentCurrent = false;
   let documentView: ReturnType<typeof reviewDocument> | undefined;
   let documentSnapshot = "";
   let previewMode = readPreference<boolean>(`review-preview.${id}`, false);
@@ -143,6 +151,21 @@ export function reviewPane(
   });
   function openComment(commentId?: string, body = "", anchor?: Range) {
     if (pending?.body.trim()) {
+      if (staleEditor && !commentId) {
+        if (documentView) textRange = anchor ?? documentView.capture();
+        if (documentView && !textRange) {
+          status.textContent = "Select a text fragment first.";
+          return;
+        }
+        editing = undefined;
+        staleEditor = false;
+        save.disabled = false;
+        remember();
+        draw();
+        status.textContent = "";
+        input.focus();
+        return;
+      }
       const sameComment = commentId === pending.editing;
       status.textContent = sameComment
         ? ""
@@ -243,7 +266,7 @@ export function reviewPane(
       expectedRound: detail.currentRoundId,
       expectedVersion: detail.version,
     });
-    selectedRound = "";
+    presentCurrent = true;
     await reload();
   });
   const compare = button("Changes since previous round", async () => {
@@ -319,10 +342,14 @@ export function reviewPane(
     delivery,
     changes,
   );
-  roundSelect.addEventListener("change", () => {
-    selectedRound = roundSelect.value;
+  function chooseRound(roundId: string) {
+    selectedRound = roundId;
     selection = end = 0;
     textRange = undefined;
+  }
+  roundSelect.addEventListener("change", () => {
+    presentCurrent = false;
+    chooseRound(roundSelect.value);
     draw();
   });
   function draw() {
@@ -333,6 +360,9 @@ export function reviewPane(
     const focusedLine = focused?.classList.contains("review-line")
       ? focused.getAttribute("aria-label")
       : undefined;
+    const focusedSource = focused?.matches(
+      ".review-source-editor, .review-markdown",
+    );
     const { scrollTop, scrollLeft } = host;
     const round =
       detail.rounds.find((r) => r.id === selectedRound) ??
@@ -343,16 +373,6 @@ export function reviewPane(
     );
     roundSelect.value = round.id;
     const snapshot = detail.snapshots[round.snapshotId];
-    if (
-      pending &&
-      (pending.roundId !== round.id || pending.snapshotId !== round.snapshotId)
-    ) {
-      staleEditor = true;
-      save.disabled = true;
-      shownError = true;
-      status.textContent =
-        "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
-    }
     if (pending && !restored) {
       restored = true;
       input.value = pending.body;
@@ -361,14 +381,23 @@ export function reviewPane(
       end = pending.end;
       textRange = pending.range;
       form.hidden = false;
-      staleEditor =
-        pending.roundId !== round.id || pending.snapshotId !== round.snapshotId;
-      save.disabled = staleEditor;
-      if (staleEditor) {
-        shownError = true;
-        status.textContent =
-          "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
-      }
+    }
+    const wasStale = staleEditor;
+    staleEditor =
+      !!pending &&
+      (pending.roundId !== detail.currentRoundId ||
+        pending.roundId !== round.id ||
+        pending.snapshotId !== snapshot.id);
+    save.disabled = staleEditor;
+    if (staleEditor) {
+      shownError = true;
+      status.textContent =
+        pending!.roundId === detail.currentRoundId
+          ? "Your unfinished comment is in the current round. Switch back to continue writing."
+          : "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
+    } else if (wasStale) {
+      shownError = false;
+      status.textContent = "";
     }
     const reuseDocument =
       snapshot.kind === "document" &&
@@ -716,6 +745,7 @@ export function reviewPane(
           : undefined;
       if (target?.getClientRects().length)
         target.focus({ preventScroll: true });
+      else if (focusedSource) documentView?.focus(textRange);
     }
     host.scrollTop = scrollTop;
     host.scrollLeft = scrollLeft;
@@ -724,7 +754,14 @@ export function reviewPane(
     const generation = ++loading;
     const next = await invoke<Detail>("review.detail", { id });
     if (generation !== loading) return;
+    const followCurrent =
+      presentCurrent ||
+      !selectedRound ||
+      selectedRound === detail?.currentRoundId;
+    presentCurrent = false;
     detail = next;
+    if (followCurrent && selectedRound !== next.currentRoundId)
+      chooseRound(next.currentRoundId);
     shownError = false;
     version = next.version;
     draw();
@@ -773,7 +810,22 @@ export function reviewPane(
     const summary: ReviewSummary | undefined = state.reviews?.find(
       (r) => r.id === id,
     );
+    const presentation = state.reviewPresentation;
+    if (
+      presentation?.paneId === paneId &&
+      presentation.token !== presentationToken
+    ) {
+      presentationToken = presentation.token;
+      presentCurrent = true;
+    }
     if (summary && summary.version !== version) void reload().catch(showError);
+    else if (presentCurrent && detail) {
+      presentCurrent = false;
+      if (selectedRound !== detail.currentRoundId) {
+        chooseRound(detail.currentRoundId);
+        draw();
+      }
+    }
   }
   function showError(error: unknown) {
     shownError = true;

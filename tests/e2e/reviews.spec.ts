@@ -1538,3 +1538,72 @@ test("Document Review scrolls long lines at the bottom and opens comments from t
     host.getByRole("button", { name: "Send feedback" }),
   ).toBeVisible();
 });
+
+test("Review follows the current round, respects deliberate history, and preserves unfinished text", async () => {
+  const review = await open(await shell.create("Review revision selection"));
+  const host = pane(review);
+  const round = host.getByLabel("Round", { exact: true });
+  const refresh = async (text: string) => {
+    const current = await inspect(review);
+    await writeFile(shell.file, text + "\n");
+    return shell.cli<{ currentRoundId: string }>(
+      "review",
+      "refresh",
+      "--id",
+      review.reviewId,
+      "--expected-round",
+      current.currentRoundId,
+    );
+  };
+  await expect(round).toHaveValue(review.roundId);
+  await source(review).focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const draft = host.getByRole("textbox", { name: "Comment", exact: true });
+  await draft.fill("Unfinished text before refreshing");
+  const second = await refresh("Second invented revision");
+  await expect(round).toHaveValue(second.currentRoundId);
+  await expect(source(review)).toContainText("Second invented revision");
+  await expect(draft).toHaveValue("Unfinished text before refreshing");
+  await expect(host.getByRole("status")).toContainText("older revision");
+  const save = host.getByRole("button", { name: "Save comment", exact: true });
+  await expect(save).toBeDisabled();
+  await draft.fill("Updated unfinished text after refreshing");
+  await expect(save).toBeDisabled();
+
+  await round.selectOption(review.roundId);
+  const third = await refresh("Third invented revision");
+  await expect(round.locator("option")).toHaveCount(3);
+  await expect(round).toHaveValue(review.roundId);
+  await expect(source(review)).toContainText("first line");
+  await expect(draft).toHaveValue("Updated unfinished text after refreshing");
+
+  const shown = await shell.cli<{ roundId: string; paneId: string }>(
+    "review",
+    "show",
+    "--id",
+    review.reviewId,
+  );
+  expect(shown).toMatchObject({
+    roundId: third.currentRoundId,
+    paneId: review.paneId,
+  });
+  await expect(round).toHaveValue(third.currentRoundId);
+  await expect(source(review)).toContainText("Third invented revision");
+  await expect(draft).toHaveValue("Updated unfinished text after refreshing");
+  await expect(save).toBeDisabled();
+
+  await source(review).focus();
+  await shell.page.keyboard.press(`${modifier}+Home`);
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await expect(draft).toBeFocused();
+  await expect(save).toBeEnabled();
+  await save.click();
+  const comment = host.getByLabel("Draft comment", { exact: true });
+  await expect(comment).toContainText(
+    "Updated unfinished text after refreshing",
+  );
+  await expect(comment.locator("blockquote")).toHaveText(
+    "Third invented revision",
+  );
+  expect(await shell.prompts()).toHaveLength(0);
+});

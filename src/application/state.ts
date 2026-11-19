@@ -41,6 +41,7 @@ export class ApplicationStateStore {
   >();
   private timer?: NodeJS.Timeout;
   private notificationTimer?: NodeJS.Timeout;
+  private reviewPresentation?: AppState["reviewPresentation"];
   closing = false;
   onDidChange?: (state: AppState) => void;
   beforeNotify?: () => void;
@@ -193,6 +194,7 @@ export class ApplicationStateStore {
     );
     return structuredClone({
       ...this.data,
+      reviewPresentation: this.reviewPresentation,
       // Editors read their resource through file.read; unrelated navigation does
       // not need every open or recoverable file buffer's text.
       drafts: {},
@@ -411,6 +413,10 @@ export class ApplicationStateStore {
       if (options.notify !== false) this.notify();
       throw error;
     }
+  }
+  presentReview(paneId: string): void {
+    this.reviewPresentation = { paneId, token: randomUUID() };
+    this.notify();
   }
   notify(coalesce = false): void {
     this.beforeNotify?.();

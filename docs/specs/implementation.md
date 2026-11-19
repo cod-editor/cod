@@ -141,6 +141,8 @@ Document comments can anchor exact text fragments, not just whole lines. Source 
 
 A review binds its source, repository and originating conversation. The user can comment or edit while discussing the document alongside it. Comments remain private until one explicit round submission; an empty round may submit an approval. There is no recipient selector or fallback destination.
 
+A pane that is showing the current round follows a newly opened round. Deliberate history selections survive passive review updates. Explicit review show selects the current round even when the pane was showing history. The change preserves unfinished comment text. Anchors from an earlier round require an explicit new selection before that text can be saved in the current round, and no feedback is sent by navigation.
+
 Freeze submitted text, anchors, source revision and destination. Sent rounds are immutable. Changed or ambiguous anchors become outdated and require explicit reattachment; refreshing a review never silently attaches feedback to unrelated text. Show changes between review revisions. Persist unfinished comment editors and saved comments separately from delivery.
 
 Delivery distinguishes private, queued, sending, acknowledged and uncertain states. A stable packet identity prevents duplicate delivery. An interrupted dispatch must reconcile native history before retry; an immediate send return is not a remote receipt. `review wait` completes on durable submission, not on completion of the agent's next turn. A waiter may reconnect using the review ID.

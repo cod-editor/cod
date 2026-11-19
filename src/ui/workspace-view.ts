@@ -239,7 +239,7 @@ export function createWorkspaceView(
     } else if (pane.kind === "review") {
       const previous = container.querySelector<HTMLElement>(".review-body");
       if (previous) updateReview(previous, getState());
-      else content = reviewPane(pane.reviewId, getState(), invoke);
+      else content = reviewPane(pane.reviewId, pane.id, getState(), invoke);
     } else if (pane.kind === "preview" || pane.kind === "diff") {
       if (!container.childElementCount)
         content =
