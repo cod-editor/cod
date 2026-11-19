@@ -228,14 +228,14 @@ test("Pinned and ordinary dragging clamps to the correct segment and cross-pane 
     .poll(async () => order(await ws(), right.groupId)[0])
     .toBe(a.paneId);
   expect((await ws()).panes.find((p) => p.id === a.paneId)?.pinned).toBe(true);
-  await context(a.paneId, "Split below");
+  await context(a.paneId, "Move to left pane");
   await app.stop();
   await app.start();
   await expect(tab(a.paneId)).toHaveAttribute("data-pinned", "true");
   expect((await ws()).panes.filter((p) => p.id === a.paneId)).toHaveLength(1);
   expect(
-    (await ws()).groups!.find((g) => g.paneIds.includes(a.paneId))!.paneIds,
-  ).toEqual([a.paneId]);
+    (await ws()).groups!.find((g) => g.paneIds.includes(a.paneId))!.id,
+  ).toBe(a.groupId);
 });
 
 test("Pinned chat, draft and active native task follow cross-workspace moves and survive view close and workspace recovery", async () => {

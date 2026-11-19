@@ -8,9 +8,12 @@ import type {
   ConversationState,
   OperationRequest,
 } from "../types";
-import { normalizeGroups } from "../workspace-layout.ts";
+import {
+  assertWorkspaceLayout,
+  normalizeGroups,
+  selectGroup,
+} from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
-import { leaf, replaceLeaf } from "./layout.ts";
 import { requiredString } from "./request.ts";
 
 /** Single owner of application state, transaction ordering and durable snapshots. */
@@ -57,6 +60,7 @@ export class ApplicationStateStore {
       ) as AppState & { composerCheckpoint?: string };
       if (!Array.isArray(saved.workspaces))
         throw new Error("Invalid saved state");
+      saved.workspaces.forEach(assertWorkspaceLayout);
       this.composerCheckpoint = saved.composerCheckpoint ?? "initial";
       delete saved.composerCheckpoint;
       Object.assign(this.data, saved, {
@@ -185,11 +189,7 @@ export class ApplicationStateStore {
     );
     const visiblePanes = new Set(
       workspace?.groups
-        ?.filter(
-          (group) =>
-            !group.hidden &&
-            (!workspace.zoomedGroupId || workspace.zoomedGroupId === group.id),
-        )
+        ?.filter((group) => !group.hidden)
         .map((group) => group.activePaneId),
     );
     return structuredClone({
@@ -315,19 +315,10 @@ export class ApplicationStateStore {
     if (workspace.panes.some((item) => item.id === pane.id))
       throw new Error("Tab already exists");
     workspace.panes.push(pane);
-    workspace.layout = replaceLeaf(workspace.layout, sourceId, {
-      type: "split",
-      direction: "right",
-      ratio: 0.5,
-      first: leaf(sourceId),
-      second: leaf(pane.id),
-    });
     group.paneIds.splice(group.paneIds.indexOf(sourceId) + 1, 0, pane.id);
     if (request.focus === true || request.focus === "true") {
       group.activePaneId = pane.id;
-      group.hidden = false;
-      workspace.activePaneId = pane.id;
-      workspace.activeGroupId = group.id;
+      selectGroup(workspace, group);
     }
   }
   pane(workspace: WorkspaceState, id: string): PaneState {

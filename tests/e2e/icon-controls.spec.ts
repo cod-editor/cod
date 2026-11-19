@@ -93,11 +93,11 @@ for (const scale of [1, 1.5, 2]) {
       const bar = app.page.locator(
         `.tab-group[data-group-id="${group}"] .tab-bar`,
       );
-      const disabled = app.page.getByRole("button", {
-        name: "Hide left pane",
+      const split = app.page.getByRole("button", {
+        name: "Toggle split view",
         exact: true,
       });
-      await expect(disabled).toBeDisabled();
+      await expect(split).toHaveAttribute("aria-pressed", "false");
       for (const fontSize of [14, 22]) {
         await app.cli(
           "settings",
@@ -147,8 +147,7 @@ for (const scale of [1, 1.5, 2]) {
               name: "Choose new tab type",
               exact: true,
             }),
-            bar.getByRole("button", { name: "Maximize pane", exact: true }),
-            disabled,
+            split,
           ]) {
             const normal = await square(button);
             expect(normal.width).toBe(28);

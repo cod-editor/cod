@@ -1,3 +1,4 @@
+import { normalizeGroups } from "../workspace-layout";
 import {
   backgroundWithUnknownState,
   conversationHandoffReason,
@@ -30,7 +31,6 @@ import type {
 import { ApplicationStateStore } from "./state";
 import type { TerminalApplicationService } from "./terminal-service";
 import { requiredString, providerId, object } from "./request";
-import { leaf, replaceLeaf, removeLeaf, firstPane } from "./layout";
 export interface ConversationViewPort {
   show(id: string): Promise<unknown>;
   finishPage(
@@ -455,16 +455,11 @@ export class ConversationApplicationService {
         workspace.lastConversationId = previousConversationId;
       return;
     }
-    workspace.layout =
-      removeLeaf(workspace.layout, conversation.paneId) ?? leaf(randomUUID());
     if (!workspace.panes.length) {
       const paneId = randomUUID();
       workspace.panes.push({ id: paneId, kind: "document", draftChat: true });
-      workspace.layout = leaf(paneId);
     }
-    if (workspace.activePaneId === conversation.paneId) {
-      workspace.activePaneId = firstPane(workspace.layout);
-    }
+    normalizeGroups(workspace);
   }
 
   attachConversation(
@@ -485,13 +480,6 @@ export class ConversationApplicationService {
     }
     const paneId = randomUUID();
     workspace.panes.push({ id: paneId, kind: "conversation", conversationId });
-    workspace.layout = replaceLeaf(workspace.layout, workspace.activePaneId, {
-      type: "split",
-      direction: "right",
-      ratio: 0.5,
-      first: leaf(workspace.activePaneId),
-      second: leaf(paneId),
-    });
     workspace.activePaneId = paneId;
     return paneId;
   }

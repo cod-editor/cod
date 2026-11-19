@@ -1,7 +1,7 @@
 import { focusReadyEditor } from "./document-views";
 import type { AppState, PaneState } from "../types";
 import type { Invoke, WhenRendered } from "./contracts";
-import { paneRegions } from "./pane-layout";
+import { orderedGroups } from "../workspace-layout";
 
 /** Region traversal belongs to the shell; Tab continues to navigate local controls. */
 export function createKeyboardNavigation(
@@ -132,17 +132,6 @@ export function createKeyboardNavigation(
     if (workspace()?.id !== w.id) return;
     await focusActiveContent(id, intent);
   }
-  async function spatial(index: number, workspaceId?: string): Promise<void> {
-    const w = workspaceId
-      ? getState().workspaces.find((w) => w.id === workspaceId)
-      : workspace();
-    if (!w) return;
-    const region = paneRegions(w)
-      .filter((r) => !r.id.startsWith("missing-"))
-      .sort((a, b) => a.x - b.x || a.y - b.y)[index];
-    const group = w.groups?.find((g) => g.id === region?.id);
-    if (group) await focusPane(group.activePaneId);
-  }
   async function cyclePane(
     delta: number,
     workspaceId?: string,
@@ -152,9 +141,7 @@ export function createKeyboardNavigation(
       ? getState().workspaces.find((w) => w.id === workspaceId)
       : workspace();
     if (!w) return;
-    const groups = paneRegions(w)
-      .filter((r) => w.groups?.some((g) => g.id === r.id && !g.hidden))
-      .map((r) => w.groups!.find((g) => g.id === r.id)!);
+    const groups = orderedGroups(w).filter((group) => !group.hidden);
     if (!groups.length) return;
     const index = groups.findIndex((g) =>
       g.paneIds.includes(paneId ?? w.activePaneId),
@@ -275,7 +262,6 @@ export function createKeyboardNavigation(
     },
     focusPane,
     focusActiveContent,
-    spatial,
     cyclePane,
     selectTab,
     cycleTab,

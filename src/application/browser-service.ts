@@ -1,3 +1,4 @@
+import { normalizeGroups } from "../workspace-layout";
 import { toggleDevTools } from "../devtools";
 import { SitePermissions, webOrigin } from "../browser/permissions";
 import {
@@ -29,7 +30,6 @@ import type {
 } from "../types";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
-import { leaf, replaceLeaf, removeLeaf, firstPane } from "./layout";
 export interface BrowserConversationPort {
   isActive(id: string): boolean;
   send(request: OperationRequest): Promise<{ id: string; status: string }>;
@@ -511,7 +511,8 @@ export class BrowserApplicationService {
       // racing the hide and reopening the pane that was just hidden.
       if (
         match.command !== "pane.toggleLeft" &&
-        match.command !== "pane.toggleRight"
+        match.command !== "pane.toggleRight" &&
+        match.command !== "pane.zoom"
       )
         this.browserWindow?.webContents.focus();
       this.browserWindow?.webContents.send("cod:command", {
@@ -857,14 +858,7 @@ export class BrowserApplicationService {
           );
           if (!group) throw new Error("Source tab group no longer exists");
           group.paneIds.splice(group.paneIds.indexOf(active.id) + 1, 0, paneId);
-        } else
-          workspace.layout = replaceLeaf(workspace.layout, active.id, {
-            type: "split",
-            direction: "right",
-            ratio: 0.5,
-            first: leaf(active.id),
-            second: leaf(paneId),
-          });
+        }
       }
       if (!source && request.sourcePane === undefined)
         workspace.activePaneId = paneId;
@@ -1035,7 +1029,6 @@ export class BrowserApplicationService {
     workspace.panes = workspace.panes.filter(
       (item) => item.id !== record.paneId,
     );
-    workspace.layout = removeLeaf(workspace.layout, record.paneId) ?? leaf("");
     if (!workspace.panes.length) {
       const pane = {
         id: randomUUID(),
@@ -1043,10 +1036,8 @@ export class BrowserApplicationService {
         draftChat: true,
       } as const;
       workspace.panes.push(pane);
-      workspace.layout = leaf(pane.id);
     }
-    if (workspace.activePaneId === record.paneId)
-      workspace.activePaneId = firstPane(workspace.layout);
+    normalizeGroups(workspace);
   }
   browserEvent(event: BrowserEvent): void {
     if (event.type === "download") {

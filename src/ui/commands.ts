@@ -31,7 +31,7 @@ import {
   shortcutTitle,
 } from "./keyboard-ui";
 import { createKeyboardNavigation } from "./keyboard-navigation";
-import { paneRegions } from "./pane-layout";
+
 import { createSearchList } from "./search-list";
 import {
   rankCommands,
@@ -73,10 +73,17 @@ interface CommandFeatures {
   };
   layout: {
     toggle: (key: "filesVisible" | "workspacesVisible") => void;
-    split: (direction: "right" | "down") => void;
-    zoom: () => void;
+    toggleSplit: (workspace?: WorkspaceState) => Promise<void>;
+    moveTab: (
+      workspace: WorkspaceState,
+      paneId: string,
+      groupId: string,
+    ) => Promise<void>;
     togglePane: (side: "left" | "right", signal?: AbortSignal) => Promise<void>;
-    sidePane: (side: "left" | "right") => Promise<string | undefined>;
+    sidePane: (
+      side: "left" | "right",
+      workspace?: WorkspaceState,
+    ) => string | undefined;
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
   chat: { send: (id: string) => Promise<void>; integration: () => void };
@@ -1043,14 +1050,16 @@ export function createCommands(
       pane?.kind !== "browser"
     )
       return "Select a browser tab first";
-    const paneNumber = /^pane\.focus([1-9])$/.exec(id);
-    if (paneNumber && Number(paneNumber[1]) > (w.groups?.length ?? 0))
-      return "That pane is not open";
+    if (id === "pane.focusRight" && !layout.sidePane("right", w))
+      return "Right pane is not open";
+    if (
+      id === "pane.splitRight" &&
+      group?.activePaneId !== layout.sidePane("left", w)
+    )
+      return "Tab is already in the right pane";
     const tabNumber = /^tab\.focus([1-8])$/.exec(id);
     if (tabNumber && Number(tabNumber[1]) > (group?.paneIds.length ?? 0))
       return "That tab is not open";
-    if (id === "tab.moveToPane" && (w.groups?.length ?? 0) < 2)
-      return "Open a second pane first";
     if (
       id === "tab.reorderLeft" &&
       (!group || group.paneIds.indexOf(pane?.id ?? w.activePaneId) <= 0)
@@ -1069,12 +1078,44 @@ export function createCommands(
     )
       return "Select a review first";
   }
+  let pendingPaneSwitch:
+    | {
+        workspaceId: string;
+        paneId: string;
+        intent: AbortController;
+        applied: Promise<void>;
+      }
+    | undefined;
   async function execute(
     id: CommandId,
     browserId?: string,
     context?: CommandContext,
   ): Promise<void> {
+    const switching =
+      id === "tab.close" &&
+      !context &&
+      !pendingPaneSwitch?.intent.signal.aborted
+        ? pendingPaneSwitch
+        : undefined;
     const focusIntent = keys.beginFocus();
+    if (switching) {
+      // Close follows the requested pane even while the old pane still has focus.
+      switching.intent = focusIntent;
+      try {
+        await switching.applied;
+      } catch {
+        return;
+      }
+      if (
+        focusIntent.signal.aborted ||
+        activeWorkspace()?.id !== switching.workspaceId
+      )
+        return;
+      context = {
+        workspaceId: switching.workspaceId,
+        paneId: switching.paneId,
+      };
+    }
     if (browserId) focus.native(browserId);
     if (id === "workspace.overview") {
       overview.toggle();
@@ -1126,11 +1167,6 @@ export function createCommands(
       const action = conversationCommand(id, conversation);
       if (action) {
         action.run();
-        return;
-      }
-      const paneNumber = /^pane\.focus([1-9])$/.exec(id);
-      if (paneNumber) {
-        await keys.spatial(Number(paneNumber[1]) - 1, w?.id);
         return;
       }
       const tabNumber = /^tab\.focus([1-8])$/.exec(id);
@@ -1370,10 +1406,23 @@ export function createCommands(
           break;
         case "pane.focusLeft":
         case "pane.focusRight": {
-          const target = await layout.sidePane(
+          const target = layout.sidePane(
             id === "pane.focusLeft" ? "left" : "right",
+            w,
           );
-          if (target) await keys.focusPane(target, focusIntent);
+          if (!target || !w) break;
+          const switching = {
+            workspaceId: w.id,
+            paneId: target,
+            intent: focusIntent,
+            applied: keys.focusPane(target, focusIntent),
+          };
+          pendingPaneSwitch = switching;
+          try {
+            await switching.applied;
+          } finally {
+            if (pendingPaneSwitch === switching) pendingPaneSwitch = undefined;
+          }
           break;
         }
         case "pane.toggleRight":
@@ -1406,18 +1455,13 @@ export function createCommands(
           await keys.cycleRegion(-1, browserId);
           break;
         case "pane.zoom":
-          if (w && group)
-            await invoke("group.zoom", { workspace: w.id, id: group.id });
+          await layout.toggleSplit(w);
           break;
         case "pane.splitRight":
-        case "pane.splitDown":
-          if (w && group && pane)
-            await invoke("group.split", {
-              workspace: w.id,
-              id: group.id,
-              paneId: pane.id,
-              direction: id === "pane.splitRight" ? "right" : "down",
-            });
+          if (w && group && pane) {
+            await layout.moveTab(w, pane.id, group.id);
+            await keys.focusActiveContent(pane.id, focusIntent);
+          }
           break;
         case "tab.next":
           await keys.cycleTab(1, w?.id, pane?.id);
@@ -1490,23 +1534,8 @@ export function createCommands(
           break;
         case "tab.moveToPane":
           if (w && group && pane) {
-            const targets = paneRegions(w).filter(
-              (r) => r.id !== group.id && !r.id.startsWith("missing-"),
-            );
-            menu(
-              document.querySelector<HTMLElement>(
-                `[data-tab-id="${pane.id}"]`,
-              ) ?? document.querySelector<HTMLElement>("#workspace-selector")!,
-              targets.map((target, index) => ({
-                label: `Move to pane ${index + 1}`,
-                run: () =>
-                  void invoke("pane.move", {
-                    workspace: w.id,
-                    id: pane.id,
-                    group: target.id,
-                  }).then(() => keys.focusPane(pane.id)),
-              })),
-            );
+            await layout.moveTab(w, pane.id, group.id);
+            await keys.focusActiveContent(pane.id, focusIntent);
           }
           break;
         case "text.inc":
@@ -1726,11 +1755,7 @@ export function createCommands(
       (selected ?? tree.querySelector<HTMLElement>("[role=treeitem]"))?.focus();
     };
     const workspace = activeWorkspace();
-    if (
-      workspace &&
-      (workspace.settings?.workspacesVisible === false ||
-        workspace.zoomedGroupId)
-    )
+    if (workspace && workspace.settings?.workspacesVisible === false)
       void invoke("workspace.settings", {
         id: workspace.id,
         settings: { workspacesVisible: true },

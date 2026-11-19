@@ -220,9 +220,6 @@ body {
 .split.right {
   flex-direction: row;
 }
-.split.down {
-  flex-direction: column;
-}
 .split-child {
   display: flex;
   min-width: 0;
@@ -238,19 +235,10 @@ body {
   width: 1px;
   cursor: col-resize;
 }
-.split.down > .split-handle {
-  height: 1px;
-  cursor: row-resize;
-}
 .split.right > .split-handle:before {
   content: "";
   position: absolute;
   inset: 0 -3px;
-}
-.split.down > .split-handle:before {
-  content: "";
-  position: absolute;
-  inset: -3px 0;
 }
 .tab-group {
   display: flex;

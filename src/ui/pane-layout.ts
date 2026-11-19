@@ -1,3 +1,4 @@
+import { orderedGroups } from "../workspace-layout";
 import type { CommandId } from "../keyboard";
 import { documentKey, isTextDocument } from "../text-document";
 import { createTabDrag } from "./tab-drag";
@@ -10,7 +11,6 @@ import type {
   ConversationState,
   WorkspaceState,
   PaneState,
-  Layout,
 } from "../types";
 import type { Invoke, WhenRendered } from "./contracts";
 interface LayoutActions {
@@ -26,37 +26,6 @@ interface LayoutActions {
   documentModified: (pane: PaneState) => boolean;
   conversationActions: (conversation: ConversationState) => MenuAction[];
   nativeLayout: () => void;
-}
-export function paneRegions(workspace: WorkspaceState) {
-  const regions: {
-    id: string;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  }[] = [];
-  const visit = (layout: Layout, x = 0, y = 0, w = 1, h = 1): void => {
-    if (layout.type === "leaf") {
-      regions.push({ id: layout.paneId, x, y, w, h });
-      return;
-    }
-    const r = layout.ratio;
-    if (layout.direction === "right") {
-      visit(layout.first, x, y, w * r, h);
-      visit(layout.second, x + w * r, y, w * (1 - r), h);
-    } else {
-      visit(layout.first, x, y, w, h * r);
-      visit(layout.second, x, y + h * r, w, h * (1 - r));
-    }
-  };
-  if (workspace.groupLayout) visit(workspace.groupLayout);
-  if (regions.length === 1) {
-    regions[0].x = 0;
-    regions[0].w = 0.5;
-    regions.push({ id: "missing-right", x: 0.5, y: 0, w: 0.5, h: 1 });
-  }
-  regions.sort((a, b) => a.y - b.y || a.x - b.x);
-  return regions;
 }
 export function createPaneLayout(
   getState: () => AppState,
@@ -74,14 +43,22 @@ export function createPaneLayout(
   const drag = createTabDrag(invoke);
   const activeWorkspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
-  function groupFor(
-    workspace: WorkspaceState,
-    paneId = workspace.activePaneId,
-  ) {
-    return workspace.groups?.find((group) => group.paneIds.includes(paneId));
-  }
+  const splitButton = iconButton("split", "Toggle split view", () => {
+    void toggleSplit().catch(() => undefined);
+  });
+  splitButton.onpointerdown = (event) => event.preventDefault();
+  document.querySelector("#pane-visibility")!.append(splitButton);
   let settingsSignature = "";
   function applyWorkspaceSettings(workspace?: WorkspaceState): void {
+    splitButton.disabled = !workspace;
+    splitButton.title = shortcutTitle("pane.zoom", "Toggle split view");
+    splitButton.setAttribute(
+      "aria-pressed",
+      String(
+        workspace?.groups.length === 2 &&
+          workspace.groups.every((group) => !group.hidden),
+      ),
+    );
     if (!workspace) {
       navigationWidths.clear();
       settingsSignature = "";
@@ -92,44 +69,35 @@ export function createPaneLayout(
       const hasWorkspaces = getState().workspaces.length > 0;
       if (hasWorkspaces)
         document.querySelector<HTMLElement>(".sidebar")!.hidden = false;
-      for (const [selector, labels] of [
-        ["#visibility-controls", ["Toggle workspaces", "Toggle files"]],
-        ["#pane-visibility", ["Show left pane", "Show right pane"]],
-      ] as const) {
-        const host = document.querySelector(selector)!;
-        host.replaceChildren(
-          ...labels.map((label) => {
+      const controls = document.querySelector("#visibility-controls")!;
+      controls.replaceChildren(
+        ...(["Toggle workspaces", "Toggle files"] as const).map(
+          (label, index) => {
             const button = iconButton(
-              label.includes("files") ? "folder" : "workspace",
+              index ? "folder" : "workspace",
               label,
               () => {},
             );
             button.disabled = true;
             button.setAttribute(
               "aria-pressed",
-              String(hasWorkspaces && label === "Toggle workspaces"),
+              String(hasWorkspaces && index === 0),
             );
             button.title = "Select a workspace to change panels";
             return button;
-          }),
-        );
-      }
+          },
+        ),
+      );
       return;
     }
     navigationWidths.apply(workspace);
     const settings = workspace.settings;
     document
       .querySelector(".sidebar")!
-      .toggleAttribute(
-        "hidden",
-        !!workspace.zoomedGroupId || settings?.workspacesVisible === false,
-      );
+      .toggleAttribute("hidden", settings?.workspacesVisible === false);
     document
       .querySelector("#project-panel")!
-      .toggleAttribute(
-        "hidden",
-        !!workspace.zoomedGroupId || settings?.filesVisible !== true,
-      );
+      .toggleAttribute("hidden", settings?.filesVisible !== true);
     document.documentElement.style.setProperty(
       "--chat-max-width",
       settings?.chatMaxWidth
@@ -138,198 +106,87 @@ export function createPaneLayout(
     );
     const signature = JSON.stringify([
       workspace.id,
-      shortcutTitle("pane.toggleLeft"),
-      shortcutTitle("pane.toggleRight"),
-      workspace.settings,
-      workspace.groupLayout,
-      workspace.zoomedGroupId,
-      workspace.groups?.map((g) => [g.id, g.hidden, g.paneIds]),
-      workspace.panes.map((p) => [p.id, p.kind]),
+      settings?.workspacesVisible,
+      settings?.filesVisible,
+      shortcutTitle("navigation.toggleWorkspaces"),
+      shortcutTitle("navigation.toggleFiles"),
     ]);
     if (signature === settingsSignature) return;
     settingsSignature = signature;
     const controls = document.querySelector("#visibility-controls")!;
     controls.replaceChildren();
-    for (const [key, name, label] of [
-      ["workspacesVisible", "workspace", "Toggle workspaces"],
-      ["filesVisible", "folder", "Toggle files"],
+    for (const [key, name, label, command, enabled] of [
+      [
+        "workspacesVisible",
+        "workspace",
+        "Toggle workspaces",
+        "navigation.toggleWorkspaces",
+        settings?.workspacesVisible !== false,
+      ],
+      [
+        "filesVisible",
+        "folder",
+        "Toggle files",
+        "navigation.toggleFiles",
+        settings?.filesVisible === true,
+      ],
     ] as const) {
       const button = iconButton(name, label, () => toggleSetting(key));
-      button.setAttribute(
-        "aria-pressed",
-        String(
-          !workspace.zoomedGroupId &&
-            (key === "workspacesVisible"
-              ? settings?.[key] !== false
-              : settings?.[key] === true),
-        ),
-      );
-      button.title = shortcutTitle(
-        key === "filesVisible"
-          ? "navigation.toggleFiles"
-          : "navigation.toggleWorkspaces",
-        label,
-      );
+      button.setAttribute("aria-pressed", String(enabled));
+      button.title = shortcutTitle(command, label);
       controls.append(button);
     }
-    const groupControls = document.querySelector("#pane-visibility")!;
-    groupControls.replaceChildren();
-    const regions = paneRegions(workspace);
-    for (const region of regions) {
-      const group = workspace.groups?.find((g) => g.id === region.id);
-      const visible =
-        !!group &&
-        !group.hidden &&
-        (!workspace.zoomedGroupId || workspace.zoomedGroupId === group.id);
-      const position = [
-        region.h < 0.99
-          ? region.y + region.h / 2 < 0.5
-            ? "top"
-            : "bottom"
-          : "",
-        region.w < 0.99
-          ? region.x + region.w / 2 < 0.5
-            ? "left"
-            : "right"
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const button = iconButton(
-        "workspace",
-        `${visible ? "Hide" : "Show"} ${position} pane`,
-        () => {
-          void toggleRegion(region.id);
-        },
-      );
-
-      if (group) button.dataset.groupId = group.id;
-      const side =
-        region.id === sideRegion("left")?.id
-          ? "left"
-          : region.id === sideRegion("right")?.id
-            ? "right"
-            : undefined;
-      if (side)
-        button.title = shortcutTitle(
-          side === "left" ? "pane.toggleLeft" : "pane.toggleRight",
-          button.getAttribute("aria-label")!,
-        );
-      button.disabled =
-        visible &&
-        (workspace.groups?.filter((g) => !g.hidden).length ?? 0) <= 1;
-      if (button.disabled) button.title = "At least one pane must remain open";
-      button.setAttribute("aria-pressed", String(visible));
-      const svg = button.querySelector("svg")!;
-      svg.innerHTML = '<rect x="3" y="3" width="18" height="18" rx="2"/>';
-      for (const cell of regions) {
-        const rect = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "rect",
-        );
-        rect.setAttribute("x", String(4 + cell.x * 16));
-        rect.setAttribute("y", String(4 + cell.y * 16));
-        rect.setAttribute("width", String(Math.max(1, cell.w * 16 - 1)));
-        rect.setAttribute("height", String(Math.max(1, cell.h * 16 - 1)));
-        rect.setAttribute("stroke", "none");
-        rect.setAttribute("fill", "currentColor");
-        rect.setAttribute("opacity", cell.id === region.id ? "0.9" : "0.15");
-        svg.append(rect);
-      }
-      groupControls.append(button);
-    }
   }
-  async function toggleRegion(id: string, signal?: AbortSignal): Promise<void> {
+  async function toggleSplit(workspace = activeWorkspace()): Promise<void> {
+    if (workspace)
+      await invoke("group.toggle-split", { workspace: workspace.id });
+  }
+  function sidePane(side: "left" | "right", workspace = activeWorkspace()) {
+    return (
+      workspace &&
+      orderedGroups(workspace)[side === "left" ? 0 : 1]?.activePaneId
+    );
+  }
+  async function togglePane(
+    side: "left" | "right",
+    signal?: AbortSignal,
+  ): Promise<void> {
     const workspace = activeWorkspace();
     if (!workspace) return;
-    const region = paneRegions(workspace).find((region) => region.id === id);
-    if (!region) return;
-    const group = workspace.groups?.find((group) => group.id === id);
-    const visible =
-      group &&
-      !group.hidden &&
-      (!workspace.zoomedGroupId || workspace.zoomedGroupId === id);
-    let selectedGroup = id;
-    let hidden: boolean;
+    const group = orderedGroups(workspace)[side === "left" ? 0 : 1];
     if (!group) {
-      selectedGroup = (
-        await invoke<{ groupId: string }>("group.ensure", {
-          workspace: workspace.id,
-          side: region.x < 0.5 ? "left" : "right",
-        })
-      ).groupId;
-      hidden = false;
-    } else if (!visible) {
-      await invoke("pane.focus", {
-        workspace: workspace.id,
-        id: group.activePaneId,
-      });
-      hidden = false;
-    } else if ((workspace.groups?.filter((g) => !g.hidden).length ?? 0) > 1) {
-      await invoke("group.visibility", {
-        workspace: workspace.id,
-        id,
-        hidden: true,
-      });
-      hidden = true;
-    } else return;
+      await invoke("group.ensure", { workspace: workspace.id, side });
+      return;
+    }
+    if (
+      !group.hidden &&
+      workspace.groups.filter((item) => !item.hidden).length === 1
+    )
+      return;
+    const hidden = !group.hidden;
+    await invoke("group.visibility", {
+      workspace: workspace.id,
+      id: group.id,
+      hidden,
+    });
     if (signal)
       await actions.whenRendered(() => {
         const current = activeWorkspace();
         if (current?.id !== workspace.id) return false;
-        const target = current.groups?.find(
-          (group) => group.id === selectedGroup,
-        );
-        if (!target) return undefined;
-        return (
+        return current.groups.find((item) => item.id === group.id)?.hidden ===
           hidden
-            ? target.hidden
-            : !target.hidden &&
-              (!current.zoomedGroupId || current.zoomedGroupId === target.id)
-        )
           ? true
           : undefined;
       }, signal);
   }
-
-  function sideRegion(side: "left" | "right") {
-    const workspace = activeWorkspace();
-    if (!workspace) return undefined;
-    const regions = paneRegions(workspace).sort(
-      (a, b) => a.x - b.x || a.y - b.y,
-    );
-    return side === "left" ? regions[0] : regions.at(-1);
-  }
-  async function sidePane(side: "left" | "right"): Promise<string | undefined> {
-    const workspace = activeWorkspace();
-    const region = sideRegion(side);
-    if (!workspace || !region) return;
-    const group = workspace.groups?.find((g) => g.id === region.id);
-    if (group) return group.activePaneId;
-    return (
-      await invoke<{ paneId: string }>("group.ensure", {
-        workspace: workspace.id,
-        side,
-      })
-    ).paneId;
-  }
-  function togglePane(
-    side: "left" | "right",
-    signal?: AbortSignal,
-  ): Promise<void> {
-    const region = sideRegion(side);
-    return region ? toggleRegion(region.id, signal) : Promise.resolve();
-  }
   function paneToggleReason(side: "left" | "right"): string | undefined {
     const workspace = activeWorkspace();
     if (!workspace) return "Open a workspace first";
-    const region = sideRegion(side);
-    const group = workspace.groups?.find((g) => g.id === region?.id);
+    const group = orderedGroups(workspace)[side === "left" ? 0 : 1];
     if (
       group &&
       !group.hidden &&
-      (!workspace.zoomedGroupId || workspace.zoomedGroupId === group.id) &&
-      (workspace.groups?.filter((g) => !g.hidden).length ?? 0) <= 1
+      workspace.groups.filter((item) => !item.hidden).length === 1
     )
       return "At least one pane must remain open";
   }
@@ -339,97 +196,100 @@ export function createPaneLayout(
       void invoke("workspace.settings", {
         id: w.id,
         settings: {
-          [key]:
-            !!w.zoomedGroupId ||
-            !(key === "workspacesVisible"
-              ? w.settings?.[key] !== false
-              : w.settings?.[key] === true),
+          [key]: !(key === "workspacesVisible"
+            ? w.settings?.[key] !== false
+            : w.settings?.[key] === true),
         },
       });
   }
   function renderWorkspace(workspace: WorkspaceState): HTMLElement {
-    if (!workspace.groups?.length || !workspace.groupLayout)
-      return renderLayout(workspace, workspace.layout);
-    if (workspace.zoomedGroupId) {
-      const group = workspace.groups.find(
-        (g) => g.id === workspace.zoomedGroupId,
-      );
-      if (group) return renderGroup(workspace, group);
-    }
-    const build = (layout: Layout, path: number[] = []): HTMLElement | null => {
-      if (layout.type === "leaf") {
-        const group = workspace.groups!.find((g) => g.id === layout.paneId);
-        return group && !group.hidden ? renderGroup(workspace, group) : null;
+    const groups = orderedGroups(workspace);
+    const [left, right] = groups;
+    const bothVisible = !!right && !left.hidden && !right.hidden;
+    const split = splitViews.get(workspace.id) ?? document.createElement("div");
+    splitViews.set(workspace.id, split);
+    split.className = "split right";
+    const [first, handle, second] = (
+      split.childElementCount
+        ? [...split.children]
+        : [
+            document.createElement("div"),
+            document.createElement("div"),
+            document.createElement("div"),
+          ]
+    ) as HTMLElement[];
+    const ratio =
+      workspace.groupLayout.type === "split"
+        ? workspace.groupLayout.ratio
+        : 0.5;
+    for (const [index, child] of [first, second].entries()) {
+      const group = groups[index];
+      child.className = "split-child";
+      child.hidden = !group || !!group.hidden;
+      child.style.flex = bothVisible
+        ? `${index === 0 ? ratio : 1 - ratio} 1 0`
+        : "1 1 0";
+      if (!child.hidden) {
+        const section = renderGroup(workspace, group);
+        if (child.firstElementChild !== section) child.replaceChildren(section);
       }
-      const first = build(layout.first, [...path, 0]),
-        second = build(layout.second, [...path, 1]);
-      if (!first) return second;
-      if (!second) return first;
-      const splitKey = workspace.id + ":" + path.join(".");
-      const split = splitViews.get(splitKey) ?? document.createElement("div");
-      splitViews.set(splitKey, split);
-      split.className = `split ${layout.direction}`;
-      const a =
-          (split.children[0] as HTMLElement | undefined) ??
-          document.createElement("div"),
-        b =
-          (split.children[2] as HTMLElement | undefined) ??
-          document.createElement("div"),
-        handle =
-          (split.children[1] as HTMLElement | undefined) ??
-          document.createElement("div");
-      a.className = b.className = "split-child";
-      a.style.flex = `${layout.ratio} 1 0`;
-      b.style.flex = `${1 - layout.ratio} 1 0`;
-      if (a.firstElementChild !== first) a.replaceChildren(first);
-      if (b.firstElementChild !== second) b.replaceChildren(second);
-      handle.className = "split-handle";
-      handle.setAttribute("role", "separator");
-      handle.setAttribute("aria-label", "Resize panes");
-      handle.tabIndex = 0;
-      const firstGroup = (l: Layout): string =>
-        l.type === "leaf" ? l.paneId : firstGroup(l.first);
-      const resize = (ratio: number) =>
-        void invoke("group.resize", {
-          workspace: workspace.id,
-          id: firstGroup(layout.first),
-          path,
-          ratio: Math.max(0.15, Math.min(0.85, ratio)),
-        });
-      handle.onpointerdown = (event) => {
-        handle.setPointerCapture(event.pointerId);
-        const rect = split.getBoundingClientRect();
-        let ratio = layout.ratio;
-        handle.onpointermove = (e) => {
-          ratio =
-            layout.direction === "right"
-              ? (e.clientX - rect.left) / rect.width
-              : (e.clientY - rect.top) / rect.height;
-          ratio = Math.max(0.15, Math.min(0.85, ratio));
-          a.style.flex = `${ratio} 1 0`;
-          b.style.flex = `${1 - ratio} 1 0`;
-          nativeLayout();
-        };
-        handle.onpointerup = () => {
-          handle.onpointermove = null;
-          resize(ratio);
-        };
+    }
+    handle.className = "split-handle";
+    handle.hidden = !bothVisible;
+    handle.setAttribute("role", "separator");
+    handle.setAttribute("aria-label", "Resize panes");
+    handle.setAttribute("aria-orientation", "vertical");
+    handle.tabIndex = 0;
+    const clamp = (value: number) => Math.max(0.15, Math.min(0.85, value));
+    const resize = (value: number) =>
+      void invoke("group.resize", {
+        workspace: workspace.id,
+        id: left.id,
+        ratio: clamp(value),
+      });
+    handle.onpointerdown = (event) => {
+      if (event.button !== 0) return;
+      handle.setPointerCapture(event.pointerId);
+      const rect = split.getBoundingClientRect();
+      let position = ratio;
+      handle.onpointermove = (move) => {
+        position = clamp((move.clientX - rect.left) / rect.width);
+        first.style.flex = `${position} 1 0`;
+        second.style.flex = `${1 - position} 1 0`;
+        nativeLayout();
       };
-      handle.onkeydown = (e) => {
-        if (
-          ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(e.key)
-        ) {
-          e.preventDefault();
-          resize(
-            layout.ratio +
-              (["ArrowLeft", "ArrowUp"].includes(e.key) ? -0.05 : 0.05),
-          );
-        }
+      handle.onpointerup = () => {
+        handle.onpointermove = null;
+        resize(position);
       };
-      if (!split.childElementCount) split.append(a, handle, b);
-      return split;
     };
-    return build(workspace.groupLayout) ?? document.createElement("div");
+    handle.onkeydown = (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      resize(ratio + (event.key === "ArrowLeft" ? -0.05 : 0.05));
+    };
+    if (!split.childElementCount) split.append(first, handle, second);
+    return split;
+  }
+  async function moveTab(
+    workspace: WorkspaceState,
+    paneId: string,
+    groupId: string,
+  ): Promise<void> {
+    const other = workspace.groups.find((group) => group.id !== groupId);
+    if (other)
+      await invoke("pane.move", {
+        workspace: workspace.id,
+        id: paneId,
+        group: other.id,
+      });
+    else
+      await invoke("group.split", {
+        workspace: workspace.id,
+        id: groupId,
+        paneId,
+        direction: "right",
+      });
   }
   function paneLabel(pane: PaneState): string {
     if (pane.kind === "untitled") return pane.name;
@@ -712,45 +572,12 @@ export function createPaneLayout(
             }),
         })),
         {
-          label: "Split right",
-          run: () =>
-            void invoke("group.split", {
-              workspace: workspace.id,
-              id: group.id,
-              direction: "right",
-              paneId: id,
-            }),
-        },
-        {
-          label: "Split below",
-          run: () =>
-            void invoke("group.split", {
-              workspace: workspace.id,
-              id: group.id,
-              direction: "down",
-              paneId: id,
-            }),
-        },
-        ...(workspace.groups ?? [])
-          .filter((g) => g.id !== group.id)
-          .map((g, i) => ({
-            label: `Move to pane ${i + 1}`,
-            run: () =>
-              void invoke("pane.move", {
-                workspace: workspace.id,
-                id,
-                group: g.id,
-              }),
-          })),
-        null,
-        {
-          label: workspace.zoomedGroupId ? "Restore panes" : "Maximize pane",
-          command: "pane.zoom",
-          run: () =>
-            void invoke("group.zoom", {
-              workspace: workspace.id,
-              id: group.id,
-            }),
+          label:
+            orderedGroups(workspace)[0].id === group.id
+              ? "Move to right pane"
+              : "Move to left pane",
+          command: "tab.moveToPane",
+          run: () => void moveTab(workspace, id, group.id),
         },
       ];
       if (pane.kind === "untitled")
@@ -817,28 +644,8 @@ export function createPaneLayout(
       void actions.newTab(workspace.id, group.id).catch(() => undefined);
     };
     plus.dataset.action = "new-tab";
-    const zoom =
-      bar.querySelector<HTMLButtonElement>('[data-action="zoom"]') ??
-      iconButton(
-        workspace.zoomedGroupId ? "restore" : "maximize",
-        workspace.zoomedGroupId ? "Restore panes" : "Maximize pane",
-        () =>
-          void invoke("group.zoom", { workspace: workspace.id, id: group.id }),
-      );
-    zoom.dataset.action = "zoom";
-    const zoomLabel = workspace.zoomedGroupId
-      ? "Restore panes"
-      : "Maximize pane";
-    if (zoom.getAttribute("aria-label") !== zoomLabel) {
-      zoom.setAttribute("aria-label", zoomLabel);
-      zoom.title = shortcutTitle("pane.zoom", zoomLabel);
-      zoom.replaceChildren(
-        icon(workspace.zoomedGroupId ? "restore" : "maximize"),
-      );
-    }
     if (tabs.parentNode !== bar) bar.append(tabs);
     if (plus.parentNode !== bar) bar.append(plus);
-    if (zoom.parentNode !== bar) bar.append(zoom);
     if (bar.parentNode !== section) section.prepend(bar);
     const pane = workspace.panes.find((p) => p.id === group.activePaneId);
     const previousPreview = bar.querySelector<HTMLButtonElement>(
@@ -878,50 +685,6 @@ export function createPaneLayout(
     }
     return section;
   }
-  function renderLayout(
-    workspace: WorkspaceState,
-    layout: Layout,
-  ): HTMLElement {
-    if (layout.type === "leaf") {
-      const pane = workspace.panes.find((item) => item.id === layout.paneId);
-      if (!pane) {
-        const missing = document.createElement("div");
-        missing.textContent = "Unavailable pane";
-        return missing;
-      }
-      return renderPane(workspace, pane);
-    }
-    const split = document.createElement("div");
-    split.className = `split ${layout.direction}`;
-    const first = document.createElement("div");
-    const second = document.createElement("div");
-    first.className = "split-child";
-    second.className = "split-child";
-    first.style.flex = `${layout.ratio} 1 0`;
-    second.style.flex = `${1 - layout.ratio} 1 0`;
-    first.append(renderLayout(workspace, layout.first));
-    second.append(renderLayout(workspace, layout.second));
-    split.append(first, second);
-    return split;
-  }
-
-  function splitActive(direction: "right" | "down"): void {
-    const w = activeWorkspace(),
-      g = w && groupFor(w);
-    if (w && g)
-      void invoke("group.split", {
-        workspace: w.id,
-        id: g.id,
-        direction,
-        paneId: w.activePaneId,
-      });
-  }
-  function zoomActive(): void {
-    const w = activeWorkspace(),
-      g = w && groupFor(w);
-    if (w && g) void invoke("group.zoom", { workspace: w.id, id: g.id });
-  }
-
   return {
     documentModified(key: string, modified: boolean) {
       for (const group of groupViews.values())
@@ -937,16 +700,15 @@ export function createPaneLayout(
     togglePane,
     sidePane,
     paneToggleReason,
-    split: splitActive,
-    zoom: zoomActive,
+    toggleSplit,
+    moveTab,
     reconcile() {
       const workspaces = getState().workspaces;
       for (const id of groupViews.keys())
         if (!workspaces.some((w) => w.groups?.some((g) => g.id === id)))
           groupViews.delete(id);
       for (const key of splitViews.keys())
-        if (!workspaces.some((w) => key.startsWith(w.id + ":")))
-          splitViews.delete(key);
+        if (!workspaces.some((w) => key === w.id)) splitViews.delete(key);
     },
   };
 }

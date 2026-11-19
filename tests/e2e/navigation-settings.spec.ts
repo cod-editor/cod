@@ -1,3 +1,4 @@
+import type { AppState } from "../../src/types";
 import { test, expect } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -277,7 +278,7 @@ test("Folder actions use the native chooser from Commands and empty and populate
   }
 });
 
-test("Header pane controls follow the visible left and right regions and restore hidden panes", async ({}, info) => {
+test("Header split mode follows position while the sidebars stay independent", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -299,73 +300,56 @@ test("Header pane controls follow the visible left and right regions and restore
       "--path",
       app.file,
     );
-    const left = () =>
-      app.page.getByRole("button", { name: "Hide left pane", exact: true });
-    const right = () =>
-      app.page.getByRole("button", { name: "Hide right pane", exact: true });
-    await expect(left()).toHaveAttribute("aria-pressed", "true");
-    await expect(right()).toHaveAttribute("aria-pressed", "true");
-    await expect(left()).toHaveCSS("color", "rgb(97, 175, 239)");
-    await left().click();
-    await expect(app.pane(file.paneId)).toBeHidden();
-    await expect(app.page.locator(".composer textarea")).toBeVisible();
-    await app.page
-      .getByRole("button", { name: "Show left pane", exact: true })
-      .click();
-    await expect(app.pane(file.paneId)).toBeVisible();
-    await right().click();
-    await expect(app.page.locator(".composer textarea")).toBeHidden();
-    await expect(app.pane(file.paneId)).toBeVisible();
-    await app.page
-      .getByRole("button", { name: "Show right pane", exact: true })
-      .click();
-    await expect(app.page.locator(".composer textarea")).toBeVisible();
-    const leftGroup = await left().getAttribute("data-group-id");
-    const split = await app.cli<{ paneId: string; groupId: string }>(
-      "group",
-      "split",
-      "--workspace",
-      workspace,
-      "--id",
-      leftGroup!,
-      "--direction",
-      "down",
-    );
-    await expect(
-      app.page.getByRole("button", { name: "Hide top left pane", exact: true }),
-    ).toBeVisible();
-    await expect(
-      app.page.getByRole("button", {
-        name: "Hide bottom left pane",
-        exact: true,
-      }),
-    ).toBeVisible();
-    await app.page
-      .getByRole("button", { name: "Hide bottom left pane", exact: true })
-      .click();
-    await expect(app.pane(split.paneId)).toBeHidden();
-    await expect(app.pane(file.paneId)).toBeVisible();
-    await app.page
-      .getByRole("button", { name: "Show bottom left pane", exact: true })
-      .click();
-    await expect(app.pane(split.paneId)).toBeVisible();
-    await app.page.screenshot({
-      path: info.outputPath("spatial-pane-controls.png"),
+    const editor = app
+      .pane(file.paneId)
+      .getByRole("textbox", { name: "File contents", exact: true });
+    const composer = app.page.locator(".composer textarea");
+    const split = app.page.getByRole("button", {
+      name: "Toggle split view",
+      exact: true,
     });
-    await app.cli(
-      "group",
-      "zoom",
-      "--workspace",
-      workspace,
-      "--id",
-      split.groupId,
-    );
-    await expect(app.pane(file.paneId)).toBeHidden();
-    await app.page
-      .getByRole("button", { name: "Show top left pane", exact: true })
-      .click();
-    await expect(app.pane(file.paneId)).toBeVisible();
-    await expect(app.pane(split.paneId)).toBeVisible();
+    const files = app.page.getByRole("button", {
+      name: "Toggle files",
+      exact: true,
+    });
+    await expect(split).toHaveAttribute("aria-pressed", "true");
+    await expect(split).toHaveCSS("color", "rgb(97, 175, 239)");
+    await files.click();
+    await editor.focus();
+    await split.click();
+    await expect(editor).toBeFocused();
+    await expect(composer).toBeHidden();
+    await expect(files).toHaveAttribute("aria-pressed", "true");
+
+    await app.page.keyboard.press("Alt+2");
+    await expect(composer).toBeFocused();
+    await expect(editor).toBeHidden();
+    await app.page.keyboard.press("Shift+Escape");
+    await expect(composer).toBeFocused();
+    await expect(editor).toBeVisible();
+    await expect(split).toHaveAttribute("aria-pressed", "true");
+    const before = await app.cli<AppState>("state");
+    const left = before.workspaces
+      .find((item) => item.id === workspace)!
+      .groups.find((group) => group.paneIds.includes(file.paneId))!;
+    expect(
+      (
+        await app.raw(
+          "group",
+          "split",
+          "--workspace",
+          workspace,
+          "--id",
+          left.id,
+          "--direction",
+          "down",
+        )
+      ).code,
+    ).not.toBe(0);
+    expect(await app.cli<AppState>("state")).toEqual(before);
+    await app.page.screenshot({
+      path: info.outputPath("side-by-side-pane-switch.png"),
+    });
   } finally {
     await app.cleanup();
   }

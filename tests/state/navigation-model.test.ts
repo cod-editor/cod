@@ -25,7 +25,9 @@ function fixture(): AppState {
             pinned: true,
           },
         ],
-        layout: { type: "leaf", paneId: "pane-a" },
+        groups: [{ id: "group", paneIds: ["pane-a"], activePaneId: "pane-a" }],
+        groupLayout: { type: "leaf", paneId: "group" },
+        activeGroupId: "group",
       },
       {
         id: "beta",
@@ -33,7 +35,9 @@ function fixture(): AppState {
         folders: [],
         activePaneId: "pane-b",
         panes: [{ kind: "browser", id: "pane-b", browserId: "browser-b" }],
-        layout: { type: "leaf", paneId: "pane-b" },
+        groups: [{ id: "group", paneIds: ["pane-b"], activePaneId: "pane-b" }],
+        groupLayout: { type: "leaf", paneId: "group" },
+        activeGroupId: "group",
       },
     ],
     conversations: [

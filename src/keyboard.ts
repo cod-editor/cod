@@ -135,27 +135,16 @@ export const commands = [
     key("KeyS", { mod: true }, ["editor"]),
   ]),
   entry("pane.toggleLeft", "Toggle left pane", "Layout", [], [], all),
-  entry("pane.toggleRight", "Toggle right pane", "Layout", [
-    key("KeyJ", { mod: true, platform: "darwin" }),
-    key("KeyJ", { mod: true, platform: "linux" }, [
-      ...cod,
-      "browser",
-      "agent-page",
-    ]),
+  entry("pane.toggleRight", "Toggle right pane", "Layout", [], [], all),
+  entry("pane.focusLeft", "Focus left pane", "Navigation", [
+    key("Digit1", { alt: true }, all),
   ]),
-  entry("pane.focusLeft", "Focus left pane", "Navigation", [], [], all),
-  entry("pane.focusRight", "Focus right pane", "Navigation", [], [], all),
-  entry("pane.zoom", "Maximize / restore pane", "Layout", [
-    key("Enter", { mod: true, shift: true }, all),
+  entry("pane.focusRight", "Focus right pane", "Navigation", [
+    key("Digit2", { alt: true }, all),
   ]),
-  ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map((number) =>
-    entry(
-      `pane.focus${number}` as const,
-      `Focus pane ${number}`,
-      "Navigation",
-      [key(`Digit${number}`, { mod: true, alt: true })],
-    ),
-  ),
+  entry("pane.zoom", "Toggle split view", "Layout", [
+    key("Escape", { shift: true }, all),
+  ]),
   entry("pane.next", "Focus next pane", "Navigation", [
     key("ArrowRight", { mod: true, alt: true }),
   ]),
@@ -227,12 +216,7 @@ export const commands = [
   entry("tab.reorderLeft", "Move tab left", "Tabs"),
   entry("tab.reorderRight", "Move tab right", "Tabs"),
   entry("tab.moveToPane", "Move tab to another pane", "Tabs"),
-  entry("pane.splitRight", "Split right", "Layout", [
-    key("Backslash", { mod: true }),
-  ]),
-  entry("pane.splitDown", "Split below", "Layout", [
-    key("Backslash", { mod: true, shift: true }),
-  ]),
+  entry("pane.splitRight", "Move tab to right pane", "Layout", [], [], all),
   entry("terminal.new", "New terminal", "Terminal", [
     key("Backquote", { ctrl: true, shift: true }),
   ]),

@@ -11,7 +11,7 @@ test.afterEach(async () => {
   await shell?.cleanup();
 });
 
-test("Rename from a chat tab reveals collapsed, hidden and maximized workspace navigation", async () => {
+test("Rename from a chat tab reveals collapsed and hidden workspace navigation in single-group view", async () => {
   const workspace = await shell.create("Rename navigation");
   const chat = await shell.newChat(workspace, "codex");
   const parent = shell.page.locator(
@@ -47,20 +47,17 @@ test("Rename from a chat tab reveals collapsed, hidden and maximized workspace n
     "--settings",
     JSON.stringify({ workspacesVisible: false }),
   );
-  const state = await shell.cli<AppState>("state");
-  const group = state.workspaces.find(
-    (w) => w.id === workspace,
-  )!.activeGroupId!;
-  await shell.cli("group", "zoom", "--workspace", workspace, "--id", group);
+  await shell.cli("group", "toggle-split", "--workspace", workspace);
+  await shell.cli("group", "toggle-split", "--workspace", workspace);
   await tab.click({ button: "right" });
   await shell.page.getByRole("button", { name: "Rename", exact: true }).click();
   await expect(input).toBeFocused();
   await expect(row).toBeVisible();
   expect(
-    (await shell.cli<AppState>("state")).workspaces.find(
-      (w) => w.id === workspace,
-    )!.zoomedGroupId,
-  ).toBeNull();
+    (await shell.cli<AppState>("state")).workspaces
+      .find((w) => w.id === workspace)!
+      .groups.filter((group) => !group.hidden),
+  ).toHaveLength(1);
   await input.fill("Visible renamed chat");
   await input.press("Enter");
   await expect(row).toContainText("Visible renamed chat");

@@ -30,7 +30,7 @@ Cod should also serve as the user's main browser and the place they spend most o
 - Workspace: a named place with zero or more folders, agent conversations and a saved arrangement of panes. A workspace can span several repositories or contain no repository at all.
 - Conversation: a native session belonging to Claude Code, Codex or Kimi Code, presented through the same chat interface.
 - Tab/view: an open chat, editable file, document preview, diff, review, browser page, terminal or agent-made HTML page.
-- Pane: a tab group within the workspace layout; panes can split, resize, hide or maximize.
+- Pane: one of up to two side-by-side tab groups in a workspace. A workspace can show its focused group or both.
 - Review: feedback on a document or repository changes, with anchored draft comments submitted together to the originating conversation.
 - Browser profile: one shared set of browser logins across workspaces in v1.
 
@@ -214,13 +214,13 @@ Competitor comparisons from earlier descriptions are not requirements and need f
 
 ## Interface conventions
 
-Use a fixed, bounded workspace selector centered in the title bar. Workspace and file visibility controls sit on its left, after native window controls; content-area visibility controls sit on its right. There is no persistent footer. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. Text search belongs in Commands and its shortcut. Global controls remain in the title bar when a pane is maximized. Transient feedback stays visible without reserving a bottom strip.
+Use a fixed, bounded workspace selector centered in the title bar. Workspace and file visibility controls sit on its left, after native window controls; one split-view control sits on its right. There is no persistent footer. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. Text search belongs in Commands and its shortcut. Transient feedback stays visible without reserving a bottom strip.
 
-Maximizing a pane fills the window's working area below the title bar, temporarily hiding navigation and other panes. Restore recovers the previous panel visibility, widths and split arrangement. Explicitly revealing a navigation panel leaves maximized mode. This is an in-window layout action, not operating-system fullscreen.
+The split-view control switches between one tab group and both. The workspace and file sidebars have independent visibility. A split keeps its saved width, active group and tabs when toggled.
 
 Use compact One Dark editor conventions: neutral selection and focus, consistent row/tab sizing, content-sized tabs with bounded width and truncation, and no active-tab underline. Keep keyboard focus visible. Native window chrome follows the platform; websites and Bitwarden keep their own appearance. Secondary actions belong in context menus, shortcuts and Commands rather than persistent buttons or explanatory hints.
 
-Pane visibility controls remain discoverable even before the material area is opened; revealing an empty area does not start another agent. Shared form, menu, tree and tab controls use consistent spacing, focus and interaction across screens. Tool activity is collapsed per turn while pending approvals and actionable errors remain visible.
+The split-view control is available before the second group exists, and showing an empty group starts no agent. Shared form, menu, tree and tab controls use consistent spacing, focus and interaction across screens. Tool activity is collapsed per turn while pending approvals and actionable errors remain visible.
 
 Provider session commands expose actual native status, skills, plugins, effective configuration and subagents where supported. Unsupported or unavailable sections say so; opening an inspector never sends an inference prompt. Skills retain their native path identity when names collide.
 

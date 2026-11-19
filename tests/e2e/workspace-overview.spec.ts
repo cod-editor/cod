@@ -67,10 +67,8 @@ test("Overview keeps selection separate from activation, preserves workspace gro
     "--settings",
     JSON.stringify({ workspacesVisible: false }),
   );
-  const group = (await app.cli<AppState>("state")).workspaces.find(
-    (w) => w.id === first,
-  )!.activeGroupId!;
-  await app.cli("group", "zoom", "--workspace", first, "--id", group);
+  await app.cli("group", "toggle-split", "--workspace", first);
+  await app.cli("group", "toggle-split", "--workspace", first);
   const before = await app.cli<AppState>("state");
   await composer.focus();
   await show();
@@ -124,8 +122,14 @@ test("Overview keeps selection separate from activation, preserves workspace gro
   expect(after.workspaces.find((w) => w.id === first)?.settings).toEqual(
     before.workspaces.find((w) => w.id === first)?.settings,
   );
-  expect(after.workspaces.find((w) => w.id === first)?.zoomedGroupId).toBe(
-    before.workspaces.find((w) => w.id === first)?.zoomedGroupId,
+  expect(
+    after.workspaces
+      .find((w) => w.id === first)
+      ?.groups.map((group) => !!group.hidden),
+  ).toEqual(
+    before.workspaces
+      .find((w) => w.id === first)
+      ?.groups.map((group) => !!group.hidden),
   );
   await app.page.getByRole("button", { name: "Overview", exact: true }).click();
   await search().fill("Beta shared");
@@ -1259,7 +1263,6 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
       name: `Invented collection${String(w).padStart(3, "0")}`,
       panes,
       activePaneId: panes[0].id,
-      layout: { type: "leaf", paneId: panes[0].id },
       groups: [
         {
           id: group,
@@ -1269,7 +1272,6 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
       ],
       groupLayout: { type: "leaf", paneId: group },
       activeGroupId: group,
-      zoomedGroupId: null,
       closedTabs: [],
       chatDrafts: {},
       settings: { ...template.settings, workspacesVisible: false },

@@ -141,10 +141,7 @@ export function createWorkspaceNavigation(
     const active = getState().workspaces.find(
       (item) => item.id === getState().activeWorkspaceId,
     );
-    if (
-      active &&
-      (active.settings?.workspacesVisible === false || active.zoomedGroupId)
-    ) {
+    if (active && active.settings?.workspacesVisible === false) {
       await invoke("workspace.settings", {
         id: active.id,
         settings: { workspacesVisible: true },

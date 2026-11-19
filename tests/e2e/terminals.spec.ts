@@ -377,7 +377,7 @@ test("T1 AC6 restart restores terminal resources with fresh processes and no she
     `export COD_FIXTURE_OLD=present; printf '${tag}\\n'`,
   );
   const old = await inspect(terminal.id);
-  const layout = (await shell.workspace(workspace)).layout;
+  const layout = (await shell.workspace(workspace)).groupLayout;
   await shell.stop();
   await expect.poll(() => alive(old.pid)).toBe(false);
   await shell.start();
@@ -389,7 +389,7 @@ test("T1 AC6 restart restores terminal resources with fresh processes and no she
   expect(restored.pid).not.toBe(old.pid);
   expect(restored.cwd).toBe(old.cwd);
   expect(restored.paneId).toBe(old.paneId);
-  expect((await shell.workspace(workspace)).layout).toEqual(layout);
+  expect((await shell.workspace(workspace)).groupLayout).toEqual(layout);
   expect(restored.output).not.toContain(tag);
   await ready(terminal.id);
   const check = marker();
@@ -523,3 +523,44 @@ for (const closer of [
     }
   });
 }
+
+test("Two-group keyboard mode keeps a real terminal process alive while switching to the editor", async () => {
+  const workspace = await shell.create("Preserve the running shell");
+  const file = await shell.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    shell.file,
+  );
+  const editor = shell
+    .pane(file.paneId)
+    .getByRole("textbox", { name: "File contents", exact: true });
+  const terminal = await open(workspace);
+  const original = await inspect(terminal.id);
+  const split = shell.page.getByRole("button", {
+    name: "Toggle split view",
+    exact: true,
+  });
+  await expect(split).toHaveAttribute("aria-pressed", "true");
+  await input(terminal.paneId).focus();
+  await input(terminal.paneId).press("Shift+Escape");
+  await expect(split).toHaveAttribute("aria-pressed", "false");
+  await expect(input(terminal.paneId)).toBeFocused();
+  await expect(editor).toBeHidden();
+
+  await input(terminal.paneId).press("Alt+1");
+  await expect(editor).toBeFocused();
+  await expect(input(terminal.paneId)).toBeHidden();
+  await command(terminal.id, "printf 'still running\\n'");
+  expect((await inspect(terminal.id)).pid).toBe(original.pid);
+
+  await editor.press("Alt+2");
+  await expect(input(terminal.paneId)).toBeFocused();
+  await input(terminal.paneId).press("Shift+Escape");
+  await expect(split).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeVisible();
+  await expect(input(terminal.paneId)).toBeFocused();
+  expect((await inspect(terminal.id)).pid).toBe(original.pid);
+});

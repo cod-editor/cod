@@ -152,7 +152,7 @@ export function createFocusTargets(
         target === "files"
           ? w.settings?.filesVisible === true
           : w.settings?.workspacesVisible !== false;
-      if (!visible || w.zoomedGroupId) {
+      if (!visible) {
         await invoke("workspace.settings", {
           id: w.id,
           settings: { [setting]: true },

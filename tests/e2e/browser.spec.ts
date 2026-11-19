@@ -444,7 +444,7 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
   const workspace = await shell.create("Browser layout");
   const browser = await open(workspace);
   const identity = await remote("/one", "window.identity");
-  await shell.command("Split right");
+  await shell.command("Move tab to right pane");
   const content = shell
     .pane(browser.paneId)
     .getByRole("region", { name: "Browser content", exact: true });
@@ -462,6 +462,17 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
       );
     })
     .toBe(true);
+  const split = shell.page.getByRole("button", {
+    name: "Toggle split view",
+    exact: true,
+  });
+  await expect(split).toHaveAttribute("aria-pressed", "true");
+  await pageKey("/one", "Escape", ["shift"]);
+  await expect(split).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(async () => (await nativeView("/one"))?.visible).toBe(true);
+  expect(await remote("/one", "window.identity")).toBe(identity);
+  await pageKey("/one", "Escape", ["shift"]);
+  await expect(split).toHaveAttribute("aria-pressed", "true");
   await pageKey("/one", "P", [
     process.platform === "darwin" ? "meta" : "control",
     "shift",
