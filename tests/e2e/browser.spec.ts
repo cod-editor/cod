@@ -1006,7 +1006,7 @@ test("Browser authentication popup follows redirects and retains its opener", as
 test("Browser OAuth loop error stays compact and redacts parameters while retry preserves the destination", async ({}, info) => {
   const workspace = await shell.create("Invented authorization");
   await shell.app!.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(1270, 800),
+    BrowserWindow.getAllWindows()[0].setContentSize(1060, 800),
   );
   const record = await open(workspace);
   const pathname =
