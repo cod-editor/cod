@@ -223,6 +223,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     reply(m, { stopReason: "end_turn" });
     return;
   }
+  if (mode === "no-turn-ack") return;
   if (mode === "rpc-error") {
     write({
       id: m.id,
@@ -268,6 +269,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       complete();
       return;
     }
+    if (m.params.toolOutput)
+      notify("turn/started", {
+        threadId: sessionId,
+        turn: { id: turnId, status: "inProgress" },
+      });
     // Deliberately send early notifications before the turn/start response.
     notify("item/agentMessage/delta", {
       threadId: "another-session",

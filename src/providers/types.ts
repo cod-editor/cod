@@ -78,6 +78,7 @@ export interface AdapterOptions {
   /** Complete child environment; omitted means inherit without changing routing/auth. */
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
+  /** Deadline for a Kimi ACP session/prompt, which replies when its turn ends. */
   turnTimeoutMs?: number;
   onEvent?: (event: ProviderEvent) => void;
 }

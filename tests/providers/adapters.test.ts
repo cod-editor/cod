@@ -1,14 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   createCodexAdapter,
   createKimiAdapter,
 } from "../../src/providers/index.ts";
 import { RpcTransport } from "../../src/providers/transport.ts";
-import type { ProviderEvent, ProviderId } from "../../src/providers/types.ts";
+import type {
+  AdapterOptions,
+  ProviderEvent,
+  ProviderId,
+} from "../../src/providers/types.ts";
 const fixture = fileURLToPath(new URL("./fake-provider.mjs", import.meta.url));
-function setup(provider: ProviderId, mode = "normal") {
+function setup(
+  provider: ProviderId,
+  mode = "normal",
+  options: Pick<AdapterOptions, "turnTimeoutMs"> = { turnTimeoutMs: 2000 },
+) {
   const events: ProviderEvent[] = [];
   const adapter = (
     provider === "codex" ? createCodexAdapter : createKimiAdapter
@@ -17,7 +26,7 @@ function setup(provider: ProviderId, mode = "normal") {
     executable: process.execPath,
     args: [fixture, provider, mode],
     requestTimeoutMs: 500,
-    turnTimeoutMs: 2000,
+    ...options,
     onEvent: (event) => events.push(event),
   });
   return { adapter, events };
@@ -26,7 +35,7 @@ async function until(predicate: () => boolean) {
   const end = Date.now() + 1500;
   while (!predicate()) {
     if (Date.now() > end) throw new Error("Expected event was not delivered");
-    await new Promise((r) => setTimeout(r, 5));
+    await delay(5);
   }
 }
 for (const provider of ["codex", "kimi"] as const) {
@@ -472,6 +481,89 @@ for (const mode of [
     }
   });
 }
+
+for (const origin of ["composer", "native queue", "tool result"] as const) {
+  test(`Codex ${origin} turns remain attached past one hour`, async ({
+    mock,
+  }) => {
+    const { adapter, events } = setup(
+      "codex",
+      origin === "native queue" ? "external-approval" : "approval",
+      {},
+    );
+    let sent: ReturnType<typeof adapter.send> | undefined;
+    try {
+      await adapter.create();
+      mock.timers.enable({ apis: ["setTimeout"] });
+      if (origin === "composer") {
+        sent = adapter.send("invented long turn");
+        void sent.catch(() => {});
+      }
+      if (origin === "tool result")
+        assert.equal(
+          await adapter.sendToolResult(
+            { namespace: "", name: "fixture_check", output: "invented result" },
+            false,
+          ),
+          "turn-1",
+        );
+      await until(() => events.some((e) => e.type === "permission"));
+      const permission = events.find((e) => e.type === "permission")!;
+      mock.timers.tick(60 * 60 * 1000 + 1);
+      assert.equal(events.filter((e) => e.type === "error").length, 0);
+      assert.equal(events.filter((e) => e.type === "completed").length, 0);
+      await assert.rejects(adapter.send("overlap"), /active/i);
+      await adapter.permission(permission.requestId, "deny");
+      if (sent) assert.equal((await sent).status, "completed");
+      await until(() => events.some((e) => e.type === "completed"));
+      assert.deepEqual(
+        events
+          .filter((e) => e.type === "completed")
+          .map((e) => e.outcome.status),
+        ["completed"],
+      );
+      assert.deepEqual(
+        events.filter((e) => e.type === "text").map((e) => e.text),
+        origin === "native queue"
+          ? ["Job finished", "Queue received"]
+          : ["hello", "DENIED"],
+      );
+    } finally {
+      mock.timers.reset();
+      await adapter.dispose();
+    }
+  });
+}
+
+test("Codex still rejects unacknowledged composer and tool-result requests", async () => {
+  for (const origin of ["composer", "tool result"] as const) {
+    const { adapter, events } = setup("codex", "no-turn-ack", {});
+    try {
+      await adapter.create();
+      const request =
+        origin === "composer"
+          ? adapter.send("invented awaiting acknowledgment")
+          : adapter.sendToolResult(
+              {
+                namespace: "",
+                name: "fixture_check",
+                output: "invented result",
+              },
+              false,
+            );
+      await assert.rejects(
+        request,
+        origin === "composer"
+          ? /Provider request timed out: turn\/start/
+          : /Tool result delivery was not confirmed.*Provider request timed out: turn\/start/,
+      );
+      assert.equal(events.filter((e) => e.type === "error").length, 1);
+      assert.equal(events.filter((e) => e.type === "completed").length, 0);
+    } finally {
+      await adapter.dispose();
+    }
+  }
+});
 
 test("Kimi empty native completion is an actionable failure rather than a successful answer", async () => {
   const { adapter, events } = setup("kimi", "empty-completion");

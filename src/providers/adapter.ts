@@ -46,7 +46,7 @@ interface ActiveTurn {
   buffer: RpcMessage[];
   resolve(value: TurnOutcome): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 export class NativeAdapter implements ProviderAdapter {
@@ -447,7 +447,9 @@ export class NativeAdapter implements ProviderAdapter {
         buffer: [],
         resolve,
         reject,
-        timer: this.turnTimer(),
+        // Codex acknowledges turn/start separately from native completion.
+        // A quiet accepted turn is still owned until completion or disconnect.
+        timer: this.provider === "kimi" ? this.kimiTurnTimer() : undefined,
       };
     });
     this.active = active;
@@ -575,13 +577,12 @@ export class NativeAdapter implements ProviderAdapter {
       buffer: [],
       resolve: () => {},
       reject: () => {},
-      timer: this.turnTimer(),
     };
     this.emit({ type: "turn-started", nativeTurnId: turnId });
     this.state("working");
   }
 
-  private turnTimer() {
+  private kimiTurnTimer() {
     return setTimeout(
       () => {
         this.fail(
