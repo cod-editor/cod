@@ -346,12 +346,7 @@ export function createContentFind(
         const group = workspace?.groups?.find((g) =>
           g.paneIds.includes(opened!.pane.id),
         );
-        if (
-          !group ||
-          group.hidden ||
-          group.activePaneId !== opened.pane.id ||
-          (workspace?.zoomedGroupId && workspace.zoomedGroupId !== group.id)
-        ) {
+        if (!group || group.hidden || group.activePaneId !== opened.pane.id) {
           close(false);
           return;
         }

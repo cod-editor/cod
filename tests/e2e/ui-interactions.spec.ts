@@ -255,7 +255,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await expect(selected).toHaveCount(1);
     for (const name of [
       "Choose new tab type",
-      "Maximize pane",
+      "Toggle split view",
       "Overview",
       "Provider",
     ]) {
@@ -275,13 +275,13 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await app.page.screenshot({ path: info.outputPath("new-tab-choices.png") });
     await app.page.keyboard.press("Escape");
     await app.page
-      .getByRole("button", { name: "Maximize pane", exact: true })
+      .getByRole("button", { name: "Toggle split view", exact: true })
       .click();
     await app.page.screenshot({
-      path: info.outputPath("maximized-selected-tab.png"),
+      path: info.outputPath("single-group-selected-tab.png"),
     });
     await app.page
-      .getByRole("button", { name: "Restore panes", exact: true })
+      .getByRole("button", { name: "Toggle split view", exact: true })
       .click();
     await app.stop();
     app.launchArguments = ["--force-device-scale-factor=2"];

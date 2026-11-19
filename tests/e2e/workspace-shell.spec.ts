@@ -167,7 +167,7 @@ test("AC4 shares pane operations, supports keyboard controls, and rejects invali
   await expect(shell.page.getByTestId("pane")).toHaveCount(2);
   await shell.cli("pane", "focus", "--workspace", workspaceId, "--id", initial);
   await assertActive(workspaceId, initial);
-  const beforeResize = (await shell.workspace(workspaceId)).layout;
+  const beforeResize = (await shell.workspace(workspaceId)).groupLayout;
   await shell.cli(
     "pane",
     "resize",
@@ -178,7 +178,9 @@ test("AC4 shares pane operations, supports keyboard controls, and rejects invali
     "--ratio",
     "0.65",
   );
-  expect((await shell.workspace(workspaceId)).layout).not.toEqual(beforeResize);
+  expect((await shell.workspace(workspaceId)).groupLayout).not.toEqual(
+    beforeResize,
+  );
   const boxes = await Promise.all([
     shell.pane(initial).boundingBox(),
     shell.pane(split.paneId).boundingBox(),
@@ -230,12 +232,23 @@ test("AC4 shares pane operations, supports keyboard controls, and rejects invali
     "--id",
     split.paneId,
   );
-  await expect(shell.page.getByTestId("pane")).toHaveCount(1);
-  await shell.command("Split below");
-  await expect(shell.page.getByTestId("pane")).toHaveCount(2);
-  const workspace = await shell.workspace(workspaceId);
-  const newPane = workspace.panes.find((pane) => pane.id !== initial)!.id;
-  // Sequential keyboard traversal must focus the containing pane.
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
+  const workspace = (await shell.state()).workspaces.find(
+    (item) => item.id === workspaceId,
+  )!;
+  const right = workspace.groups.find(
+    (group) => !group.paneIds.includes(initial),
+  )!;
+  const newPane = (
+    await shell.cli<{ paneId: string }>(
+      "conversation",
+      "draft",
+      "--workspace",
+      workspaceId,
+      "--source-pane",
+      right.activePaneId,
+    )
+  ).paneId;
   await tabTo(
     shell.page,
     shell.pane(initial).getByRole("textbox", { name: "Message", exact: true }),
@@ -247,23 +260,12 @@ test("AC4 shares pane operations, supports keyboard controls, and rejects invali
   );
   await assertActive(workspaceId, newPane);
   await shell.page.keyboard.press(`${modifier}+W`);
-  await expect(shell.page.getByTestId("pane")).toHaveCount(1);
-  const unsplit = await shell.state();
-  expect(
-    (
-      await shell.raw(
-        "pane",
-        "resize",
-        "--workspace",
-        workspaceId,
-        "--id",
-        initial,
-        "--ratio",
-        "0.5",
-      )
-    ).code,
-  ).not.toBe(0);
-  expect(await shell.state()).toEqual(unsplit);
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
+  await expect(shell.pane(newPane)).toHaveCount(0);
+  await shell.page.keyboard.press("Shift+Escape");
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(1);
+  await shell.page.keyboard.press("Shift+Escape");
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
 });
 
 test("AC5 restores folders, file references, split layout and selection in a fresh process", async ({}, testInfo) => {
@@ -315,8 +317,8 @@ test("AC5 restores folders, file references, split layout and selection in a fre
       .pane(opened.paneId)
       .getByRole("textbox", { name: "File contents", exact: true }),
   ).toHaveValue(await shell.contents());
-  // The original empty conversation remains beside the two document groups.
-  await expect(shell.page.getByTestId("pane")).toHaveCount(3);
+  // The original empty conversation remains beside the document group.
+  await expect(shell.page.getByTestId("pane")).toHaveCount(2);
   const viewportHeight = await shell.page.evaluate(() => window.innerHeight);
   const restoredPane = await shell.pane(opened.paneId).boundingBox();
   expect(restoredPane!.height).toBeGreaterThan(viewportHeight * 0.6);

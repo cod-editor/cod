@@ -133,7 +133,15 @@ test("UI snapshots retain labels and attention without copying hidden history or
         },
       ],
       activePaneId: conversation.paneId,
-      layout: { type: "leaf", paneId: conversation.paneId },
+      groups: [
+        {
+          id: "group",
+          paneIds: [conversation.paneId],
+          activePaneId: conversation.paneId,
+        },
+      ],
+      groupLayout: { type: "leaf", paneId: "group" },
+      activeGroupId: "group",
     });
     const visible = app.store.data.conversations[0];
     const hidden = {
@@ -216,7 +224,9 @@ test("Failed navigation persistence rolls back layout while retaining live provi
         { id: "pane", kind: "conversation", conversationId: conversation.id },
       ],
       activePaneId: "pane",
-      layout: { type: "leaf", paneId: "pane" },
+      groups: [{ id: "group", paneIds: ["pane"], activePaneId: "pane" }],
+      groupLayout: { type: "leaf", paneId: "group" },
+      activeGroupId: "group",
     });
     app.store.data.activeWorkspaceId = "workspace";
     conversation.messages.push({

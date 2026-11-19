@@ -40,8 +40,8 @@ export const commands = {
   "group.split": ["workspace", "id", "direction", "pane-id?"],
   "group.focus": ["workspace", "id"],
   "group.visibility": ["workspace", "id", "hidden?"],
-  "group.zoom": ["workspace", "id"],
-  "group.resize": ["workspace", "id", "ratio", "path?"],
+  "group.toggle-split": ["workspace"],
+  "group.resize": ["workspace", "id", "ratio"],
   "pane.move": ["workspace", "id", "group", "index?"],
   "conversation.discover": ["workspace", "provider", "cwd?"],
   "conversation.handoff": ["id"],
@@ -304,7 +304,6 @@ export function parseArguments(argv: string[]): OperationRequest | undefined {
     "images",
     "skills",
     "initialSelection",
-    ...(op === "group.resize" ? ["path"] : []),
   ])
     if (typeof values[name] === "string") {
       try {

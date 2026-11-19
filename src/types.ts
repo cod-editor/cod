@@ -5,8 +5,6 @@ import type {
   ProviderState,
 } from "./providers/types";
 
-export type SplitDirection = "right" | "down";
-
 export interface DocumentPane {
   id: string;
   kind: "document";
@@ -217,14 +215,18 @@ export interface TerminalUiEvent {
   message?: string;
 }
 
-export type Layout =
-  | { type: "leaf"; paneId: string }
+export interface GroupLeaf {
+  type: "leaf";
+  paneId: string;
+}
+export type GroupLayout =
+  | GroupLeaf
   | {
       type: "split";
-      direction: SplitDirection;
+      direction: "right";
       ratio: number;
-      first: Layout;
-      second: Layout;
+      first: GroupLeaf;
+      second: GroupLeaf;
     };
 
 export interface TabGroup {
@@ -271,17 +273,15 @@ export interface WorkspaceState {
     }
   >;
   lastConversationId?: string;
-  groups?: TabGroup[];
-  groupLayout?: Layout;
-  activeGroupId?: string;
-  zoomedGroupId?: string | null;
+  groups: TabGroup[];
+  groupLayout: GroupLayout;
+  activeGroupId: string;
   settings?: WorkspaceSettings;
   id: string;
   name: string;
   folders: string[];
   panes: PaneState[];
   activePaneId: string;
-  layout: Layout;
 }
 
 export interface AppState {

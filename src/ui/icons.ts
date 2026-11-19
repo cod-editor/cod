@@ -22,6 +22,8 @@ export const icons: Record<string, string> = {
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   maximize: '<path d="M14 3h7v7M21 3l-7 7M3 14v7h7M3 21l7-7"/>',
   restore: '<path d="M14 3v7h7M14 10l7-7M3 14h7v7M10 14l-7 7"/>',
+  split:
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
   left: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
   right:
     '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',

@@ -18,15 +18,8 @@ async function prepareKeyboardProfile(app: ChatApp) {
       "pane.previous": ["Alt+Shift+Tab"],
       "pane.zoom": ["Alt+Enter"],
       "pane.splitRight": ["Alt+N"],
-      "pane.splitDown": ["Alt+Shift+N"],
       "focus.composer": ["Alt+J"],
       "focus.terminal": ["Mod+Backquote"],
-      ...Object.fromEntries(
-        Array.from({ length: 9 }, (_, i) => [
-          `pane.focus${i + 1}`,
-          [`Alt+${i + 1}`],
-        ]),
-      ),
     }),
   );
 }
@@ -401,7 +394,7 @@ test("Native website keys stay on the page and palette cancellation restores its
         };
       }, url);
     await expect.poll(inspect).not.toBeNull();
-    // Numbered pane focus is independent of tab selection.
+    // Left/right pane focus is independent of tab selection.
     await app.page.keyboard.press("Alt+1");
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     const key = async (
@@ -645,33 +638,35 @@ test("Native website keys stay on the page and palette cancellation restores its
       wc.sendInputEvent({ type: "keyDown", keyCode: "N", modifiers: ["alt"] });
       wc.sendInputEvent({ type: "keyUp", keyCode: "N", modifiers: ["alt"] });
     }, url);
+    const chatGroup = before.groups!.find((group) =>
+      group.paneIds.includes(chatPane.id),
+    )!;
     await expect
       .poll(
         async () =>
-          (await state(app)).workspaces.find((w) => w.id === workspace)!.groups!
-            .length,
+          (await state(app)).workspaces
+            .find((w) => w.id === workspace)!
+            .groups!.find((group) => group.id === chatGroup.id)!.paneIds,
       )
-      .toBe(3);
+      .toEqual([chatPane.id, original.id]);
     const splitState = (await state(app)).workspaces.find(
       (w) => w.id === workspace,
     )!;
-    const originalGroup = splitState.groups!.find((g) =>
-      g.paneIds.includes(original.id),
-    )!;
-    expect(originalGroup.paneIds).not.toContain(second.paneId);
+    expect(splitState.groups).toHaveLength(2);
     expect(
-      splitState.groups!.find((g) => g.paneIds.includes(chatPane.id))!.paneIds,
-    ).toEqual([chatPane.id]);
+      splitState.groups!.find((group) => group.id !== chatGroup.id)!.paneIds,
+    ).toEqual([second.paneId]);
     expect(splitState.panes.filter((p) => p.id === original.id)).toHaveLength(
       1,
     );
+    // Keep the original browser on the right while another tab is active on the left.
     await app.cli(
       "pane",
       "focus",
       "--workspace",
       workspace,
       "--id",
-      chatPane.id,
+      second.paneId,
     );
     await app.app!.evaluate(
       ({ webContents }, args) => {
@@ -702,8 +697,8 @@ test("Native website keys stay on the page and palette cancellation restores its
     expect(
       (await state(app)).workspaces
         .find((item) => item.id === workspace)!
-        .panes.some((pane) => pane.id === chatPane.id),
-    ).toBe(true);
+        .panes.map((pane) => pane.id),
+    ).toEqual(expect.arrayContaining([chatPane.id, second.paneId]));
     // Leaving Find open must not crash or hang application shutdown.
     await app.page.keyboard.press("Alt+1");
     await app.app!.evaluate(
@@ -1085,27 +1080,19 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
       app.page.getByRole("textbox", { name: "Message", exact: true }),
     ).toHaveValue("preserved second draft");
     const finishFocusDiagnostics = await observeLayoutFocus(app.page);
-    await command(app.page, "Split below");
-    await expect
-      .poll(
-        async () =>
-          (await state(app)).workspaces.find((item) => item.id === workspace)!
-            .groups!.length,
-      )
-      .toBe(3);
-    // The backend may publish the split before its renderer frame is committed.
     await expect(
       app.page.getByRole("separator", { name: "Resize panes", exact: true }),
-    ).toHaveCount(2);
+    ).toHaveCount(1);
     const splitBefore = JSON.stringify(
       (await state(app)).workspaces.find((item) => item.id === workspace)!
         .groupLayout,
     );
-    const divider = app.page
-      .getByRole("separator", { name: "Resize panes", exact: true })
-      .last();
+    const divider = app.page.getByRole("separator", {
+      name: "Resize panes",
+      exact: true,
+    });
     await reach(app.page, divider);
-    await app.page.keyboard.press("ArrowDown");
+    await app.page.keyboard.press("ArrowRight");
     await expect
       .poll(async () =>
         JSON.stringify(
@@ -1135,26 +1122,33 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
     } finally {
       await finishFocusDiagnostics(false).catch(() => undefined);
     }
-    // Traversing to the separator may activate a neighboring pane. Return to
-    // the top-right group with its pane shortcut before choosing the tab.
+    // Move the same tab across and back using the single destination action.
     await app.page.keyboard.press("Alt+2");
     await reach(
       app.page,
       app.pane(last).getByRole("textbox", { name: "Message", exact: true }),
     );
     await command(app.page, "Move tab to another pane");
-    await expect(
-      app.page.getByRole("dialog", { name: "Actions" }),
-    ).toBeVisible();
-    await app.page.keyboard.press("End");
-    await app.page.keyboard.press("Enter");
     await expect
-      .poll(
-        async () =>
-          (await state(app)).workspaces.find((item) => item.id === workspace)!
-            .groups!.length,
+      .poll(async () =>
+        (await state(app)).workspaces
+          .find((item) => item.id === workspace)!
+          .groups.find((item) => item.id === group.id)!
+          .paneIds.includes(last),
       )
-      .toBe(2);
+      .toBe(false);
+    await expect(
+      app.pane(last).getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await command(app.page, "Move tab to another pane");
+    await expect
+      .poll(async () =>
+        (await state(app)).workspaces
+          .find((item) => item.id === workspace)!
+          .groups.find((item) => item.id === group.id)!
+          .paneIds.includes(last),
+      )
+      .toBe(true);
     expect(
       (await state(app)).workspaces
         .find((item) => item.id === workspace)!
@@ -1274,6 +1268,81 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
     await expect(returnedComposer).toHaveValue(
       "preserved second draft while file loads",
     );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Close immediately after a pane shortcut follows the new tab even during selection IPC", async () => {
+  const app = new ChatApp();
+  await prepareKeyboardProfile(app);
+  try {
+    await app.start();
+    const workspace = await app.create("Rapid tab close");
+    const first = await app.newChat(workspace, "codex");
+    const second = await app.newChat(workspace, "codex");
+    const file = await app.cli<{ paneId: string }>(
+      "file",
+      "open",
+      "--workspace",
+      workspace,
+      "--path",
+      app.file,
+    );
+    const editor = app
+      .pane(file.paneId)
+      .getByRole("textbox", { name: "File contents", exact: true });
+    await app.page.keyboard.press("Alt+1");
+    await expect(editor).toBeFocused();
+
+    await app.app!.evaluate(({ ipcMain }, target) => {
+      const state = globalThis as typeof globalThis & {
+        releaseLayoutFocus?: () => void;
+        layoutCloseTarget?: string;
+      };
+      const handlers = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+        }
+      )._invokeHandlers;
+      const original = handlers.get("cod:invoke")!;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (
+          request.op === "pane.focus" &&
+          request.id === target &&
+          !state.releaseLayoutFocus
+        ) {
+          await new Promise<void>((resolve) => {
+            state.releaseLayoutFocus = resolve;
+          });
+        }
+        if (request.op === "pane.close") state.layoutCloseTarget = request.id;
+        return original(event, request);
+      });
+    }, second.paneId);
+    await app.page.keyboard.press("Alt+2");
+    await expect
+      .poll(() =>
+        app.app!.evaluate(() => typeof (globalThis as any).releaseLayoutFocus),
+      )
+      .toBe("function");
+    await expect(editor).toBeFocused();
+    await app.page.keyboard.press(`${modifier}+W`);
+    await app.app!.evaluate(() => (globalThis as any).releaseLayoutFocus());
+
+    await expect
+      .poll(() =>
+        app.app!.evaluate(() => (globalThis as any).layoutCloseTarget),
+      )
+      .toBe(second.paneId);
+    await expect(app.pane(second.paneId)).toBeHidden();
+    await expect(
+      app
+        .pane(first.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await expect(editor).toBeVisible();
   } finally {
     await app.cleanup();
   }
@@ -1513,8 +1582,6 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
   Object.assign(bindings, {
     "pane.toggleLeft": ["Mod+E"],
     "pane.toggleRight": ["Mod+J"],
-    "pane.focus1": [],
-    "pane.focus2": [],
     "pane.focusLeft": ["Alt+1"],
     "pane.focusRight": ["Alt+2"],
   });
@@ -1578,14 +1645,16 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
     await app.page.keyboard.press("Alt+2");
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("Keep right file draft");
+    await app.page.keyboard.press("Alt+Enter");
+    await expect(composer).toBeVisible();
     await app.page.keyboard.press(`${modifier}+E`);
     await expect(app.pane(first.paneId)).toBeHidden();
     await expect(editor).toBeFocused();
     await app.page.keyboard.press(`${modifier}+J`);
     await expect(editor).toBeFocused();
     await expect(
-      app.page.getByRole("button", { name: "Hide right pane", exact: true }),
-    ).toBeDisabled();
+      app.page.getByRole("button", { name: "Toggle split view", exact: true }),
+    ).toHaveAttribute("aria-pressed", "false");
     await app.page.keyboard.press("Alt+1");
     await expect(composer).toBeFocused();
     await expect(composer).toHaveValue("Keep left chat draft");
@@ -1647,16 +1716,10 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
       workspace,
       "--url",
       url,
-    );
-    await app.cli(
-      "pane",
-      "move",
-      "--workspace",
-      workspace,
-      "--id",
-      browser.paneId,
-      "--group",
-      right.id,
+      "--source-pane",
+      file.paneId,
+      "--focus",
+      "true",
     );
     await app.page.keyboard.press("Alt+2");
     await expect
@@ -1670,6 +1733,13 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
         ),
       )
       .toBe(true);
+    const split = app.page.getByRole("button", {
+      name: "Toggle split view",
+      exact: true,
+    });
+    if ((await split.getAttribute("aria-pressed")) !== "true")
+      await app.cli("group", "toggle-split", "--workspace", workspace);
+    await expect(split).toHaveAttribute("aria-pressed", "true");
     await app.app!.evaluate(({ webContents }, url) => {
       const contents = webContents
         .getAllWebContents()
@@ -1742,6 +1812,8 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
         ),
       )
       .toBe(true);
+    await nativeKey("Enter", true);
+    await expect(app.pane(first.paneId)).toBeVisible();
     await nativeKey("E", false);
     await expect(app.pane(first.paneId)).toBeHidden();
     await expect(app.pane(browser.paneId)).toBeVisible();
@@ -1767,9 +1839,7 @@ for (const replacement of ["none", "keyboard", "native"] as const) {
     await writeFile(
       path.join(app.data, "keymap.json"),
       JSON.stringify({
-        "pane.focus1": [],
         "pane.focusLeft": ["Alt+1"],
-        "pane.focus2": [],
         "pane.focusRight": ["Alt+2"],
       }),
     );
@@ -1955,9 +2025,8 @@ for (const replacement of ["none", "keyboard", "native"] as const) {
       const input = app
         .pane(chat.paneId)
         .getByRole("textbox", { name: "Message", exact: true });
-      await expect(input).toBeVisible();
       if (cancelled) {
-        await expect(input).not.toBeFocused();
+        await expect(input).toBeHidden();
         await expect
           .poll(() =>
             app.app!.evaluate(

@@ -7,24 +7,20 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import type {
-  OperationRequest,
-  SplitDirection,
-  WorkspaceState,
-} from "../types";
-import { normalizeGroups, replaceGroup } from "../workspace-layout";
+import type { OperationRequest, WorkspaceState } from "../types";
+import {
+  assertWorkspaceLayout,
+  groupLeaf,
+  normalizeGroups,
+  orderedGroups,
+  revealSplit,
+  selectGroup,
+  showGroupOnly,
+  tabGroup,
+} from "../workspace-layout";
 import { ApplicationStateStore } from "./state";
 import { documentKey } from "../text-document";
 import { requiredString, requiredName, object } from "./request";
-import {
-  leaf,
-  replaceLeaf,
-  removeLeaf,
-  firstPane,
-  containsPane,
-  containingSplit,
-  resizeSplit,
-} from "./layout";
 import type { ConversationApplicationService } from "./conversation-service";
 import type { BrowserApplicationService } from "./browser-service";
 import type { TerminalApplicationService } from "./terminal-service";
@@ -56,14 +52,21 @@ export class WorkspaceApplicationService {
   ) {}
   createWorkspace(name: string): { id: string } {
     const id = randomUUID();
-    const paneId = randomUUID();
+    const pane = {
+      id: randomUUID(),
+      kind: "document",
+      draftChat: true,
+    } as const;
+    const group = tabGroup(pane);
     this.store.data.workspaces.push({
       id,
       name,
       folders: [],
-      panes: [{ id: paneId, kind: "document", draftChat: true }],
-      activePaneId: paneId,
-      layout: leaf(paneId),
+      panes: [pane],
+      activePaneId: pane.id,
+      groups: [group],
+      groupLayout: groupLeaf(group.id),
+      activeGroupId: group.id,
     });
     this.store.data.activeWorkspaceId = id;
     return { id };
@@ -141,6 +144,7 @@ export class WorkspaceApplicationService {
           )
         : this.store.data.closedWorkspaces?.at(-1);
     if (!record) throw new Error("No closed workspace to reopen");
+    assertWorkspaceLayout(record.workspace);
     if (
       record.conversations.some((saved) =>
         this.store.data.conversations.some(
@@ -197,6 +201,18 @@ export class WorkspaceApplicationService {
       requiredString(request, "workspace"),
     );
     normalizeGroups(workspace);
+    if (request.op === "group.toggle-split") {
+      const active = workspace.groups.find(
+        (group) => group.id === workspace.activeGroupId,
+      )!;
+      if (
+        workspace.groups.length === 1 ||
+        workspace.groups.some((group) => group.hidden)
+      )
+        revealSplit(workspace);
+      else showGroupOnly(workspace, active);
+      return { paneId: active.activePaneId };
+    }
     const id = requiredString(request, "id");
     if (request.op === "pane.move") {
       this.store.pane(workspace, id);
@@ -222,106 +238,54 @@ export class WorkspaceApplicationService {
         id,
       );
       target.activePaneId = id;
-      target.hidden = false;
-      workspace.activePaneId = id;
-      workspace.activeGroupId = target.id;
+      selectGroup(workspace, target);
       return { paneId: id, groupId: target.id };
     }
     const group = workspace.groups!.find((item) => item.id === id);
     if (!group) throw new Error("Group not found");
-    if (request.op === "group.split") {
-      if (request.direction !== "right" && request.direction !== "down")
-        throw new Error("Invalid split direction");
-      const paneId =
-        typeof request.paneId === "string" ? request.paneId : randomUUID();
-      if (request.paneId) {
-        this.store.pane(workspace, paneId);
-        for (const source of workspace.groups!)
-          source.paneIds = source.paneIds.filter((item) => item !== paneId);
-      } else
-        workspace.panes.push({ id: paneId, kind: "document", draftChat: true });
-      if (!group.paneIds.length) {
-        const placeholder = randomUUID();
-        workspace.panes.push({
-          id: placeholder,
-          kind: "document",
-          draftChat: true,
-        });
-        group.paneIds.push(placeholder);
-        group.activePaneId = placeholder;
-      }
-      const next = {
-        id: randomUUID(),
-        paneIds: [paneId],
-        activePaneId: paneId,
-      };
-      workspace.groups!.push(next);
-      workspace.groupLayout = replaceGroup(workspace.groupLayout!, id, {
-        type: "split",
-        direction: request.direction,
-        ratio: 0.5,
-        first: leaf(id),
-        second: leaf(next.id),
-      });
-      workspace.activeGroupId = next.id;
-      workspace.activePaneId = paneId;
-      workspace.zoomedGroupId = null;
-      return { groupId: next.id, paneId };
-    }
+    if (request.op === "group.split")
+      return this.splitGroup(workspace, group.id, request);
     if (request.op === "group.visibility") {
-      group.hidden =
+      const hidden =
         typeof request.hidden === "boolean" ? request.hidden : !group.hidden;
-      if (workspace.groups!.every((item) => item.hidden))
-        throw new Error("At least one group must remain visible");
-      if (group.hidden && workspace.activeGroupId === id) {
-        const visible = workspace.groups!.find((item) => !item.hidden)!;
-        workspace.activeGroupId = visible.id;
-        workspace.activePaneId = visible.activePaneId;
+      if (hidden) {
+        const other = workspace.groups.find((item) => item !== group);
+        if (!other) throw new Error("At least one group must remain visible");
+        showGroupOnly(workspace, other);
+      } else {
+        revealSplit(workspace);
       }
-      if (group.hidden && workspace.zoomedGroupId === id)
-        workspace.zoomedGroupId = null;
-    } else if (request.op === "group.zoom") {
-      workspace.zoomedGroupId = workspace.zoomedGroupId === id ? null : id;
-      group.hidden = false;
-      workspace.activeGroupId = id;
-      workspace.activePaneId = group.activePaneId;
     } else if (request.op === "group.resize") {
-      if (
-        typeof request.ratio !== "number" ||
-        !Number.isFinite(request.ratio) ||
-        request.ratio <= 0 ||
-        request.ratio >= 1
-      )
-        throw new Error("Invalid split ratio");
-      let target = containingSplit(workspace.groupLayout!, id);
-      if (request.path !== undefined) {
-        if (
-          !Array.isArray(request.path) ||
-          request.path.length > 16 ||
-          request.path.some((part) => part !== 0 && part !== 1)
-        )
-          throw new Error("Split path must contain only 0 or 1");
-        let current = workspace.groupLayout!;
-        for (const part of request.path) {
-          if (current.type !== "split") throw new Error("Split layout changed");
-          current = part === 0 ? current.first : current.second;
-        }
-        if (current.type !== "split" || !containsPane(current, id))
-          throw new Error("Split layout changed");
-        target = current;
-      }
-      if (!target) throw new Error("Group is not split");
-      workspace.groupLayout = resizeSplit(
-        workspace.groupLayout!,
-        target,
-        request.ratio,
-      );
+      this.resizeGroup(workspace, request.ratio);
     } else {
-      group.hidden = false;
-      workspace.activeGroupId = id;
-      workspace.activePaneId = group.activePaneId;
+      selectGroup(workspace, group);
     }
     return { groupId: id };
+  }
+
+  private splitGroup(
+    workspace: WorkspaceState,
+    sourceId: string,
+    request: OperationRequest,
+  ) {
+    if (request.direction !== "right")
+      throw new Error("Only a side-by-side split is supported");
+    revealSplit(workspace);
+    const destination = workspace.groups.find(
+      (group) => group.id !== sourceId,
+    )!;
+    if (request.paneId !== undefined) {
+      const pane = this.store.pane(
+        workspace,
+        requiredString(request, "paneId"),
+      );
+      for (const group of workspace.groups)
+        group.paneIds = group.paneIds.filter((id) => id !== pane.id);
+      destination.paneIds.push(pane.id);
+      destination.activePaneId = pane.id;
+    }
+    selectGroup(workspace, destination);
+    return { groupId: destination.id, paneId: destination.activePaneId };
   }
 
   splitPane(request: OperationRequest): { paneId: string } {
@@ -330,39 +294,10 @@ export class WorkspaceApplicationService {
     );
     const target = this.store.pane(workspace, requiredString(request, "id"));
     normalizeGroups(workspace);
-    const group = workspace.groups!.find((item) =>
+    const group = workspace.groups.find((item) =>
       item.paneIds.includes(target.id),
     )!;
-    const direction = request.direction;
-    if (direction !== "right" && direction !== "down") {
-      throw new Error("direction must be right or down");
-    }
-    const paneId = randomUUID();
-    workspace.panes.push({ id: paneId, kind: "document", draftChat: true });
-    const nextGroup = {
-      id: randomUUID(),
-      paneIds: [paneId],
-      activePaneId: paneId,
-    };
-    workspace.groups!.push(nextGroup);
-    workspace.groupLayout = replaceGroup(workspace.groupLayout!, group.id, {
-      type: "split",
-      direction,
-      ratio: 0.5,
-      first: leaf(group.id),
-      second: leaf(nextGroup.id),
-    });
-    workspace.activeGroupId = nextGroup.id;
-    workspace.zoomedGroupId = null;
-    workspace.layout = replaceLeaf(workspace.layout, target.id, {
-      type: "split",
-      direction: direction as SplitDirection,
-      ratio: 0.5,
-      first: leaf(target.id),
-      second: leaf(paneId),
-    });
-    workspace.activePaneId = paneId;
-    return { paneId };
+    return { paneId: this.splitGroup(workspace, group.id, request).paneId };
   }
 
   async closePane(
@@ -437,7 +372,6 @@ export class WorkspaceApplicationService {
       );
     }
     workspace.panes = workspace.panes.filter((item) => item.id !== pane.id);
-    workspace.layout = removeLeaf(workspace.layout, pane.id) ?? leaf("");
     if (!workspace.panes.length) {
       const empty = {
         id: randomUUID(),
@@ -445,10 +379,8 @@ export class WorkspaceApplicationService {
         draftChat: true,
       } as const;
       workspace.panes.push(empty);
-      workspace.layout = leaf(empty.id);
     }
-    if (workspace.activePaneId === pane.id)
-      workspace.activePaneId = firstPane(workspace.layout);
+    normalizeGroups(workspace);
     return { paneId: pane.id };
   }
 
@@ -643,43 +575,32 @@ export class WorkspaceApplicationService {
       id,
     );
     target.activePaneId = id;
-    target.hidden = false;
-    workspace.activeGroupId = target.id;
+    selectGroup(workspace, target);
   }
 
-  resizePane(request: OperationRequest): {
-    paneId: string;
-    ratio: number;
-  } {
+  private resizeGroup(workspace: WorkspaceState, value: unknown): number {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value <= 0 ||
+      value >= 1
+    )
+      throw new Error("Ratio must be a finite number between 0 and 1");
+    if (workspace.groupLayout.type !== "split")
+      throw new Error("Workspace has one group");
+    workspace.groupLayout.ratio = value;
+    return value;
+  }
+
+  resizePane(request: OperationRequest): { paneId: string; ratio: number } {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
     const pane = this.store.pane(workspace, requiredString(request, "id"));
-    const ratio = request.ratio;
-    if (
-      typeof ratio !== "number" ||
-      !Number.isFinite(ratio) ||
-      ratio <= 0 ||
-      ratio >= 1
-    ) {
-      throw new Error("ratio must be a finite number between 0 and 1");
-    }
-    normalizeGroups(workspace);
-    const group = workspace.groups!.find((item) =>
-      item.paneIds.includes(pane.id),
-    );
-    const groupSplit =
-      group && containingSplit(workspace.groupLayout!, group.id);
-    if (groupSplit)
-      workspace.groupLayout = resizeSplit(
-        workspace.groupLayout!,
-        groupSplit,
-        ratio,
-      );
-    const target = containingSplit(workspace.layout, pane.id);
-    if (!target && !groupSplit) throw new Error("Pane is not inside a split");
-    if (target) workspace.layout = resizeSplit(workspace.layout, target, ratio);
-    return { paneId: pane.id, ratio };
+    return {
+      paneId: pane.id,
+      ratio: this.resizeGroup(workspace, request.ratio),
+    };
   }
 
   ensureGroup(request: OperationRequest): { groupId: string; paneId: string } {
@@ -689,49 +610,11 @@ export class WorkspaceApplicationService {
     if (request.side !== "left" && request.side !== "right")
       throw new Error("side must be left or right");
     normalizeGroups(workspace);
-    const leaves = (layout: import("../types").Layout): string[] =>
-      layout.type === "leaf"
-        ? [layout.paneId]
-        : [...leaves(layout.first), ...leaves(layout.second)];
-    const ordered = leaves(workspace.groupLayout!);
-    const existing = ordered.length > 1 || request.side === "left";
-    if (existing) {
-      const id = request.side === "left" ? ordered[0]! : ordered.at(-1)!;
-      const group = workspace.groups!.find((item) => item.id === id)!;
-      group.hidden = false;
-      workspace.activeGroupId = id;
-      workspace.activePaneId = group.activePaneId;
-      workspace.zoomedGroupId = null;
-      return { groupId: id, paneId: group.activePaneId };
-    }
-    const paneId = randomUUID(),
-      groupId = randomUUID();
-    workspace.panes.push({ id: paneId, kind: "empty" });
-    workspace.groups!.push({
-      id: groupId,
-      paneIds: [paneId],
-      activePaneId: paneId,
-    });
-    const next = leaf(groupId),
-      previous = workspace.groupLayout!;
-    workspace.groupLayout = {
-      type: "split",
-      direction: "right",
-      ratio: 0.5,
-      first: request.side === "left" ? next : previous,
-      second: request.side === "left" ? previous : next,
-    };
-    workspace.layout = {
-      type: "split",
-      direction: "right",
-      ratio: 0.5,
-      first: request.side === "left" ? leaf(paneId) : workspace.layout,
-      second: request.side === "left" ? workspace.layout : leaf(paneId),
-    };
-    workspace.activeGroupId = groupId;
-    workspace.activePaneId = paneId;
-    workspace.zoomedGroupId = null;
-    return { groupId, paneId };
+    if (request.side === "right" && workspace.groups.length === 1)
+      revealSplit(workspace);
+    const group = orderedGroups(workspace)[request.side === "left" ? 0 : 1];
+    selectGroup(workspace, group);
+    return { groupId: group.id, paneId: group.activePaneId };
   }
 
   async moveConversation(request: OperationRequest): Promise<unknown> {
@@ -795,9 +678,6 @@ export class WorkspaceApplicationService {
           });
         const previousDestinationActive = destination.activePaneId;
         // Replace only a pristine placeholder, never another draft or live session.
-        const destinationPaneIds = new Set(
-          destination.panes.map((pane) => pane.id),
-        );
         destination.panes = destination.panes.filter((pane) => {
           const draft = destination.chatDrafts?.[pane.id];
           return !(
@@ -810,26 +690,10 @@ export class WorkspaceApplicationService {
             !draft?.images?.length
           );
         });
-        for (const id of destinationPaneIds) {
-          if (!destination.panes.some((pane) => pane.id === id))
-            destination.layout = removeLeaf(destination.layout, id) ?? leaf("");
-        }
         source.panes = source.panes.filter((pane) => !belongs(pane));
-        for (const pane of moved) {
-          source.layout = removeLeaf(source.layout, pane.id) ?? leaf("");
+        for (const pane of moved)
           if (!destination.panes.some((existing) => existing.id === pane.id))
             destination.panes.push(pane);
-          if (!containsPane(destination.layout, pane.id))
-            destination.layout = firstPane(destination.layout)
-              ? {
-                  type: "split",
-                  direction: "right",
-                  ratio: 0.5,
-                  first: destination.layout,
-                  second: leaf(pane.id),
-                }
-              : leaf(pane.id);
-        }
         if (source.chatDrafts?.[conversation.paneId]) {
           destination.chatDrafts ??= {};
           destination.chatDrafts[conversation.paneId] =
@@ -852,7 +716,6 @@ export class WorkspaceApplicationService {
             draftChat: true,
           } as const;
           source.panes.push(empty);
-          source.layout = leaf(empty.id);
         }
         if (!source.panes.some((pane) => pane.id === source.activePaneId))
           source.activePaneId = source.panes[0]!.id;
@@ -989,11 +852,6 @@ export class WorkspaceApplicationService {
               throw new Error(`${key} must be between 160 and 800`);
           }
           workspace.settings = { ...workspace.settings, ...settings };
-          if (
-            settings.filesVisible === true ||
-            settings.workspacesVisible === true
-          )
-            workspace.zoomedGroupId = null;
           return workspace.settings;
         });
 
@@ -1003,7 +861,7 @@ export class WorkspaceApplicationService {
 
       case "group.visibility":
 
-      case "group.zoom":
+      case "group.toggle-split":
 
       case "group.resize":
 
@@ -1098,11 +956,9 @@ export class WorkspaceApplicationService {
             item.paneIds.includes(id),
           );
           if (group) {
-            group.hidden = false;
             group.activePaneId = id;
-            workspace.activeGroupId = group.id;
+            selectGroup(workspace, group);
           }
-          workspace.zoomedGroupId = null;
           return { workspaceId: workspace.id, paneId: id };
         });
 
@@ -1204,14 +1060,6 @@ export class WorkspaceApplicationService {
           );
           workspace.activePaneId = pane.id;
           normalizeGroups(workspace);
-          const group = workspace.groups!.find((group) =>
-            group.paneIds.includes(pane.id),
-          );
-          if (group) {
-            group.hidden = false;
-            if (workspace.zoomedGroupId && workspace.zoomedGroupId !== group.id)
-              workspace.zoomedGroupId = null;
-          }
           if (pane.kind === "conversation")
             workspace.lastConversationId = pane.conversationId;
           return { paneId: pane.id };

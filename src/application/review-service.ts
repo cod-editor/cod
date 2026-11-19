@@ -5,7 +5,6 @@ import type { OperationRequest } from "../types";
 import { ApplicationStateStore } from "./state";
 import type { ConversationApplicationService } from "./conversation-service";
 import { requiredString } from "./request";
-import { leaf, replaceLeaf } from "./layout";
 
 type ReviewConversationPort = Pick<
   ConversationApplicationService,
@@ -122,19 +121,11 @@ export class ReviewApplicationService {
                 base: request.base as string | undefined,
                 head: request.head as string | undefined,
               });
-        const paneId = randomUUID(),
-          activeId = workspace.activePaneId;
+        const paneId = randomUUID();
         workspace.panes.push({
           id: paneId,
           kind: "review",
           reviewId: summary.id,
-        });
-        workspace.layout = replaceLeaf(workspace.layout, activeId, {
-          type: "split",
-          direction: "right",
-          ratio: 0.5,
-          first: leaf(activeId),
-          second: leaf(paneId),
         });
         workspace.activePaneId = paneId;
         await this.store.persist();
@@ -157,17 +148,9 @@ export class ReviewApplicationService {
             (p) => p.kind === "review" && p.reviewId === id,
           );
           if (!pane) {
-            const paneId = randomUUID(),
-              active = workspace.activePaneId;
+            const paneId = randomUUID();
             pane = { id: paneId, kind: "review", reviewId: id };
             workspace.panes.push(pane);
-            workspace.layout = replaceLeaf(workspace.layout, active, {
-              type: "split",
-              direction: "right",
-              ratio: 0.5,
-              first: leaf(active),
-              second: leaf(paneId),
-            });
           }
           workspace.activePaneId = pane.id;
           return {

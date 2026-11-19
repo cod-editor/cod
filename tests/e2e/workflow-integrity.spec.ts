@@ -379,53 +379,39 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
     const initial = await app.cli<AppState>("state");
     const workspace = initial.workspaces[0];
     const draft = workspace.activePaneId;
-    const left = app.page.getByRole("button", {
-      name: "Hide left pane",
+    const split = app.page.getByRole("button", {
+      name: "Toggle split view",
       exact: true,
     });
-    const right = app.page.getByRole("button", {
-      name: "Show right pane",
-      exact: true,
-    });
-    await expect(left).toBeVisible();
-    await expect(left).toBeDisabled();
-    await expect(right).toBeVisible();
-    await expect(right).toBeEnabled();
-    await expect(left).toHaveAttribute(
-      "title",
-      "At least one pane must remain open",
-    );
-    await expect(app.page.locator(".composer textarea")).toHaveCount(1);
-    await app.page
-      .locator(".composer textarea")
-      .fill("Keep the only conversation draft.");
+    await expect(split).toBeEnabled();
+    await expect(split).toHaveAttribute("aria-pressed", "false");
+    const composer = app.pane(draft).locator(".composer textarea");
+    await composer.fill("Keep the only conversation draft.");
     await app.page.screenshot({
-      path: info.outputPath("fresh-visible-pane-controls.png"),
+      path: info.outputPath("fresh-toggle-split.png"),
     });
-    await right.click();
-    await expect(
-      app.page.getByRole("button", { name: "Hide left pane", exact: true }),
-    ).toBeVisible();
-    await expect(app.page.locator(".composer textarea")).toHaveCount(1);
-    expect((await app.cli<AppState>("state")).conversations).toHaveLength(0);
-    await expect(app.pane(draft).locator(".composer textarea")).toHaveValue(
-      "Keep the only conversation draft.",
+    await split.click();
+    await expect(split).toHaveAttribute("aria-pressed", "true");
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue("Keep the only conversation draft.");
+    const opened = await app.cli<AppState>("state");
+    expect(opened.conversations).toHaveLength(0);
+    expect(opened.terminals).toHaveLength(0);
+    expect(opened.workspaces[0].panes.map((pane) => pane.kind)).toContain(
+      "empty",
     );
-    await left.click();
-    await expect(app.pane(draft)).toBeHidden();
-    await expect(
-      app.page.getByRole("button", { name: "Hide right pane", exact: true }),
-    ).toBeDisabled();
+    await app.page.keyboard.press("Alt+2");
+    await app.page.keyboard.press("Shift+Escape");
+    await expect(split).toHaveAttribute("aria-pressed", "false");
+    await expect(composer).toBeHidden();
     await app.stop();
     await app.start();
-    await expect(app.pane(draft)).toBeHidden();
-    await app.page
-      .getByRole("button", { name: "Show left pane", exact: true })
-      .click();
-    await expect(app.pane(draft).locator(".composer textarea")).toHaveValue(
-      "Keep the only conversation draft.",
-    );
-    await expect(app.page.locator(".composer textarea")).toHaveCount(1);
+    const restored = app.pane(draft).locator(".composer textarea");
+    await expect(restored).toBeHidden();
+    await app.page.keyboard.press("Alt+1");
+    await expect(restored).toBeFocused();
+    await expect(restored).toHaveValue("Keep the only conversation draft.");
+    await expect(app.page.locator(".tab-group:visible")).toHaveCount(1);
     await app.page.screenshot({
       path: info.outputPath("empty-material-restored-chat.png"),
     });

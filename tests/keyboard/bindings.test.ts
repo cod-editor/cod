@@ -157,19 +157,15 @@ const personal = {
   "focus.terminal": ["Mod+Backquote"],
   "terminal.new": ["Mod+Shift+Backquote"],
   "pane.splitRight": ["Alt+N"],
-  "pane.splitDown": ["Alt+Shift+N"],
   "pane.zoom": ["Alt+Enter"],
   "pane.next": ["Alt+Tab"],
   "pane.previous": ["Alt+Shift+Tab"],
-  ...Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`pane.focus${n}`, [`Alt+${n}`]]),
-  ),
 };
 test("Option symbols and explicit dead-key chords use physical keys without taking ordinary composition", () => {
   configureKeymap(personal, "darwin");
   for (const [key, code, command] of [
     ["∆", "KeyJ", "focus.composer"],
-    ["¡", "Digit1", "pane.focus1"],
+    ["¡", "Digit1", "pane.focusLeft"],
     ["Dead", "KeyN", "pane.splitRight"],
     ["å", "KeyA", undefined],
     ["∫", "KeyB", undefined],
@@ -202,7 +198,7 @@ test("Option symbols and explicit dead-key chords use physical keys without taki
       "darwin",
       "browser",
     )?.command,
-    "pane.splitDown",
+    undefined,
   );
   assert.equal(
     resolveKeybinding(
@@ -222,7 +218,8 @@ test("Option symbols and explicit dead-key chords use physical keys without taki
   );
 });
 
-test("approved numeric selection, find and zoom bindings replace old defaults", () => {
+test("Default split shortcuts cover only two sides while tab selection stays available", () => {
+  configureKeymap({}, "darwin");
   for (const number of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
     assert.equal(
       resolveKeybinding(
@@ -230,7 +227,11 @@ test("approved numeric selection, find and zoom bindings replace old defaults", 
         "darwin",
         "browser",
       )?.command,
-      `pane.focus${number}`,
+      number === 1
+        ? "pane.focusLeft"
+        : number === 2
+          ? "pane.focusRight"
+          : undefined,
     );
     assert.equal(
       resolveKeybinding(
@@ -247,10 +248,19 @@ test("approved numeric selection, find and zoom bindings replace old defaults", 
     "content.find",
   );
   assert.equal(
-    resolveKeybinding(input("Enter", { altKey: true }), "darwin", "review")
+    resolveKeybinding(input("Escape", { shiftKey: true }), "darwin", "review")
       ?.command,
     "pane.zoom",
   );
+  assert.equal(
+    resolveKeybinding(input("Enter", { altKey: true }), "darwin", "review"),
+    undefined,
+  );
+  assert.equal(
+    resolveKeybinding(input("j", { metaKey: true }), "darwin", "browser"),
+    undefined,
+  );
+  configureKeymap(personal, "darwin");
   assert.equal(
     resolveKeybinding(input("Tab", { altKey: true }), "darwin", "browser")
       ?.command,
@@ -269,11 +279,12 @@ test("approved numeric selection, find and zoom bindings replace old defaults", 
     undefined,
   );
   assert.equal(resolveKeybinding(input("F6"), "darwin", "shell"), undefined);
+  configureKeymap({}, "darwin");
 });
 
 test("keymap overrides disable, reject unknown/conflicts atomically and never widen surface authority", () => {
   configureKeymap({}, "darwin");
-  assert.equal(formatShortcut("pane.zoom", "darwin"), "⌘⇧Enter");
+  assert.equal(formatShortcut("pane.zoom", "darwin"), "⇧Esc");
   configureKeymap({ settings: null, "files.save": ["Mod+Alt+S"] }, "darwin");
   assert.equal(formatShortcut("settings", "darwin"), "");
   assert.equal(
@@ -307,7 +318,7 @@ test("keymap overrides disable, reject unknown/conflicts atomically and never wi
   configureKeymap({}, "darwin");
 });
 
-test("Shift+Escape can maximize panes without permitting plain typing shortcuts", () => {
+test("Shift+Escape toggles the split without permitting plain typing shortcuts", () => {
   try {
     configureKeymap({ "pane.zoom": ["Shift+Escape"] }, "darwin");
     for (const surface of ["composer", "browser", "editor"] as const)
@@ -385,8 +396,6 @@ test("Positional pane overrides retain declared native authority and terminal ed
         {
           "pane.toggleLeft": ["Mod+E"],
           "pane.toggleRight": ["Mod+J"],
-          "pane.focus1": [],
-          "pane.focus2": [],
           "pane.focusLeft": ["Alt+1"],
           "pane.focusRight": ["Alt+2"],
         },

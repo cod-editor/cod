@@ -1,3 +1,4 @@
+import { normalizeGroups } from "../workspace-layout";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -11,7 +12,6 @@ import type {
 } from "../types";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
-import { leaf, replaceLeaf, removeLeaf, firstPane } from "./layout";
 
 export class TerminalApplicationService {
   private readonly processes: TerminalService;
@@ -156,13 +156,6 @@ export class TerminalApplicationService {
     }
     const paneId = randomUUID();
     workspace.panes.push({ id: paneId, kind: "terminal", terminalId });
-    workspace.layout = replaceLeaf(workspace.layout, workspace.activePaneId, {
-      type: "split",
-      direction: "right",
-      ratio: 0.5,
-      first: leaf(workspace.activePaneId),
-      second: leaf(paneId),
-    });
     workspace.activePaneId = paneId;
     return paneId;
   }
@@ -205,8 +198,6 @@ export class TerminalApplicationService {
     workspace.panes = workspace.panes.filter(
       (pane) => pane.id !== terminal.paneId,
     );
-    workspace.layout =
-      removeLeaf(workspace.layout, terminal.paneId) ?? leaf("");
     if (!workspace.panes.length) {
       const empty = {
         id: randomUUID(),
@@ -214,10 +205,8 @@ export class TerminalApplicationService {
         draftChat: true,
       } as const;
       workspace.panes.push(empty);
-      workspace.layout = leaf(empty.id);
     }
-    if (workspace.activePaneId === terminal.paneId)
-      workspace.activePaneId = firstPane(workspace.layout);
+    normalizeGroups(workspace);
   }
 
   terminal(id: string): TerminalState {

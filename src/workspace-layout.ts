@@ -1,133 +1,154 @@
-import { randomUUID } from "node:crypto";
-import type { Layout, WorkspaceState } from "./types";
+import type { GroupLeaf, PaneState, TabGroup, WorkspaceState } from "./types";
+
+export const groupLeaf = (id: string): GroupLeaf => ({
+  type: "leaf",
+  paneId: id,
+});
+
+export function tabGroup(pane: PaneState): TabGroup {
+  return {
+    id: crypto.randomUUID(),
+    paneIds: [pane.id],
+    activePaneId: pane.id,
+  };
+}
+
+export function orderedGroups(workspace: WorkspaceState): TabGroup[] {
+  const { groupLayout, groups } = workspace;
+  const ids =
+    groupLayout.type === "leaf"
+      ? [groupLayout.paneId]
+      : [groupLayout.first.paneId, groupLayout.second.paneId];
+  return ids.map((id) => groups.find((group) => group.id === id)!);
+}
+
+export function assertWorkspaceLayout(workspace: WorkspaceState): void {
+  const { groupLayout, groups } = workspace;
+  const ids =
+    groupLayout?.type === "leaf"
+      ? [groupLayout.paneId]
+      : groupLayout?.type === "split" &&
+          groupLayout.direction === "right" &&
+          groupLayout.first?.type === "leaf" &&
+          groupLayout.second?.type === "leaf" &&
+          typeof groupLayout.ratio === "number" &&
+          groupLayout.ratio > 0 &&
+          groupLayout.ratio < 1
+        ? [groupLayout.first.paneId, groupLayout.second.paneId]
+        : [];
+  if (
+    !ids.length ||
+    new Set(ids).size !== ids.length ||
+    !Array.isArray(groups) ||
+    groups.length !== ids.length ||
+    ids.some((id) => !groups.some((group) => group.id === id)) ||
+    !ids.includes(workspace.activeGroupId)
+  )
+    throw new Error("Workspace must contain one or two side-by-side groups");
+}
+
+export function revealSplit(workspace: WorkspaceState): void {
+  if (workspace.groupLayout.type === "leaf") {
+    const empty: PaneState = { id: crypto.randomUUID(), kind: "empty" };
+    workspace.panes.push(empty);
+    const group = tabGroup(empty);
+    workspace.groups.push(group);
+    workspace.groupLayout = {
+      type: "split",
+      direction: "right",
+      ratio: 0.5,
+      first: workspace.groupLayout,
+      second: groupLeaf(group.id),
+    };
+  }
+  for (const group of workspace.groups) group.hidden = false;
+}
+
+export function showGroupOnly(
+  workspace: WorkspaceState,
+  group: TabGroup,
+): void {
+  workspace.activeGroupId = group.id;
+  workspace.activePaneId = group.activePaneId;
+  for (const item of workspace.groups) item.hidden = item !== group;
+}
+
+export function selectGroup(workspace: WorkspaceState, group: TabGroup): void {
+  if (workspace.groups.some((item) => item.hidden))
+    showGroupOnly(workspace, group);
+  workspace.activeGroupId = group.id;
+  workspace.activePaneId = group.activePaneId;
+}
+
+const isChat = (pane: PaneState) =>
+  pane.kind === "conversation" ||
+  pane.kind === "terminal" ||
+  (pane.kind === "document" && !pane.filePath);
 
 export function normalizeGroups(workspace: WorkspaceState): void {
-  const ids = new Set(workspace.panes.map((pane) => pane.id));
-  if (!workspace.groups?.length) {
-    const id = randomUUID();
-    workspace.groups = [
-      { id, paneIds: [...ids], activePaneId: workspace.activePaneId },
-    ];
-    workspace.groupLayout = { type: "leaf", paneId: id };
-    workspace.activeGroupId = id;
-  }
+  const tabs = new Map(workspace.panes.map((pane) => [pane.id, pane]));
   const seen = new Set<string>();
-  for (const group of workspace.groups) {
+  const active = workspace.groups.find(
+    (group) => group.id === workspace.activeGroupId,
+  )!;
+  for (const group of workspace.groups)
     group.paneIds = group.paneIds.filter(
-      (id) => ids.has(id) && !seen.has(id) && !!seen.add(id),
+      (id) => tabs.has(id) && !seen.has(id) && !!seen.add(id),
     );
-  }
-  const active =
-    workspace.groups.find((group) => group.id === workspace.activeGroupId) ??
-    workspace.groups[0]!;
-  const isChat = (id: string) => {
-    const pane = workspace.panes.find((item) => item.id === id);
-    return (
-      pane?.kind === "conversation" ||
-      pane?.kind === "terminal" ||
-      (pane?.kind === "document" && !pane.filePath)
-    );
-  };
-  for (const id of ids)
-    if (!seen.has(id)) {
-      const chat = isChat(id);
-      let destination = workspace.groups.find((group) =>
-        group.paneIds.some((other) => isChat(other) === chat),
-      );
-      if (!destination) {
-        destination = { id: randomUUID(), paneIds: [], activePaneId: id };
-        workspace.groups.push(destination);
-        const next: Layout = { type: "leaf", paneId: destination.id };
-        workspace.groupLayout = {
-          type: "split",
-          direction: "right",
-          ratio: 0.5,
-          first: chat ? workspace.groupLayout! : next,
-          second: chat ? next : workspace.groupLayout!,
-        };
-        workspace.zoomedGroupId = null;
-      }
-      destination.paneIds.push(id);
-      destination.hidden = false;
-    }
-  for (const group of workspace.groups) {
-    if (group.paneIds.length < 2) continue;
-    const emptyIds = group.paneIds.filter((id) =>
-      workspace.panes.some(
-        (pane) =>
-          pane.id === id &&
-          pane.kind === "empty" &&
-          !pane.launcher &&
-          !pane.pinned,
-      ),
-    );
-    if (emptyIds.length === group.paneIds.length) continue;
-    for (const id of emptyIds) {
-      ids.delete(id);
-      workspace.panes = workspace.panes.filter((pane) => pane.id !== id);
-      group.paneIds = group.paneIds.filter((paneId) => paneId !== id);
-      workspace.layout = removeGroup(workspace.layout, id) ?? {
-        type: "leaf",
-        paneId: group.paneIds[0]!,
-      };
-    }
-  }
-  for (const group of workspace.groups) {
-    group.paneIds = [
-      ...group.paneIds.filter(
-        (id) => workspace.panes.find((pane) => pane.id === id)?.pinned,
-      ),
-      ...group.paneIds.filter(
-        (id) => !workspace.panes.find((pane) => pane.id === id)?.pinned,
-      ),
-    ];
-  }
-  for (const group of [...workspace.groups]) {
-    if (!group.paneIds.length && workspace.groups.length > 1) {
-      workspace.groups = workspace.groups.filter((item) => item !== group);
-      workspace.groupLayout = removeGroup(workspace.groupLayout!, group.id) ?? {
-        type: "leaf",
-        paneId: active.id,
-      };
-    } else if (!group.paneIds.includes(group.activePaneId))
-      group.activePaneId = group.paneIds[0] ?? "";
-  }
-  if (!ids.has(workspace.activePaneId))
-    workspace.activePaneId =
-      workspace.groups.find((group) => !group.hidden)?.activePaneId ??
-      workspace.groups[0]!.activePaneId;
-  const owner = workspace.groups.find((group) =>
-    group.paneIds.includes(workspace.activePaneId),
-  );
-  if (owner) {
-    owner.activePaneId = workspace.activePaneId;
-    owner.hidden = false;
-    if (workspace.zoomedGroupId && workspace.zoomedGroupId !== owner.id)
-      workspace.zoomedGroupId = null;
-    workspace.activeGroupId = owner.id;
-  }
-  if (!workspace.groups.some((group) => group.id === workspace.zoomedGroupId))
-    workspace.zoomedGroupId = null;
-  if (workspace.groups.every((group) => group.hidden))
-    workspace.groups[0]!.hidden = false;
-}
 
-export function replaceGroup(
-  layout: Layout,
-  id: string,
-  replacement: Layout,
-): Layout {
-  if (layout.type === "leaf")
-    return layout.paneId === id ? replacement : layout;
-  return {
-    ...layout,
-    first: replaceGroup(layout.first, id, replacement),
-    second: replaceGroup(layout.second, id, replacement),
-  };
-}
-export function removeGroup(layout: Layout, id: string): Layout | null {
-  if (layout.type === "leaf") return layout.paneId === id ? null : layout;
-  const first = removeGroup(layout.first, id),
-    second = removeGroup(layout.second, id);
-  return first && second ? { ...layout, first, second } : (first ?? second);
+  for (const pane of tabs.values()) {
+    if (seen.has(pane.id)) continue;
+    const chat = isChat(pane);
+    const sides = orderedGroups(workspace);
+    const preferred = (chat ? [...sides].reverse() : sides).find((group) =>
+      group.paneIds.some((id) => isChat(tabs.get(id)!) === chat),
+    );
+    if (preferred || sides.length === 2 || !active.paneIds.length) {
+      (preferred ?? sides[chat ? sides.length - 1 : 0]).paneIds.push(pane.id);
+      continue;
+    }
+    const newGroup = tabGroup(pane);
+    workspace.groups.push(newGroup);
+    const first = workspace.groupLayout as GroupLeaf;
+    const second = groupLeaf(newGroup.id);
+    workspace.groupLayout = {
+      type: "split",
+      direction: "right",
+      ratio: 0.5,
+      first: chat ? first : second,
+      second: chat ? second : first,
+    };
+  }
+
+  for (const group of workspace.groups) {
+    const real = group.paneIds.filter((id) => {
+      const pane = tabs.get(id)!;
+      return pane.kind !== "empty" || pane.launcher || pane.pinned;
+    });
+    if (real.length) {
+      const removed = group.paneIds.filter((id) => !real.includes(id));
+      for (const id of removed) tabs.delete(id);
+      group.paneIds = real;
+    }
+    if (!group.paneIds.length) {
+      const empty: PaneState = { id: crypto.randomUUID(), kind: "empty" };
+      tabs.set(empty.id, empty);
+      group.paneIds.push(empty.id);
+    }
+    group.paneIds = [
+      ...group.paneIds.filter((id) => tabs.get(id)?.pinned),
+      ...group.paneIds.filter((id) => !tabs.get(id)?.pinned),
+    ];
+    if (!group.paneIds.includes(group.activePaneId))
+      group.activePaneId = group.paneIds[0];
+  }
+
+  workspace.panes = [...tabs.values()];
+  const owner =
+    workspace.groups.find((group) =>
+      group.paneIds.includes(workspace.activePaneId),
+    ) ?? active;
+  if (owner.paneIds.includes(workspace.activePaneId))
+    owner.activePaneId = workspace.activePaneId;
+  selectGroup(workspace, owner);
 }

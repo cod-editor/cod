@@ -34,7 +34,6 @@ export function createNavigationWidths(invoke: Invoke) {
     for (const panel of panels) {
       panel.handle.hidden =
         !next ||
-        !!next.zoomedGroupId ||
         (panel.visible === "workspacesVisible"
           ? next.settings?.workspacesVisible === false
           : next.settings?.filesVisible !== true);

@@ -15,7 +15,9 @@ async function fixture() {
     folders: [],
     panes: [{ id: "p", kind: "document", draftChat: true }],
     activePaneId: "p",
-    layout: { type: "leaf", paneId: "p" },
+    groups: [{ id: "group", paneIds: ["p"], activePaneId: "p" }],
+    groupLayout: { type: "leaf", paneId: "group" },
+    activeGroupId: "group",
     chatDrafts: {
       p: {
         text: "original",

@@ -24,7 +24,6 @@ import { ProjectService } from "../projects";
 import { changedLines } from "../git-lines";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
-import { leaf, replaceLeaf, removeLeaf } from "./layout";
 import {
   documentKey,
   isTextDocument,
@@ -165,8 +164,6 @@ export class FileApplicationService {
         workspace.panes = workspace.panes.filter(
           (pane) => pane.id !== opening.id,
         );
-        workspace.layout =
-          removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
       }
       if (
         request.sourcePane === undefined ||
@@ -212,13 +209,6 @@ export class FileApplicationService {
         ...(line ? { line } : {}),
       };
       workspace.panes.push(document);
-      workspace.layout = replaceLeaf(workspace.layout, workspace.activePaneId, {
-        type: "split",
-        direction: "right",
-        ratio: 0.5,
-        first: leaf(workspace.activePaneId),
-        second: leaf(document.id),
-      });
       pane = document;
     } else {
       pane.filePath = filePath;
@@ -284,8 +274,6 @@ export class FileApplicationService {
           workspace.panes = workspace.panes.filter(
             (pane) => pane.id !== opening.id,
           );
-          workspace.layout =
-            removeLeaf(workspace.layout, opening.id) ?? leaf(existing.id);
         }
         if (
           request.sourcePane === undefined ||
@@ -311,16 +299,8 @@ export class FileApplicationService {
         workspace.activePaneId = launcher.id;
         return { paneId: launcher.id };
       }
-      const active = workspace.activePaneId,
-        id = randomUUID();
+      const id = randomUUID();
       workspace.panes.push({ id, ...resource });
-      workspace.layout = replaceLeaf(workspace.layout, active, {
-        type: "split",
-        direction: "right",
-        ratio: 0.5,
-        first: leaf(active),
-        second: leaf(id),
-      });
       workspace.activePaneId = id;
       return { paneId: id };
     });

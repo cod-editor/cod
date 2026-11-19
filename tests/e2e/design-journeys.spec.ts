@@ -776,7 +776,7 @@ test("Workspace status icons match their chats and prioritize actual failures", 
   });
 });
 
-test("Header navigation and full-area pane zoom preserve layout and expose errors above native content", async ({}, info) => {
+test("Header navigation and single-group view preserve sidebars and expose errors above native content", async ({}, info) => {
   const server = createServer((_req, res) =>
     res.end(
       "<!doctype html><title>Invented zoom page</title><h1>Invented native browser</h1><p>Visible page remains usable after restoring the layout.</p>",
@@ -896,35 +896,43 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
     });
     const widths = await panelWidths();
     await captureNative("header-normal-split-native.png");
+    const splitToggle = header.getByRole("button", {
+      name: "Toggle split view",
+      exact: true,
+    });
     const chat = shell.pane(chatPane);
-    const chatGroup = chat.locator("xpath=..");
-    await chatGroup
-      .getByRole("button", { name: "Maximize pane", exact: true })
-      .click();
-    await expect(shell.page.locator(".sidebar")).toBeHidden();
-    await expect(shell.page.locator("#project-panel")).toBeHidden();
+    const composer = chat.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.focus();
+    await splitToggle.click();
+    await expect(splitToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(composer).toBeFocused();
+    await expect(shell.page.locator(".sidebar")).toBeVisible();
+    await expect(shell.page.locator("#project-panel")).toBeVisible();
     await expect(
       shell.page.getByRole("separator", {
         name: "Resize workspaces",
         exact: true,
       }),
-    ).toBeHidden();
-    await expect(workspacesToggle).toHaveAttribute("aria-pressed", "false");
-    await expect(filesToggle).toHaveAttribute("aria-pressed", "false");
+    ).toBeVisible();
+    await expect(workspacesToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(filesToggle).toHaveAttribute("aria-pressed", "true");
     const viewport = await shell.page.evaluate(() => ({
       width: innerWidth,
       height: innerHeight,
     }));
     const paneBox = (await shell.page.locator("#panes").boundingBox())!;
     const headerBox = (await header.boundingBox())!;
-    expect(paneBox.x).toBe(0);
-    expect(paneBox.width).toBe(viewport.width);
+    expect(paneBox.x).toBeGreaterThan(0);
+    expect(paneBox.width).toBeLessThan(viewport.width);
     expect(paneBox.y).toBe(headerBox.y + headerBox.height);
     expect(paneBox.y + paneBox.height).toBe(viewport.height);
     expect((await state()).settings).toEqual(before.settings);
     expect((await state()).groupLayout).toEqual(before.groupLayout);
     await shell.page.screenshot({
-      path: info.outputPath("chat-maximized-full-working-area.png"),
+      path: info.outputPath("chat-single-group.png"),
     });
     await shell.page.keyboard.press(`${modifier}+Shift+E`);
     await expect(
@@ -933,11 +941,8 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
         .getByRole("treeitem")
         .first(),
     ).toBeFocused();
-    expect((await state()).zoomedGroupId).toBeFalsy();
+    await expect(splitToggle).toHaveAttribute("aria-pressed", "false");
     await expect.poll(panelWidths).toEqual(widths);
-    await chatGroup
-      .getByRole("button", { name: "Maximize pane", exact: true })
-      .click();
     await shell.page.keyboard.press(`${modifier}+Shift+W`);
     await expect
       .poll(() =>
@@ -946,18 +951,15 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
           .evaluate((node) => node.contains(document.activeElement)),
       )
       .toBe(true);
-    expect((await state()).zoomedGroupId).toBeFalsy();
-    const nativeGroup = shell.pane(browser.paneId).locator("xpath=..");
-    await nativeGroup
-      .getByRole("button", { name: "Maximize pane", exact: true })
-      .click();
+    await expect(splitToggle).toHaveAttribute("aria-pressed", "false");
+    await shell.page.keyboard.press("Alt+1");
     await expect
       .poll(async () => (await nativeBounds())?.bounds.width)
-      .toBe(viewport.width);
+      .toBe(paneBox.width);
     const native = await nativeBounds();
-    expect(native!.bounds.x).toBe(0);
+    expect(native!.bounds.x).toBe(paneBox.x);
     expect(native!.bounds.y + native!.bounds.height).toBe(viewport.height);
-    await captureNative("native-browser-maximized-full-working-area.png");
+    await captureNative("native-browser-single-group.png");
     const addressInput = shell
       .pane(browser.paneId)
       .getByRole("textbox", { name: "Address", exact: true });
@@ -977,9 +979,7 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
         );
       })
       .toBe(true);
-    await nativeGroup
-      .getByRole("button", { name: "Restore panes", exact: true })
-      .click();
+    await splitToggle.click();
     await expect.poll(panelWidths).toEqual(widths);
     expect((await state()).groupLayout).toEqual(before.groupLayout);
     // An enabled global command reports its empty result in the header.
@@ -997,12 +997,8 @@ test("Header navigation and full-area pane zoom preserve layout and expose error
     await shell.page.keyboard.press("Space");
     await expect(filesToggle).toHaveAttribute("aria-pressed", "false");
     await expect(shell.page.locator("#project-panel")).toBeHidden();
-    await nativeGroup
-      .getByRole("button", { name: "Maximize pane", exact: true })
-      .click();
-    await nativeGroup
-      .getByRole("button", { name: "Restore panes", exact: true })
-      .click();
+    await splitToggle.click();
+    await splitToggle.click();
     await expect(shell.page.locator("#project-panel")).toBeHidden();
     await filesToggle.click();
     await shell.app!.evaluate(({ BrowserWindow }) =>
@@ -1063,7 +1059,7 @@ test("Header participates in keyboard area traversal and its controls remain seq
   ).toBeFocused();
   await shell.page.keyboard.press("Tab");
   await expect(
-    header.getByRole("button", { name: "Show right pane", exact: true }),
+    header.getByRole("button", { name: "Toggle split view", exact: true }),
   ).toBeFocused();
   await shell.page.keyboard.press("Control+Alt+Shift+F6");
   await expect(composer).toBeFocused();
