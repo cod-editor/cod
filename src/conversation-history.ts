@@ -95,7 +95,10 @@ export function stageCodexSnapshot(
         staged.tools.push({
           id,
           turnId: historyTurnId,
-          phase: phase(item.status),
+          phase:
+            item.type === "functionCallOutput"
+              ? "completed"
+              : phase(item.status),
           details: item,
           order,
         });

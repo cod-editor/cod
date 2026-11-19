@@ -114,6 +114,11 @@ export interface ImageAttachment {
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   data: string;
 }
+export interface ToolResult {
+  name: string;
+  namespace: string | null;
+  output: string;
+}
 export interface ProviderAdapter {
   readonly provider: ProviderId;
   readonly nativeId: string | null;
@@ -136,6 +141,10 @@ export interface ProviderAdapter {
     images?: ImageAttachment[],
     skills?: Array<{ name: string; path: string }>,
   ): Promise<TurnOutcome>;
+  sendToolResult(
+    result: ToolResult,
+    requireDispatchedTurn: boolean,
+  ): Promise<string>;
   permission(requestId: string, optionId: string): Promise<void>;
   cancel(): Promise<void>;
   dispose(): Promise<void>;

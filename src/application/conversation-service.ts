@@ -48,6 +48,7 @@ export class ConversationApplicationService {
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
   private externalTurns = new Set<string>();
+  private pendingToolResults = new Map<string, number>();
   private drainingQueues = new Set<string>();
   private scheduleQueue(id: string): void {
     // Let native completion handlers release their active turn first.
@@ -200,10 +201,10 @@ export class ConversationApplicationService {
       : undefined;
   }
   isActive(id: string): boolean {
-    return this.activeTurns.has(id);
+    return this.activeTurns.has(id) || this.pendingToolResults.has(id);
   }
   reserve(id: string): void {
-    if (this.activeTurns.has(id))
+    if (this.isActive(id))
       throw new Error("A turn is already active for this conversation");
     this.activeTurns.add(id);
   }
@@ -530,7 +531,7 @@ export class ConversationApplicationService {
       const conversation = this.store.conversation(id);
       const reason = conversationHandoffReason(this.store.data, conversation);
       if (reason) throw new Error(reason);
-      if (this.activeTurns.has(id) || this.controllerInitializations.has(id))
+      if (this.isActive(id) || this.controllerInitializations.has(id))
         throw new Error(
           "Finish or interrupt the active turn before continuing in CLI",
         );
@@ -811,12 +812,11 @@ export class ConversationApplicationService {
       throw new Error("Message must not be blank");
     if (conversation.handoffTerminalId)
       throw new Error("Return to chat before sending a message");
-    if (!fromQueue && request.pageId && this.activeTurns.has(conversation.id))
+    if (!fromQueue && request.pageId && this.isActive(conversation.id))
       throw new Error("Origin conversation is busy");
     if (
       !fromQueue &&
-      (this.activeTurns.has(conversation.id) ||
-        conversation.queuedMessages?.length)
+      (this.isActive(conversation.id) || conversation.queuedMessages?.length)
     ) {
       const messageId = randomUUID();
       await this.store.change(() => {
@@ -926,6 +926,56 @@ export class ConversationApplicationService {
     } catch (error) {
       this.release(conversation.id);
       throw error;
+    }
+  }
+
+  private async sendToolResult(
+    request: OperationRequest,
+  ): Promise<{ id: string; status: "accepted"; nativeTurnId: string }> {
+    const id = requiredString(request, "id");
+    const conversation = this.store.conversation(id);
+    this.assertCurrent(conversation);
+    if (conversation.provider !== "codex")
+      throw new Error("Tool results are only supported in Codex conversations");
+    const name = requiredString(request, "name").trim();
+    const namespace =
+      request.namespace === undefined
+        ? null
+        : requiredString(request, "namespace").trim();
+    if (
+      !name ||
+      name.length > 256 ||
+      namespace === "" ||
+      (namespace?.length ?? 0) > 256
+    )
+      throw new Error(
+        "Tool name and optional namespace must contain 1–256 characters",
+      );
+    const output = request.output;
+    if (typeof output !== "string" || output.length > 1_000_000)
+      throw new Error(
+        "Tool output must be a string of at most 1,000,000 characters",
+      );
+
+    this.pendingToolResults.set(id, (this.pendingToolResults.get(id) ?? 0) + 1);
+    try {
+      // Preserve transactions already admitted before this result arrived.
+      await this.store.serialize(() => undefined);
+      this.assertCurrent(conversation);
+      const adapter = await this.ensureController(conversation);
+      this.assertCurrent(conversation);
+      const nativeTurnId = await adapter.sendToolResult(
+        { name, namespace, output },
+        this.activeTurns.has(id),
+      );
+      return { id, status: "accepted", nativeTurnId };
+    } finally {
+      const remaining = this.pendingToolResults.get(id)! - 1;
+      if (remaining) this.pendingToolResults.set(id, remaining);
+      else {
+        this.pendingToolResults.delete(id);
+        this.scheduleQueue(id);
+      }
     }
   }
 
@@ -1407,6 +1457,9 @@ export class ConversationApplicationService {
 
       case "conversation.send":
         return this.sendConversation(request);
+
+      case "conversation.send-tool-result":
+        return this.sendToolResult(request);
 
       case "conversation.queue-edit":
       case "conversation.queue-remove":

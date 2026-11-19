@@ -895,9 +895,12 @@ export function createConversationViews({
         label.textContent =
           compactToolCaption(info) + (failed ? " · failed" : "");
         label.title = toolCaption(info);
-        const actionable = /request.?user.?input|ask.?user|question/i.test(
-          String(info?.name ?? info?.toolName ?? ""),
-        );
+        const result = info?.type === "functionCallOutput";
+        const actionable =
+          !result &&
+          /request.?user.?input|ask.?user|question/i.test(
+            String(info?.name ?? info?.toolName ?? ""),
+          );
         if (actionable) {
           tool.dataset.actionRequired = "true";
         }
@@ -907,8 +910,10 @@ export function createConversationViews({
         if (tool.open) {
           const details = document.createElement("pre");
           details.textContent =
-            JSON.stringify(entry.tool.details, null, 2) ??
-            String(entry.tool.details);
+            result && typeof info.output === "string"
+              ? info.output
+              : (JSON.stringify(entry.tool.details, null, 2) ??
+                String(entry.tool.details));
           tool.append(details);
         }
         tool.ontoggle = (event) => {

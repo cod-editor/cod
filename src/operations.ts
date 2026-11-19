@@ -296,6 +296,7 @@ export class ApplicationOperations {
               cancel: true,
               images: true,
               modelSelection: true,
+              toolResults: true,
             },
             kimi: {
               available: true,
@@ -304,6 +305,7 @@ export class ApplicationOperations {
               cancel: true,
               images: true,
               modelSelection: true,
+              toolResults: false,
             },
             claude: {
               available: false,

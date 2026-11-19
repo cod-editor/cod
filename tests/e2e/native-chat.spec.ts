@@ -1667,6 +1667,169 @@ function inspectQueuedChat(id: string) {
   return shell.cli<ConversationState>("conversation", "inspect", "--id", id);
 }
 
+test("Codex tool result CLI targets an idle chat, preserves its draft and restores native activity", async () => {
+  const workspace = await shell.create("Result destination");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = () => shell.pane(chat.paneId);
+  const composer = () =>
+    pane().getByRole("textbox", { name: "Message", exact: true });
+  const item = () =>
+    pane()
+      .locator(".tool-activity")
+      .filter({ hasText: "Tool result · fixture.file_check" });
+  await composer().fill("Keep this draft");
+  const other = await shell.create("Other workspace");
+  const output = "-- first invented result\nsecond line";
+  const receipt = await shell.cli(
+    "conversation",
+    "send-tool-result",
+    "--id",
+    chat.id,
+    "--name",
+    "file_check",
+    "--namespace",
+    "fixture",
+    "--output",
+    output,
+  );
+  expect(receipt).toEqual({
+    id: chat.id,
+    status: "accepted",
+    nativeTurnId: "turn-1",
+  });
+  expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(other);
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(composer()).toHaveValue("Keep this draft");
+  await expect(transcript(chat)).toContainText("Tool result received.");
+  await expect(item()).toHaveCount(1);
+  await expect(item()).toHaveAttribute("data-tool-phase", "completed");
+  await expandActivity(pane());
+  await item().locator(":scope > summary").click();
+  await expect(item().locator("pre")).toHaveText(output);
+  expect(
+    (await shell.inspect(chat.id)).messages.map((message) => message.role),
+  ).toEqual(["assistant"]);
+  const requests = await shell.prompts();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].message?.params).toMatchObject({
+    threadId: chat.nativeId,
+    input: [],
+    toolOutput: {
+      name: "file_check",
+      namespace: "fixture",
+      output,
+      retain: true,
+    },
+  });
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(item()).toHaveCount(1);
+  await expect(item()).toHaveAttribute(
+    "data-tool-id",
+    `codex/${chat.nativeId}/turn-1/result-turn-1-0`,
+  );
+  await expect(item()).toHaveAttribute("data-tool-phase", "completed");
+  await expect(composer()).toHaveValue("Keep this draft");
+  expect(await shell.prompts()).toHaveLength(1);
+});
+
+test("Codex tool result CLI joins a busy turn and leaves the human message queued", async () => {
+  const workspace = await shell.create("Running check");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Begin [approve]");
+  await expect.poll(() => status(chat.id)).toBe("waiting");
+  await shell.send(chat.id, "Message after check");
+  const receipt = await shell.cli(
+    "conversation",
+    "send-tool-result",
+    "--id",
+    chat.id,
+    "--name",
+    "check_reports",
+    "--output",
+    "Invented status output",
+  );
+  expect(receipt).toEqual({
+    id: chat.id,
+    status: "accepted",
+    nativeTurnId: "turn-1",
+  });
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).tools)
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "completed",
+          details: expect.objectContaining({
+            type: "functionCallOutput",
+            output: "Invented status output",
+            namespace: null,
+          }),
+        }),
+      ]),
+    );
+  const active = await inspectQueuedChat(chat.id);
+  expect(active.status).toBe("waiting");
+  expect(active.turns).toHaveLength(1);
+  expect(active.queuedMessages?.map((message) => message.text)).toEqual([
+    "Message after check",
+  ]);
+  expect(
+    active.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.text),
+  ).toEqual(["Begin [approve]"]);
+  const result = active.tools.find(
+    (tool) => (tool.details as { type?: string }).type === "functionCallOutput",
+  );
+  expect(result?.turnId).toBe(active.turns?.[0].id);
+  await shell.cli(
+    "conversation",
+    "permission",
+    "--id",
+    chat.id,
+    "--request-id",
+    active.pendingPermissions[0].id,
+    "--option-id",
+    "deny",
+  );
+  await expect(transcript(chat)).toContainText("DONE Message after check");
+  const finished = await inspectQueuedChat(chat.id);
+  expect(finished.turns).toHaveLength(2);
+  expect(finished.queuedMessages).toEqual([]);
+  expect(
+    (await shell.prompts()).map((entry) => entry.message?.params?.input),
+  ).toMatchObject([
+    [{ type: "text", text: "Begin [approve]" }],
+    [],
+    [{ type: "text", text: "Message after check" }],
+  ]);
+});
+
+test("Tool result CLI rejects unsupported providers and reserved role flags without sending", async () => {
+  const workspace = await shell.create("Unsupported tool result");
+  const chat = await shell.newChat(workspace, "kimi");
+  const args = [
+    "conversation",
+    "send-tool-result",
+    "--id",
+    chat.id,
+    "--name",
+    "check",
+    "--output",
+    "",
+  ];
+  const unsupported = await shell.raw(...args);
+  expect(unsupported.code).toBe(1);
+  expect(unsupported.stderr).toContain("only supported in Codex conversations");
+  const role = await shell.raw(...args, "--role", "system");
+  expect(role.code).toBe(1);
+  expect(role.stderr).toContain("Unknown or reserved flag: --role");
+  expect(await shell.prompts()).toHaveLength(0);
+});
+
 test("Queued turn at completion cannot be cleared by the previous send promise", async () => {
   await shell.configure({ codex: { queueAfterCompletion: true } });
   const workspace = await shell.create("Immediate queue");
