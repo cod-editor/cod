@@ -26,6 +26,16 @@ import type { BrowserApplicationService } from "./browser-service";
 import type { TerminalApplicationService } from "./terminal-service";
 import type { ReviewApplicationService } from "./review-service";
 
+type BrowserHost = Pick<
+  BrowserApplicationService,
+  | "browser"
+  | "removeBrowser"
+  | "requestClose"
+  | "loadAgentPage"
+  | "restoreBrowser"
+  | "withReopenedBrowser"
+>;
+
 export class WorkspaceApplicationService {
   constructor(
     private readonly store: ApplicationStateStore,
@@ -33,15 +43,7 @@ export class WorkspaceApplicationService {
       ConversationApplicationService,
       "disposeController" | "isActive" | "reserve" | "release"
     >,
-    private readonly browsers: Pick<
-      BrowserApplicationService,
-      | "browser"
-      | "removeBrowser"
-      | "requestClose"
-      | "loadAgentPage"
-      | "restoreBrowser"
-      | "withReopenedBrowser"
-    >,
+    private readonly browserHost: BrowserHost | undefined,
     private readonly terminals: Pick<
       TerminalApplicationService,
       "terminal" | "stopProcess" | "restoreTerminal" | "openTerminal"
@@ -51,6 +53,12 @@ export class WorkspaceApplicationService {
       "list" | "relocateOrigin" | "reconcileOrigins"
     >,
   ) {}
+  private get browsers(): BrowserHost {
+    if (!this.browserHost)
+      throw new Error("Browser operations require the desktop client");
+    return this.browserHost;
+  }
+
   createWorkspace(name: string): { id: string } {
     const id = randomUUID();
     const pane = {
