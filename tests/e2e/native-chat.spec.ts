@@ -1870,6 +1870,189 @@ test("Codex tool result CLI targets an idle chat, preserves its draft and restor
   expect(await shell.prompts()).toHaveLength(1);
 });
 
+test("Both ordinary Codex send shortcuts steer the same live turn and keep the existing queue", async () => {
+  const workspace = await shell.create("Steering fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  const composer = pane.getByRole("textbox", { name: "Message", exact: true });
+  await shell.send(chat.id, "Original task [hold]");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("STREAM Original task [hold]");
+  await shell.send(chat.id, "Keep waiting");
+  await composer.fill("First live follow-up");
+  await composer.press("Enter");
+  await expect(transcript(chat)).toContainText("First live follow-up");
+  await expect(composer).toHaveValue("");
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=";
+  await shell.cli(
+    "conversation",
+    "composer",
+    "--workspace",
+    workspace,
+    "--pane-id",
+    chat.paneId,
+    "--text",
+    "One more follow-up [Image 1]",
+    "--images",
+    JSON.stringify([{ data: png, mimeType: "image/png", reference: 1 }]),
+  );
+  await expect(composer).toHaveValue("One more follow-up [Image 1]");
+  await composer.press(`${modifier}+Enter`);
+  await expect(transcript(chat)).toContainText("One more follow-up");
+  await expect(composer).toHaveValue("");
+  await expect(composer).toBeFocused();
+
+  const live = await inspectQueuedChat(chat.id);
+  expect(live.turns).toHaveLength(1);
+  expect(live.status).toBe("working");
+  expect(live.queuedMessages?.map((item) => item.text)).toEqual([
+    "Keep waiting",
+  ]);
+  expect(
+    live.messages
+      .filter((item) => item.role === "user")
+      .map(({ text, turnId }) => ({ text, turnId })),
+  ).toEqual(
+    [
+      "Original task [hold]",
+      "First live follow-up",
+      "One more follow-up [Image 1]",
+    ].map((text) => ({ text, turnId: live.turns?.[0].id })),
+  );
+  const requests = (await shell.records()).filter(
+    (row) => row.message?.method === "turn/steer",
+  );
+  expect(requests).toHaveLength(2);
+  expect(requests.map((row) => row.message?.params?.expectedTurnId)).toEqual([
+    "turn-1",
+    "turn-1",
+  ]);
+  expect(requests[1]?.message?.params?.input).toEqual(
+    expect.arrayContaining([
+      { type: "image", url: `data:image/png;base64,${png}` },
+    ]),
+  );
+  expect(live.messages.at(-1)?.images?.[0]?.data).toBe(png);
+  await composer.fill("Retain stale input");
+  const error = await shell.page.evaluate(async (id) => {
+    try {
+      await window.cod.invoke({
+        op: "conversation.send",
+        id,
+        expectedTurn: "ended-turn",
+        text: "Retain stale input",
+      });
+      return null;
+    } catch (error) {
+      return String(error);
+    }
+  }, chat.id);
+  expect(error).toContain("The selected turn has ended");
+  await expect(composer).toHaveValue("Retain stale input");
+  expect(await shell.prompts()).toHaveLength(1);
+  expect(
+    (await shell.records()).filter(
+      (row) => row.message?.method === "turn/steer",
+    ),
+  ).toHaveLength(2);
+});
+
+test("Codex steering preserves a rejected draft and reconciles an uncertain receipt after restart", async () => {
+  const workspace = await shell.create("Steering recovery fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = () => shell.pane(chat.paneId);
+  const composer = () =>
+    pane().getByRole("textbox", { name: "Message", exact: true });
+  await shell.send(chat.id, "Original task [hold]");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("STREAM Original task [hold]");
+  await shell.configure({ codex: { steering: "reject" } });
+  await composer().fill("Recoverable follow-up");
+  await composer().press("Enter");
+  await expect(
+    pane().getByRole("status", { name: "Conversation status" }),
+  ).toContainText("Fixture turn no longer active");
+  await expect(composer()).toHaveValue("Recoverable follow-up");
+  await shell.configure({ codex: { steering: "silent" } });
+  await composer().press("Enter");
+  await expect(pane().getByLabel("Pending follow-ups")).toContainText(
+    "Waiting for the current turn",
+  );
+  await expect(composer()).toHaveValue("");
+  await composer().fill("Keep my next draft");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(pane().getByLabel("Pending follow-ups")).toContainText(
+    "Follow-up delivery uncertain",
+  );
+  await pane().getByRole("button", { name: "Check delivery" }).click();
+  await expect(pane().getByLabel("Pending follow-ups")).toHaveCount(0);
+  await expect(composer()).toHaveValue("Keep my next draft");
+  const restored = await inspectQueuedChat(chat.id);
+  expect(
+    restored.messages.filter(
+      (item) => item.role === "user" && item.text === "Recoverable follow-up",
+    ),
+  ).toHaveLength(1);
+  expect(await shell.prompts()).toHaveLength(1);
+});
+
+test("A follow-up absent from the finished native turn returns to a paused queue", async () => {
+  const workspace = await shell.create("Undelivered follow-up fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  const composer = pane.getByRole("textbox", { name: "Message", exact: true });
+  await shell.configure({ codex: { steering: "absent" } });
+  await shell.send(chat.id, "Original task [hold]");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("STREAM Original task [hold]");
+  await composer.fill("Keep this follow-up");
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect(pane.getByLabel("Pending follow-ups")).toContainText(
+    "Follow-up delivery uncertain",
+  );
+  await pane.getByRole("button", { name: "Check delivery" }).click();
+  await expect(
+    pane.getByRole("button", { name: "Continue queue" }),
+  ).toBeVisible();
+  expect(await shell.prompts()).toHaveLength(1);
+  await pane.getByRole("button", { name: "Continue queue" }).click();
+  await expect(transcript(chat)).toContainText("DONE Keep this follow-up");
+  expect(await shell.prompts()).toHaveLength(2);
+});
+
+test("Ordinary Kimi ACP send visibly queues when the provider cannot steer", async () => {
+  const workspace = await shell.create("Kimi steering fixture");
+  const chat = await shell.newChat(workspace, "kimi");
+  const composer = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await shell.send(chat.id, "Original task [hold]");
+  await expect
+    .poll(() => textFromInspection(chat.id))
+    .toContain("STREAM Original task [hold]");
+  await composer.fill("Retain this draft");
+  await composer.press("Enter");
+  await expect(
+    shell.pane(chat.paneId).getByLabel("Queued messages"),
+  ).toContainText("Retain this draft");
+  await expect(composer).toHaveValue("");
+  await expect(composer).toBeFocused();
+  expect(
+    (await shell.records()).filter(
+      (row) => row.message?.method === "turn/steer",
+    ),
+  ).toHaveLength(0);
+  expect(await shell.prompts()).toHaveLength(1);
+});
+
 test("Codex tool result CLI joins a busy turn and leaves the human message queued", async () => {
   const workspace = await shell.create("Running check");
   const chat = await shell.newChat(workspace, "codex");
@@ -2168,6 +2351,8 @@ for (const provider of ["codex", "kimi"] as const) {
   test(`Busy ${provider} chat queues messages, edits in place and cancels without losing the next draft`, async () => {
     const workspace = await shell.create("Message queue");
     const chat = await shell.newChat(workspace, provider);
+    if (provider === "codex")
+      await shell.configure({ codex: { steering: "unsupported" } });
     await shell.send(chat.id, "First request [approve]");
     await expect.poll(() => status(chat.id)).toBe("waiting");
     const pane = shell.pane(chat.paneId);

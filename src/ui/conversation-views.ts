@@ -1046,19 +1046,26 @@ export function createConversationViews({
     currentStatus.hidden = !currentStatus.textContent;
     body.append(currentStatus);
 
-    const waiting = (conversation.queuedMessages ?? []).filter(
-      (m) => m.status !== "sending",
+    const queueMessages = conversation.queuedMessages ?? [];
+    const waiting = queueMessages.filter(
+      (m) => m.status !== "sending" || m.steering,
     );
     if (waiting.length) {
       const queue = document.createElement("section");
       queue.className = "message-queue";
-      queue.setAttribute("aria-label", "Queued messages");
-      const heading = document.createElement("div");
-      heading.className = "queue-heading";
-      heading.textContent = conversation.queuePaused
-        ? "Queue paused"
-        : "Queued";
-      queue.append(heading);
+      const hasQueue = waiting.some((message) => !message.steering);
+      queue.setAttribute(
+        "aria-label",
+        hasQueue ? "Queued messages" : "Pending follow-ups",
+      );
+      if (hasQueue) {
+        const heading = document.createElement("div");
+        heading.className = "queue-heading";
+        heading.textContent = conversation.queuePaused
+          ? "Queue paused"
+          : "Queued";
+        queue.append(heading);
+      }
       if (
         conversation.queuePaused &&
         waiting.every((m) => m.status === "queued")
@@ -1073,6 +1080,34 @@ export function createConversationViews({
         const row = document.createElement("div");
         row.className = "queued-message";
         row.dataset.focusKey = `queued:${message.id}`;
+        if (message.steering) {
+          const preview = document.createElement("div");
+          preview.className = "queued-message-text";
+          preview.textContent = message.text || "Image attachment";
+          row.append(preview);
+          if (message.images?.length) row.append(imageStrip(message.images));
+          const status = document.createElement("div");
+          status.setAttribute("role", "status");
+          status.textContent =
+            message.status === "uncertain"
+              ? "Follow-up delivery uncertain"
+              : "Waiting for the current turn to take this follow-up";
+          row.append(status);
+          if (message.status === "uncertain") {
+            row.append(
+              actionRow(
+                paneButton("Check delivery", () =>
+                  invoke("conversation.check-steer", {
+                    id: conversation.id,
+                    messageId: message.id,
+                  }),
+                ),
+              ),
+            );
+          }
+          queue.append(row);
+          continue;
+        }
         if (message.editing && !queueEdits.has(message.id))
           queueEdits.set(message.id, message.text);
         if (queueEdits.has(message.id)) {
@@ -1266,6 +1301,10 @@ export function createConversationViews({
   }
   async function sendMessage(id: string): Promise<void> {
     if (pendingSends.has(id)) return;
+    const turn = getState()
+      .conversations.find((item) => item.id === id)
+      ?.turns?.at(-1);
+    const expectedTurn = turn && !turn.finishedAt ? turn.id : undefined;
     if (loadingImages.has(id)) {
       setStatus("Wait for the image to finish loading");
       return;
@@ -1299,7 +1338,14 @@ export function createConversationViews({
       }
       await invoke(
         "conversation.send",
-        { id, text, images, skills, writer },
+        {
+          id,
+          text,
+          images,
+          skills,
+          writer,
+          ...(expectedTurn ? { expectedTurn } : {}),
+        },
         { reportError: false },
       );
     } catch (error) {

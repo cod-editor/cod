@@ -336,6 +336,7 @@ for (const queued of [false, true])
     const workspace = await shell.create("Send autosave ordering");
     const chat = await shell.newChat(workspace, "codex");
     if (queued) {
+      await shell.configure({ codex: { steering: "unsupported" } });
       await shell.send(chat.id, "[hold] Invented active request");
       await expect
         .poll(async () => (await shell.inspect(chat.id)).status)

@@ -26,6 +26,7 @@ import {
 } from "../conversation-history";
 import type {
   ConversationState,
+  QueuedMessage,
   WorkspaceState,
   TerminalState,
   OperationRequest,
@@ -50,6 +51,7 @@ export class ConversationApplicationService {
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
   private externalTurns = new Set<string>();
+  private steering = new Set<string>();
   private pendingToolResults = new Map<string, number>();
   private drainingQueues = new Set<string>();
   private scheduleQueue(id: string): void {
@@ -824,6 +826,7 @@ export class ConversationApplicationService {
   async sendConversation(
     request: OperationRequest,
     fromQueue = false,
+    trustedUi = false,
   ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
     const text = typeof request.text === "string" ? request.text : "";
@@ -840,6 +843,49 @@ export class ConversationApplicationService {
       throw new Error("Return to chat before sending a message");
     if (!fromQueue && request.pageId && this.isActive(conversation.id))
       throw new Error("Origin conversation is busy");
+    if (
+      trustedUi &&
+      !fromQueue &&
+      !request.pageId &&
+      conversation.provider === "codex"
+    ) {
+      if (
+        conversation.queuedMessages?.some(
+          (item) =>
+            item.steering &&
+            item.text === text &&
+            (item.images ?? []).length === images.length &&
+            (item.images ?? []).every(
+              (image, index) =>
+                image.data === images[index]?.data &&
+                image.mimeType === images[index]?.mimeType &&
+                image.reference === images[index]?.reference,
+            ),
+        )
+      )
+        throw new Error("Check the pending follow-up before sending it again");
+      const adapter = this.controllers.get(conversation.id);
+      const nativeTurnId = adapter?.activeTurnIdentity();
+      const localTurnId = this.currentTurn(conversation);
+      if (
+        request.expectedTurn !== undefined &&
+        request.expectedTurn !== localTurnId
+      )
+        throw new Error(
+          "The selected turn has ended. Your message was not sent.",
+        );
+      if (localTurnId && adapter && nativeTurnId) {
+        const steered = await this.steerConversation(
+          conversation,
+          adapter,
+          localTurnId,
+          nativeTurnId,
+          { id: randomUUID(), text, images, skills, status: "sending" },
+          request.writer as string | undefined,
+        );
+        if (steered) return steered;
+      }
+    }
     if (
       !fromQueue &&
       (this.isActive(conversation.id) || conversation.queuedMessages?.length)
@@ -953,6 +999,174 @@ export class ConversationApplicationService {
       this.release(conversation.id);
       throw error;
     }
+  }
+
+  private clearSteeredDraft(
+    conversation: ConversationState,
+    message: QueuedMessage,
+    writer?: string,
+  ): void {
+    const version = message.steering?.draftVersion;
+    if (
+      !version ||
+      this.store.workspace(conversation.workspaceId).chatDrafts?.[
+        conversation.paneId
+      ]?.version !== version
+    )
+      return;
+    this.clearSubmittedDraft(
+      conversation,
+      message.text,
+      message.images ?? [],
+      writer,
+    );
+  }
+
+  private async steerConversation(
+    conversation: ConversationState,
+    adapter: ProviderAdapter,
+    localTurnId: string,
+    nativeTurnId: string,
+    message: QueuedMessage,
+    writer?: string,
+  ) {
+    const isTargetActive = () =>
+      this.currentTurn(conversation) === localTurnId &&
+      this.controllers.get(conversation.id) === adapter &&
+      adapter.activeTurnIdentity() === nativeTurnId;
+    if (this.steering.has(conversation.id))
+      throw new Error("A follow-up is being prepared for the current turn");
+
+    this.steering.add(conversation.id);
+    try {
+      await this.store.change(() => {
+        this.assertCurrent(conversation);
+        if (this.store.closing || !isTargetActive())
+          throw new Error(
+            "The selected turn has ended. Your message was not sent.",
+          );
+        const queue = (conversation.queuedMessages ??= []);
+        if (queue.length >= 100) throw new Error("Message queue is full");
+        message.steering = {
+          nativeTurnId,
+          localTurnId,
+          draftVersion: this.store.workspace(conversation.workspaceId)
+            .chatDrafts?.[conversation.paneId]?.version,
+        };
+        queue.push(message);
+      });
+      let status;
+      try {
+        if (!isTargetActive())
+          throw new Error(
+            "The selected turn has ended. Your message was not sent.",
+          );
+        status = await adapter.steer(message, nativeTurnId, message.id);
+      } finally {
+        if (!status || status === "unsupported")
+          await this.store.change(() => {
+            this.assertCurrent(conversation);
+            conversation.queuedMessages = conversation.queuedMessages!.filter(
+              (item) => item.id !== message.id,
+            );
+          });
+      }
+      if (status === "unsupported") {
+        // Method Not Found proves that native input was never admitted.
+        if (this.currentTurn(conversation) !== localTurnId)
+          throw new Error(
+            "The selected turn has ended. Your message was not sent.",
+          );
+        return;
+      }
+      await this.store.change(() => {
+        this.assertCurrent(conversation);
+        const current = conversation.queuedMessages?.find(
+          (item) => item.id === message.id,
+        );
+        if (current && (status === "uncertain" || !isTargetActive()))
+          current.status = "uncertain";
+        this.clearSteeredDraft(conversation, message, writer);
+      });
+      return { id: conversation.id, status, messageId: message.id };
+    } finally {
+      this.steering.delete(conversation.id);
+      this.scheduleQueue(conversation.id);
+    }
+  }
+
+  private recordSteeredItem(
+    conversation: ConversationState,
+    message: QueuedMessage,
+    itemId: string,
+  ): void {
+    const steering = message.steering!;
+    const id = `codex/${conversation.nativeId}/${steering.nativeTurnId}/${itemId}`;
+    const existing = conversation.messages.find((item) => item.id === id);
+    if (existing) {
+      existing.text = message.text;
+      existing.images = message.images;
+    } else {
+      conversation.messages.push({
+        id,
+        turnId: steering.localTurnId,
+        role: "user",
+        order: this.nextOrder(conversation),
+        text: message.text,
+        ...(message.images?.length ? { images: message.images } : {}),
+      });
+    }
+    conversation.queuedMessages = conversation.queuedMessages!.filter(
+      (item) => item.id !== message.id,
+    );
+  }
+
+  private async checkSteeredMessage(request: OperationRequest) {
+    const conversation = this.store.conversation(requiredString(request, "id"));
+    const id = requiredString(request, "messageId");
+    const message = conversation.queuedMessages?.find((item) => item.id === id);
+    if (
+      !message?.steering ||
+      message.status !== "uncertain" ||
+      this.steering.has(conversation.id)
+    )
+      throw new Error("There is no uncertain follow-up to check");
+    const { nativeTurnId } = message.steering;
+    const adapter = await this.ensureController(conversation);
+    const itemId = await adapter.findSteeredItem(nativeTurnId, id);
+    const result = await this.store.change(() => {
+      this.assertCurrent(conversation);
+      const current = conversation.queuedMessages?.find(
+        (item) => item.id === id,
+      );
+      if (!current || itemId) {
+        if (current?.steering && itemId) {
+          this.recordSteeredItem(conversation, current, itemId);
+          this.clearSteeredDraft(conversation, current);
+        }
+        return { status: "delivered" };
+      }
+      if (!current.steering) return { status: "queued" };
+      if (
+        this.controllers.get(conversation.id) !== adapter ||
+        adapter.activeTurnIdentity() === nativeTurnId
+      )
+        throw new Error(
+          "The turn may still accept the follow-up. Check again after it ends.",
+        );
+      this.clearSteeredDraft(conversation, current);
+      delete current.steering;
+      current.status = "queued";
+      conversation.queuePaused = true;
+      return { status: "queued" };
+    });
+    if (result.status === "delivered") this.scheduleQueue(conversation.id);
+    return result;
+  }
+
+  private markSteerUncertain(conversation: ConversationState): void {
+    for (const message of conversation.queuedMessages ?? [])
+      if (message.steering) message.status = "uncertain";
   }
 
   private async sendToolResult(
@@ -1089,6 +1303,20 @@ export class ConversationApplicationService {
         break;
       }
       case "text":
+        if (event.role === "user" && event.itemId && event.clientId) {
+          const message = conversation.queuedMessages?.find(
+            (item) =>
+              item.id === event.clientId &&
+              item.steering?.nativeTurnId === event.nativeTurnId,
+          );
+          if (message) {
+            this.recordSteeredItem(conversation, message, event.itemId);
+            break;
+          }
+          const steeredId = `codex/${conversation.nativeId}/${event.nativeTurnId}/${event.itemId}`;
+          if (conversation.messages.some((item) => item.id === steeredId))
+            break;
+        }
         if (!event.replay) {
           const id = event.itemId
             ? `codex/live/${conversation.nativeId}/${event.itemId}`
@@ -1159,6 +1387,7 @@ export class ConversationApplicationService {
           );
         break;
       case "completed":
+        this.markSteerUncertain(conversation);
         this.finishTurn(conversation, event.outcome.status);
         if (event.outcome.status === "cancelled")
           conversation.queuePaused = true;
@@ -1173,6 +1402,7 @@ export class ConversationApplicationService {
         }
         break;
       case "error":
+        this.markSteerUncertain(conversation);
         this.finishTurn(conversation, "failed");
         conversation.queuePaused = true;
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
@@ -1482,10 +1712,13 @@ export class ConversationApplicationService {
         return this.createConversation(request, true);
 
       case "conversation.send":
-        return this.sendConversation(request);
+        return this.sendConversation(request, false, trustedUi);
 
       case "conversation.send-tool-result":
         return this.sendToolResult(request);
+
+      case "conversation.check-steer":
+        return this.checkSteeredMessage(request);
 
       case "conversation.queue-edit":
       case "conversation.queue-remove":
@@ -1498,8 +1731,10 @@ export class ConversationApplicationService {
               (m) => m.id === requiredString(request, "messageId"),
             );
             if (!message) throw new Error("Queued message not found");
-            if (message.status === "sending")
-              throw new Error("Message is already being sent");
+            if (message.status === "sending" || message.steering)
+              throw new Error(
+                "Check the follow-up delivery before changing this message",
+              );
             if (request.op === "conversation.queue-remove") {
               conversation.queuedMessages = conversation.queuedMessages!.filter(
                 (m) => m !== message,
