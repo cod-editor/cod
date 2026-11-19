@@ -21,6 +21,20 @@ export function keyboardSurface(
   if (element?.closest(".file-editor")) return "editor";
   return "shell";
 }
+export function isReviewCommentSave(event: KeyboardEvent): boolean {
+  return (
+    event.target instanceof Element &&
+    !!event.target.closest(".review-comment-editor") &&
+    event.key === "Enter" &&
+    event.ctrlKey === (keyboardPlatform === "linux") &&
+    event.metaKey === (keyboardPlatform === "darwin") &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.isComposing &&
+    event.keyCode !== 229 &&
+    !event.getModifierState("AltGraph")
+  );
+}
 export function shortcutTitle(id: CommandId, label?: string): string {
   const title = label ?? commands.find((c) => c.id === id)!.title;
   const hint = formatShortcut(id, keyboardPlatform);
