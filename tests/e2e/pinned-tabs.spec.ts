@@ -329,25 +329,13 @@ test("Pinned chat, draft and active native task follow cross-workspace moves and
 });
 
 test("Pinned blank tabs keep protection through every content choice and terminal reopen requires a fresh shell", async () => {
-  for (const kind of ["Open file", "Browser", "Chat", "Terminal"]) {
+  for (const kind of ["New file", "Browser", "Chat", "Terminal"]) {
     const b = await blank();
     await pin(b.paneId);
     const choice = app
       .pane(b.paneId)
       .getByRole("region", { name: "New tab", exact: true });
     await choice.getByRole("button", { name: kind, exact: true }).click();
-    if (kind === "Open file") {
-      const picker = app.page.getByRole("dialog", {
-        name: "Open file",
-        exact: true,
-      });
-      await picker
-        .getByRole("textbox", { name: "Open file", exact: true })
-        .fill("spec.md");
-      await picker
-        .getByRole("button", { name: "spec.md", exact: true })
-        .click();
-    }
     await expect(tab(b.paneId)).toHaveAttribute("data-pinned", "true");
     await expect
       .poll(async () => (await ws()).panes.find((p) => p.id === b.paneId)?.kind)
@@ -356,7 +344,9 @@ test("Pinned blank tabs keep protection through every content choice and termina
           ? "browser"
           : kind === "Terminal"
             ? "terminal"
-            : "document",
+            : kind === "New file"
+              ? "untitled"
+              : "document",
       );
     if (kind === "Chat") {
       const composer = app

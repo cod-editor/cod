@@ -1215,6 +1215,9 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
     await expect(
       app.page.getByRole("textbox", { name: "Message", exact: true }),
     ).toHaveValue("preserved second draft");
+    await expect(
+      app.pane(last).getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
     await app.page.keyboard.press(`${modifier}+W`);
     await expect(
       app.page.getByRole("textbox", { name: "Message", exact: true }),

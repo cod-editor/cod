@@ -495,7 +495,7 @@ export function createCommands(
   ): void {
     const { workspace, group, sourcePane } = tabTarget(workspaceId, groupId);
     const create = async (
-      op: "browser.open" | "conversation.draft" | "terminal.open",
+      op: "file.new" | "browser.open" | "conversation.draft" | "terminal.open",
     ) => {
       await createTab(op, {
         workspace: workspace.id,
@@ -504,21 +504,10 @@ export function createCommands(
         ...(op === "browser.open" ? { url: "about:blank" } : {}),
       });
     };
-    const run = (op: "browser.open" | "conversation.draft" | "terminal.open") =>
+    const run = (op: Parameters<typeof create>[0]) =>
       void create(op).catch(() => undefined);
     menu(anchor, [
-      {
-        label: "Open file",
-        run: () =>
-          projects.quickOpen({
-            workspace,
-            sourcePane,
-            group: group.id,
-            restoreFocus: () => {
-              if (anchor.isConnected) anchor.focus({ preventScroll: true });
-            },
-          }),
-      },
+      { label: "New file", run: () => run("file.new") },
       { label: "Browser", run: () => run("browser.open") },
       { label: "Chat", run: () => run("conversation.draft") },
       { label: "Terminal", run: () => run("terminal.open") },
@@ -1850,6 +1839,13 @@ export function createCommands(
     newConversation,
     newTab,
     chooseTabType,
+    newFileInBlankTab: (workspace: WorkspaceState, paneId: string) =>
+      createTab("file.new", {
+        workspace: workspace.id,
+        group: workspace.groups?.find((group) => group.paneIds.includes(paneId))
+          ?.id,
+        replacePane: paneId,
+      }),
     browser: browserDialog,
     terminal: terminalDialog,
     folder: folderDialog,
