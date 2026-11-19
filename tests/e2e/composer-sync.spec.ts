@@ -240,6 +240,97 @@ test("CLI updates an already open new-chat draft including its provider", async 
     .toEqual(["kimi"]);
 });
 
+test("A delayed snapshot cannot roll back a single composer's acknowledged draft", async () => {
+  const workspace = await shell.create("Delayed draft snapshot");
+  const chat = await shell.newChat(workspace, "codex");
+  const input = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Older invented draft");
+  await expect
+    .poll(async () => (await draft(workspace, chat.paneId))?.text)
+    .toBe("Older invented draft");
+
+  // Capture a real snapshot containing the older autosave, then allow the
+  // newer text-only autosave to acknowledge before delivering that snapshot.
+  await shell.app!.evaluate(
+    ({ BrowserWindow }, { workspace, paneId, conversationId }) => {
+      const view = BrowserWindow.getAllWindows()[0].webContents;
+      const send = view.send.bind(view);
+      let held: unknown[] | undefined;
+      view.send = (channel, ...args) => {
+        if (channel === "cod:state") {
+          const state = args[0] as AppState;
+          const draft = state.workspaces.find((w) => w.id === workspace)
+            ?.chatDrafts?.[paneId];
+          const conversation = state.conversations.find(
+            (c) => c.id === conversationId,
+          );
+          if (
+            draft?.text === "Older invented draft" &&
+            conversation?.displayName === "Delayed draft snapshot fixture"
+          )
+            held = args;
+          return;
+        }
+        send(channel, ...args);
+      };
+      Object.assign(globalThis, {
+        releaseOldDraftSnapshot: () => {
+          if (!held) throw new Error("No draft snapshot was captured");
+          view.send = send;
+          send("cod:state", ...held);
+        },
+      });
+    },
+    { workspace, paneId: chat.paneId, conversationId: chat.id },
+  );
+  await shell.cli(
+    "conversation",
+    "rename",
+    "--id",
+    chat.id,
+    "--name",
+    "Delayed draft snapshot fixture",
+  );
+  await input.fill("Newer invented draft");
+  await expect
+    .poll(async () => (await draft(workspace, chat.paneId))?.text)
+    .toBe("Newer invented draft");
+  // Round-trip through the same renderer IPC before delivering the older
+  // snapshot, so the completed autosave reply has reached the renderer.
+  await shell.page.evaluate(() => window.cod.invoke({ op: "state" }));
+  await shell.app!.evaluate(() =>
+    (globalThis as any).releaseOldDraftSnapshot(),
+  );
+  await expect(
+    shell.page.getByRole("tab", {
+      name: "Delayed draft snapshot fixture",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(input).toHaveValue("Newer invented draft");
+  await input.fill("Latest invented draft");
+  await expect
+    .poll(async () => {
+      const saved = await draft(workspace, chat.paneId);
+      return { text: saved?.text, conflict: Boolean(saved?.localDraft) };
+    })
+    .toEqual({ text: "Latest invented draft", conflict: false });
+  await expect(
+    shell.page.getByRole("region", { name: "Draft conflict" }),
+  ).toHaveCount(0);
+  await input.press("Enter");
+  await expect
+    .poll(async () =>
+      (await shell.inspect(chat.id)).messages.some(
+        (message) =>
+          message.role === "user" && message.text === "Latest invented draft",
+      ),
+    )
+    .toBe(true);
+});
+
 for (const queued of [false, true])
   test(`A single composer keeps its next message when ${queued ? "queueing" : "sending"} with delayed state delivery`, async () => {
     const workspace = await shell.create("Send autosave ordering");
