@@ -296,6 +296,31 @@ function receive(message, external = false) {
     });
     return;
   }
+  if (
+    message.method === "thread/turns/list" &&
+    params.itemsView === "summary"
+  ) {
+    reply(message, {
+      data: history.map(({ id, status }) => ({ id, status })),
+      nextCursor: null,
+    });
+    return;
+  }
+  if (message.method === "thread/items/list" && params.turnId) {
+    const turn = history.find((item) => item.id === params.turnId);
+    if (!turn || params.threadId !== nativeId) {
+      write({
+        id: message.id,
+        error: { code: -32602, message: "Unknown fixture turn" },
+      });
+      return;
+    }
+    reply(message, {
+      data: turn.items.map((item) => ({ turnId: turn.id, item })),
+      nextCursor: null,
+    });
+    return;
+  }
   if (message.method === "thread/items/list" && configuration().pagedHistory) {
     const items = history
       .flatMap(({ id: turnId, items }) =>
@@ -455,6 +480,44 @@ function receive(message, external = false) {
     return;
   }
 
+  if (message.method === "turn/steer" && provider === "codex") {
+    const mode = configuration().steering;
+    if (mode === "unsupported") {
+      write({
+        id: message.id,
+        error: { code: -32601, message: "Unsupported fixture method" },
+      });
+      return;
+    }
+    if (
+      params.threadId !== nativeId ||
+      !active ||
+      params.expectedTurnId !== active.turnId ||
+      mode === "reject"
+    ) {
+      write({
+        id: message.id,
+        error: { code: -32600, message: "Fixture turn no longer active" },
+      });
+      return;
+    }
+    const turn = active.turn;
+    const item = {
+      id: `steered-${turn.id}-${turn.items.length}`,
+      type: "userMessage",
+      clientId: params.clientUserMessageId,
+      content: params.input,
+    };
+    if (mode !== "absent") {
+      turn.items.push(item);
+      persist();
+    }
+    reply(message, { turnId: turn.id });
+    if (mode !== "silent" && mode !== "absent")
+      for (const method of ["item/started", "item/completed"])
+        notify(method, { threadId: nativeId, turnId: turn.id, item });
+    return;
+  }
   if (!["turn/start", "session/prompt"].includes(message.method)) {
     if (message.id !== undefined)
       write({

@@ -7,6 +7,7 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
   RpcTransport,
+  ProviderRpcError,
   errorOf,
   object,
   string,
@@ -25,6 +26,7 @@ import type {
   ProviderOptions,
   ProviderSelection,
   ToolResult,
+  SteeringInput,
   TurnOutcome,
 } from "./types.ts";
 
@@ -63,6 +65,7 @@ export class NativeAdapter implements ProviderAdapter {
   private id: string | null = null;
   private resumeTailCursor?: string;
   private active?: ActiveTurn;
+  private steeringUnavailable = false;
   private finishedTurns = new Set<string>();
   private readonly background = new CodexBackground();
   private approvals = new Map<string, Approval>();
@@ -435,6 +438,143 @@ export class NativeAdapter implements ProviderAdapter {
     });
   }
 
+  private codexInput(
+    text: string,
+    images: NonNullable<SteeringInput["images"]>,
+    skills: NonNullable<SteeringInput["skills"]>,
+  ) {
+    return [
+      ...skills.map((skill) => ({ type: "skill", ...skill })),
+      ...(text ? [{ type: "text", text }] : []),
+      ...images.flatMap((image, index) => [
+        { type: "text", text: `[Image ${image.reference ?? index + 1}]` },
+        { type: "image", url: `data:${image.mimeType};base64,${image.data}` },
+      ]),
+    ];
+  }
+
+  activeTurnIdentity(): string | undefined {
+    if (
+      this.provider === "codex" &&
+      !this.failure &&
+      !this.closed &&
+      !this.steeringUnavailable
+    )
+      return this.active?.cancelRequested ? undefined : this.active?.id;
+  }
+
+  async steer(
+    { text, images = [], skills = [] }: SteeringInput,
+    expectedTurnId: string,
+    clientId: string,
+  ): Promise<"accepted" | "uncertain" | "unsupported"> {
+    if (this.provider !== "codex")
+      throw new Error(
+        "This provider does not support sending to the current turn",
+      );
+    this.ensureOpen();
+    const resolvedSkills = await this.resolveSkills(text, skills);
+    this.ensureOpen();
+    if (!this.id || this.activeTurnIdentity() !== expectedTurnId)
+      throw new Error("The selected turn is no longer active");
+    try {
+      const result = object(
+        await this.rpc!.request(
+          "turn/steer",
+          {
+            threadId: this.id,
+            expectedTurnId,
+            clientUserMessageId: clientId,
+            input: this.codexInput(text, images, resolvedSkills),
+          },
+          undefined,
+          "reconcile",
+        ),
+      );
+      return result.turnId === expectedTurnId ? "accepted" : "uncertain";
+    } catch (error) {
+      if (error instanceof ProviderRpcError) {
+        if (error.code === -32601) {
+          this.steeringUnavailable = true;
+          return "unsupported";
+        }
+        if (error.code === -32600 || error.code === -32602) throw error;
+      }
+      return "uncertain";
+    }
+  }
+
+  private async findInCodexHistory(
+    method: "thread/items/list" | "thread/turns/list",
+    target: Record<string, unknown>,
+    match: (row: Record<string, unknown>) => boolean,
+  ): Promise<Record<string, unknown> | null> {
+    this.ensureOpen();
+    if (this.provider !== "codex" || !this.id || this.binding)
+      throw new Error("Codex history requires a bound conversation");
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    while (seen.size < 20) {
+      const page = object(
+        await this.rpc!.request(
+          method,
+          {
+            threadId: this.id,
+            ...target,
+            ...(cursor ? { cursor } : {}),
+            limit: 30,
+          },
+          undefined,
+          "read-only",
+        ),
+      );
+      if (!Array.isArray(page.data) || !("nextCursor" in page))
+        throw new Error("Codex did not confirm the selected turn history");
+      const found = page.data.map(object).find(match);
+      if (found) return found;
+      if (page.nextCursor === null) return null;
+      cursor = string(page.nextCursor);
+      if (!cursor || seen.has(cursor)) break;
+      seen.add(cursor);
+    }
+    throw new Error(
+      "Codex could not finish checking the selected turn history",
+    );
+  }
+
+  async findSteeredItem(
+    turnId: string,
+    clientId: string,
+  ): Promise<string | null> {
+    // Capture terminal state before reading items. A negative item lookup
+    // while native work can still consume the input is not a rejection.
+    const turn = await this.findInCodexHistory(
+      "thread/turns/list",
+      { itemsView: "summary" },
+      (row) => row.id === turnId,
+    );
+    const match = await this.findInCodexHistory(
+      "thread/items/list",
+      { turnId, deferOutput: {} },
+      (row) => {
+        if (row.turnId !== turnId)
+          throw new Error("Codex returned items from a different turn");
+        const item = object(row.item);
+        return item.type === "userMessage" && item.clientId === clientId;
+      },
+    );
+    if (match) {
+      const id = string(object(match.item).id);
+      if (!id) throw new Error("Codex omitted the message identity");
+      return id;
+    }
+    if (!["completed", "interrupted", "failed"].includes(String(turn?.status)))
+      throw new Error(
+        "Codex did not confirm that the selected turn has finished",
+      );
+    return null;
+  }
+
   async send(
     text: string,
     images: import("./types").ImageAttachment[] = [],
@@ -491,27 +631,10 @@ export class NativeAdapter implements ProviderAdapter {
     void (async () => {
       try {
         if (this.provider === "codex") {
-          const skills = resolvedSkills.map((skill) => ({
-            type: "skill",
-            ...skill,
-          }));
           const started = object(
             await this.rpc!.request("turn/start", {
               threadId: this.id,
-              input: [
-                ...skills,
-                ...(text ? [{ type: "text", text }] : []),
-                ...images.flatMap((image, index) => [
-                  {
-                    type: "text",
-                    text: `[Image ${image.reference ?? index + 1}]`,
-                  },
-                  {
-                    type: "image",
-                    url: `data:${image.mimeType};base64,${image.data}`,
-                  },
-                ]),
-              ],
+              input: this.codexInput(text, images, resolvedSkills),
               ...this.selection.overrides(),
             }),
           );
@@ -722,7 +845,7 @@ export class NativeAdapter implements ProviderAdapter {
       ) {
         const item = object(p.item);
         if (
-          this.active?.external &&
+          (this.active?.external || typeof item.clientId === "string") &&
           message.method === "item/started" &&
           item.type === "userMessage" &&
           typeof item.id === "string"
@@ -731,6 +854,8 @@ export class NativeAdapter implements ProviderAdapter {
             type: "text",
             role: "user",
             itemId: item.id,
+            clientId: string(item.clientId),
+            nativeTurnId: this.active?.id,
             text: (Array.isArray(item.content) ? item.content : [])
               .map(
                 (part) =>

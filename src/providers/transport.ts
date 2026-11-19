@@ -17,6 +17,14 @@ export const string = (value: unknown): string | undefined =>
 export const errorOf = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
 
+export class ProviderRpcError extends Error {
+  readonly code: unknown;
+  constructor(code: unknown, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -145,13 +153,15 @@ export class RpcTransport {
     }
     this.pending.delete(message.id as number);
     clearTimeout(pending.timer);
-    if ("error" in message)
+    if ("error" in message) {
+      const error = object(message.error);
       pending.reject(
-        new Error(
-          string(object(message.error).message) ?? "Provider RPC error",
+        new ProviderRpcError(
+          error.code,
+          string(error.message) ?? "Provider RPC error",
         ),
       );
-    else if ("result" in message) pending.resolve(message.result);
+    } else if ("result" in message) pending.resolve(message.result);
     else
       pending.reject(new Error("Provider response omitted result and error"));
   }
@@ -187,7 +197,7 @@ export class RpcTransport {
     method: string,
     params: unknown,
     timeout = this.timeout,
-    mode?: "read-only",
+    mode?: "read-only" | "reconcile",
   ): Promise<unknown> {
     if (this.closing || this.closed || this.failure)
       return Promise.reject(
@@ -199,8 +209,8 @@ export class RpcTransport {
         this.pending.delete(id);
         const error = new Error(`Provider request timed out: ${method}`);
         reject(error);
-        // A timed-out mutation has an unknown outcome: do not reuse its controller.
-        if (mode !== "read-only") this.fail(error);
+        // Unreconcilable mutations retire the controller when acceptance is unknown.
+        if (!mode) this.fail(error);
       }, timeout);
       this.pending.set(id, { resolve, reject, timer });
       try {

@@ -160,6 +160,11 @@ export interface QueuedMessage {
   images?: import("./providers/types").ImageAttachment[];
   skills?: Array<{ name: string; path: string }>;
   status: "queued" | "sending" | "uncertain";
+  steering?: {
+    nativeTurnId: string;
+    localTurnId: string;
+    draftVersion?: string;
+  };
 }
 
 export interface ConversationState {

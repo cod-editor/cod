@@ -44,6 +44,8 @@ export type ProviderEvent = {
       role: "assistant" | "user";
       replay: boolean;
       itemId?: string;
+      clientId?: string;
+      nativeTurnId?: string;
     }
   | {
       type: "tool";
@@ -120,6 +122,12 @@ export interface ToolResult {
   namespace: string | null;
   output: string;
 }
+export interface SteeringInput {
+  text: string;
+  images?: ImageAttachment[];
+  skills?: Array<{ name: string; path: string }>;
+}
+
 export interface ProviderAdapter {
   readonly provider: ProviderId;
   readonly nativeId: string | null;
@@ -147,6 +155,13 @@ export interface ProviderAdapter {
     images?: ImageAttachment[],
     skills?: Array<{ name: string; path: string }>,
   ): Promise<TurnOutcome>;
+  activeTurnIdentity(): string | undefined;
+  steer(
+    input: SteeringInput,
+    expectedTurnId: string,
+    clientId: string,
+  ): Promise<"accepted" | "uncertain" | "unsupported">;
+  findSteeredItem(turnId: string, clientId: string): Promise<string | null>;
   sendToolResult(
     result: ToolResult,
     requireDispatchedTurn: boolean,
