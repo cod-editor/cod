@@ -1268,26 +1268,33 @@ export function createConversationViews({
         );
         const key = conversation?.id ?? paneId;
         const version = draft.version ?? "";
-        if (!hydratedComposers.has(key)) {
-          hydratedComposers.add(key);
-          seenVersions.set(key, version);
+        const hydrated = hydratedComposers.has(key);
+        if (hydrated && version === seenVersions.get(key)) continue;
+        hydratedComposers.add(key);
+        seenVersions.set(key, version);
+        if (draft.writer === writer && (hydrated || versions.has(key))) {
+          const acknowledged = versions.get(key);
+          // An autosave reply can overtake rendering an older own snapshot.
+          // Only a clear rooted at the current acknowledgement may advance it.
+          if (
+            acknowledged === undefined ||
+            draft.clearedFromVersion === acknowledged
+          )
+            versions.set(key, version);
+        } else if (!hydrated) {
           if (!composerDrafts.has(key) && !dirtyComposers.has(key)) {
             acceptDraft(key, paneId, draft.localDraft ?? draft);
             versions.set(key, version);
             if (draft.localDraft) composerConflicts.set(key, draft);
-          } else versions.set(key, draft.version ?? "");
-        } else if (version !== seenVersions.get(key)) {
-          seenVersions.set(key, version);
-          if (draft.writer === writer) versions.set(key, draft.version ?? "");
-          else if (
-            composerConflicts.has(key) ||
-            dirtyComposers.has(key) ||
-            loadingImages.has(key)
-          ) {
-            composerConflicts.set(key, draft);
-            void persistComposer(key);
-          } else acceptDraft(key, paneId, draft);
-        }
+          } else versions.set(key, version);
+        } else if (
+          composerConflicts.has(key) ||
+          dirtyComposers.has(key) ||
+          loadingImages.has(key)
+        ) {
+          composerConflicts.set(key, draft);
+          void persistComposer(key);
+        } else acceptDraft(key, paneId, draft);
       }
   }
   const views = new Map<string, HTMLElement>();
