@@ -99,7 +99,37 @@ async function ownedCaches(source) {
     await fs.symlink(cache, path.join(directory, `${name}-cache`));
   }
 }
-async function collect(directory, frozen) {
+async function* outputFiles(source, relative = "") {
+  const entries = await fs
+    .readdir(path.join(source, relative), { withFileTypes: true })
+    .catch((error) => {
+      if (!relative && error.code === "ENOENT") return [];
+      throw error;
+    });
+  for (const entry of entries) {
+    const file = path.join(relative, entry.name);
+    if (entry.isDirectory()) yield* outputFiles(source, file);
+    else if (entry.isFile()) yield file;
+  }
+}
+
+function playwrightResult(relative) {
+  const parts = relative.split(path.sep);
+  const index = parts[0] === "test-results" ? 0 : 1;
+  if (parts[index] !== "test-results" || parts.length < index + 3)
+    return undefined;
+  const name = parts[index + 2];
+  return {
+    directory: parts.slice(0, index + 2).join(path.sep),
+    failureMarker:
+      parts.length === index + 3 &&
+      (name === "trace.zip" ||
+        name === "error-context.md" ||
+        /^test-failed-\d+\.png$/.test(name)),
+  };
+}
+
+export async function collectEvidence(directory, frozen) {
   const evidence = path.join(directory, "evidence");
   await fs.mkdir(evidence);
   const log = await fs.open(path.join(directory, "job.log"));
@@ -111,44 +141,63 @@ async function collect(directory, frozen) {
   } finally {
     await log.close();
   }
-  let bytes = 0,
-    files = 0,
-    omitted = 0;
-  async function copy(source, relative = "output") {
-    for (const entry of await fs
-      .readdir(source, { withFileTypes: true })
-      .catch(() => [])
-      .then((entries) =>
-        entries.sort(
-          (a, b) =>
-            Number(b.name === "preflight.json") -
-            Number(a.name === "preflight.json"),
-        ),
-      )) {
-      const file = path.join(source, entry.name),
-        next = path.join(relative, entry.name);
-      if (entry.isDirectory()) await copy(file, next);
-      else if (entry.isFile()) {
-        const stat = await fs.stat(file);
-        if (files >= 100 || bytes + stat.size > maxEvidence) {
-          omitted++;
-          continue;
-        }
-        await fs.mkdir(path.dirname(path.join(evidence, next)), {
-          recursive: true,
-        });
-        await fs.copyFile(file, path.join(evidence, next));
-        bytes += stat.size;
-        files++;
-      }
-    }
-  }
+  let evidenceBytes = 0,
+    evidenceFiles = 0,
+    omittedEvidenceFiles = 0,
+    omittedFailureEvidenceFiles = 0;
   if (frozen) {
     await fs.copyFile(
       path.join(frozen, "input-sha256.txt"),
       path.join(evidence, "input-sha256.txt"),
     );
-    await copy(path.join(frozen, "output"));
+    const output = path.join(frozen, "output");
+    async function copy(relative, failure = false) {
+      const file = path.join(output, relative);
+      const stat = await fs.lstat(file);
+      if (!stat.isFile()) return;
+      if (evidenceFiles >= 100 || evidenceBytes + stat.size > maxEvidence) {
+        if (relative === "preflight.json")
+          throw new Error("Preflight summary exceeds the evidence budget");
+        omittedEvidenceFiles++;
+        if (failure) omittedFailureEvidenceFiles++;
+        return;
+      }
+      const destination = path.join(evidence, "output", relative);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.copyFile(file, destination);
+      evidenceBytes += stat.size;
+      evidenceFiles++;
+    }
+    await copy("preflight.json").catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+
+    // Playwright retains traces only on failure. Its standard error context
+    // and failure screenshot names also identify failed result directories.
+    const failedResults = new Set();
+    for await (const file of outputFiles(output)) {
+      const result = playwrightResult(file);
+      if (result?.failureMarker) {
+        failedResults.add(result.directory);
+        await copy(file, true);
+      }
+    }
+    for await (const file of outputFiles(output)) {
+      const result = playwrightResult(file);
+      if (
+        result &&
+        failedResults.has(result.directory) &&
+        !result.failureMarker
+      )
+        await copy(file, true);
+    }
+    for await (const file of outputFiles(output)) {
+      if (
+        file !== "preflight.json" &&
+        !failedResults.has(playwrightResult(file)?.directory)
+      )
+        await copy(file);
+    }
     // Retain bounded evidence, not a second unbounded copy of test artifacts.
     await fs.rm(path.join(frozen, "output"), { recursive: true, force: true });
     const raw = await fs.open(path.join(frozen, "run.log"));
@@ -162,9 +211,10 @@ async function collect(directory, frozen) {
     }
   }
   return {
-    evidenceBytes: bytes,
-    evidenceFiles: files,
-    omittedEvidenceFiles: omitted,
+    evidenceBytes,
+    evidenceFiles,
+    omittedEvidenceFiles,
+    omittedFailureEvidenceFiles,
   };
 }
 async function trimOwnedImages(current) {
@@ -310,7 +360,7 @@ async function execute(id) {
     exitCode = 1;
   }
   try {
-    artifacts = await collect(directory, frozen);
+    artifacts = await collectEvidence(directory, frozen);
     await fs.copyFile(
       path.join(directory, "evidence/run.log"),
       path.join(directory, "job.log"),
@@ -462,6 +512,7 @@ async function recoverEvidence(id) {
     evidenceBytes,
     evidenceFiles,
     omittedEvidenceFiles: null,
+    omittedFailureEvidenceFiles: null,
   });
 }
 async function main() {
