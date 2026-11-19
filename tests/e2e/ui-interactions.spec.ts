@@ -234,7 +234,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
   await app.prepare();
   try {
     await app.start();
-    const tabs = app.page.getByRole("tablist").first();
+    const tabs = app.page.locator(".tabs").first();
     const close = tabs.locator(".tab-close").first();
     const selected = tabs.getByRole("tab", { selected: true });
     await selected.hover();

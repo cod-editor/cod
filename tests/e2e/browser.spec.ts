@@ -248,7 +248,7 @@ test("Address bar searches text and opens bare addresses without sending address
   await shell.page
     .getByRole("button", { name: "New browser tab", exact: true })
     .click();
-  const address = shell.page.getByRole("textbox", {
+  const address = shell.page.getByRole("combobox", {
     name: "Address",
     exact: true,
   });
@@ -400,7 +400,7 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
     .getByRole("button", { name: "New browser tab", exact: true })
     .click();
   await expect(shell.page.getByRole("dialog")).toHaveCount(0);
-  const newAddress = shell.page.getByRole("textbox", {
+  const newAddress = shell.page.getByRole("combobox", {
     name: "Address",
     exact: true,
   });
@@ -413,7 +413,7 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
   expect(record).toBeDefined();
   const address = shell
     .pane(record.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   await expect(address).toHaveValue(origin + "/one");
   await expect
     .poll(() => remote("/one", "document.title").catch(() => ""))
@@ -500,7 +500,7 @@ test("Browser reload shortcut targets the focused page or address and leaves oth
 
   const address = shell
     .pane(record.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   const afterNative = await identity();
   await address.fill("Keep unsent address text");
   await address.press(`${modifier}+r`);
@@ -584,7 +584,7 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
   await expect(
     shell
       .pane(browser.paneId)
-      .getByRole("textbox", { name: "Address", exact: true }),
+      .getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   await pageKey("/one", "O", [
     process.platform === "darwin" ? "meta" : "control",
@@ -1206,7 +1206,7 @@ test("Local address suggestions, searchable history and search engine settings s
   );
   const address = shell
     .pane(home.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   await address.focus();
   await address.fill("history-fixture");
   await expect(shell.pane(home.paneId).getByRole("option")).toContainText(
@@ -1250,7 +1250,7 @@ test("Local address suggestions, searchable history and search engine settings s
   });
   await shell
     .pane(home.paneId)
-    .getByRole("textbox", { name: "Address", exact: true })
+    .getByRole("combobox", { name: "Address", exact: true })
     .click();
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   await shell.page
@@ -1606,7 +1606,7 @@ test("Optional bookmarks edit in place and stay separate from home pins", async 
   const record = await open(workspace);
   await shell
     .pane(record.paneId)
-    .getByRole("textbox", { name: "Address", exact: true })
+    .getByRole("combobox", { name: "Address", exact: true })
     .click();
   await shell.command("Bookmark current page");
   await expect
@@ -1654,7 +1654,7 @@ test("Optional bookmarks edit in place and stay separate from home pins", async 
   expect(suggestions[0]?.title).toBe("Reading list");
   await shell
     .pane(record.paneId)
-    .getByRole("textbox", { name: "Address", exact: true })
+    .getByRole("combobox", { name: "Address", exact: true })
     .click();
   await shell.command("Bookmarks");
   await dialog()
@@ -2418,7 +2418,7 @@ test("Local HTML uses ordinary browser navigation, recovery and persisted histor
     url,
   );
   const pane = shell.pane(opened.paneId);
-  const address = pane.getByRole("textbox", { name: "Address", exact: true });
+  const address = pane.getByRole("combobox", { name: "Address", exact: true });
   await expect(address).toHaveValue(url);
   const page = async () => {
     await expect
@@ -2467,7 +2467,7 @@ test("Local HTML uses ordinary browser navigation, recovery and persisted histor
   await expect(
     shell
       .pane(opened.paneId)
-      .getByRole("textbox", { name: "Address", exact: true }),
+      .getByRole("combobox", { name: "Address", exact: true }),
   ).toHaveValue(pathToFileURL(evidence).href);
   await shell
     .pane(opened.paneId)
@@ -2523,7 +2523,7 @@ test("Selecting an address stays quiet; explicit suggestions exclude the current
   await remote("/quiet-current", "document.title");
   const address = shell
     .pane(current.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   const results = shell
     .pane(current.paneId)
     .getByRole("listbox", { name: "Address suggestions" });
@@ -2531,6 +2531,10 @@ test("Selecting an address stays quiet; explicit suggestions exclude the current
     process.platform === "darwin" ? "meta" : "control",
   ]);
   await expect(address).toBeFocused();
+  await expect(address).toHaveAttribute("aria-expanded", "false");
+  await expect(address).not.toHaveAttribute("aria-activedescendant");
+  await expect(address).toMatchAriaSnapshot('- combobox "Address"');
+
   expect(
     await address.evaluate((input: HTMLInputElement) => [
       input.selectionStart,
@@ -2553,6 +2557,17 @@ test("Selecting an address stays quiet; explicit suggestions exclude the current
   await expect(results).toBeHidden();
   await address.press("ArrowDown");
   await expect(results.getByRole("option")).toContainText("quiet-alternative");
+  await expect(address).toBeFocused();
+  await expect(address).toHaveAttribute("aria-expanded", "true");
+  const controlled = await results.getAttribute("id");
+  await expect(address).toHaveAttribute("aria-controls", controlled!);
+  const selectedId = await results
+    .getByRole("option", { selected: true })
+    .getAttribute("id");
+  await expect(address).toHaveAttribute("aria-activedescendant", selectedId!);
+  expect(await address.ariaSnapshot()).toContain("[expanded]");
+  expect(await results.ariaSnapshot()).toContain("[selected]");
+
   await expect(results).not.toContainText(origin + "/quiet-current");
   await expect(results.getByRole("option").first()).toHaveAttribute(
     "aria-selected",
@@ -2562,6 +2577,8 @@ test("Selecting an address stays quiet; explicit suggestions exclude the current
   await expect(address).toBeFocused();
   await expect(address).toHaveValue(origin + "/quiet-current");
   await expect(results).toBeHidden();
+  await expect(address).toHaveAttribute("aria-expanded", "false");
+  await expect(address).not.toHaveAttribute("aria-activedescendant");
   await address.fill("quiet");
   await expect(results.getByRole("option")).toContainText("quiet-alternative");
   await expect(results).not.toContainText(origin + "/quiet-current");
@@ -2591,7 +2608,7 @@ test("Address selection uses current navigation state before a pending render an
   await remote("/address-before-render", "document.title");
   const address = shell
     .pane(current.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   await expect(address).toHaveValue(origin + "/address-before-render");
   await shell.page.evaluate(() => {
     const original = window.requestAnimationFrame.bind(window),
@@ -2686,7 +2703,7 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
   });
   const address = shell
     .pane(current.paneId)
-    .getByRole("textbox", { name: "Address", exact: true });
+    .getByRole("combobox", { name: "Address", exact: true });
   const results = shell
     .pane(current.paneId)
     .getByRole("listbox", { name: "Address suggestions" });

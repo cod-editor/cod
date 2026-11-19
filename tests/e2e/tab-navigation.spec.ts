@@ -42,6 +42,75 @@ async function blank(group?: string) {
   return result;
 }
 
+test("Tab selection and tab actions are separate and return keyboard focus on close", async () => {
+  const initial = await state();
+  const second = await blank(initial.activeGroupId);
+  const firstTab = app.page.locator(
+    `[role=tab][data-tab-id="${initial.activePaneId}"]`,
+  );
+  const secondTab = app.page.locator(
+    `[role=tab][data-tab-id="${second.paneId}"]`,
+  );
+  const bar = secondTab.locator("..").locator("..").locator("..");
+  const tablist = bar.getByRole("tablist", { name: "Pane tabs" });
+  await expect(secondTab).toHaveAttribute("aria-selected", "true");
+  const close = secondTab.locator("..").getByRole("button", {
+    name: "Close New tab",
+    exact: true,
+  });
+  const panel = app.page.getByRole("tabpanel", {
+    name: "New tab",
+    exact: true,
+  });
+  const panelId = await panel.getAttribute("id");
+  await expect(secondTab).toHaveAttribute("aria-controls", panelId!);
+  await expect(panel).toContainText("New file");
+  await expect(tablist).toMatchAriaSnapshot(`
+    - tablist "Pane tabs":
+      - tab "New tab" [selected]
+  `);
+  expect(await tablist.ariaSnapshot()).not.toContain("Close New tab");
+  expect(await bar.ariaSnapshot()).toContain('button "Close New tab"');
+  await secondTab.focus();
+  await secondTab.press("Tab");
+  await expect(close).toBeFocused();
+  await close.press("Enter");
+  await expect(secondTab).toHaveCount(0);
+  await expect(firstTab).toHaveAttribute("aria-selected", "true");
+  await expect(firstTab).toBeFocused();
+});
+
+test("The pane separator exposes its live and restored position", async ({}, info) => {
+  await app.page.getByRole("button", { name: "Toggle split view" }).click();
+  let separator = app.page.getByRole("separator", { name: "Resize panes" });
+  await expect(separator).toHaveAttribute("aria-orientation", "vertical");
+  await expect(separator).toHaveAttribute("aria-valuemin", "15");
+  await expect(separator).toHaveAttribute("aria-valuemax", "85");
+  await expect(separator).toHaveAttribute("aria-valuenow", "50");
+  await expect(separator).toMatchAriaSnapshot('- separator "Resize panes"');
+  const region = await separator.getAttribute("aria-controls");
+  await expect(app.page.locator(`[id="${region}"]`)).toBeVisible();
+  await separator.focus();
+  await separator.press("ArrowRight");
+  await expect(separator).toHaveAttribute("aria-valuenow", "55");
+  await expect(separator).toBeFocused();
+  const rect = (await separator.boundingBox())!;
+  await app.page.mouse.move(rect.x + rect.width / 2, rect.y + 30);
+  await app.page.mouse.down();
+  await app.page.mouse.move(rect.x + rect.width / 2 - 65, rect.y + 30);
+  const pending = await separator.getAttribute("aria-valuenow");
+  expect(Number(pending)).toBeLessThan(55);
+  await app.page.mouse.up();
+  await expect(separator).toHaveAttribute("aria-valuenow", pending!);
+  await app.page.screenshot({
+    path: info.outputPath("accessible-pane-split.png"),
+  });
+  await app.stop();
+  await app.start();
+  separator = app.page.getByRole("separator", { name: "Resize panes" });
+  await expect(separator).toHaveAttribute("aria-valuenow", pending!);
+});
+
 test("Fallback new tab retains persistent choices and replaces itself with each content type", async ({}, info) => {
   const original = await state();
   await blank();
@@ -117,7 +186,7 @@ test("Fallback new tab retains persistent choices and replaces itself with each 
   ).toBeFocused();
   await app.page.keyboard.press("Enter");
   await expect(
-    app.pane(browserId).getByRole("textbox", { name: "Address", exact: true }),
+    app.pane(browserId).getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   const chat = await blank(original.groups![0].id);
   await chooser().getByRole("button", { name: "Chat", exact: true }).click();
@@ -214,7 +283,7 @@ test("Overview browser results retain title, selection, keyboard navigation and 
     .not.toBe(browser.paneId);
   const newPane = (await state()).activePaneId;
   await expect(
-    app.pane(newPane).getByRole("textbox", { name: "Address", exact: true }),
+    app.pane(newPane).getByRole("combobox", { name: "Address", exact: true }),
   ).toBeFocused();
   expect(
     (await state()).groups!.find((g) => g.paneIds.includes(newPane))!.id,

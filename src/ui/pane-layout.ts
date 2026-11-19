@@ -37,6 +37,7 @@ export function createPaneLayout(
     saveFile,
     conversationActions,
     nativeLayout,
+    whenRendered,
     documentModified: isDocumentModified,
   } = actions;
   const navigationWidths = createNavigationWidths(invoke);
@@ -153,6 +154,7 @@ export function createPaneLayout(
             document.createElement("div"),
           ]
     ) as HTMLElement[];
+    first.id = `pane-group-${left.id}`;
     const ratio =
       workspace.groupLayout.type === "split"
         ? workspace.groupLayout.ratio
@@ -174,6 +176,15 @@ export function createPaneLayout(
     handle.setAttribute("role", "separator");
     handle.setAttribute("aria-label", "Resize panes");
     handle.setAttribute("aria-orientation", "vertical");
+    handle.setAttribute("aria-controls", first.id);
+    const announcePosition = (value: number) => {
+      const percentage = Math.round(value * 10000) / 100;
+      // CLI operations can set a position beyond the interactive drag bounds.
+      handle.setAttribute("aria-valuemin", String(Math.min(15, percentage)));
+      handle.setAttribute("aria-valuemax", String(Math.max(85, percentage)));
+      handle.setAttribute("aria-valuenow", String(percentage));
+    };
+    announcePosition(ratio);
     handle.tabIndex = 0;
     const clamp = (value: number) => Math.max(0.15, Math.min(0.85, value));
     const resize = (value: number) =>
@@ -191,12 +202,23 @@ export function createPaneLayout(
         position = clamp((move.clientX - rect.left) / rect.width);
         first.style.flex = `${position} 1 0`;
         second.style.flex = `${1 - position} 1 0`;
+        announcePosition(position);
         nativeLayout();
       };
-      handle.onpointerup = () => {
+      const finish = (persist: boolean) => {
         handle.onpointermove = null;
-        resize(position);
+        handle.onpointerup = null;
+        handle.onpointercancel = null;
+        if (persist) resize(position);
+        else {
+          first.style.flex = `${ratio} 1 0`;
+          second.style.flex = `${1 - ratio} 1 0`;
+          announcePosition(ratio);
+          nativeLayout();
+        }
       };
+      handle.onpointerup = () => finish(true);
+      handle.onpointercancel = () => finish(false);
     };
     handle.onkeydown = (event) => {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -280,29 +302,52 @@ export function createPaneLayout(
       bar.querySelector<HTMLDivElement>(".tabs") ??
       document.createElement("div");
     tabs.className = "tabs";
-    tabs.setAttribute("role", "tablist");
+    // The visual strip interleaves tabs and their action buttons. The ARIA
+    // list owns only tabs so the actions are separate in the accessibility tree.
+    const tablist =
+      bar.querySelector<HTMLElement>(".tab-semantics") ??
+      document.createElement("div");
+    tablist.className = "tab-semantics";
+    tablist.setAttribute("role", "tablist");
+    tablist.setAttribute("aria-label", "Pane tabs");
+    const tabIds: string[] = [];
+    const panel =
+      section.querySelector<HTMLElement>(":scope > .tab-content") ??
+      document.createElement("div");
+    panel.className = "tab-content";
+    panel.id = `tab-content-${group.id}`;
     const previousTabs = new Map(
-      [...tabs.querySelectorAll<HTMLElement>(":scope > .tab")].map((tab) => [
-        tab.dataset.tabId!,
-        tab,
-      ]),
+      [...tabs.querySelectorAll<HTMLButtonElement>(".tab-select")].map(
+        (tab) => [tab.dataset.tabId!, tab.parentElement!],
+      ),
     );
     let tabIndex = 0;
     for (const id of group.paneIds) {
       const pane = workspace.panes.find((p) => p.id === id);
       if (!pane || (pane.kind === "empty" && !pane.launcher)) continue;
-      const tab = previousTabs.get(id) ?? document.createElement("div");
+      const item = previousTabs.get(id) ?? document.createElement("div");
       previousTabs.delete(id);
-      tab.className = "tab";
+      item.className = "tab";
+      const tab =
+        item.querySelector<HTMLButtonElement>(".tab-select") ??
+        document.createElement("button");
+      tab.type = "button";
+      tab.className = "tab-select";
+      tab.id = `tab-${id}`;
+      tabIds.push(tab.id);
       tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-label", paneLabel(pane));
-      tab.setAttribute("aria-selected", String(id === group.activePaneId));
-      tab.tabIndex = id === group.activePaneId ? 0 : -1;
+      const title = paneLabel(pane);
+      const accessibleName =
+        pane.kind === "review" ? `${title} - Review snapshot` : title;
+      tab.setAttribute("aria-label", accessibleName);
+      tab.setAttribute("aria-controls", panel.id);
+      const selected = id === group.activePaneId;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (tab.parentElement !== item) item.prepend(tab);
       tab.dataset.tabId = id;
       tab.dataset.baseTitle =
-        paneLabel(pane) +
-        (pane.kind === "review" ? " - Review snapshot" : "") +
-        (pane.pinned ? " - Pinned tab" : "");
+        accessibleName + (pane.pinned ? " - Pinned tab" : "");
       if (isTextDocument(pane)) tab.dataset.documentKey = documentKey(pane);
       else delete tab.dataset.documentKey;
       tab.dataset.pinned = String(!!pane.pinned);
@@ -323,8 +368,7 @@ export function createPaneLayout(
         tab.querySelector<HTMLElement>(".tab-label") ??
         document.createElement("span");
       label.className = "tab-label";
-      if (label.textContent !== paneLabel(pane))
-        label.textContent = paneLabel(pane);
+      if (label.textContent !== title) label.textContent = title;
       if (label.parentNode !== tab) tab.append(label);
       const kind =
         tab.querySelector<HTMLElement>(".tab-kind") ??
@@ -343,13 +387,13 @@ export function createPaneLayout(
       if (kind.nextSibling !== modified) kind.after(modified);
       setTabModified(tab, isDocumentModified(pane));
       const close =
-        tab.querySelector<HTMLButtonElement>(".tab-close") ??
+        item.querySelector<HTMLButtonElement>(".tab-close") ??
         iconButton("close", "Close tab", () => {});
       close.type = "button";
-      close.tabIndex = -1;
+      close.tabIndex = selected ? 0 : -1;
       close.setAttribute(
         "aria-label",
-        `${pane.pinned ? "Unpin" : "Close"} ${paneLabel(pane)}`,
+        `${pane.pinned ? "Unpin" : "Close"} ${accessibleName}`,
       );
       close.classList.add("compact", "tab-close");
       close.classList.toggle("tab-pin", !!pane.pinned);
@@ -362,11 +406,11 @@ export function createPaneLayout(
       close.onpointerdown = () => {
         // A page title may change while the mouse is held. Keep the close target
         // in place until release rather than moving it under the pointer.
-        tab.style.width = `${tab.getBoundingClientRect().width}px`;
+        item.style.width = `${item.getBoundingClientRect().width}px`;
         const press = new AbortController();
         const release = () => {
           press.abort();
-          requestAnimationFrame(() => tab.style.removeProperty("width"));
+          requestAnimationFrame(() => item.style.removeProperty("width"));
         };
         window.addEventListener("pointerup", release, {
           signal: press.signal,
@@ -377,14 +421,46 @@ export function createPaneLayout(
           once: true,
         });
       };
+      const closeAndReturnFocus = async () => {
+        const restore = item.contains(document.activeElement);
+        const { closed } = await invoke<{ closed?: boolean }>("pane.close", {
+          workspace: workspace.id,
+          id,
+        });
+        if (!restore || closed === false) return;
+        const ready = await whenRendered(() => {
+          const current = activeWorkspace();
+          if (current?.id !== workspace.id) return false;
+          return current.panes.some((pane) => pane.id === id)
+            ? undefined
+            : true;
+        }, AbortSignal.timeout(2000));
+        if (ready && document.activeElement === document.body) {
+          const visibleBar = bar.getClientRects().length
+            ? bar
+            : splitViews
+                .get(workspace.id)
+                ?.querySelector<HTMLElement>(
+                  ".split-child:not([hidden]) .tab-bar",
+                );
+          const target =
+            visibleBar?.querySelector<HTMLElement>(
+              '.tab-select[aria-selected="true"]',
+            ) ??
+            visibleBar?.querySelector<HTMLElement>('[data-action="new-tab"]');
+          target?.focus();
+        }
+      };
       close.onclick = (e) => {
         e.stopPropagation();
-        void (pane.pinned
-          ? invoke("pane.pin", { workspace: workspace.id, id, pinned: false })
-          : invoke("pane.close", { workspace: workspace.id, id }));
+        void (
+          pane.pinned
+            ? invoke("pane.pin", { workspace: workspace.id, id, pinned: false })
+            : closeAndReturnFocus()
+        ).catch(() => undefined);
       };
-      if (close.parentNode !== tab) tab.append(close);
-      tab.onclick = () => {
+      if (close.parentNode !== item) item.append(close);
+      item.onclick = () => {
         void invoke("pane.focus", { workspace: workspace.id, id })
           .then(() =>
             pane.kind === "conversation"
@@ -394,14 +470,10 @@ export function createPaneLayout(
           .catch(() => undefined);
       };
       tab.onkeydown = (e) => {
-        if ((e.target as Element).closest("button")) return;
         if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.key === "Enter" || e.key === " ") {
+        if (e.key === "Delete") {
           e.preventDefault();
-          tab.click();
-        } else if (e.key === "Delete") {
-          e.preventDefault();
-          void invoke("pane.close", { workspace: workspace.id, id });
+          void closeAndReturnFocus().catch(() => undefined);
         } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
           e.preventDefault();
           const index = group.paneIds.indexOf(id);
@@ -427,15 +499,15 @@ export function createPaneLayout(
             .catch(() => undefined);
         }
       };
-      tab.onauxclick = (event) => {
+      item.onauxclick = (event) => {
         if (event.button !== 1) return;
         event.preventDefault();
         if (!pane.pinned)
           void invoke("pane.close", { workspace: workspace.id, id });
       };
-      tab.draggable = true;
-      tab.ondragstart = (e) => drag.start(e, tab, workspace.id, id);
-      tab.ondragend = drag.end;
+      item.draggable = true;
+      item.ondragstart = (e) => drag.start(e, item, workspace.id, id);
+      item.ondragend = drag.end;
       const actions: MenuAction[] = [
         {
           label: pane.pinned ? "Unpin tab" : "Pin tab",
@@ -557,7 +629,7 @@ export function createPaneLayout(
             : []),
           null,
         );
-      tab.oncontextmenu = (e) => {
+      item.oncontextmenu = (e) => {
         e.preventDefault();
         const conversation =
           pane.kind === "conversation"
@@ -570,11 +642,15 @@ export function createPaneLayout(
             : actions,
         );
       };
-      if (tabs.children[tabIndex] !== tab)
-        tabs.insertBefore(tab, tabs.children[tabIndex] ?? null);
+      if (tabs.children[tabIndex] !== item)
+        tabs.insertBefore(item, tabs.children[tabIndex] ?? null);
       tabIndex++;
     }
-    for (const tab of previousTabs.values()) tab.remove();
+    for (const item of previousTabs.values()) item.remove();
+    if (tabIds.length) {
+      tablist.setAttribute("aria-owns", tabIds.join(" "));
+      if (tablist.parentElement !== bar) bar.prepend(tablist);
+    } else tablist.remove();
     drag.bind(bar, tabs, workspace, group);
     const plus =
       bar.querySelector<HTMLButtonElement>('[data-action="new-tab"]') ??
@@ -618,14 +694,15 @@ export function createPaneLayout(
     } else previousPreview?.remove();
     if (pane) {
       const content = renderPane(workspace, pane);
-      for (const child of [...section.children])
-        if (
-          child !== bar &&
-          child !== content &&
-          !child.classList.contains("content-find")
-        )
-          child.remove();
-      if (content.parentNode !== section) section.append(content);
+      if (pane.kind !== "empty" || pane.launcher) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", `tab-${pane.id}`);
+      } else {
+        panel.removeAttribute("role");
+        panel.removeAttribute("aria-labelledby");
+      }
+      if (content.parentNode !== panel) panel.replaceChildren(content);
+      if (panel.parentNode !== section) section.append(panel);
     }
     return section;
   }
@@ -633,7 +710,7 @@ export function createPaneLayout(
     documentModified(key: string, modified: boolean) {
       for (const group of groupViews.values())
         for (const tab of group.querySelectorAll<HTMLElement>(
-          ".tab[data-document-key]",
+          ".tab-select[data-document-key]",
         ))
           if (tab.dataset.documentKey === key) setTabModified(tab, modified);
     },

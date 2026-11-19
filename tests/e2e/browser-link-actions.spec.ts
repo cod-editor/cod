@@ -392,7 +392,7 @@ test("Native keyboard context handoff and current-page Commands use the exact va
   expect(await browserRecords()).toHaveLength(1);
   await app
     .pane(source.paneId)
-    .getByRole("textbox", { name: "Address", exact: true })
+    .getByRole("combobox", { name: "Address", exact: true })
     .focus();
   await command("Open in system browser");
   await expect
@@ -789,7 +789,7 @@ test("A background link finishing a slow load does not take focus from newer add
       modifiers: [process.platform === "darwin" ? "meta" : "control"],
     });
   }, origin + "/source");
-  const address = app.page.getByRole("textbox", { name: "Address" });
+  const address = app.page.getByRole("combobox", { name: "Address" });
   await expect(address).toBeFocused();
   await address.fill("unfinished.example");
   await expect

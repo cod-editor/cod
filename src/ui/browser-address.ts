@@ -12,6 +12,8 @@ export function addressSuggestions(
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Address suggestions");
   list.hidden = true;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", list.id);
   let revision = 0,

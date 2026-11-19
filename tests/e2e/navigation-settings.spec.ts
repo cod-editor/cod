@@ -1105,7 +1105,7 @@ test("Settings returns native page focus and field selection after Done and Esca
       )
       .toBe(true);
     await app.page
-      .getByRole("textbox", { name: "Address", exact: true })
+      .getByRole("combobox", { name: "Address", exact: true })
       .click();
     if (process.platform === "linux") {
       const point = await app.app!.evaluate(
