@@ -5,6 +5,7 @@ import type { OperationRequest } from "../types";
 import { ApplicationStateStore } from "./state";
 import type { ConversationApplicationService } from "./conversation-service";
 import { requiredString } from "./request";
+import { normalizeGroups } from "../workspace-layout";
 
 type ReviewConversationPort = Pick<
   ConversationApplicationService,
@@ -128,6 +129,7 @@ export class ReviewApplicationService {
           reviewId: summary.id,
         });
         workspace.activePaneId = paneId;
+        normalizeGroups(workspace);
         await this.store.persist();
         await this.refreshReviews();
         return {

@@ -124,6 +124,7 @@ export class TerminalApplicationService {
     } else terminal.paneId = this.attachTerminal(workspace, id, target);
     this.store.data.terminals.push(terminal);
     try {
+      normalizeGroups(workspace);
       await this.store.persist();
     } catch (error) {
       await this.processes.close(id);
