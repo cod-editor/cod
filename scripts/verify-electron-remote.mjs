@@ -382,6 +382,7 @@ async function main() {
       inputIdentity: result.inputIdentity,
       durationMs: result.durationMs,
       omittedEvidenceFiles: result.omittedEvidenceFiles,
+      omittedFailureEvidenceFiles: result.omittedFailureEvidenceFiles,
       evidence: local,
     }),
   );

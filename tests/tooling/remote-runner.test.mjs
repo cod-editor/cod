@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
+  open,
   writeFile,
   readFile,
   rm,
@@ -18,9 +19,74 @@ import {
   verifyManifest,
   recoverableCollection,
   fullPreflightPassed,
+  collectEvidence,
 } from "../../scripts/remote-electron-worker.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+test("Remote collection saves failed test evidence before a full passing shard", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "cod-remote-evidence-"),
+  );
+  try {
+    const frozen = path.join(directory, "frozen");
+    const output = path.join(frozen, "output");
+    const passing = "Electron-shard-1-3/test-results/a-passing";
+    const failed = "Electron-shard-3-3/test-results/z-failure";
+    const screenshotOnly = "Electron-shard-3-3/test-results/z-screenshot-only";
+    for (const result of [passing, failed, screenshotOnly])
+      await mkdir(path.join(output, result), { recursive: true });
+    for (let i = 0; i < 105; i++)
+      await writeFile(path.join(output, passing, `passing-${i}.png`), "pass");
+    for (const name of ["trace.zip", "error-context.md", "custom.png"])
+      await writeFile(path.join(output, failed, name), name);
+    await writeFile(
+      path.join(output, screenshotOnly, "test-failed-1.png"),
+      "shot",
+    );
+    const oversized = await open(path.join(output, failed, "large.zip"), "w");
+    try {
+      await oversized.truncate(64 * 1024 * 1024 + 1);
+    } finally {
+      await oversized.close();
+    }
+    await writeFile(path.join(directory, "job.log"), "job log tail");
+    await writeFile(path.join(frozen, "run.log"), "frozen run log");
+    await writeFile(path.join(frozen, "input-sha256.txt"), "source identity");
+    const summary = JSON.stringify({ results: [{ status: "FAIL" }] });
+    await writeFile(path.join(output, "preflight.json"), summary);
+
+    const counts = await collectEvidence(directory, frozen);
+    const evidence = (name) => path.join(directory, "evidence", name);
+    for (const name of ["trace.zip", "error-context.md", "custom.png"])
+      assert.equal(
+        await readFile(evidence(`output/${failed}/${name}`), "utf8"),
+        name,
+      );
+    assert.equal(
+      await readFile(
+        evidence(`output/${screenshotOnly}/test-failed-1.png`),
+        "utf8",
+      ),
+      "shot",
+    );
+    assert.equal(counts.evidenceFiles, 100);
+    assert.ok(counts.evidenceBytes <= 64 * 1024 * 1024);
+    assert.equal(counts.omittedEvidenceFiles, 11);
+    assert.equal(counts.omittedFailureEvidenceFiles, 1);
+    assert.equal(await readFile(evidence("run.log"), "utf8"), "job log tail");
+    assert.equal(
+      await readFile(evidence("input-sha256.txt"), "utf8"),
+      "source identity",
+    );
+    assert.equal(
+      await readFile(evidence("output/preflight.json"), "utf8"),
+      summary,
+    );
+    await assert.rejects(readdir(output), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test("Remote result identities reject traversal and detect changed source bytes", async () => {
   for (const id of [
     "../other",
