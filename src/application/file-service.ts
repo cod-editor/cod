@@ -81,13 +81,38 @@ export class FileApplicationService {
         sequence >= Number.MAX_SAFE_INTEGER
       )
         throw new Error("Invalid untitled file sequence");
+      const launcher =
+        request.replacePane === undefined
+          ? undefined
+          : this.store.openingPane(workspace, request);
       const pane: import("../types").UntitledPane = {
-        id: randomUUID(),
+        id: launcher?.id ?? randomUUID(),
         kind: "untitled",
         name: `Untitled ${sequence + 1}`,
+        ...(launcher?.pinned ? { pinned: true } : {}),
       };
+      if (launcher) {
+        const group = workspace.groups!.find((item) =>
+          item.paneIds.includes(launcher.id),
+        );
+        if (
+          !group ||
+          (request.group !== undefined && group.id !== request.group)
+        )
+          throw new Error(
+            "The blank tab moved. Choose again in its current pane.",
+          );
+        workspace.panes[workspace.panes.indexOf(launcher)] = pane;
+        if (request.focus === true || request.focus === "true") {
+          group.activePaneId = pane.id;
+          group.hidden = false;
+          workspace.activePaneId = pane.id;
+          workspace.activeGroupId = group.id;
+        }
+      } else {
+        this.store.insertPane(workspace, pane, request);
+      }
       workspace.untitledSequence = sequence + 1;
-      this.store.insertPane(workspace, pane, request);
       return { paneId: pane.id };
     });
   }

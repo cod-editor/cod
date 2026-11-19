@@ -2,7 +2,7 @@ import { actionButton } from "./action-feedback";
 import { icon } from "./controls";
 
 export function newTab(actions: {
-  file: () => void;
+  file: () => Promise<void>;
   browser: () => void;
   chat: () => Promise<unknown>;
   terminal: () => void;
@@ -14,7 +14,7 @@ export function newTab(actions: {
   const choices = document.createElement("div");
   choices.className = "new-tab-choices";
   for (const [name, label, kind] of [
-    ["file", "Open file", "file"],
+    ["file", "New file", "file"],
     ["browser", "Browser", "browser"],
     ["chat", "Chat", "conversation"],
     ["terminal", "Terminal", "terminal"],

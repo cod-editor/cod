@@ -263,7 +263,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   await plus(group.id).focus();
   await plus(group.id).press("Enter");
   await expect(
-    menu().getByRole("button", { name: "Open file", exact: true }),
+    menu().getByRole("button", { name: "New file", exact: true }),
   ).toBeFocused();
   expect((await active()).panes).toHaveLength(initial.panes.length);
   await menu().screenshot({ path: info.outputPath("new-tab-type-menu.png") });
@@ -299,20 +299,15 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   ).toBeFocused();
   expect((await active()).groups).toHaveLength(initial.groups!.length);
   await plus(group.id).click();
-  await menu().getByRole("button", { name: "Open file", exact: true }).click();
-  const picker = app.page.getByRole("dialog", {
-    name: "Open file",
-    exact: true,
-  });
-  await picker
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await picker.getByRole("button", { name: "spec.md", exact: true }).click();
+  await menu()
+    .getByRole("button", { name: "New file", exact: true })
+    .press("Enter");
   const filePane = await selectedAfter(terminalPane);
   await expect(editor(filePane)).toBeFocused();
-  await expect(editor(filePane)).toHaveValue(
-    "# Invented specification\n\nInitial text.\n",
-  );
+  await expect(editor(filePane)).toHaveValue("");
+  expect((await active()).panes.find((p) => p.id === filePane)).toMatchObject({
+    kind: "untitled",
+  });
   expect(
     (await active()).groups!.find((g) => g.id === group.id)!.paneIds,
   ).toContain(filePane);
@@ -675,7 +670,7 @@ test("Unsaved buffers survive the ordinary closed-tab cache and workspace recove
   await expect(editor(id)).toHaveValue("Recover this unsaved buffer");
 });
 
-test("Type menu retains the background group target and rejects a moved source during file search", async ({}, info) => {
+test("Type menu retains the background group target and rejects a moved source when creating a file", async ({}, info) => {
   const left = await untitled(),
     leftGroup = (await active()).groups!.find((g) => g.paneIds.includes(left))!;
   const right = await app.cli<{ groupId: string }>(
@@ -708,34 +703,28 @@ test("Type menu retains the background group target and rejects a moved source d
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(720);
   await menu().screenshot({ path: info.outputPath("narrow-new-tab-menu.png") });
-  await menu().getByRole("button", { name: "Open file", exact: true }).click();
-  const picker = app.page.getByRole("dialog", {
-    name: "Open file",
-    exact: true,
-  });
-  await picker
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .press("Escape");
-  await expect(plus(right.groupId)).toBeFocused();
+  await menu().getByRole("button", { name: "New file", exact: true }).click();
+  const note = await selectedAfter(source);
+  await expect(editor(note)).toBeFocused();
+  await expect(editor(note)).toHaveValue("");
+  expect((await active()).activeGroupId).toBe(right.groupId);
   await plus(right.groupId).click();
-  await menu().getByRole("button", { name: "Open file", exact: true }).click();
   await app.cli(
     "pane",
     "move",
     "--workspace",
     workspace,
     "--id",
-    source,
+    note,
     "--group",
     leftGroup.id,
   );
   const before = (await active()).panes.map((p) => p.id);
-  await picker
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await picker.getByRole("button", { name: "spec.md", exact: true }).click();
+  await menu().getByRole("button", { name: "New file", exact: true }).click();
   await expect(
-    app.page.getByRole("status").filter({ hasText: "source tab moved" }),
+    app.page
+      .getByRole("status")
+      .filter({ hasText: "source tab closed or moved" }),
   ).toBeVisible();
   expect((await active()).panes.map((p) => p.id)).toEqual(before);
 });
@@ -779,7 +768,7 @@ test("Preview creates a text buffer while review and unchosen tabs retain the ch
     exact: true,
   });
   await expect(
-    chooser.getByRole("button", { name: "Open file", exact: true }),
+    chooser.getByRole("button", { name: "New file", exact: true }),
   ).toBeFocused();
   const first = (await active()).activePaneId;
   await app.page.keyboard.press(`${modifier}+t`);
@@ -787,7 +776,7 @@ test("Preview creates a text buffer while review and unchosen tabs retain the ch
   await expect(
     app
       .pane((await active()).activePaneId)
-      .getByRole("button", { name: "Open file", exact: true }),
+      .getByRole("button", { name: "New file", exact: true }),
   ).toBeFocused();
 });
 

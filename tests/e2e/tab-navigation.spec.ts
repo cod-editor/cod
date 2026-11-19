@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
@@ -46,30 +46,15 @@ test("Fallback new tab retains persistent choices and replaces itself with each 
   const original = await state();
   await blank();
   await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
+    .getByRole("button", { name: "New file", exact: true })
     .focus();
   await expect(chooser()).toBeVisible();
   await expect(app.page.getByRole("dialog")).toHaveCount(0);
   await expect(
-    chooser().getByRole("button", { name: "Open file", exact: true }),
+    chooser().getByRole("button", { name: "New file", exact: true }),
   ).toBeFocused();
   const id = (await state()).activePaneId;
   expect((await state()).groups).toHaveLength(original.groups!.length);
-  await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
-    .press("Enter");
-  const search = () =>
-    app.page.getByRole("dialog", {
-      name: "Open file",
-      exact: true,
-    });
-  await expect(search()).toBeVisible();
-  await search()
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .press("Escape");
-  await expect(
-    chooser().getByRole("button", { name: "Open file", exact: true }),
-  ).toBeFocused();
   await app
     .pane(id)
     .screenshot({ path: info.outputPath("new-tab-choices.png") });
@@ -77,16 +62,46 @@ test("Fallback new tab retains persistent choices and replaces itself with each 
   await app.start();
   await expect(chooser()).toBeVisible();
   expect((await state()).activePaneId).toBe(id);
+  const folder = app.folders[0];
+  const filesBefore = (await readdir(folder)).sort();
   await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
-    .click();
-  await search()
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await search().getByRole("button", { name: "spec.md", exact: true }).click();
-  await expect(
-    app.pane(id).getByRole("textbox", { name: "File contents", exact: true }),
-  ).toBeVisible();
+    .getByRole("button", { name: "New file", exact: true })
+    .press("Enter");
+  const editor = () =>
+    app.pane(id).getByRole("textbox", { name: "File contents", exact: true });
+  await expect(editor()).toBeFocused();
+  await expect(editor()).toHaveValue("");
+  expect((await state()).panes.find((p) => p.id === id)?.kind).toBe("untitled");
+  const note = "Draft a note from the launcher";
+  await editor().fill(note);
+  await expect
+    .poll(
+      async () =>
+        (
+          await app.cli<{ draft?: { content: string } }>(
+            "file",
+            "read",
+            "--workspace",
+            workspace,
+            "--pane-id",
+            id,
+          )
+        ).draft?.content,
+    )
+    .toBe(note);
+  expect((await readdir(folder)).sort()).toEqual(filesBefore);
+  await app.stop();
+  await app.start();
+  await expect(editor()).toHaveValue(note);
+  const target = path.join(folder, "launcher-note.txt");
+  await app.app!.evaluate(({ dialog }, target) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: target });
+  }, target);
+  await editor().press(`${modifier}+s`);
+  await expect
+    .poll(() => readFile(target, "utf8").catch(() => null))
+    .toBe(note);
+  await expect(editor()).toHaveValue(note);
   expect((await state()).groups).toHaveLength(original.groups!.length);
   await app.page.keyboard.press(`${modifier}+t`);
   await expect(
@@ -95,7 +110,7 @@ test("Fallback new tab retains persistent choices and replaces itself with each 
   await blank(original.groups![0].id);
   const browserId = (await state()).activePaneId;
   await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
+    .getByRole("button", { name: "New file", exact: true })
     .press("ArrowDown");
   await expect(
     chooser().getByRole("button", { name: "Browser", exact: true }),
@@ -375,7 +390,7 @@ test("Blank tab choices fit a narrow split and use shared controls with enlarged
   expect(
     await region.evaluate((node) => node.scrollWidth <= node.clientWidth),
   ).toBe(true);
-  await region.getByRole("button", { name: "Open file", exact: true }).focus();
+  await region.getByRole("button", { name: "New file", exact: true }).focus();
   await app.page.keyboard.press("ArrowDown");
   await expect(
     region.getByRole("button", { name: "Browser", exact: true }),
@@ -385,76 +400,74 @@ test("Blank tab choices fit a narrow split and use shared controls with enlarged
     .screenshot({ path: info.outputPath("new-tab-narrow-enlarged.png") });
 });
 
-test("A file choice keeps its original blank tab and rejects a tab that was closed while choosing", async () => {
+test("New file replaces the exact blank tab and rejects a changed or closed target", async () => {
   const first = await blank();
-  await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
-    .click();
-  const search = app.page.getByRole("dialog", {
-    name: "Open file",
-    exact: true,
-  });
-  await expect(search).toBeVisible();
-  const second = await app.cli<{ paneId: string }>(
-    "pane",
+  const second = await blank(first.groupId);
+  const before = (await state()).groups!.find(
+    (g) => g.id === first.groupId,
+  )!.paneIds;
+  const options = [
+    "file",
     "new",
     "--workspace",
     workspace,
-  );
-  await search
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await search.getByRole("button", { name: "spec.md", exact: true }).click();
-  await expect(
-    app
-      .pane(first.paneId)
-      .getByRole("textbox", { name: "File contents", exact: true }),
-  ).toBeVisible();
+    "--group",
+    first.groupId,
+    "--replace-pane",
+  ];
+  await app.cli(...options, first.paneId);
+  const background = await state();
+  expect(background.activePaneId).toBe(second.paneId);
+  expect(background.panes.find((p) => p.id === first.paneId)).toMatchObject({
+    kind: "untitled",
+  });
+  expect(background.panes.find((p) => p.id === second.paneId)).toMatchObject({
+    kind: "empty",
+    launcher: true,
+  });
   expect(
-    (await state()).panes.find((p) => p.id === second.paneId),
-  ).toMatchObject({ kind: "empty", launcher: true });
-  await app.cli(
-    "pane",
-    "focus",
-    "--workspace",
-    workspace,
-    "--id",
-    second.paneId,
-  );
-  await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
-    .click();
-  await expect(search).toBeVisible();
-  await search
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await search.getByRole("button", { name: "spec.md", exact: true }).click();
-  await expect
-    .poll(async () => (await state()).panes.some((p) => p.id === second.paneId))
-    .toBe(false);
-  expect(
-    (await state()).panes.filter((p) => p.kind === "document" && p.filePath),
-  ).toHaveLength(1);
-  const closed = await blank();
-  await chooser()
-    .getByRole("button", { name: "Open file", exact: true })
-    .click();
-  await expect(search).toBeVisible();
+    background.groups!.find((g) => g.id === first.groupId)!.paneIds,
+  ).toEqual(before);
+  const changed = await app.raw(...options, first.paneId);
+  expect(changed.code).toBe(1);
+  expect(changed.stderr).toContain("The blank tab was changed");
   await app.cli(
     "pane",
     "close",
     "--workspace",
     workspace,
     "--id",
-    closed.paneId,
+    second.paneId,
   );
-  const before = (await state()).panes.map((p) => p.id);
-  await search
-    .getByRole("textbox", { name: "Open file", exact: true })
-    .fill("spec.md");
-  await search.getByRole("button", { name: "spec.md", exact: true }).click();
-  await expect(app.page.locator("#status")).toContainText(
-    "The blank tab was closed",
+  const afterClose = (await state()).panes.map((p) => p.id);
+  const closed = await app.raw(...options, second.paneId);
+  expect(closed.code).toBe(1);
+  expect(closed.stderr).toContain("The blank tab was closed");
+  expect((await state()).panes.map((p) => p.id)).toEqual(afterClose);
+
+  const moved = await blank(first.groupId);
+  const right = await app.cli<{ groupId: string }>(
+    "group",
+    "ensure",
+    "--workspace",
+    workspace,
+    "--side",
+    "right",
   );
-  expect((await state()).panes.map((p) => p.id)).toEqual(before);
+  await app.cli(
+    "pane",
+    "move",
+    "--workspace",
+    workspace,
+    "--id",
+    moved.paneId,
+    "--group",
+    right.groupId,
+  );
+  const wrongGroup = await app.raw(...options, moved.paneId);
+  expect(wrongGroup.code).toBe(1);
+  expect(wrongGroup.stderr).toContain("The blank tab moved");
+  expect(
+    (await state()).panes.find((p) => p.id === moved.paneId),
+  ).toMatchObject({ kind: "empty", launcher: true });
 });

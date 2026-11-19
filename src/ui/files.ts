@@ -2,7 +2,7 @@ import { focusReadyEditor } from "./document-views";
 import { createSearchList } from "./search-list";
 import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
-import type { Invoke, WhenRendered } from "./contracts";
+import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 import { icon, menu } from "./controls";
 interface Entry {
@@ -35,7 +35,6 @@ export class FileTree {
       ReturnType<typeof createFocusManager>,
       "capture" | "restore"
     >,
-    private whenRendered: WhenRendered,
   ) {
     host.tabIndex = 0;
     host.addEventListener("focusin", (event) => {
@@ -429,14 +428,8 @@ export class FileTree {
   private async openFile(
     path: string,
     line?: number,
-    target?: {
-      workspace: WorkspaceState;
-      paneId?: string;
-      sourcePane?: string;
-      group?: string;
-    },
+    workspace = this.workspace,
   ): Promise<void> {
-    const workspace = target?.workspace ?? this.workspace;
     if (!workspace) return;
     // Native dialog focus restoration is not a new user navigation intent.
     // A later real key/pointer action is, and must cancel deferred autofocus.
@@ -454,30 +447,7 @@ export class FileTree {
         workspace: workspace.id,
         path,
         ...(line ? { line } : {}),
-        ...(target?.paneId ? { replacePane: target.paneId } : {}),
-        ...(target?.sourcePane
-          ? { sourcePane: target.sourcePane, group: target.group, focus: false }
-          : {}),
       });
-      if (target?.sourcePane) {
-        if (intent.signal.aborted) return;
-        await this.invoke("pane.focus", {
-          workspace: workspace.id,
-          id: result.paneId,
-        });
-        if (
-          !(await this.whenRendered(() => {
-            if (this.workspace?.id !== workspace.id) return false;
-            return this.workspace.activePaneId === result.paneId &&
-              document.querySelector(`[data-pane-id="${result.paneId}"]`)
-              ? true
-              : undefined;
-          }, intent.signal))
-        ) {
-          intent.abort();
-          return;
-        }
-      }
       requestAnimationFrame(() => {
         if (intent.signal.aborted) return;
         const editor = document.querySelector<HTMLTextAreaElement>(
@@ -512,27 +482,11 @@ export class FileTree {
   search(path?: string): void {
     this.openPicker(false, path);
   }
-  quickOpen(target?: {
-    workspace: WorkspaceState;
-    paneId?: string;
-    sourcePane?: string;
-    group?: string;
-    restoreFocus?: () => void;
-  }): void {
-    this.openPicker(true, undefined, target);
+  quickOpen(): void {
+    this.openPicker(true);
   }
-  private openPicker(
-    files: boolean,
-    path?: string,
-    target?: {
-      workspace: WorkspaceState;
-      paneId?: string;
-      sourcePane?: string;
-      group?: string;
-      restoreFocus?: () => void;
-    },
-  ): void {
-    const workspace = target?.workspace ?? this.workspace;
+  private openPicker(files: boolean, path?: string): void {
+    const workspace = this.workspace;
     if (!workspace) return;
     const previous = this.focus.capture();
     let performed = false;
@@ -548,10 +502,7 @@ export class FileTree {
     results.setAttribute("aria-label", "Search results");
     dialog.append(input, results);
     document.body.append(dialog);
-    const restore = () => {
-      if (target?.restoreFocus) target.restoreFocus();
-      else this.focus.restore(previous);
-    };
+    const restore = () => this.focus.restore(previous);
     dialog.oncancel = (event) => {
       event.preventDefault();
       dialog.close();
@@ -596,11 +547,9 @@ export class FileTree {
           dialog.close();
           // A failed open must report on a live surface, not this closing dialog.
           dialog.remove();
-          void this.openFile(
-            match.path,
-            match.line,
-            target ?? { workspace },
-          ).catch(() => undefined);
+          void this.openFile(match.path, match.line, workspace).catch(
+            () => undefined,
+          );
         };
         results.append(button);
       }

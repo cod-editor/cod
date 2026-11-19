@@ -93,7 +93,13 @@ export const commands = {
   "file.lines": ["workspace", "pane-id"],
   "file.image": ["workspace", "path"],
   "file.resolve": ["workspace", "path"],
-  "file.new": ["workspace", "group?", "source-pane?", "focus?"],
+  "file.new": [
+    "workspace",
+    "group?",
+    "source-pane?",
+    "replace-pane?",
+    "focus?",
+  ],
   "file.open": [
     "workspace",
     "path",

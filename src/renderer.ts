@@ -88,7 +88,6 @@ const projects = new FileTree(
   invoke,
   (workspace) => commands.folder(workspace),
   focus,
-  whenRendered,
 );
 
 const finder = createContentFind(
@@ -119,7 +118,7 @@ const workspaceView = createWorkspaceView(
   {
     newTab: (workspace, pane) =>
       newTab({
-        file: () => projects.quickOpen({ workspace, paneId: pane.id }),
+        file: () => commands.newFileInBlankTab(workspace, pane.id),
         browser: () =>
           commands.browser({ workspace: workspace.id, pane: pane.id }),
         chat: () => commands.newConversation(workspace.id, pane.id),
