@@ -795,6 +795,7 @@ a {
   gap: var(--space-2);
   position: sticky;
   top: 0;
+  left: 0;
   background: #282c34;
   z-index: 1;
   padding: var(--space-1) var(--space-3);
@@ -1565,74 +1566,87 @@ browser-action-list::part(action):focus-visible {
   color: var(--muted);
 }
 
-.review-document {
-  container-type: inline-size;
-  container-name: review-source;
-  white-space: normal;
-}
+/* One viewport scrolls source lines and their inline discussion together. */
 .review-source-layout {
-  display: flex;
-  min-width: 0;
-  height: max(320px, 60vh);
-}
-.review-source-layout > .highlighted-editor {
-  flex: 1;
-  min-width: 0;
-}
-.review-annotations {
-  display: none;
+  --review-gutter-width: calc(5ch + var(--control-height));
+  container-type: inline-size;
+  isolation: isolate;
   position: relative;
-  overflow: auto;
-  flex: none;
-  width: min(38%, 320px);
-  border-left: 1px solid var(--line);
+  min-width: 0;
+  font: var(--editor-font-size)/var(--editor-line-height, 1.65)
+    var(--editor-font-family, ui-monospace, monospace);
+  tab-size: var(--editor-tab-size, 8);
+  color: var(--editor-foreground);
 }
-.review-source-layout.has-comments > .review-annotations {
-  display: block;
+.review-source-width {
+  width: max-content;
+  min-width: 100%;
 }
-.review-annotations > [data-review-annotation] {
+.review-source-editor {
+  outline: none;
+}
+.review-source-editor:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -1px;
+}
+.review-source-line {
+  position: relative;
+  min-height: 1lh;
+  white-space: pre;
+}
+.review-source-line::before {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--review-gutter-width);
+  padding-right: var(--space-3);
+  content: attr(data-source-line);
+  color: var(--muted);
+  background: var(--panel);
+  text-align: right;
+  user-select: none;
+}
+.review-source-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  height: 0;
+  width: var(--control-height);
+}
+.review-source-gutter > button {
   position: absolute;
   left: 0;
-  right: 0;
-  margin: 0 var(--space-2);
+  opacity: 0;
 }
-.review-anchor-context,
-.review-anchor-label {
-  display: none;
+.review-source-layout:hover .review-source-gutter > button,
+.review-source-layout:focus-within .review-source-gutter > button {
+  opacity: 1;
+}
+.review-source-editor > [data-review-annotation] {
+  position: sticky;
+  --comment-indent: min(var(--review-gutter-width), 12cqw);
+  left: var(--comment-indent);
+  width: calc(100cqw - var(--comment-indent));
+  margin: var(--space-2) 0 var(--space-2) var(--comment-indent);
+  font: var(--ui-font-size)/1.5 var(--ui-font-family, system-ui);
+}
+.review-anchor-context {
+  color: var(--muted);
 }
 .review-anchor-context blockquote {
   margin: var(--space-1) 0;
-  color: var(--muted);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-@container review-source (max-width: 32em) {
-  .review-source-layout {
-    flex-direction: column;
-    height: auto;
-  }
-  .review-source-layout > .highlighted-editor {
-    flex: none;
-    width: 100%;
-    height: max(320px, 60vh);
-  }
-  .review-annotations {
-    position: static;
-    width: 100%;
-    overflow: visible;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .review-annotations > [data-review-annotation] {
-    position: static;
-    margin: var(--space-2) 0;
-  }
-  .review-annotations .review-anchor-context {
-    display: block;
-  }
-  .review-annotations .review-anchor-label {
-    display: inline;
-  }
+.review-source-editor > [data-review-annotation] blockquote {
+  max-height: 6lh;
+  overflow: auto;
+}
+.review-markdown .review-anchor-context,
+.review-markdown .review-anchor-label {
+  display: none;
 }
 .review-comment-editor {
   padding: var(--space-2);
@@ -1664,12 +1678,6 @@ browser-action-list::part(action):focus-visible {
   padding: var(--space-1);
 }
 
-.review-document .highlighted-editor .review-editor {
-  padding: 20px;
-  border: 0;
-  background: transparent;
-  resize: none;
-}
 .review-markdown {
   padding: 8px 20px;
   line-height: 1.6;
@@ -1809,12 +1817,6 @@ browser-action-list::part(action):focus-visible {
 }
 .transcript {
   line-height: var(--chat-line-height, 1.65);
-}
-
-/* Review anchors refer to snapshot lines; source review keeps one visual row per line. */
-.review-document .editor-colors,
-.review-document .file-editor {
-  white-space: pre;
 }
 
 .review-diff-hunk {

@@ -130,35 +130,41 @@ export class ReviewApplicationService {
       });
     }
     const id = requiredString(request, "id");
-    if (request.op === "review.show")
-      return this.store.change(async () => {
-        const summary = await this.reviews.inspect(id),
-          workspace = this.store.workspace(summary.workspaceId);
-        let pane = workspace.panes.find(
-          (p) => p.kind === "review" && p.reviewId === id,
-        );
-        if (!pane) {
-          const paneId = randomUUID(),
-            active = workspace.activePaneId;
-          pane = { id: paneId, kind: "review", reviewId: id };
-          workspace.panes.push(pane);
-          workspace.layout = replaceLeaf(workspace.layout, active, {
-            type: "split",
-            direction: "right",
-            ratio: 0.5,
-            first: leaf(active),
-            second: leaf(paneId),
-          });
-        }
-        workspace.activePaneId = pane.id;
-        return {
-          reviewId: id,
-          paneId: pane.id,
-          roundId: summary.currentRoundId,
-          snapshotId: summary.snapshotId,
-          version: summary.version,
-        };
-      });
+    if (request.op === "review.show") {
+      const presentation = await this.store.change(
+        async () => {
+          const summary = await this.reviews.inspect(id),
+            workspace = this.store.workspace(summary.workspaceId);
+          let pane = workspace.panes.find(
+            (p) => p.kind === "review" && p.reviewId === id,
+          );
+          if (!pane) {
+            const paneId = randomUUID(),
+              active = workspace.activePaneId;
+            pane = { id: paneId, kind: "review", reviewId: id };
+            workspace.panes.push(pane);
+            workspace.layout = replaceLeaf(workspace.layout, active, {
+              type: "split",
+              direction: "right",
+              ratio: 0.5,
+              first: leaf(active),
+              second: leaf(paneId),
+            });
+          }
+          workspace.activePaneId = pane.id;
+          return {
+            reviewId: id,
+            paneId: pane.id,
+            roundId: summary.currentRoundId,
+            snapshotId: summary.snapshotId,
+            version: summary.version,
+          };
+        },
+        { notify: false },
+      );
+      this.store.presentReview(presentation.paneId);
+      return presentation;
+    }
     if (request.op === "review.inspect") return this.reviews.inspect(id);
     if (request.op === "review.detail") return this.reviews.detail(id);
     if (request.op === "review.changed") return this.reviews.changed(id);

@@ -1341,7 +1341,7 @@ test("A long review supports keyboard range comments and submission without tabb
         .pane(review.paneId)
         .getByLabel("Draft comment", { exact: true })
         .locator("blockquote"),
-    ).toHaveText((await first.inputValue()).split("\n").slice(0, 2).join("\n"));
+    ).toHaveText("Invented review line 1\nInvented review line 2");
     const submit = app
       .pane(review.paneId)
       .getByRole("button", { name: "Send feedback", exact: true });

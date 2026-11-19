@@ -1,3 +1,4 @@
+import { reviewTextPoint } from "./review-source";
 import type { AppState, PaneState } from "../types";
 import type { createFocusManager } from "./focus";
 import { iconButton } from "./controls";
@@ -154,8 +155,16 @@ export function createContentFind(
         .querySelector(".transcript")
         ?.dispatchEvent(new Event("cod:show-complete-history"));
     const editor = host.querySelector<HTMLTextAreaElement>(".file-editor");
+    const reviewSource = host.querySelector<HTMLElement>(
+      ".review-source-layout:not([hidden]) .review-source-editor",
+    );
     const needle = query.toLocaleLowerCase();
-    const matches: { start: number; end: number; node?: Text }[] = [];
+    const matches: {
+      start: number;
+      end: number;
+      node?: Text;
+      line?: HTMLElement;
+    }[] = [];
     if (editor) {
       const text = editor.value.toLocaleLowerCase();
       for (
@@ -164,6 +173,18 @@ export function createContentFind(
         at = text.indexOf(needle, at + Math.max(1, needle.length))
       )
         matches.push({ start: at, end: at + query.length });
+    } else if (reviewSource) {
+      for (const line of reviewSource.querySelectorAll<HTMLElement>(
+        ".review-source-text",
+      )) {
+        const text = line.textContent!.toLocaleLowerCase();
+        for (
+          let at = text.indexOf(needle);
+          at >= 0;
+          at = text.indexOf(needle, at + Math.max(1, needle.length))
+        )
+          matches.push({ start: at, end: at + query.length, line });
+      }
     } else {
       const content =
         host.querySelector<HTMLElement>(
@@ -218,15 +239,24 @@ export function createContentFind(
           editor.clientHeight / 3,
       );
       editor.dispatchEvent(new Event("scroll"));
-    } else if (match.node) {
+    } else {
+      const first = match.line
+        ? reviewTextPoint(match.line, match.start)
+        : { node: match.node!, offset: match.start };
+      const last = match.line
+        ? reviewTextPoint(match.line, match.end)
+        : { node: match.node!, offset: match.end };
       const range = document.createRange();
-      range.setStart(match.node, match.start);
-      range.setEnd(match.node, match.end);
+      range.setStart(first.node, first.offset);
+      range.setEnd(last.node, last.offset);
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
       CSS.highlights.set("cod-find-match", new Highlight(range));
-      match.node.parentElement?.scrollIntoView({ block: "center" });
+      (match.line ?? match.node?.parentElement)?.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+      });
     }
   }
   function open(pane: PaneState) {

@@ -301,6 +301,8 @@ export interface AppState {
   browsers: BrowserState[];
   drafts: Record<string, FileDraft>;
   reviews?: ReviewSummary[];
+  /** Renderer-only navigation intent. Never written to application data. */
+  reviewPresentation?: { paneId: string; token: string };
 }
 
 export interface OperationRequest {
