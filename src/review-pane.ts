@@ -132,6 +132,8 @@ export function reviewPane(
       button("Cancel comment", () => {
         forget();
         form.hidden = true;
+        shownError = false;
+        status.textContent = "";
         draw();
         focusSelection();
       }),
@@ -294,6 +296,38 @@ export function reviewPane(
     });
     await reload();
   });
+  async function cancelReview() {
+    const round = detail?.rounds.find((r) => r.id === selectedRound);
+    if (
+      !detail ||
+      !round ||
+      round.id !== detail.currentRoundId ||
+      round.status !== "draft"
+    )
+      return;
+    if (pending?.body.trim()) {
+      form.hidden = false;
+      draw();
+      shownError = true;
+      status.textContent =
+        "Save or cancel the unfinished comment before cancelling the review.";
+      input.focus();
+      return;
+    }
+    await invoke("review.cancel", {
+      id,
+      roundId: round.id,
+      expectedVersion: detail.version,
+    });
+    if (!pending?.body.trim()) {
+      forget();
+      editing = undefined;
+      form.hidden = true;
+    }
+    await reload();
+    if (document.activeElement === document.body)
+      more.focus({ preventScroll: true });
+  }
   header.className = "review-header ui-toolbar";
   form.className = "review-comment-editor ui-stack";
   const originLabel = document.createElement("span");
@@ -305,6 +339,14 @@ export function reviewPane(
         disabled: addComment.disabled,
         run: () => addComment.click(),
       },
+      ...(selectedRound === detail?.currentRoundId && !addComment.disabled
+        ? [
+            {
+              label: "Cancel review",
+              run: () => void cancelReview().catch(showError),
+            },
+          ]
+        : []),
       { label: "Refresh round", run: () => refresh.click() },
       {
         label: "Changes since previous round",
@@ -369,7 +411,15 @@ export function reviewPane(
       detail.rounds.at(-1)!;
     selectedRound = round.id;
     roundSelect.replaceChildren(
-      ...detail.rounds.map((r) => new Option(`Round ${r.number}`, r.id)),
+      ...detail.rounds.map(
+        (r) =>
+          new Option(
+            r.status === "cancelled"
+              ? `Round ${r.number} (cancelled)`
+              : `Round ${r.number}`,
+            r.id,
+          ),
+      ),
     );
     roundSelect.value = round.id;
     const snapshot = detail.snapshots[round.snapshotId];
@@ -387,14 +437,17 @@ export function reviewPane(
       !!pending &&
       (pending.roundId !== detail.currentRoundId ||
         pending.roundId !== round.id ||
-        pending.snapshotId !== snapshot.id);
+        pending.snapshotId !== snapshot.id ||
+        round.status === "cancelled");
     save.disabled = staleEditor;
     if (staleEditor) {
       shownError = true;
       status.textContent =
-        pending!.roundId === detail.currentRoundId
-          ? "Your unfinished comment is in the current round. Switch back to continue writing."
-          : "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
+        round.status === "cancelled" && round.id === detail.currentRoundId
+          ? "Review cancelled. Copy or discard the unfinished comment."
+          : pending!.roundId === detail.currentRoundId
+            ? "Your unfinished comment is in the current round. Switch back to continue writing."
+            : "Unfinished comment belongs to an older revision. Select lines and choose Add comment to re-anchor it.";
     } else if (wasStale) {
       shownError = false;
       status.textContent = "";
@@ -588,11 +641,13 @@ export function reviewPane(
       item.className = "review-comment";
       item.tabIndex = 0;
       const commentState =
-        round.status === "draft"
-          ? "Draft"
-          : round.submission?.delivery.status === "acknowledged"
-            ? "Sent"
-            : "Submitted";
+        round.status === "cancelled"
+          ? "Unsent"
+          : round.status === "draft"
+            ? "Draft"
+            : round.submission?.delivery.status === "acknowledged"
+              ? "Sent"
+              : "Submitted";
       item.setAttribute("aria-label", `${commentState} comment`);
       const caption = document.createElement("div");
       caption.className = "review-comment-caption";
@@ -769,7 +824,7 @@ export function reviewPane(
       id,
     })
       .then((value) => {
-        if (generation === loading && !staleEditor)
+        if (generation === loading && !shownError)
           status.textContent = value.changed
             ? `Changed on disk${value.unavailable ? " (unavailable)" : ""}; saved revision retained`
             : "";

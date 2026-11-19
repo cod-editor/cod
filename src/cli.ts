@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { defaultSocketPath } from "./paths";
 import { help, parseArguments } from "./command-catalog";
-import type { OperationRequest } from "./types";
+import type { OperationRequest, ReviewSummary } from "./types";
 
 async function invoke(request: OperationRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -93,11 +93,21 @@ async function main(): Promise<void> {
         const summary = (await invoke({
           op: "review.inspect",
           id: request.id,
-        })) as { rounds: Array<{ id: string; submission?: unknown }> };
+        })) as ReviewSummary;
         const round = summary.rounds.find((r) => r.id === request.round);
         if (!round) throw new Error("Unknown review round");
         if (round.submission) {
           process.stdout.write(JSON.stringify(round.submission) + "\n");
+          return;
+        }
+        if (round.status === "cancelled") {
+          process.stdout.write(
+            JSON.stringify({
+              status: "cancelled",
+              reviewId: request.id,
+              roundId: round.id,
+            }) + "\n",
+          );
           return;
         }
         if (Date.now() >= deadline) {

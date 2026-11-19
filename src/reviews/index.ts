@@ -40,7 +40,7 @@ interface Round {
   id: string;
   number: number;
   snapshotId: string;
-  status: "draft" | "submitted";
+  status: "draft" | "submitted" | "cancelled";
   comments: Comment[];
   submission?: Submission;
 }
@@ -538,6 +538,14 @@ export class ReviewService {
       after: current.text,
       changes,
     };
+  }
+  cancel(args: Mutation) {
+    return this.mutate((state) => {
+      const { review, round } = this.editable(state, args);
+      round.status = "cancelled";
+      review.version++;
+      return this.summary(review);
+    });
   }
   submit(args: Mutation & { conversationId: string; requestId: string }) {
     return this.mutate(async (state) => {
