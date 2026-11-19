@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp } from "../workspace-app";
 
@@ -62,7 +63,11 @@ export class ChatApp extends WorkspaceApp {
     return this.cli("conversation", "send", "--id", id, "--text", text);
   }
   async configure(value: Record<string, unknown>) {
-    await writeFile(this.recording + ".config.json", JSON.stringify(value));
+    const file = this.recording + ".config.json";
+    const temporary = file + "." + randomUUID();
+    // A running provider may read the config while a test releases its next action.
+    await writeFile(temporary, JSON.stringify(value));
+    await rename(temporary, file);
   }
   async records(): Promise<ProtocolRecord[]> {
     return (await readFile(this.recording, "utf8"))
