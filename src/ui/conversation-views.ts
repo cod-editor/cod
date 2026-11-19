@@ -1177,7 +1177,6 @@ export function createConversationViews({
       actions.append(
         backgroundActivity(
           conversation.backgroundActivities,
-          conversation.status === "ready",
           views
             .get("chat:" + conversation.id)
             ?.querySelector<HTMLDetailsElement>(".composer-background")?.open ??

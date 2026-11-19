@@ -10,23 +10,31 @@ const stateLabels: Record<BackgroundActivity["state"], string> = {
 
 export function backgroundActivity(
   activities: BackgroundActivity[],
-  idle: boolean,
   expanded: boolean,
   invalidate: () => void,
 ): HTMLElement {
   const details = document.createElement("details");
   details.className = "composer-background";
   const summary = document.createElement("summary");
+  summary.className = "composer-background-summary";
   summary.dataset.focusKey = "background-activity";
+  summary.tabIndex = 0;
   const running = activities.filter((item) => item.state === "running");
   const agents = running.filter((item) => item.kind === "agent").length;
-  const commands = running.length - agents;
+  const shells = running.length - agents;
   const parts = [
-    agents ? `${agents} ${agents === 1 ? "subagent" : "subagents"}` : "",
-    commands ? `${commands} ${commands === 1 ? "command" : "commands"}` : "",
+    agents ? `${agents} ${agents === 1 ? "agent" : "agents"}` : "",
+    shells ? `${shells} ${shells === 1 ? "shell" : "shells"}` : "",
   ].filter(Boolean);
-  if (idle && running.length) parts.unshift("In background");
-  summary.textContent = parts.join(" · ") || "Background activity";
+  const name = "Background activity";
+  if (parts.length) {
+    summary.setAttribute("aria-label", `${name}: ${parts.join(", ")}`);
+    for (const part of parts) {
+      const count = document.createElement("span");
+      count.textContent = part;
+      summary.append(count);
+    }
+  } else summary.textContent = name;
   details.append(summary);
   if (expanded) {
     details.open = true;
