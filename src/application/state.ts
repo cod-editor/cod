@@ -285,7 +285,7 @@ export class ApplicationStateStore {
     return pane;
   }
 
-  /** Insert fresh content in a stable source group without type-based splitting. */
+  /** Append a fresh tab to its stable source group. */
   insertPane(
     workspace: WorkspaceState,
     pane: PaneState,
@@ -315,7 +315,7 @@ export class ApplicationStateStore {
     if (workspace.panes.some((item) => item.id === pane.id))
       throw new Error("Tab already exists");
     workspace.panes.push(pane);
-    group.paneIds.splice(group.paneIds.indexOf(sourceId) + 1, 0, pane.id);
+    group.paneIds.push(pane.id);
     if (request.focus === true || request.focus === "true") {
       group.activePaneId = pane.id;
       selectGroup(workspace, group);

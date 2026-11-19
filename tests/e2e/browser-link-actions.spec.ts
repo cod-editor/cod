@@ -362,6 +362,14 @@ test("Native right-click opens an independent background tab in the source group
   await nativeContext("#target");
   await chooseNative("Open link in new tab");
   await expect.poll(async () => (await browserRecords()).length).toBe(3);
+  const last = (await browserRecords()).find(
+    (b) => b.id !== source.id && b.id !== target.id,
+  )!;
+  expect(
+    (await app.workspace(workspace)).groups.find(
+      (item) => item.id === group.id,
+    )!.paneIds,
+  ).toEqual([...group.paneIds, last.paneId]);
   await app.stop();
   await app.start();
   expect((await browserRecords()).map((b) => b.url)).toEqual(

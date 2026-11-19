@@ -258,6 +258,8 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
       input.selectionEnd,
     ]),
   ).toEqual([2, 7]);
+  await untitled();
+  await app.cli("pane", "focus", "--workspace", workspace, "--id", id);
   const initial = await active(),
     group = initial.groups!.find((g) => g.paneIds.includes(id))!;
   await plus(group.id).focus();
@@ -283,7 +285,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   ).toMatchObject({ kind: "browser" });
   expect(
     (await active()).groups!.find((g) => g.id === group.id)!.paneIds,
-  ).toContain(browserPane);
+  ).toEqual([...group.paneIds, browserPane]);
   await plus(group.id).click();
   await menu().getByRole("button", { name: "Chat", exact: true }).click();
   const chatPane = await selectedAfter(browserPane);
@@ -313,7 +315,7 @@ test("Plus chooses a type without creating a tab; cancellation returns focus and
   ).toContain(filePane);
 });
 
-test("Contextual new file is blank, unpinned and adjacent while CLI creation leaves foreground selection unchanged", async () => {
+test("Contextual new file appends after existing unpinned tabs and background CLI creation keeps focus", async () => {
   const source = await untitled();
   await editor(source).fill("Do not copy content");
   await app.cli(
@@ -326,6 +328,11 @@ test("Contextual new file is blank, unpinned and adjacent while CLI creation lea
     "--pinned",
     "true",
   );
+  await untitled();
+  await app.cli("pane", "focus", "--workspace", workspace, "--id", source);
+  const before = (await active()).groups.find((g) =>
+    g.paneIds.includes(source),
+  )!;
   await editor(source).press(`${modifier}+t`);
   const child = await selectedAfter(source),
     current = await active();
@@ -337,7 +344,7 @@ test("Contextual new file is blank, unpinned and adjacent while CLI creation lea
   await expect(editor(child)).toBeFocused();
   await expect(editor(child)).toHaveValue("");
   const group = current.groups!.find((g) => g.paneIds.includes(source))!;
-  expect(group.paneIds.indexOf(child)).toBe(group.paneIds.indexOf(source) + 1);
+  expect(group.paneIds).toEqual([...before.paneIds, child]);
   const next = await app.cli<{ paneId: string }>(
     "pane",
     "new",
@@ -349,6 +356,9 @@ test("Contextual new file is blank, unpinned and adjacent while CLI creation lea
     group.id,
   );
   expect(next.paneId).not.toBe(child);
+  expect(
+    (await active()).groups.find((g) => g.id === group.id)!.paneIds,
+  ).toEqual([...group.paneIds, next.paneId]);
   expect((await active()).activePaneId).toBe(child);
   await expect(editor(child)).toBeFocused();
   await app.stop();
@@ -356,12 +366,19 @@ test("Contextual new file is blank, unpinned and adjacent while CLI creation lea
   expect((await active()).panes.find((p) => p.id === next.paneId)?.kind).toBe(
     "untitled",
   );
+  expect(
+    (await active()).groups.find((g) => g.id === group.id)!.paneIds,
+  ).toEqual([...group.paneIds, next.paneId]);
 });
 
 test("Double click creates exactly one contextual tab only on free tab bar space", async () => {
-  const source = await untitled(),
-    group = (await active()).groups!.find((g) => g.paneIds.includes(source))!;
+  const source = await untitled();
   await editor(source).fill("Preserve source");
+  await untitled();
+  await app.cli("pane", "focus", "--workspace", workspace, "--id", source);
+  const group = (await active()).groups.find((g) =>
+    g.paneIds.includes(source),
+  )!;
   const tabs = app.page.locator(`[data-group-id="${group.id}"] .tabs`),
     box = await tabs.boundingBox();
   expect(box).not.toBeNull();
@@ -372,6 +389,9 @@ test("Double click creates exactly one contextual tab only on free tab bar space
   await tabs.dblclick({ position: point });
   await expect.poll(async () => (await active()).panes.length).toBe(before + 1);
   const child = await selectedAfter(source);
+  expect(
+    (await active()).groups.find((g) => g.id === group.id)!.paneIds,
+  ).toEqual([...group.paneIds, child]);
   await expect(editor(child)).toBeFocused();
   await expect(editor(child)).toHaveValue("");
   await app.page

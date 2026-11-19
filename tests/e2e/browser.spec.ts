@@ -1917,6 +1917,19 @@ test("Quitting while a page-close decision is pending preserves its tab for rest
 test("Ordinary target blank links become managed tabs in the opener group and survive restart", async () => {
   const workspace = await shell.create("Managed browser tabs");
   const parent = await open(workspace);
+  const existing = await open(workspace, "/existing");
+  const before = (await shell.workspace(workspace)).groups.find((group) =>
+    group.paneIds.includes(parent.paneId),
+  )!;
+  expect(before.paneIds.at(-1)).toBe(existing.paneId);
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    parent.paneId,
+  );
   await remote(
     "/one",
     `{
@@ -1952,7 +1965,7 @@ test("Ordinary target blank links become managed tabs in the opener group and su
     state.workspaces
       .find((w) => w.id === workspace)!
       .groups!.find((g) => g.paneIds.includes(parent.paneId))!.paneIds,
-  ).toContain(child.paneId);
+  ).toEqual([...before.paneIds, child.paneId]);
   expect(await remote("/two", "typeof require + ':' + typeof window.cod")).toBe(
     "undefined:undefined",
   );

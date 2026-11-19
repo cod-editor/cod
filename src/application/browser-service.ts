@@ -357,12 +357,7 @@ export class BrowserApplicationService {
             const group = workspace.groups?.find((item) =>
               item.paneIds.includes(opener.paneId),
             );
-            if (group)
-              group.paneIds.splice(
-                group.paneIds.indexOf(opener.paneId) + 1,
-                0,
-                paneId,
-              );
+            if (group) group.paneIds.push(paneId);
             if (
               !background &&
               workspace.activePaneId === opener.paneId &&
@@ -859,7 +854,7 @@ export class BrowserApplicationService {
             item.paneIds.includes(active.id),
           );
           if (!group) throw new Error("Source tab group no longer exists");
-          group.paneIds.splice(group.paneIds.indexOf(active.id) + 1, 0, paneId);
+          group.paneIds.push(paneId);
         }
       }
       if (!source && request.sourcePane === undefined)
