@@ -5,6 +5,7 @@ export type KeyboardSurface =
   | "composer"
   | "terminal"
   | "browser"
+  | "browser-controls"
   | "agent-page"
   | "review";
 export interface KeyInput {
@@ -36,11 +37,13 @@ const all: readonly KeyboardSurface[] = [
   "composer",
   "terminal",
   "browser",
+  "browser-controls",
   "agent-page",
   "review",
 ];
 const cod: readonly KeyboardSurface[] = [
   "shell",
+  "browser-controls",
   "editor",
   "composer",
   "review",
@@ -186,6 +189,9 @@ export const commands = [
   ]),
   entry("browser.address", "Focus address bar", "Browser", [
     key("KeyL", { mod: true }, [...cod, "browser"]),
+  ]),
+  entry("browser.reload", "Reload browser page", "Browser", [
+    key("KeyR", { mod: true }, ["browser", "browser-controls"]),
   ]),
   entry("chat.send", "Send message", "Conversation", [
     key("Enter", {}, ["composer"]),

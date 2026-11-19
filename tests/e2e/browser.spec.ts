@@ -464,6 +464,74 @@ test("Browser AC1 UI and CLI navigation, history and address keyboard use real w
   expect((await inspect(record.id)).url).toBe(origin + "/three");
 });
 
+test("Browser reload shortcut targets the focused page or address and leaves other surfaces intact", async () => {
+  const workspace = await shell.create("Reload shortcut fixture");
+  await open(workspace, "/other-tab");
+  const record = await open(workspace);
+  const identity = () => remote("/one", "window.identity");
+  const otherIdentity = await remote("/other-tab", "window.identity");
+  const reloadCount = () => requests.filter((url) => url === "/one").length;
+  const rendererIdentity = () =>
+    shell.page.evaluate(() => document.body.dataset.reloadFixture);
+  await shell.page.evaluate(() => {
+    document.body.dataset.reloadFixture = "retain";
+  });
+
+  const initial = await identity();
+  const initialRequests = reloadCount();
+  await pageKey("/one", "R", [
+    process.platform === "darwin" ? "meta" : "control",
+  ]);
+  await expect.poll(identity).not.toBe(initial);
+  expect(reloadCount()).toBe(initialRequests + 1);
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        ({ webContents }, url) =>
+          webContents
+            .getAllWebContents()
+            .some(
+              (contents) => contents.getURL() === url && contents.isFocused(),
+            ),
+        origin + "/one",
+      ),
+    )
+    .toBe(true);
+
+  const address = shell
+    .pane(record.paneId)
+    .getByRole("textbox", { name: "Address", exact: true });
+  const afterNative = await identity();
+  await address.fill("Keep unsent address text");
+  await address.press(`${modifier}+r`);
+  await expect.poll(identity).not.toBe(afterNative);
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue("Keep unsent address text");
+  expect(reloadCount()).toBe(initialRequests + 2);
+  expect(await remote("/other-tab", "window.identity")).toBe(otherIdentity);
+  expect(await rendererIdentity()).toBe("retain");
+
+  const file = await shell.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    shell.file,
+  );
+  const editor = shell
+    .pane(file.paneId)
+    .getByRole("textbox", { name: "File contents" });
+  await editor.fill("Keep editor draft");
+  const afterAddress = await identity();
+  await editor.press(`${modifier}+r`);
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue("Keep editor draft");
+  expect(await identity()).toBe(afterAddress);
+  expect(reloadCount()).toBe(initialRequests + 2);
+  expect(await rendererIdentity()).toBe("retain");
+});
+
 test("Browser AC2 native bounds stay inside split panes and overlays hide views without losing page state", async ({}, info) => {
   const workspace = await shell.create("Browser layout");
   const browser = await open(workspace);

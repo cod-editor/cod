@@ -282,6 +282,68 @@ test("Default split shortcuts cover only two sides while tab selection stays ava
   configureKeymap({}, "darwin");
 });
 
+test("browser reload uses the primary modifier and only owns the page and its browser controls", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const systemModifier = {
+      metaKey: platform === "darwin",
+      ctrlKey: platform === "linux",
+    };
+    configureKeymap({}, platform);
+    for (const surface of ["browser", "browser-controls"] as const)
+      assert.equal(
+        resolveKeybinding(input("r", systemModifier), platform, surface)
+          ?.command,
+        "browser.reload",
+      );
+    for (const surface of [
+      "editor",
+      "terminal",
+      "composer",
+      "shell",
+      "agent-page",
+      "review",
+    ] as const)
+      assert.notEqual(
+        resolveKeybinding(input("r", systemModifier), platform, surface)
+          ?.command,
+        "browser.reload",
+      );
+    assert.equal(
+      resolveKeybinding(
+        input("p", systemModifier),
+        platform,
+        "browser-controls",
+      )?.command,
+      resolveKeybinding(input("p", systemModifier), platform, "shell")?.command,
+    );
+    try {
+      configureKeymap({ "browser.reload": ["Mod+Alt+R"] }, platform);
+      assert.equal(
+        resolveKeybinding(input("r", systemModifier), platform, "browser"),
+        undefined,
+      );
+      assert.equal(
+        resolveKeybinding(
+          input("r", { ...systemModifier, altKey: true }),
+          platform,
+          "browser-controls",
+        )?.command,
+        "browser.reload",
+      );
+      assert.notEqual(
+        resolveKeybinding(
+          input("r", { ...systemModifier, altKey: true }),
+          platform,
+          "terminal",
+        )?.command,
+        "browser.reload",
+      );
+    } finally {
+      configureKeymap({}, platform);
+    }
+  }
+});
+
 test("keymap overrides disable, reject unknown/conflicts atomically and never widen surface authority", () => {
   configureKeymap({}, "darwin");
   assert.equal(formatShortcut("pane.zoom", "darwin"), "⇧Esc");
