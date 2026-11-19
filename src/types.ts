@@ -314,6 +314,8 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
+  onPreviewUpdate(callback: (version: string | null) => void): void;
+  openPreviewUpdate(): Promise<void>;
   toggleDevTools(browserId?: string): Promise<void>;
   onSettings(
     callback: (state: import("./settings").SettingsState) => void,

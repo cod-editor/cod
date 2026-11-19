@@ -351,6 +351,16 @@ body {
   max-width: 100%;
   overflow-x: auto;
 }
+.app-header:has(.preview-update:not([hidden])) {
+  height: max(34px, calc(1em * var(--ui-line-height) + var(--space-1)));
+}
+#pane-visibility:has(.preview-update:not([hidden])) {
+  height: 100%;
+}
+.preview-update {
+  margin-inline-end: var(--space-1);
+  white-space: nowrap;
+}
 #pane-visibility::-webkit-scrollbar {
   display: none;
 }
