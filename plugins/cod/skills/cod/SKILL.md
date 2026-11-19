@@ -1,6 +1,6 @@
 ---
 name: cod
-description: Operate the running Cod desktop workspace through codctl. Use when managing Cod workspaces, panes, files, native conversations and supported application controls.
+description: Operate the running Cod desktop workspace through codctl. Use when managing Cod workspaces, panes, files, native conversations, and document or diff reviews.
 ---
 
 # Operate Cod through codctl
@@ -48,7 +48,9 @@ Claude and native mode selection are not exposed. Use `conversation options --id
 
 ## Local review workflow
 
-Open a document with `review open-document --workspace ID --conversation ORIGIN_CONVERSATION_ID --path PATH`, or one repository diff with `review open-diff --workspace ID --conversation ORIGIN_CONVERSATION_ID --repo-root PATH` (optional paired base/head refs). Save returned reviewId and roundId. Use `review inspect --id ID` for public status. Private draft bodies are deliberately unavailable through CLI and state. Only the human submits drafts unless they explicitly delegate submission.
+When the user asks in a Cod chat to open a document or diff for review or comments, open a review in Cod. Use an ordinary file preview when the user only asks to see the file.
+
+Run `codctl context` to get the originating chat and its current workspace. Open a document with `review open-document --workspace ID --conversation ORIGIN_CONVERSATION_ID --path PATH`, or one repository diff with `review open-diff --workspace ID --conversation ORIGIN_CONVERSATION_ID --repo-root PATH` (optional paired base/head refs). Save the returned `reviewId` and `roundId` and verify the returned `paneId` in the target workspace with `codctl state` before confirming the review is open. Use `review inspect --id ID` for public status. Private draft bodies are deliberately unavailable through CLI and state. Only the human submits drafts unless they explicitly delegate submission.
 
 `review wait --id ID --round ROUND [--timeout-ms N]` polls durable submission: success returns frozen feedback and delivery status; timeout exits 2 without publishing. Disconnecting does not cancel the review; rerun after restart. Never paste a waiter result back into chat automatically.
 
