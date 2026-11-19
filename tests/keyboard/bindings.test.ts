@@ -57,10 +57,6 @@ test("native and DOM inputs match with exact platform modifiers and non-Latin fa
     ),
     undefined,
   );
-  assert.equal(
-    formatShortcut("navigation.toggleWorkspaces", "linux"),
-    "Ctrl+Shift+B",
-  );
 });
 test("IME, AltGraph and releases never dispatch; held discrete commands remain consumed", () => {
   const base = input("w", { metaKey: true });
@@ -105,7 +101,7 @@ test("website and terminal editing belongs to its own surface", () => {
       "linux",
       "terminal",
     )?.command,
-    "navigation.toggleWorkspaces",
+    undefined,
   );
   assert.equal(
     resolveKeybinding(input("F6"), "linux", "browser")?.command,

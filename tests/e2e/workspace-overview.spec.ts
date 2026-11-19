@@ -63,14 +63,6 @@ test("Overview keeps selection separate from activation, preserves workspace gro
   await composer.evaluate((node: HTMLTextAreaElement) =>
     node.setSelectionRange(3, 12),
   );
-  await app.cli(
-    "workspace",
-    "settings",
-    "--id",
-    first,
-    "--settings",
-    JSON.stringify({ workspacesVisible: false }),
-  );
   await app.cli("group", "toggle-split", "--workspace", first);
   await app.cli("group", "toggle-split", "--workspace", first);
   const before = await app.cli<AppState>("state");
@@ -281,11 +273,6 @@ test("Overview exposes valid workspace groups and independently reachable row ac
     "--cwd",
     app.folders[0],
   );
-  await expect(
-    app.page.locator(
-      `#workspace-tree [data-navigation-key="terminal:${terminal.id}"]`,
-    ),
-  ).toHaveCount(0);
   const second = await app.create("Invented grouped Beta");
   const browser = await app.cli<{ id: string; paneId: string }>(
     "browser",
@@ -795,7 +782,7 @@ test("Overview reconciles review, streaming and removal updates without losing i
     "--name",
     "Invented guarded neighbor",
   );
-  const review = await app.cli<{ reviewId: string }>(
+  const review = await app.cli<{ reviewId: string; paneId: string }>(
     "review",
     "open-document",
     "--workspace",
@@ -805,19 +792,19 @@ test("Overview reconciles review, streaming and removal updates without losing i
     "--conversation",
     chat.id,
   );
-  const sidebarReview = app.page.locator(
-    `#workspace-tree [data-navigation-key="review:${review.reviewId}"]`,
+  await app.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    review.paneId,
   );
-  await expect(sidebarReview).toBeVisible();
-  await sidebarReview.click();
-  await expect(app.page.locator(".review-body")).toBeVisible();
   await show();
   await search().fill("spec.md");
-  await expect(row("review", review.reviewId)).toHaveCount(0);
-  await expect(overview()).toContainText("No matching items");
-  await search().fill("guarded workspace");
-  await expect(row("workspace", workspace)).toBeVisible();
-  await row("workspace", workspace).click();
+  await expect(row("review", review.reviewId)).toBeVisible();
+  await row("review", review.reviewId).hover();
+  await search().press("Enter");
   await expect(app.page.locator(".review-body")).toBeVisible();
   await show();
   await search().fill("guarded");
@@ -896,7 +883,7 @@ test("Overview reconciles review, streaming and removal updates without losing i
     .toBe("ready");
   await app.cli("conversation", "remove", "--id", neighbor.id);
   await expect(row("conversation", neighbor.id)).toHaveCount(0);
-  await expect(row("conversation", chat.id)).toHaveAttribute(
+  await expect(row("review", review.reviewId)).toHaveAttribute(
     "aria-current",
     "true",
   );
@@ -1283,7 +1270,7 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
       activeGroupId: group,
       closedTabs: [],
       chatDrafts: {},
-      settings: { ...template.settings, workspacesVisible: false },
+      settings: template.settings,
     });
   }
   const heavy = state.conversations.at(-1)!;
@@ -1387,11 +1374,11 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
   await expect
     .poll(() => app.inspect(stream.id).then((c) => c.status))
     .toBe("ready");
+  await show();
   await expect(
-    app.page.locator(
-      '#workspace-tree [data-navigation-key="workspace:invented-workspace-49"]',
-    ),
+    row("workspace", "invented-workspace-49").locator(".."),
   ).toHaveAttribute("data-status", "ready");
+  await search().press("Escape");
   const baselineNodes = await app.page.evaluate(
     () => document.getElementsByTagName("*").length,
   );
@@ -1505,4 +1492,147 @@ test("Overview and Commands open from a Markdown preview and return to its focus
     await field.press("Escape");
     await expect(link).toBeFocused();
   }
+});
+
+test("Overview quick actions target the selected tab from search without closing the active workspace", async ({}, info) => {
+  const first = await app.create("Active navigation fixture");
+  const active = await app.newChat(first, "codex");
+  const second = await app.create("Other navigation fixture");
+  const selected = await app.newChat(second, "codex");
+  await app.cli(
+    "conversation",
+    "rename",
+    "--id",
+    selected.id,
+    "--name",
+    "Chosen chat fixture",
+  );
+  await app.cli("conversation", "show", "--id", active.id);
+  const activeComposer = app
+    .pane(active.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await activeComposer.fill("Preserve this active composer draft");
+  await app.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(660, 530),
+  );
+
+  const footer = () => overview().locator(".picker-footer");
+  const selection = () => row("conversation", selected.id);
+  const snapshots = () => app.cli<AppState>("state");
+  await show();
+  await search().pressSequentially("Chosen chat");
+  await selection().hover();
+  await expect(search()).toBeFocused();
+  await expect(footer()).toContainText("Open");
+  await expect(footer()).toContainText("Rename");
+  await expect(footer()).toContainText("Close tab");
+  const shortcuts = await footer().locator("kbd").allTextContents();
+  expect(shortcuts).toEqual(
+    process.platform === "darwin"
+      ? ["Enter", "⌘Enter", "⌘W"]
+      : ["Enter", "Ctrl+Enter", "Ctrl+W"],
+  );
+  await expect(footer()).toBeInViewport();
+  await overview().screenshot({
+    path: info.outputPath("overview-quick-actions-narrow.png"),
+  });
+
+  await search().press(`${modifier}+Enter`);
+  const editor = overview().getByRole("textbox", {
+    name: "Conversation name",
+    exact: true,
+  });
+  await expect(editor).toBeFocused();
+  await expect(footer()).not.toContainText("Close tab");
+  await editor.fill("Taken aside fixture");
+  await editor.press(`${modifier}+w`);
+  await expect(editor).toHaveValue("Taken aside fixture");
+  await editor.press("Enter");
+  await expect(search()).toHaveValue("Chosen chat");
+  await expect(search()).toBeFocused();
+  await expect(selection()).toContainText("Taken aside fixture");
+  expect((await snapshots()).activeWorkspaceId).toBe(first);
+
+  await app.cli(
+    "pane",
+    "pin",
+    "--workspace",
+    second,
+    "--id",
+    selected.paneId,
+    "--pinned",
+    "true",
+  );
+  await expect(selection()).toHaveAccessibleName(/Pinned/);
+  await expect(footer()).not.toContainText("Close tab");
+  await search().press(`${modifier}+w`);
+  expect(
+    (await app.workspace(second)).panes.some(
+      (pane) => pane.id === selected.paneId,
+    ),
+  ).toBe(true);
+  await app.cli(
+    "pane",
+    "pin",
+    "--workspace",
+    second,
+    "--id",
+    selected.paneId,
+    "--pinned",
+    "false",
+  );
+  await expect(footer()).toContainText("Close tab");
+  await search().dispatchEvent("keydown", {
+    key: "w",
+    code: "KeyW",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+    isComposing: true,
+  });
+  expect(
+    (await app.workspace(second)).panes.some(
+      (pane) => pane.id === selected.paneId,
+    ),
+  ).toBe(true);
+
+  await writeFile(
+    path.join(app.data, "keymap.json"),
+    JSON.stringify({ "tab.close": ["Mod+Shift+Y"] }),
+  );
+  await expect(footer()).toContainText(
+    process.platform === "darwin" ? "⌘⇧Y" : "Ctrl+Shift+Y",
+  );
+  await search().press(`${modifier}+w`);
+  expect(
+    (await app.workspace(second)).panes.some(
+      (pane) => pane.id === selected.paneId,
+    ),
+  ).toBe(true);
+  await search().press(`${modifier}+Shift+Y`);
+  await expect
+    .poll(async () =>
+      (await app.workspace(second)).panes.some(
+        (pane) => pane.id === selected.paneId,
+      ),
+    )
+    .toBe(false);
+  await expect(search()).toHaveValue("Chosen chat");
+  await expect(search()).toBeFocused();
+  await expect(row("workspace", second)).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(footer()).not.toContainText("Close tab");
+  await search().press(`${modifier}+Shift+Y`);
+  const afterClose = await snapshots();
+  expect(afterClose.activeWorkspaceId).toBe(first);
+  expect(afterClose.workspaces.some((item) => item.id === second)).toBe(true);
+  expect(afterClose.conversations.some((chat) => chat.id === selected.id)).toBe(
+    true,
+  );
+  await search().press("Escape");
+  await expect(activeComposer).toBeFocused();
+  await expect(activeComposer).toHaveValue(
+    "Preserve this active composer draft",
+  );
 });

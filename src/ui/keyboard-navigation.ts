@@ -8,7 +8,6 @@ export function createKeyboardNavigation(
   getState: () => AppState,
   invoke: Invoke,
   panes: HTMLElement,
-  tree: HTMLElement,
   nativeFocus: (id: string) => void,
   focusNativeView: (id: string) => void,
   whenRendered: WhenRendered,
@@ -212,12 +211,6 @@ export function createKeyboardNavigation(
     const header = document.querySelector<HTMLElement>(".app-header");
     add(header, () =>
       header?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(),
-    );
-    add(tree.closest<HTMLElement>(".sidebar"), () =>
-      (
-        tree.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]') ??
-        tree.querySelector<HTMLElement>('[role="treeitem"]')
-      )?.focus(),
     );
     const files = document.querySelector<HTMLElement>("#project-panel");
     add(files, () =>

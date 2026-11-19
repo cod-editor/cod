@@ -103,27 +103,30 @@ test("Navigation shares full labels, attention and pin identities without retain
   assert.equal(projectNavigation(state)[0].status, "waiting");
 });
 
-test("Search includes ownership and URL context while preserving unfiltered expansion", () => {
+test("Search includes ownership and URL context while preserving unfiltered grouping", () => {
   const items = projectNavigation(fixture());
-  const collapsed = new Set(["workspace:beta"]);
   assert.deepEqual(
-    visibleNavigation(items, "", collapsed).map((item) => item.key),
-    ["workspace:alpha", "conversation:chat-a", "workspace:beta"],
+    visibleNavigation(items, "").map((item) => item.key),
+    [
+      "workspace:alpha",
+      "conversation:chat-a",
+      "workspace:beta",
+      "browser:browser-b",
+    ],
   );
   assert.deepEqual(
-    visibleNavigation(items, "beta shared", collapsed).map((item) => item.key),
+    visibleNavigation(items, "beta shared").map((item) => item.key),
     ["workspace:beta", "browser:browser-b"],
   );
   assert.deepEqual(
-    visibleNavigation(items, "needle", collapsed).map((item) => item.key),
+    visibleNavigation(items, "needle").map((item) => item.key),
     ["workspace:beta", "browser:browser-b"],
   );
   assert.deepEqual(
-    visibleNavigation(items, "alpha", collapsed).map((item) => item.key),
+    visibleNavigation(items, "alpha").map((item) => item.key),
     ["workspace:alpha", "conversation:chat-a"],
   );
-  assert.equal(collapsed.has("workspace:beta"), true);
-  assert.deepEqual(visibleNavigation(items, "missing", collapsed), []);
+  assert.deepEqual(visibleNavigation(items, "missing"), []);
 });
 
 test("An unlisted active review falls back to its workspace and browser loading is not agent attention", () => {
@@ -144,14 +147,14 @@ test("An unlisted active review falls back to its workspace and browser loading 
     /Invented navigation failure/,
   );
   assert.deepEqual(
-    visibleNavigation(items, "no match", new Set(), "conversation:chat-a").map(
+    visibleNavigation(items, "no match", "conversation:chat-a").map(
       (item) => item.key,
     ),
     ["workspace:alpha", "conversation:chat-a"],
   );
 });
 
-test("Overview groups terminal metadata with chats and pages while the sidebar retains its review tree", () => {
+test("Overview groups terminal metadata and pending reviews without requiring an open review pane", () => {
   const state = fixture();
   state.workspaces[0].panes.push({
     kind: "terminal",
@@ -182,24 +185,16 @@ test("Overview groups terminal metadata with chats and pages while the sidebar r
       originConversationId: "chat-a",
       target: { kind: "document", path: "/invented/detailed-spec.md" },
       currentRoundId: "round-one",
+      status: "draft",
       rounds: [{ id: "round-one", status: "draft" }],
     },
   ] as AppState["reviews"];
-  state.workspaces[0].panes.push({
-    kind: "review",
-    id: "review-pane",
-    reviewId: "review-one",
-  });
   state.workspaces[0].activePaneId = "terminal-pane";
-  const sidebar = projectNavigation(state),
-    overview = projectNavigation(state, "overview");
-  assert(
-    sidebar.some(
-      (item) => item.kind === "review" && item.parent === "conversation:chat-a",
-    ),
-  );
-  assert(!sidebar.some((item) => item.kind === "terminal"));
-  assert(!overview.some((item) => item.kind === "review"));
+  const overview = projectNavigation(state);
+  const review = overview.find((item) => item.kind === "review")!;
+  assert.equal(review.parent, "workspace:alpha");
+  assert.equal(review.status, "review");
+  assert.equal(review.paneId, undefined);
   const terminal = overview.find((item) => item.kind === "terminal")!;
   assert.equal(terminal.parent, "workspace:alpha");
   assert.equal(terminal.active, true);
@@ -207,15 +202,18 @@ test("Overview groups terminal metadata with chats and pages while the sidebar r
   assert.equal(terminal.hint, "/invented/project shell");
   assert.equal("output" in terminal, false);
   assert.deepEqual(
-    visibleNavigation(overview, "alpha project", new Set()).map(
-      (item) => item.key,
-    ),
+    visibleNavigation(overview, "alpha project").map((item) => item.key),
     ["workspace:alpha", "terminal:terminal-one"],
   );
   assert.deepEqual(
-    visibleNavigation(overview, "alpha", new Set()).map((item) => item.key),
-    ["workspace:alpha", "conversation:chat-a", "terminal:terminal-one"],
+    visibleNavigation(overview, "alpha").map((item) => item.key),
+    [
+      "workspace:alpha",
+      "conversation:chat-a",
+      "terminal:terminal-one",
+      "review:review-one",
+    ],
   );
   state.terminals = [];
-  assert.equal(projectNavigation(state, "overview")[0].active, true);
+  assert.equal(projectNavigation(state)[0].active, true);
 });

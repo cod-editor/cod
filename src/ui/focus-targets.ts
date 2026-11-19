@@ -3,7 +3,7 @@ import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 import type { createKeyboardNavigation } from "./keyboard-navigation";
 
-type Target = "files" | "workspaces" | "chat" | "terminal";
+type Target = "files" | "chat" | "terminal";
 export function createFocusTargets(
   getState: () => AppState,
   invoke: Invoke,
@@ -116,11 +116,9 @@ export function createFocusTargets(
     const within =
       target === "files"
         ? !!active?.closest("#project-panel")
-        : target === "workspaces"
-          ? !!active?.closest("#workspace-tree")
-          : target === "chat"
-            ? !!current && isChat(current)
-            : current?.kind === "terminal";
+        : target === "chat"
+          ? !!current && isChat(current)
+          : current?.kind === "terminal";
     const key = `${w.id}:${target}`;
     const origin = returns.get(key);
     if (within && origin) {
@@ -146,31 +144,24 @@ export function createFocusTargets(
           : captured,
       );
     }
-    if (target === "files" || target === "workspaces") {
-      const setting = target === "files" ? "filesVisible" : "workspacesVisible";
-      const visible =
-        target === "files"
-          ? w.settings?.filesVisible === true
-          : w.settings?.workspacesVisible !== false;
-      if (!visible) {
+    if (target === "files") {
+      if (w.settings?.filesVisible !== true) {
         await invoke("workspace.settings", {
           id: w.id,
-          settings: { [setting]: true },
+          settings: { filesVisible: true },
         });
         if (
           !(await keys.whenRendered(
             () =>
               workspace()?.id !== w.id
                 ? false
-                : workspace()?.settings?.[setting] === true || undefined,
+                : workspace()?.settings?.filesVisible === true || undefined,
             intent.signal,
           ))
         )
           return;
       }
-      const host = document.querySelector<HTMLElement>(
-        target === "files" ? "#project-panel" : "#workspace-tree",
-      );
+      const host = document.querySelector<HTMLElement>("#project-panel");
       (
         host?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]') ??
         host?.querySelector<HTMLElement>('[role="treeitem"]') ??

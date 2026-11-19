@@ -950,29 +950,18 @@ test("Chat Codex earlier native pages preserve focus, retry and render overlappi
 });
 
 async function removalMenu(id: string) {
-  const row = shell.page.locator(
-    `.conversation-row[data-workspace-id="${id}"]`,
+  const overview = await shell.overview();
+  const row = overview.locator(
+    `.overview-item[data-navigation-key="conversation:${id}"]`,
   );
-  if (
-    !(await shell.page
-      .locator("#workspace-tree")
-      .evaluate((node) => node.contains(document.activeElement)))
-  )
-    await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  await expect
-    .poll(() =>
-      shell.page
-        .locator("#workspace-tree")
-        .evaluate((node) => node.contains(document.activeElement)),
-    )
-    .toBe(true);
-  await shell.page.keyboard.press("Home");
+  const search = overview.getByRole("combobox");
+  await search.focus();
   for (let step = 0; step < 20; step++) {
-    if (await row.evaluate((node) => node === document.activeElement)) break;
-    await shell.page.keyboard.press("ArrowDown");
+    if ((await row.getAttribute("aria-current")) === "true") break;
+    await search.press("ArrowDown");
   }
-  await expect(row).toBeFocused();
-  await shell.page.keyboard.press("Shift+F10");
+  await expect(row).toHaveAttribute("aria-current", "true");
+  await search.press("Shift+F10");
   const menu = shell.page.getByRole("dialog", { name: "Actions", exact: true });
   await expect(menu).toBeVisible();
   return menu.getByRole("button", {
@@ -1021,13 +1010,15 @@ for (const provider of ["codex", "kimi"] as const) {
     await tabTo(shell.page, action);
     await shell.page.keyboard.press("Enter");
     await expect(
-      shell.page.locator(`.conversation-row[data-workspace-id="${chat.id}"]`),
+      shell.page.locator(
+        `.overview-item[data-navigation-key="conversation:${chat.id}"]`,
+      ),
     ).toHaveCount(0);
     await expect(shell.pane(chat.paneId)).toHaveCount(0);
     const parent = shell.page.locator(
-      `#workspace-tree > [data-workspace-id="${workspace}"]`,
+      `.overview-row[data-navigation-key="workspace:${workspace}"]`,
     );
-    await expect(parent).toBeFocused();
+    await expect((await shell.overview()).getByRole("combobox")).toBeFocused();
     await expect(parent).toHaveAttribute("data-status", "");
     expect(
       (await shell.cli<AppState>("state")).conversations.some(
@@ -1120,6 +1111,7 @@ test("Chat removal refuses working, waiting and handed-off sessions without stop
     const action = await removalMenu(chat.id);
     await expect(action).toBeDisabled();
     await expect(action).toHaveAttribute("title", /Stop the current response/);
+    await shell.page.keyboard.press("Escape");
     await shell.page.keyboard.press("Escape");
     expect(
       (await shell.raw("conversation", "remove", "--id", chat.id)).code,
@@ -2004,53 +1996,42 @@ test("Local diagnostics record process memory and clean shutdown without convers
   ).toBe(true);
 });
 
-test("Workspace tree Space opens focused items and Enter renames workspace and chat inline", async () => {
+test("Overview opens a selected workspace and renames chats with the platform chord", async () => {
   const first = await shell.create("First keyboard workspace");
   const chat = await shell.newChat(first, "codex");
   const second = await shell.create("Second keyboard workspace");
-  const workspaceRow = () =>
-    shell.page.locator(`[role="treeitem"][data-workspace-id="${first}"]`);
-  const chatRow = () =>
-    shell.page.locator(`[role="treeitem"][data-workspace-id="${chat.id}"]`);
-  await workspaceRow().focus();
+  const select = (key: string) =>
+    shell.page.locator(`.overview-item[data-navigation-key="${key}"]`).hover();
+  const search = (await shell.overview()).getByRole("combobox");
+  await select(`workspace:${first}`);
   expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(second);
-  await workspaceRow().press("Space");
+  await search.press("Enter");
   await expect
     .poll(async () => (await shell.cli<AppState>("state")).activeWorkspaceId)
     .toBe(first);
-  await workspaceRow().focus();
-  await workspaceRow().press("Enter");
-  const workspaceName = shell.page.getByRole("textbox", {
-    name: "Workspace name",
-    exact: true,
-  });
-  await expect(workspaceName).toBeFocused();
-  await workspaceName.fill("Renamed workspace");
-  await workspaceName.press("Enter");
-  await expect(workspaceRow()).toContainText("Renamed workspace");
-  await expect(workspaceRow()).toBeFocused();
-  await chatRow().focus();
-  await chatRow().press("Enter");
-  const chatName = shell.page.getByRole("textbox", {
+  await shell.overview();
+  await select(`conversation:${chat.id}`);
+  await search.press(`${modifier}+Enter`);
+  const name = shell.page.getByRole("textbox", {
     name: "Conversation name",
     exact: true,
   });
-  await expect(chatName).toBeFocused();
-  await chatName.fill("Cancelled name");
-  await chatName.press("Escape");
-  await expect(chatRow()).not.toContainText("Cancelled name");
-  await expect(chatRow()).toBeFocused();
-  await chatRow().press("Enter");
-  await chatName.fill("Renamed conversation");
-  await chatName.press("Enter");
-  await expect(chatRow()).toContainText("Renamed conversation");
-  await chatRow().press("Space");
+  await expect(name).toBeFocused();
+  await name.fill("Cancelled name");
+  await name.press("Escape");
+  await expect(search).toBeFocused();
+  await select(`conversation:${chat.id}`);
+  await search.press(`${modifier}+Enter`);
+  await name.fill("Renamed conversation");
+  await name.press("Enter");
+  await expect(search).toBeFocused();
+  await search.press("Enter");
   await expect(shell.pane(chat.paneId)).toBeVisible();
   expect(await shell.prompts()).toHaveLength(0);
   await shell.stop();
   await shell.start();
-  await expect(chatRow()).toContainText("Renamed conversation");
-  await expect(workspaceRow()).toContainText("Renamed workspace");
+  await shell.overview();
+  await expect(shell.row("Renamed conversation")).toBeVisible();
 });
 
 test("Short composer input with 25 MB state writes only small draft data", async ({}, info) => {

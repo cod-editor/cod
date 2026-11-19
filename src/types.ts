@@ -237,9 +237,7 @@ export interface TabGroup {
 }
 export interface WorkspaceSettings {
   filesVisible?: boolean;
-  workspacesVisible?: boolean;
   chatMaxWidth?: number;
-  workspacesWidth?: number;
   filesWidth?: number;
 }
 export interface WorkspaceState {

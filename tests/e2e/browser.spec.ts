@@ -586,15 +586,20 @@ test("Browser AC2 native bounds stay inside split panes and overlays hide views 
       .pane(browser.paneId)
       .getByRole("textbox", { name: "Address", exact: true }),
   ).toBeFocused();
-  await pageKey("/one", "W", [
+  await pageKey("/one", "O", [
     process.platform === "darwin" ? "meta" : "control",
     "shift",
   ]);
-  const browserRow = shell.page.locator(
-    `[role=treeitem][data-browser-id="${browser.id}"]`,
+  const overview = shell.page.getByRole("dialog", {
+    name: "Overview",
+    exact: true,
+  });
+  const browserRow = overview.locator(
+    `.overview-item[data-navigation-key="browser:${browser.id}"]`,
   );
-  await expect(browserRow).toBeFocused();
+  await expect(overview.getByRole("combobox")).toBeFocused();
   await expect(browserRow).toHaveAttribute("aria-selected", "true");
+  await shell.page.keyboard.press("Escape");
   await shell.command("Settings...");
   await expect
     .poll(async () => (await nativeView("/one"))?.visible)
@@ -1080,7 +1085,7 @@ test("Browser default scrollbars match Cod while authored nested scrolling survi
   })()`,
     );
   const shellStyle = await shell.page
-    .locator("#workspace-tree")
+    .locator("#project-panel")
     .evaluate((node) => ({
       width: getComputedStyle(node, "::-webkit-scrollbar").width,
       thumb: getComputedStyle(node, "::-webkit-scrollbar-thumb")
@@ -1533,9 +1538,9 @@ test("Downloads survive tab closure and retain history across restart", async ()
   await shell.stop();
   await shell.start();
   await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
-  await shell.page
-    .getByRole("treeitem", { name: "Downloads, Idle", exact: true })
-    .click();
+  const overview = await shell.overview();
+  await shell.row("Downloads").click();
+  await expect(overview).toBeHidden();
   await shell.command("Downloads");
   const dialog = shell.page!.getByRole("dialog", {
     name: "Downloads",
@@ -1765,6 +1770,17 @@ test("Guarded workspace close cancels before removing the workspace or its page"
       showMessageBox: async () => ({ response: 0, checkboxChecked: false }),
     });
   });
+  const overview = await shell.overview();
+  const search = overview.getByRole("combobox");
+  const target = overview.locator(
+    `.overview-item[data-navigation-key="browser:${browser.id}"]`,
+  );
+  await target.hover();
+  await search.press(`${modifier}+w`);
+  await expect(search).toBeFocused();
+  await expect(target).toBeVisible();
+  expect((await inspect(browser.id)).id).toBe(browser.id);
+  await search.press("Escape");
   const result = await shell.cli<{ closed: boolean }>(
     "workspace",
     "close",
@@ -1776,7 +1792,9 @@ test("Guarded workspace close cancels before removing the workspace or its page"
   expect(
     await remote("/one", `document.querySelector('input').value`),
   ).toContain("Workspace draft");
+  await shell.overview();
   await expect(shell.row("Protected workspace form")).toBeVisible();
+  await shell.page.keyboard.press("Escape");
 });
 
 test("File search covers the native browser with the Cod surface and restores its page", async () => {
@@ -1855,7 +1873,9 @@ test("Restart loads only visible browser tabs and leaves inactive workspace page
     "--name",
     "Still visible",
   );
+  await shell.overview();
   await expect(shell.row("Still visible")).toBeVisible();
+  await shell.page.keyboard.press("Escape");
   expect(requests.some((url) => url === "/two")).toBe(false);
   expect(await nativeView("/two")).toBeNull();
   await shell.cli("workspace", "focus", "--id", second);

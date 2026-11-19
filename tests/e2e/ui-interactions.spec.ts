@@ -52,16 +52,27 @@ test("First-run controls, menus, pending work and failure recovery remain usable
     await app.command("New workspace");
     await expect(app.page.getByRole("dialog")).toHaveCount(0);
     await app.command("Rename workspace");
-    await app.page
-      .getByRole("textbox", { name: "Workspace name", exact: true })
-      .fill("Explore report export");
-    await app.page
-      .getByRole("textbox", { name: "Workspace name", exact: true })
-      .press("Enter");
+    const overview = app.page.getByRole("dialog", {
+      name: "Overview",
+      exact: true,
+    });
+    const name = overview.getByRole("textbox", {
+      name: "Workspace name",
+      exact: true,
+    });
+    const search = overview.getByRole("combobox", { name: "Search Overview" });
+    await name.fill("Explore report export");
+    await name.press("Enter");
+    await expect(app.row("Explore report export")).toBeVisible();
+    await expect(search).toBeFocused();
+    await search.press("Escape");
 
-    await app.page
-      .getByRole("textbox", { name: "Message", exact: true })
-      .fill("[hold] Explain the report export requirements");
+    const message = app.page.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await expect(message).toBeFocused();
+    await message.fill("[hold] Explain the report export requirements");
     await app.page.keyboard.press(`${modifier}+Enter`);
     await capture("05-first-send-pending");
     await expect(
@@ -94,9 +105,12 @@ test("First-run controls, menus, pending work and failure recovery remain usable
       app.page.getByText("DONE Retry the same discussion", { exact: true }),
     ).toBeVisible();
     await capture("09-recovered");
+    await app.overview();
     await app.row("Explore report export").click({ button: "right" });
     await capture("10-workspace-context-menu");
     await app.page.keyboard.press("Escape");
+    await expect(search).toBeFocused();
+    await search.press("Escape");
     await app.command("Install agent integration...");
     await capture("11-integration-dialog");
   } catch (error) {
@@ -303,7 +317,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
   }
 });
 
-test("Navigation widths resize by pointer and keyboard, persist, and restore after viewport clamping", async ({}, info) => {
+test("Files panel width resizes by pointer and keyboard, persist, and restore after viewport clamping", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -312,14 +326,17 @@ test("Navigation widths resize by pointer and keyboard, persist, and restore aft
       app.page.getByRole("textbox", { name: "Message", exact: true }),
     ).toBeVisible();
     const workspace = (await app.state()).activeWorkspaceId!;
+    await app.page
+      .getByRole("button", { name: "Toggle files", exact: true })
+      .click();
     const separator = () =>
       app.page.getByRole("separator", {
-        name: "Resize workspaces",
+        name: "Resize files",
         exact: true,
       });
     const width = () =>
       app.page
-        .locator(".sidebar")
+        .locator("#project-panel")
         .evaluate((node) => node.getBoundingClientRect().width);
     await separator().hover();
     await app.page.screenshot({
@@ -339,21 +356,13 @@ test("Navigation widths resize by pointer and keyboard, persist, and restore aft
     const preferred = async () =>
       (
         (await app.workspace(workspace)) as unknown as {
-          settings: { workspacesWidth: number };
+          settings: { filesWidth: number };
         }
-      ).settings.workspacesWidth;
+      ).settings.filesWidth;
     await expect.poll(preferred).toBe(416);
-    await app.page
-      .getByRole("button", { name: "Toggle files", exact: true })
-      .click();
-    const files = () =>
-      app.page.getByRole("separator", { name: "Resize files", exact: true });
-    await files().press("Home");
-    await expect(files()).toHaveAttribute("aria-valuenow", "160");
     await app.stop();
     await app.start();
     await expect.poll(width).toBe(416);
-    await expect(files()).toHaveAttribute("aria-valuenow", "160");
     await app.app!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setSize(760, 800),
     );
@@ -502,6 +511,7 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       "--name",
       "Second task",
     );
+    await app.overview();
     const target = app.row("Second task");
     await target.hover();
     const targetNode = await target.elementHandle();
@@ -516,10 +526,9 @@ test("Pressed Stop, tab close and menu triggers survive streamed and background 
       "--context",
       "Invented background question",
     );
-    await expect(app.row("Background rename two")).toHaveAttribute(
-      "data-status",
-      "waiting",
-    );
+    await expect(
+      app.row("Background rename two").locator(".."),
+    ).toHaveAttribute("data-status", "waiting");
     expect(await targetNode!.evaluate((node) => node.isConnected)).toBe(true);
     await app.page.mouse.up();
     await expect
@@ -613,6 +622,7 @@ test("New chat aliases recover from zero workspaces without restoring archived s
       (record) => record.event === "started",
     ).length;
     await composer.fill("Unsent draft remains with the archived chat.");
+    await app.overview();
     await app.row(original.name).first().click({ button: "right" });
     await app.page
       .getByRole("button", { name: "Close workspace", exact: true })
@@ -620,6 +630,7 @@ test("New chat aliases recover from zero workspaces without restoring archived s
     await expect
       .poll(async () => (await app.state()).workspaces.length)
       .toBe(0);
+    await app.page.keyboard.press("Escape");
     await app.stop();
     await app.start();
     composer = app.page.getByRole("textbox", { name: "Message", exact: true });
@@ -714,11 +725,10 @@ export function exportReport(rows: ReportRow[]): string {
     ).toBeVisible();
     const state = await app.state();
     const workspace = state.workspaces[0];
-    const tree = app.page.getByRole("tree", {
-      name: "Workspaces",
-      exact: true,
-    });
-    await expect(tree.locator('[aria-selected="true"]')).toHaveCount(1);
+    const overview = await app.overview();
+    await expect(
+      overview.locator('.overview-item[aria-selected="true"]'),
+    ).toHaveCount(1);
     await expect(app.row(workspace.name).first()).toHaveAttribute(
       "aria-selected",
       "false",
@@ -726,6 +736,7 @@ export function exportReport(rows: ReportRow[]): string {
     await app.page.screenshot({
       path: info.outputPath("selected-chat-not-parent.png"),
     });
+    await app.page.keyboard.press("Escape");
     await app.cli(
       "workspace",
       "add-folder",

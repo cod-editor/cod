@@ -10,7 +10,6 @@ import type { createDocumentViews } from "./document-views";
 import type { createBrowserViews } from "./browser-views";
 import type { createTerminalViews } from "./terminal-views";
 import type { createPaneLayout } from "./pane-layout";
-import type { createWorkspaceNavigation } from "./workspace-navigation";
 import type { createFocusManager } from "./focus";
 import type { FileTree } from "./files";
 interface Views {
@@ -20,7 +19,6 @@ interface Views {
   browsers: ReturnType<typeof createBrowserViews>;
   terminals: ReturnType<typeof createTerminalViews>;
   layout: ReturnType<typeof createPaneLayout>;
-  navigation: ReturnType<typeof createWorkspaceNavigation>;
   focus: ReturnType<typeof createFocusManager>;
   projects: FileTree;
 }
@@ -33,16 +31,8 @@ export function createWorkspaceView(
   createWorkspace: () => void,
   views: Views,
 ) {
-  const {
-    chats,
-    documents,
-    browsers,
-    terminals,
-    layout,
-    navigation,
-    focus,
-    projects,
-  } = views;
+  const { chats, documents, browsers, terminals, layout, focus, projects } =
+    views;
   const resourcePanes = new Map<string, HTMLElement>();
   const activeWorkspace = () =>
     getState().workspaces.find((w) => w.id === getState().activeWorkspaceId);
@@ -88,7 +78,6 @@ export function createWorkspaceView(
       documents.reconcile();
       layout.reconcile();
       terminals.reconcile();
-      navigation.render();
       const workspace = activeWorkspace();
       projects.update(workspace);
       for (const id of resourcePanes.keys())

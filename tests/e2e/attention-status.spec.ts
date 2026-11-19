@@ -14,27 +14,40 @@ for (const provider of ["codex", "kimi"] as const) {
   test(`${provider} ready attention acknowledges through UI and CLI, survives restart and returns only for a new completion`, async ({}, info) => {
     const workspace = await shell.create(`${provider} completion attention`);
     const chat = await shell.newChat(workspace, provider);
-    const row = () => shell.page.locator(`[data-workspace-id="${chat.id}"]`);
+    const row = () =>
+      shell.page.locator(
+        `.overview-row[data-navigation-key="conversation:${chat.id}"]`,
+      );
     const workspaceRow = () =>
-      shell.page.locator(`[data-workspace-id="${workspace}"]`);
+      shell.page.locator(
+        `.overview-row[data-navigation-key="workspace:${workspace}"]`,
+      );
 
     const quiet = async () => {
+      await shell.overview();
       await expect(row()).toHaveAttribute("data-status", "");
       await expect(workspaceRow()).toHaveAttribute("data-status", "");
     };
     const ready = async () => {
+      await shell.overview();
       await expect
         .poll(async () => (await shell.inspect(chat.id)).status)
         .toBe("ready");
       await expect(row()).toHaveAttribute("data-status", "ready");
       await expect(workspaceRow()).toHaveAttribute("data-status", "ready");
-      await expect(row()).toHaveAttribute("aria-label", /Completed/);
-      await expect(workspaceRow()).toHaveAttribute("aria-label", /Completed/);
+      await expect(row().locator(".overview-item")).toHaveAttribute(
+        "aria-label",
+        /Completed/,
+      );
+      await expect(workspaceRow().locator(".overview-item")).toHaveAttribute(
+        "aria-label",
+        /Completed/,
+      );
     };
     await quiet();
     await shell.send(chat.id, "First completed answer");
     await ready();
-    await row().click();
+    await row().locator(".overview-item").click();
     await quiet();
     await shell.cli("conversation", "options", "--id", chat.id);
     await quiet();
@@ -63,6 +76,7 @@ for (const provider of ["codex", "kimi"] as const) {
     await expect
       .poll(async () => (await shell.inspect(chat.id)).status)
       .toBe("working");
+    await shell.page.keyboard.press("Escape");
     await shell
       .pane(chat.paneId)
       .getByRole("button", { name: "Stop", exact: true })
@@ -87,25 +101,28 @@ for (const provider of ["codex", "kimi"] as const) {
 test("Acknowledgment and native lifecycle preserve explicit plugin review status", async () => {
   const workspace = await shell.create("Explicit review attention");
   const chat = await shell.newChat(workspace, "codex");
-  const row = () => shell.page.locator(`[data-workspace-id="${chat.id}"]`);
+  const row = () =>
+    shell.page.locator(
+      `.overview-row[data-navigation-key="conversation:${chat.id}"]`,
+    );
   const workspaceRow = () =>
-    shell.page.locator(`[data-workspace-id="${workspace}"]`);
+    shell.page.locator(
+      `.overview-row[data-navigation-key="workspace:${workspace}"]`,
+    );
   const reviewVisible = async () => {
+    await shell.overview();
     await expect(row()).toHaveAttribute("data-status", "review");
-    await expect(row()).toHaveAttribute("aria-label", /Review requested/);
-    await expect(
-      row().locator(":scope > .icon, :scope > .tree-disclosure > .icon"),
-    ).toBeVisible();
-    await expect(workspaceRow()).toHaveAttribute("data-status", "review");
-    await expect(workspaceRow()).toHaveAttribute(
+    await expect(row().locator(".overview-item")).toHaveAttribute(
       "aria-label",
       /Review requested/,
     );
-    await expect(
-      workspaceRow().locator(
-        ":scope > .icon, :scope > .tree-disclosure > .icon",
-      ),
-    ).toBeVisible();
+    await expect(row().locator(".navigation-item-icon")).toBeVisible();
+    await expect(workspaceRow()).toHaveAttribute("data-status", "review");
+    await expect(workspaceRow().locator(".overview-item")).toHaveAttribute(
+      "aria-label",
+      /Review requested/,
+    );
+    await expect(workspaceRow().locator(".navigation-item-icon")).toBeVisible();
   };
   await shell.cli(
     "conversation",
@@ -116,7 +133,7 @@ test("Acknowledgment and native lifecycle preserve explicit plugin review status
     "review",
   );
   await reviewVisible();
-  await row().click();
+  await row().locator(".overview-item").click();
   await reviewVisible();
   await shell.cli(
     "conversation",

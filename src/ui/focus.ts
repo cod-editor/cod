@@ -3,7 +3,6 @@ interface FocusLocation {
   filePath?: string;
   browserId?: string;
   tabId?: string;
-  workspaceId?: string;
   paneId?: string;
   label?: string;
   focusKey?: string;
@@ -17,7 +16,6 @@ interface FocusLocation {
 
 export function createFocusManager(
   panes: HTMLElement,
-  tree: HTMLElement,
   focusNative: (id: string) => void,
 ) {
   function focusLocation(
@@ -26,9 +24,6 @@ export function createFocusManager(
     if (!element) return {};
     const file = element.closest<HTMLElement>("#project-panel [data-path]");
     if (file) return { element, filePath: file.dataset.path };
-    const row = element.closest<HTMLElement>("[data-workspace-id]");
-    if (row && !(element instanceof HTMLInputElement))
-      return { element, workspaceId: row.dataset.workspaceId };
     const tab = element.closest<HTMLElement>("[data-tab-id]");
     if (tab) return { element, tabId: tab.dataset.tabId };
     const pane = element.closest<HTMLElement>("[data-pane-id]");
@@ -76,11 +71,6 @@ export function createFocusManager(
         [...panes.querySelectorAll<HTMLElement>("[data-tab-id]")].find(
           (element) => element.dataset.tabId === location.tabId,
         ) ?? null;
-    } else if (location.workspaceId) {
-      target =
-        [...tree.querySelectorAll<HTMLElement>("[data-workspace-id]")].find(
-          (row) => row.dataset.workspaceId === location.workspaceId,
-        ) ?? null;
     } else if (location.paneId) {
       const pane = [
         ...panes.querySelectorAll<HTMLElement>("[data-pane-id]"),
@@ -109,13 +99,7 @@ export function createFocusManager(
           ) ?? null;
       }
     }
-    if (
-      !target &&
-      !location.paneId &&
-      !location.workspaceId &&
-      !location.tabId &&
-      location.label
-    )
+    if (!target && !location.paneId && !location.tabId && location.label)
       target =
         [
           ...document.querySelectorAll<HTMLElement>(

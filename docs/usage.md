@@ -21,7 +21,7 @@ Development and packaged builds share the default profile: `~/Library/Applicatio
 
 A new workspace starts with a chat. Enter sends; Shift+Enter inserts a newline. Cmd/Ctrl+Enter also sends. Cmd/Ctrl+Shift+P opens Commands, Cmd/Ctrl+Shift+E focuses files, and Cmd/Ctrl+S saves a file. Workspace and tab context menus contain management actions. Reviews send feedback to the conversation that requested them; draft comments remain private until submission.
 
-Use the workspace title, Commands > Overview or Cmd/Ctrl+Shift+O to search workspaces, conversations, browser pages and terminals in one grouped list. Workspace headings switch workspaces; detailed files and reviews stay inside the workspace. Arrows select, Enter opens and Escape returns to the previous control or native page. The selected item's context menu provides the same management actions as the sidebar, including pinning and inline rename. The sidebar stays available and its visibility is unchanged.
+Use the workspace title, Commands > Overview or Cmd/Ctrl+Shift+O to search workspaces, conversations, browser pages, terminals and pending reviews. Arrows select and Enter opens the selected result. Cmd/Ctrl+Enter renames a selected workspace or chat. The Close Tab shortcut closes a selected unpinned tab and leaves Overview open. Right-click or Shift+F10 opens its actions. Use Files or Open file to browse repository material. Escape returns to the previous control or native page.
 
 Remove from workspace in a session's context menu clears it from the workspace without deleting its native history. Reopen closed tab restores the removed chat and draft; the native session remains available in the provider's CLI. Stop active work and finish pending reviews or form submissions before removing the session.
 
@@ -41,7 +41,7 @@ CLI creation stays in the background unless focus is explicitly requested. Set `
 
 ## Features and limits
 
-The workspace panel lists conversations and browser tabs. A pane's `+` opens Open file / Browser / Chat / Terminal choices. New tab (`Cmd/Ctrl+T` or a double-click in free tab-bar space) creates a fresh tab of the current kind: a blank browser, empty chat with the same provider/model, fresh shell in the terminal's current directory, or untitled text buffer. Reviews and empty panes offer the four-choice tab instead. The source content is never copied. Direct creation commands remain available. Drag tabs to the insertion marker to reorder or move between panes; context menus provide keyboard alternatives. Tabs and their order survive restart.
+Overview lists conversations and browser tabs. A pane's `+` opens Open file / Browser / Chat / Terminal choices. New tab (`Cmd/Ctrl+T` or a double-click in free tab-bar space) creates a fresh tab of the current kind: a blank browser, empty chat with the same provider/model, fresh shell in the terminal's current directory, or untitled text buffer. Reviews and empty panes offer the four-choice tab instead. The source content is never copied. Direct creation commands remain available. Drag tabs to the insertion marker to reorder or move between panes; context menus provide keyboard alternatives. Tabs and their order survive restart.
 
 Very high line-count text can stall the native editor during insertion; this is tracked in [#187](https://github.com/cod-editor/cod/issues/187).
 

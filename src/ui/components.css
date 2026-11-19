@@ -272,11 +272,6 @@ button:is(.selected, :focus-visible) .ui-button-description {
   max-height: min(560px, 65vh);
 }
 
-.workspace-row.tree-row-wrap {
-  height: auto;
-  white-space: normal;
-}
-
 .command-list .icon-button {
   padding: var(--icon-button-padding);
 }

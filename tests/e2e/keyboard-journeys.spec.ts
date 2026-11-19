@@ -339,12 +339,8 @@ test("Keyboard chat journey starts without a mouse, handles permission and prese
     ).toBeFocused();
     await app.page.keyboard.type("Cancelled workspace");
     await app.page.keyboard.press("Escape");
-    const selectedWorkspace = (await state(app)).activeWorkspaceId;
-    await expect(
-      app.page.locator(
-        `#workspace-tree > [data-workspace-id="${selectedWorkspace}"]`,
-      ),
-    ).toBeFocused();
+    await expect((await app.overview()).getByRole("combobox")).toBeFocused();
+    await app.page.keyboard.press("Escape");
     await expect(composer()).toHaveValue("next draft remains intact");
     expect(
       await composer().evaluate(
@@ -830,9 +826,9 @@ test("Terminal readline and interruption survive global keyboard navigation with
     await app.page.keyboard.press("Enter");
     await expect.poll(output).toContain("AFTER_PALETTE");
     expect((await output()).match(/AFTER_PALETTE/g)).toHaveLength(1);
-    await app.page.keyboard.press(`${modifier}+Shift+W`);
+    await app.overview();
     await expect(input).not.toBeFocused();
-    await app.page.keyboard.press(`${modifier}+Shift+W`);
+    await app.page.keyboard.press("Escape");
     await expect(input).toBeFocused();
     await app.page.screenshot({
       path: info.outputPath("terminal-keyboard-focus.png"),
@@ -972,7 +968,7 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
             .settings?.filesVisible,
       )
       .toBe(beforePanels.settings?.filesVisible === true);
-    for (const shortcut of [`${modifier}+Shift+E`, `${modifier}+Shift+W`]) {
+    for (const shortcut of [`${modifier}+Shift+E`]) {
       await app.page.keyboard.press(shortcut);
       await expect(editor()).not.toBeFocused();
       await app.page.keyboard.press(shortcut);

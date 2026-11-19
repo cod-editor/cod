@@ -29,12 +29,11 @@ declare global {
 
 applyAppearance();
 
-const tree = document.querySelector<HTMLDivElement>("#workspace-tree")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
 const workspaceName =
   document.querySelector<HTMLHeadingElement>("#workspace-name")!;
 const status = document.querySelector<HTMLElement>("#status")!;
-const focus = createFocusManager(panes, tree, (id) => browsers.focusNative(id));
+const focus = createFocusManager(panes, (id) => browsers.focusNative(id));
 let renderedState: AppState | undefined;
 const renderWaiters = new Set<() => void>();
 let state: AppState = {
@@ -76,8 +75,7 @@ const layout = createPaneLayout(() => state, invoke, {
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });
-const navigation = createWorkspaceNavigation(tree, () => state, invoke, {
-  newConversation: (workspace) => commands.newConversation(workspace),
+const navigation = createWorkspaceNavigation(() => state, invoke, {
   folderDialog: (workspace, restoreFocus) =>
     commands.folder(workspace, restoreFocus),
   conversationActions: (c, rename) => commands.conversationActions(c, rename),
@@ -95,7 +93,7 @@ const finder = createContentFind(
   terminals.find,
   browsers.layout,
 );
-const commands = createCommands(() => state, invoke, panes, tree, setStatus, {
+const commands = createCommands(() => state, invoke, panes, setStatus, {
   focus,
   whenRendered,
   files: projects,
@@ -129,7 +127,6 @@ const workspaceView = createWorkspaceView(
     browsers,
     terminals,
     layout,
-    navigation,
     focus,
     projects,
   },

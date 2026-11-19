@@ -36,7 +36,7 @@ To relocate yourself, create the destination workspace, attach its folders, then
 
 Use `conversation native-inspect --id ID --section status|skills|plugins|config|agents` for actual native session information. Unsupported sections report their limits. Standalone session commands are not inference prompts. When selecting a native skill, preserve its exact name/path in the optional `skills` JSON argument to `conversation send`; duplicate names require a specific selection.
 
-Explicit background IDs do not change the focused workspace. Closing a conversation tab preserves its native controller and history. Use `conversation show --id ID` to reopen it. `conversation remove --id ID` removes an idle chat from the workspace sidebar without deleting its native session/history; `pane reopen --workspace ID` restores the most recently removed local chat. Stop active work and resolve pending reviews before removal; a CLI-owned session must first return to chat. Closing a workspace with running agents or terminals requires explicit `--force true` after human confirmation that owned work should stop. Quitting Cod stops owned providers; the next explicit send resumes the same native identity without an automatic inference turn.
+Explicit background IDs do not change the focused workspace. Closing a conversation tab preserves its native controller and history. Use `conversation show --id ID` to reopen it. `conversation remove --id ID` removes an idle chat from its workspace without deleting its native session/history; `pane reopen --workspace ID` restores the most recently removed local chat. Stop active work and resolve pending reviews before removal; a CLI-owned session must first return to chat. Closing a workspace with running agents or terminals requires explicit `--force true` after human confirmation that owned work should stop. Quitting Cod stops owned providers; the next explicit send resumes the same native identity without an automatic inference turn.
 
 Terminal records and working directories restore with fresh shells after app restart, without command replay or surviving process claims. Closing a terminal pane or workspace stops ordinary owned foreground jobs; HUP-resistant/disowned processes are not guaranteed contained.
 
@@ -58,7 +58,7 @@ Review creation binds the originating conversation. Human submission returns fee
 
 When requesting review from the destination conversation itself, open the review and end the current turn so the human's submission can start the next turn. Do not block that conversation's own turn waiting for its review by default: a busy destination queues feedback. `review wait` is useful for orchestrators and explicit readers; check whether it was cancelled before inspecting delivery status. Never paste or resend the result automatically.
 
-Closing a review pane retains its private drafts. Reopen it with `review show --id ID` or the review row in the workspace panel. Workspace closure is rejected while current draft comments or undelivered feedback remain. A human can use Cancel review to end a pending review and keep saved comments private.
+Closing a review pane retains its private drafts. Reopen it with `review show --id ID` or the review result in Overview. Workspace closure is rejected while current draft comments or undelivered feedback remain. A human can use Cancel review to end a pending review and keep saved comments private.
 
 ## Tabs, groups and attention
 

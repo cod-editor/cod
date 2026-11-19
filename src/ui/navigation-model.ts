@@ -29,6 +29,7 @@ export function describeNavigationStatus(
     background: "In background",
     waiting: "Needs attention",
     review: "Review requested",
+    cancelled: "Cancelled",
     ready: "Completed",
     failed: "Error",
     starting: "Starting",
@@ -81,10 +82,7 @@ export function conversationAttention(
       : "";
   return conversation.status;
 }
-export function projectNavigation(
-  state: AppState,
-  presentation: "sidebar" | "overview" = "sidebar",
-): NavigationItem[] {
+export function projectNavigation(state: AppState): NavigationItem[] {
   const result: NavigationItem[] = [];
   for (const workspace of state.workspaces) {
     const root = `workspace:${workspace.id}`;
@@ -92,17 +90,18 @@ export function projectNavigation(
       (c) => c.workspaceId === workspace.id,
     );
     const reviews = (state.reviews ?? []).filter(
-      (r) =>
-        presentation === "sidebar" &&
-        r.workspaceId === workspace.id &&
-        r.rounds.some(
-          (round) =>
-            round.id === r.currentRoundId &&
-            round.submission?.delivery.status !== "acknowledged",
-        ),
-    );
-    const activePane = workspace.panes.find(
-      (p) => p.id === workspace.activePaneId,
+      (review) =>
+        review.workspaceId === workspace.id &&
+        (review.status === "draft" ||
+          review.status === "cancelled" ||
+          workspace.panes.some(
+            (pane) => pane.kind === "review" && pane.reviewId === review.id,
+          ) ||
+          review.rounds.some(
+            (round) =>
+              round.submission &&
+              round.submission.delivery.status !== "acknowledged",
+          )),
     );
     const hasActiveChild =
       conversations.some((c) => c.paneId === workspace.activePaneId) ||
@@ -110,14 +109,17 @@ export function projectNavigation(
         (b) =>
           b.workspaceId === workspace.id && b.paneId === workspace.activePaneId,
       ) ||
-      (presentation === "overview" &&
-        state.terminals.some(
-          (terminal) =>
-            terminal.workspaceId === workspace.id &&
-            terminal.paneId === workspace.activePaneId,
-        )) ||
-      (activePane?.kind === "review" &&
-        reviews.some((r) => r.id === activePane.reviewId));
+      state.terminals.some(
+        (terminal) =>
+          terminal.workspaceId === workspace.id &&
+          terminal.paneId === workspace.activePaneId,
+      ) ||
+      workspace.panes.some(
+        (pane) =>
+          pane.id === workspace.activePaneId &&
+          pane.kind === "review" &&
+          reviews.some((review) => review.id === pane.reviewId),
+      );
     const statuses = conversations.map((c) => conversationAttention(state, c));
     const status =
       ["failed", "waiting", "review", "background", "ready", "working"].find(
@@ -165,18 +167,22 @@ export function projectNavigation(
         context,
       ),
     );
-    const reviewItem = (review: (typeof reviews)[number], parent: string) =>
+    const reviewItem = (review: (typeof reviews)[number]) =>
       item(
         "review",
         review.id,
         review.target.kind === "document"
-          ? review.target.path.split("/").pop() || "Document review"
-          : `Changes · ${review.target.repoRoot.split("/").pop()}`,
-        parent,
+          ? `Review: ${review.target.path.split("/").pop() || "Document"}`
+          : `Review: ${review.target.repoRoot.split("/").pop()} changes`,
+        root,
         workspace.panes.find(
           (p) => p.kind === "review" && p.reviewId === review.id,
         )?.id,
-        "review",
+        review.status === "draft"
+          ? "review"
+          : review.status === "cancelled"
+            ? "cancelled"
+            : "",
       );
     conversations.forEach((conversation, index) => {
       const row = item(
@@ -188,12 +194,7 @@ export function projectNavigation(
         statuses[index],
         conversation.taskStatusContext,
       );
-      result.push(
-        row,
-        ...reviews
-          .filter((r) => r.originConversationId === conversation.id)
-          .map((r) => reviewItem(r, row.key)),
-      );
+      result.push(row);
     });
     for (const browser of state.browsers.filter(
       (b) => b.workspaceId === workspace.id,
@@ -214,40 +215,32 @@ export function projectNavigation(
         : browser.url;
       result.push(row);
     }
-    if (presentation === "overview")
-      for (const terminal of state.terminals.filter(
-        (terminal) =>
-          terminal.workspaceId === workspace.id &&
-          workspace.panes.some(
-            (pane) =>
-              pane.kind === "terminal" && pane.terminalId === terminal.id,
-          ),
-      )) {
-        const directory =
-          terminal.cwd.split(/[\\/]/).filter(Boolean).at(-1) || terminal.cwd;
-        const row = item(
-          "terminal",
-          terminal.id,
-          directory ? `Terminal: ${directory}` : "Terminal",
-          root,
-          terminal.paneId,
-          terminal.status,
-          terminal.error ??
-            (terminal.exitCode === undefined
-              ? undefined
-              : `Exit code ${terminal.exitCode}`),
-          terminal.cwd,
-        );
-        row.hint = terminal.cwd;
-        result.push(row);
-      }
-    result.push(
-      ...reviews
-        .filter(
-          (r) => !conversations.some((c) => c.id === r.originConversationId),
-        )
-        .map((r) => reviewItem(r, root)),
-    );
+    for (const terminal of state.terminals.filter(
+      (terminal) =>
+        terminal.workspaceId === workspace.id &&
+        workspace.panes.some(
+          (pane) => pane.kind === "terminal" && pane.terminalId === terminal.id,
+        ),
+    )) {
+      const directory =
+        terminal.cwd.split(/[\\/]/).filter(Boolean).at(-1) || terminal.cwd;
+      const row = item(
+        "terminal",
+        terminal.id,
+        directory ? `Terminal: ${directory}` : "Terminal",
+        root,
+        terminal.paneId,
+        terminal.status,
+        terminal.error ??
+          (terminal.exitCode === undefined
+            ? undefined
+            : `Exit code ${terminal.exitCode}`),
+        terminal.cwd,
+      );
+      row.hint = terminal.cwd;
+      result.push(row);
+    }
+    result.push(...reviews.map(reviewItem));
   }
   return result;
 }
@@ -256,7 +249,6 @@ export function projectNavigation(
 export function visibleNavigation(
   items: NavigationItem[],
   query: string,
-  collapsed: ReadonlySet<string>,
   retainedKey?: string,
 ): NavigationItem[] {
   const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -276,12 +268,5 @@ export function visibleNavigation(
       }
     return items.filter((item) => keep.has(item.key));
   }
-  return items.filter((item) => {
-    let parent = item.parent;
-    while (parent) {
-      if (collapsed.has(parent)) return false;
-      parent = byKey.get(parent)?.parent;
-    }
-    return true;
-  });
+  return items;
 }

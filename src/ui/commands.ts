@@ -74,7 +74,7 @@ interface CommandFeatures {
     search: () => void;
   };
   layout: {
-    toggle: (key: "filesVisible" | "workspacesVisible") => void;
+    toggleFiles: () => void;
     toggleSplit: (workspace?: WorkspaceState) => Promise<void>;
     moveTab: (
       workspace: WorkspaceState,
@@ -98,7 +98,6 @@ export function createCommands(
   getState: () => AppState,
   invoke: Invoke,
   panes: HTMLElement,
-  tree: HTMLElement,
   setStatus: (message: string) => void,
   features: CommandFeatures,
 ) {
@@ -109,7 +108,6 @@ export function createCommands(
     getState,
     invoke,
     panes,
-    tree,
     focus.native,
     features.focusNativeView,
     features.whenRendered,
@@ -300,7 +298,7 @@ export function createCommands(
       label: "Rename",
       run: () => {
         if (renameOverride) renameOverride();
-        else void navigation.renameConversation(conversation.id);
+        else overview.rename(`conversation:${conversation.id}`);
       },
     };
     const removalReason = conversationRemovalReason(getState(), conversation);
@@ -314,10 +312,9 @@ export function createCommands(
       run: () => {
         void invoke("conversation.remove", { id: conversation.id })
           .then(() => {
-            requestAnimationFrame(() => {
-              if (tree.getClientRects().length)
-                focus.restore({ workspaceId: conversation.workspaceId });
-            });
+            const next = activeWorkspace()?.activePaneId;
+            if (next && document.activeElement === document.body)
+              void keys.focusActiveContent(next);
           })
           .catch(() => undefined);
       },
@@ -916,35 +913,17 @@ export function createCommands(
     }
     const workspace = activeWorkspace();
     if (!workspace) return;
-    void navigation.renameWorkspace(workspace.id);
+    overview.rename(`workspace:${workspace.id}`);
   }
 
   const currentPane = () => {
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);
   };
-  function focusedTreeId(): string | undefined {
-    return document.activeElement?.closest<HTMLElement>(
-      '[role="treeitem"][data-workspace-id]',
-    )?.dataset.workspaceId;
-  }
   function conversationTarget(pane = currentPane()) {
-    const treeId = focusedTreeId();
-    const id =
-      treeId ??
-      (pane?.kind === "conversation" ? pane.conversationId : undefined);
-    return getState().conversations.find(
-      (conversation) => conversation.id === id,
-    );
-  }
-  function workspaceTarget(fallback = activeWorkspace()) {
-    const id = focusedTreeId();
-    const owner =
-      getState().conversations.find((item) => item.id === id)?.workspaceId ??
-      getState().reviews?.find((item) => item.id === id)?.workspaceId ??
-      getState().browsers.find((item) => item.id === id)?.workspaceId ??
-      id;
-    return getState().workspaces.find((item) => item.id === owner) ?? fallback;
+    return pane?.kind === "conversation"
+      ? getState().conversations.find((c) => c.id === pane.conversationId)
+      : undefined;
   }
   function conversationCommand(
     id: CommandId,
@@ -1222,18 +1201,13 @@ export function createCommands(
           workspaceDialog("create");
           break;
         case "workspace.rename": {
-          const target = context ? w : workspaceTarget(w);
-          if (target) await navigation.renameWorkspace(target.id);
+          if (w) overview.rename(`workspace:${w.id}`);
           break;
         }
         case "workspace.close": {
-          const target = context ? w : workspaceTarget(w);
-          if (target) navigation.closeWorkspace(target);
+          if (w) navigation.closeWorkspace(w);
           break;
         }
-        case "workspace.focusTree":
-          await focusTargets.toggle("workspaces", focusIntent);
-          break;
         case "workspace.reopen":
           reopenWorkspace();
           break;
@@ -1407,10 +1381,7 @@ export function createCommands(
           break;
         }
         case "navigation.toggleFiles":
-          layout.toggle("filesVisible");
-          break;
-        case "navigation.toggleWorkspaces":
-          layout.toggle("workspacesVisible");
+          layout.toggleFiles();
           break;
         case "focus.files":
           await focusTargets.toggle("files", focusIntent);
@@ -1583,7 +1554,7 @@ export function createCommands(
         ? "agent-page"
         : "browser"
       : keyboardSurface(returnFocus.element);
-    const workspace = workspaceTarget();
+    const workspace = activeWorkspace();
     const conversation = conversationTarget();
     const context: CommandContext = {
       linkUrl: returnFocus.browserId
@@ -1591,11 +1562,7 @@ export function createCommands(
         : focusedWebLink(returnFocus.element ?? document.activeElement),
       devtoolsBrowserId: returnFocus.browserId,
       workspaceId: workspace?.id,
-      paneId:
-        getState().browsers.find((item) => item.id === focusedTreeId())
-          ?.paneId ??
-        conversation?.paneId ??
-        workspace?.activePaneId,
+      paneId: conversation?.paneId ?? workspace?.activePaneId,
       conversationId: conversation?.id,
     };
     let performed = false;
@@ -1756,20 +1723,6 @@ export function createCommands(
     input.focus();
   }
 
-  function focusPanel(): void {
-    const focus = () => {
-      const selected = tree.querySelector<HTMLElement>("[aria-selected=true]");
-      (selected ?? tree.querySelector<HTMLElement>("[role=treeitem]"))?.focus();
-    };
-    const workspace = activeWorkspace();
-    if (workspace && workspace.settings?.workspacesVisible === false)
-      void invoke("workspace.settings", {
-        id: workspace.id,
-        settings: { workspacesVisible: true },
-      }).then(() => requestAnimationFrame(focus));
-    else focus();
-  }
-
   const workspaceSelector = document.querySelector<HTMLButtonElement>(
     "#workspace-selector",
   )!;
@@ -1782,6 +1735,7 @@ export function createCommands(
     () => {
       workspaceSelector.title = shortcutTitle("workspace.overview");
       refreshPalette?.();
+      overview.refresh();
     },
     { signal: events.signal },
   );
@@ -1868,7 +1822,6 @@ export function createCommands(
       keys.dispose();
     },
     palette: commandPalette,
-    focusPanel,
     focusComposer: focusActiveComposer,
     newConversation,
     newTab,

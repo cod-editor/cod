@@ -208,8 +208,9 @@ test("T1 AC4 keyboard Ctrl-C interrupts foreground work and global shortcuts wor
   await expect(shell.page.getByRole("dialog")).toBeVisible();
   await shell.page.keyboard.press("Escape");
   await tabTo(shell.page, input(terminal.paneId));
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  await expect(shell.row("Keyboard terminal")).toBeFocused();
+  const overview = await shell.overview();
+  await expect(overview.getByRole("combobox")).toBeFocused();
+  await expect(shell.row("Keyboard terminal")).toBeVisible();
 });
 
 async function deferPaletteClose() {
@@ -238,7 +239,7 @@ async function deferPaletteClose() {
   });
 }
 
-test("Delayed palette cancellation preserves newer workspace focus and the terminal input line", async () => {
+test("Delayed Commands cancellation preserves newer Overview focus and the terminal input line", async () => {
   const workspace = await shell.create("Delayed palette fixture");
   const terminal = await open(workspace);
   await tabTo(shell.page, input(terminal.paneId));
@@ -258,8 +259,8 @@ test("Delayed palette cancellation preserves newer workspace focus and the termi
     )
     .toBe("function");
   await tabTo(shell.page, input(terminal.paneId));
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  await expect(shell.row("Delayed palette fixture")).toBeFocused();
+  const overview = await shell.overview();
+  await expect(overview.getByRole("combobox")).toBeFocused();
   await shell.page.evaluate(() => (window as any).releasePaletteClose());
   await shell.page.evaluate(
     () =>
@@ -267,8 +268,8 @@ test("Delayed palette cancellation preserves newer workspace focus and the termi
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       ),
   );
-  await expect(shell.row("Delayed palette fixture")).toBeFocused();
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await expect(overview.getByRole("combobox")).toBeFocused();
+  await shell.page.keyboard.press("Escape");
   await expect(input(terminal.paneId)).toBeFocused();
   await shell.page.keyboard.press("Enter");
   await output(terminal.id, new RegExp(tag));
