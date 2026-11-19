@@ -12,6 +12,8 @@ For an authorized repair backlog, continue from each verified checkpoint to the 
 
 GitHub Issues in this repository are the canonical repair queue. Search existing issues before creating one; keep one current issue per coherent outcome, with concise acceptance criteria, ordering/dependency links and the implementation PR. Record planning-only work explicitly: an issue does not itself authorize implementation. Task owners maintain their issues through verification and publication, and close them only after the relevant checked merge or an evidence-backed audit. Use Completed for delivered behavior and Not planned for obsolete or duplicate work, linking the surviving issue when applicable. Keep historical architecture reports out of the active queue unless their requirement or defect still applies to the current application.
 
+The task owner adds the `in-progress` GitHub label when implementation starts and before changing code. Remove it on closure or when returning the issue to the queue. Leave planning-only issues queued.
+
 Before publishing an issue, comment, PR or attachment, inspect its exact content and sanitize it. Publish only product behavior and invented fixtures: no personal or employer information, internal names/URLs/IPs, account/profile details, personal filesystem paths, screenshots of real work, raw logs or session transcripts. Keep private evidence in ignored local artifacts and publish only the minimum conclusion needed to understand the issue.
 
 1. Identify the user outcome, requirements and relevant compatibility gaps before choosing an implementation.
@@ -25,6 +27,8 @@ Before publishing an issue, comment, PR or attachment, inspect its exact content
 ## Design
 
 Before adding a protocol, service, abstraction or compatibility layer, inspect the existing mechanisms and relevant reference products. Prefer solving the problem through an existing interface. Justify any additional mechanism with a concrete unmet requirement and account for its lifecycle, failure modes, maintenance and verification cost; do not add layers merely because they are available.
+
+Keep one current application model and storage format. Remove superseded paths and avoid migrations, legacy adapters, aliases, and parallel formats maintained solely for backward compatibility. If existing local data needs conversion, have the operator back it up and convert it once on the affected local machine. Keep any conversion utility out of the repository and application packages.
 
 Validate the design as a whole rather than patching each stakeholder comment in isolation:
 
@@ -42,6 +46,8 @@ Treat user-adjustable properties as part of the initial feature: identify their 
 For input, streaming and persistence paths, verify responsiveness and bounded resource use with representative large histories and attachments as well as empty fixtures. Distinguish correctness tests from performance evidence; a saved final value alone does not prove responsive typing. When fixing a defect, inspect neighboring actions and test the proposed cause directly before declaring it resolved.
 
 Apply established preferences everywhere: compact editor conventions, keyboard-first operation, sparse persistent controls, no redundant labels or explanatory clutter. Every visible control needs a reason to remain visible rather than use a shortcut, context menu or Commands. Minimalism must preserve discoverability and keyboard focus. Do not infer a psychological profile from design preferences.
+
+For new or changed Cod controls, use native semantics where possible. Expose an accurate accessible name, role and current state or value, and keep keyboard operation and visible focus. Check the affected controls and state changes in the accessibility tree. Report screen reader behavior only for the assistive technology and platform actually exercised.
 
 Use the shared UI primitives in `src/ui/primitives.ts`, behavior helpers in `controls.ts`/`action-feedback.ts`, and the spacing/control tokens in `src/ui/components.css`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.
 
