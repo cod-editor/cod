@@ -184,6 +184,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     return;
   }
+  if (m.method === "thread/items/list" && mode === "no-history-ack") return;
   if (["thread/list", "session/list"].includes(m.method)) {
     reply(
       m,

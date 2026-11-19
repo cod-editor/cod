@@ -18,6 +18,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
 import { icon, iconButton, menu } from "./controls";
+import { codexItemsCursor } from "../conversation-history";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 function setChoiceCaption(button: HTMLButtonElement, text: string): void {
@@ -737,6 +738,7 @@ export function createConversationViews({
   }
 
   const historyCounts = new Map<string, number>();
+  const historyRequests = new Map<string, "loading" | { error: string }>();
   function recentCount(
     entries: Array<{ type: "message" | "tool"; message?: { text: string } }>,
   ): number {
@@ -779,7 +781,7 @@ export function createConversationViews({
     );
     historyCounts.set(conversation.id, count);
     const start = Math.max(0, timeline.length - count);
-    const earlier = (all = false) => {
+    const earlier = async (all = false, fetchNative = false) => {
       const current = getState().conversations.find(
         (item) => item.id === conversation.id,
       );
@@ -797,34 +799,89 @@ export function createConversationViews({
       ].sort((a, b) => a.order - b.order);
       const previous =
         historyCounts.get(conversation.id) ?? recentCount(entries);
-      if (previous >= entries.length) return;
+      const loadPage =
+        previous >= entries.length &&
+        fetchNative &&
+        current.historyPartial &&
+        codexItemsCursor(current.metadata);
+      if (previous >= entries.length && !loadPage) return;
       const old = views
         .get("chat:" + conversation.id)
         ?.querySelector<HTMLElement>(".transcript");
       const height = old?.scrollHeight ?? 0;
       const top = old?.scrollTop ?? 0;
-      const prefix = entries.slice(0, Math.max(0, entries.length - previous));
-      historyCounts.set(
-        conversation.id,
-        all ? entries.length : previous + recentCount(prefix),
-      );
-      invalidate();
+      const focusedNavigation =
+        old?.contains(document.activeElement) &&
+        document.activeElement?.hasAttribute("data-history-navigation");
+      if (loadPage) {
+        if (historyRequests.get(current.id) === "loading") return;
+        historyRequests.set(current.id, "loading");
+        invalidate();
+        try {
+          const { added } = await invoke<{ added: number }>(
+            "conversation.earlier-history",
+            { id: current.id },
+            { reportError: false },
+          );
+          historyCounts.set(
+            current.id,
+            (historyCounts.get(current.id) ?? previous) + added,
+          );
+          historyRequests.delete(current.id);
+        } catch (error) {
+          historyRequests.set(current.id, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        } finally {
+          invalidate();
+        }
+      } else {
+        const prefix = entries.slice(0, Math.max(0, entries.length - previous));
+        historyCounts.set(
+          conversation.id,
+          all ? entries.length : previous + recentCount(prefix),
+        );
+        invalidate();
+      }
       if (!all && old)
         requestAnimationFrame(() => {
-          old.scrollTop = top + old.scrollHeight - height;
+          if (
+            focusedNavigation &&
+            document.activeElement === document.body &&
+            old.isConnected &&
+            !old.querySelector("[data-history-navigation]")
+          )
+            old.focus({ preventScroll: true });
+          if (Math.abs(old.scrollTop - top) < 1)
+            old.scrollTop = top + old.scrollHeight - height;
         });
     };
     transcript.onscroll = (event) => {
-      if ((event.currentTarget as HTMLElement).scrollTop < 100) earlier();
+      if ((event.currentTarget as HTMLElement).scrollTop < 100) void earlier();
     };
-    transcript.addEventListener("cod:show-complete-history", () =>
-      earlier(true),
+    transcript.addEventListener(
+      "cod:show-complete-history",
+      () => void earlier(true),
     );
-    if (start) {
+    if (
+      start ||
+      (conversation.historyPartial && codexItemsCursor(conversation.metadata))
+    ) {
       const button = uiButton("Earlier messages", "quiet");
-      button.onclick = () => earlier();
+      button.onclick = () => void earlier(false, true);
       button.dataset.historyNavigation = "true";
+      button.dataset.focusKey = "earlier-history";
+      const request = historyRequests.get(conversation.id);
+      if (request === "loading") button.setAttribute("aria-busy", "true");
       transcript.append(button);
+      if (request && request !== "loading") {
+        const error = document.createElement("div");
+        error.className = "action-error";
+        error.setAttribute("role", "alert");
+        error.textContent = request.error;
+        transcript.append(error);
+      }
     }
     for (const entry of timeline.slice(start)) {
       if (entry.type === "message") {
@@ -932,7 +989,10 @@ export function createConversationViews({
     if (setup && !conversation.messages.length && !conversation.error)
       transcript.append(setup);
     body.append(transcript);
-    if (conversation.historyPartial) {
+    if (
+      conversation.historyPartial &&
+      !codexItemsCursor(conversation.metadata)
+    ) {
       const warning = document.createElement("div");
       warning.className = "history-warning";
       warning.textContent = "Earlier messages are not shown";
@@ -1337,6 +1397,7 @@ export function createConversationViews({
         ) {
           views.delete(id);
           historyCounts.delete(id.slice(id.indexOf(":") + 1));
+          historyRequests.delete(id.slice(id.indexOf(":") + 1));
         }
     },
   };

@@ -16,8 +16,10 @@ import {
   type ProviderEvent,
 } from "../providers";
 import {
+  codexItemsCursor,
   commitHistory,
   emptyHistory,
+  stageCodexItemsPage,
   stageCodexSnapshot,
   stageKimiEvent,
   type StagedHistory,
@@ -627,6 +629,42 @@ export class ConversationApplicationService {
       })
       .catch(() => undefined);
     return loading;
+  }
+
+  private async earlierHistory(id: string): Promise<{ added: number }> {
+    const conversation = this.store.conversation(id);
+    if (conversation.provider !== "codex" || !conversation.historyPartial)
+      return { added: 0 };
+    const adapter = await this.ensureController(conversation);
+    this.assertCurrent(conversation);
+    if (!conversation.historyPartial) return { added: 0 };
+    const cursor = codexItemsCursor(conversation.metadata);
+    if (!cursor || !adapter.earlierHistory)
+      throw new Error("Codex does not provide an earlier item cursor");
+    const { items, nextCursor, startsAtTail } =
+      await adapter.earlierHistory(cursor);
+    const staged = emptyHistory();
+    stageCodexItemsPage(staged, items, conversation.nativeId);
+    return this.store.change(() => {
+      this.assertCurrent(conversation);
+      // Resume, a moved cursor or controller replacement supersedes this page.
+      if (
+        this.controllers.get(id) !== adapter ||
+        codexItemsCursor(conversation.metadata) !== cursor
+      )
+        return { added: 0 };
+      const before = conversation.messages.length + conversation.tools.length;
+      commitHistory(conversation, staged, !startsAtTail);
+      conversation.historyPartial = Boolean(nextCursor);
+      conversation.metadata = {
+        ...object(conversation.metadata),
+        itemsBackwardsCursor: nextCursor ?? null,
+      };
+      return {
+        added:
+          conversation.messages.length + conversation.tools.length - before,
+      };
+    });
   }
 
   async loadController(
@@ -1529,6 +1567,8 @@ export class ConversationApplicationService {
           section as import("../providers/inspection").InspectionSection,
         );
       }
+      case "conversation.earlier-history":
+        return this.earlierHistory(requiredString(request, "id"));
       case "conversation.inspect":
         return structuredClone(
           this.store.conversation(requiredString(request, "id")),

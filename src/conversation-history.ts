@@ -170,9 +170,103 @@ export function stageKimiEvent(
   }
 }
 
+export function codexItemsCursor(metadata: unknown): string | undefined {
+  return text(object(metadata).itemsBackwardsCursor) || undefined;
+}
+
+export function stageCodexItemsPage(
+  staged: StagedHistory,
+  descending: unknown[],
+  nativeId: string,
+): void {
+  const turns = new Map<string, unknown[]>();
+  for (let index = descending.length - 1; index >= 0; index--) {
+    const { turnId, item } = object(descending[index]);
+    if (typeof turnId !== "string" || typeof object(item).id !== "string")
+      throw new Error("Codex returned an invalid history item");
+    const items = turns.get(turnId) ?? [];
+    if (!turns.has(turnId)) turns.set(turnId, items);
+    items.push(item);
+  }
+  stageCodexSnapshot(
+    staged,
+    {
+      historyMode: "paginated",
+      turns: [...turns].map(([id, items]) => ({ id, items })),
+    },
+    undefined,
+    nativeId,
+  );
+}
+
+type HistoryRow =
+  | { message: ConversationMessage; tool?: never }
+  | { message?: never; tool: ToolActivity };
+
+function orderedRows(
+  messages: ConversationMessage[],
+  tools: ToolActivity[],
+): HistoryRow[] {
+  const rows: HistoryRow[] = [
+    ...messages.map((message) => ({ message })),
+    ...tools.map((tool) => ({ tool })),
+  ];
+  return rows.sort(
+    (a, b) => (a.message ?? a.tool).order - (b.message ?? b.tool).order,
+  );
+}
+
+function mergeCodexPage(
+  conversation: ConversationState,
+  staged: StagedHistory,
+  matches: Map<string, string>,
+  earlier: boolean,
+): void {
+  const cached = orderedRows(conversation.messages, conversation.tools);
+  const positions = new Map(
+    cached.map((row, index) => [(row.message ?? row.tool).id, index]),
+  );
+  const replaced = new Set(matches.values());
+  const rows: HistoryRow[] = [];
+  const pending: HistoryRow[] = [];
+  let cacheIndex = 0;
+  const takeCached = (end: number) => {
+    while (cacheIndex < end) {
+      const row = cached[cacheIndex++]!;
+      if (!replaced.has((row.message ?? row.tool).id)) rows.push(row);
+    }
+  };
+  for (const row of orderedRows(staged.messages, staged.tools)) {
+    const match = matches.get((row.message ?? row.tool).id);
+    const position = match === undefined ? undefined : positions.get(match);
+    if (position === undefined) {
+      pending.push(row);
+      continue;
+    }
+    takeCached(position + 1);
+    const cachedRow = cached[position]!;
+    rows.push(
+      ...pending.splice(0),
+      earlier && (cachedRow.message ?? cachedRow.tool).id.includes("/")
+        ? cachedRow
+        : row,
+    );
+  }
+  if (earlier) rows.push(...pending.splice(0));
+  takeCached(cached.length);
+  rows.push(...pending);
+  conversation.messages = [];
+  conversation.tools = [];
+  rows.forEach(({ message, tool }, order) => {
+    if (message) conversation.messages.push({ ...message, order });
+    else conversation.tools.push({ ...tool, order });
+  });
+}
+
 export function commitHistory(
   conversation: ConversationState,
   staged: StagedHistory,
+  earlier = false,
 ): void {
   const application = conversation.messages.filter(
     (message) => message.origin === "application",
@@ -185,11 +279,18 @@ export function commitHistory(
       .replace(/\[Native [^\]]+ content\]/g, "")
       .replace(/(?:\s*\[Image \d+\]\s*)+$/g, "")
       .trim();
-  const cachedImages = conversation.messages.filter(
-    (message) => message.role === "user" && message.images?.length,
-  );
+  const cachedImages = staged.partial
+    ? []
+    : conversation.messages.filter(
+        (message) => message.role === "user" && message.images?.length,
+      );
   for (const message of native) {
-    if (message.role !== "user" || message.images?.length) continue;
+    if (
+      !cachedImages.length ||
+      message.role !== "user" ||
+      message.images?.length
+    )
+      continue;
     const matches = cachedImages.filter(
       (cached) => prompt(cached.text) === prompt(message.text),
     );
@@ -204,6 +305,7 @@ export function commitHistory(
       message.text = matches[0]!.text;
     }
   }
+  const matches = new Map<string, string>();
   const turnLinks = new Map<string, string>();
   const ambiguous = new Set<string>();
   const link = (
@@ -215,45 +317,92 @@ export function commitHistory(
       ambiguous.add(nativeTurn);
     else turnLinks.set(nativeTurn, localTurn);
   };
+  const itemId = (id: string) => id.slice(id.lastIndexOf("/") + 1);
+  const codex = conversation.provider === "codex";
+  const cachedMessages = new Map(
+    conversation.messages.map((row) => [row.id, row]),
+  );
+  const cachedTools = new Map(conversation.tools.map((row) => [row.id, row]));
+  for (const cached of [...conversation.messages, ...conversation.tools]) {
+    const canonical = /^codex\/[^/]+\/[^/]+\/[^/]+$/.test(cached.id);
+    if (canonical && !cached.id.startsWith("codex/live/"))
+      link(cached.id.slice(0, cached.id.lastIndexOf("/")), cached.turnId);
+  }
+  for (const tool of staged.tools) {
+    const candidates = codex
+      ? []
+      : conversation.tools.filter((row) => itemId(row.id) === itemId(tool.id));
+    const cached = codex
+      ? (cachedTools.get(tool.id) ??
+        cachedTools.get(`live/${conversation.nativeId}/${itemId(tool.id)}`))
+      : candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    if (cached) {
+      link(tool.turnId, cached.turnId);
+      matches.set(tool.id, cached.id);
+    }
+  }
+  if (codex) {
+    for (const message of native) {
+      const cached =
+        cachedMessages.get(message.id) ??
+        cachedMessages.get(
+          `codex/live/${conversation.nativeId}/${itemId(message.id)}`,
+        );
+      if (cached) {
+        link(message.turnId, cached.turnId);
+        matches.set(message.id, cached.id);
+      }
+    }
+  }
   for (const message of native) {
-    const byItem =
-      conversation.provider === "codex"
-        ? conversation.messages.filter(
-            (cached) =>
-              cached.id.split("/").at(-1) === message.id.split("/").at(-1),
-          )
-        : [];
+    const linkedTurn =
+      message.turnId && !ambiguous.has(message.turnId)
+        ? turnLinks.get(message.turnId)
+        : undefined;
+    const byItem = matches.get(message.id);
+    const samePrompt = (other: ConversationMessage) =>
+      other.role === message.role &&
+      prompt(other.text) === prompt(message.text);
     const sameText = conversation.messages.filter(
       (cached) =>
-        cached.role === message.role &&
-        prompt(cached.text) === prompt(message.text),
+        samePrompt(cached) &&
+        (!staged.partial ||
+          (message.role === "user" &&
+            !cached.id.includes("/") &&
+            linkedTurn &&
+            cached.turnId === linkedTurn)),
     );
-    const cached =
-      byItem.length === 1
-        ? byItem[0]
-        : sameText.length === 1 &&
-            native.filter(
-              (other) =>
-                other.role === message.role &&
-                prompt(other.text) === prompt(message.text),
-            ).length === 1
-          ? sameText[0]
-          : undefined;
+    const cached = byItem
+      ? cachedMessages.get(byItem)
+      : sameText.length === 1 &&
+          native.filter(
+            (other) =>
+              samePrompt(other) &&
+              (!staged.partial || other.turnId === message.turnId),
+          ).length === 1
+        ? sameText[0]
+        : undefined;
     if (cached) {
       link(message.turnId, cached.turnId);
+      matches.set(message.id, cached.id);
+      if ((byItem || staged.partial) && cached.images?.length) {
+        message.images = cached.images;
+        message.text = cached.text;
+      }
       message.phase ??= cached.phase;
       message.interactive ||= cached.interactive;
     }
   }
-  for (const tool of staged.tools) {
-    const cached = conversation.tools.filter(
-      (item) => item.id.split("/").at(-1) === tool.id.split("/").at(-1),
-    );
-    if (cached.length === 1) link(tool.turnId, cached[0]!.turnId);
-  }
   for (const item of [...native, ...staged.tools]) {
     if (item.turnId && !ambiguous.has(item.turnId))
       item.turnId = turnLinks.get(item.turnId) ?? item.turnId;
+  }
+  if (staged.partial && codex) {
+    mergeCodexPage(conversation, staged, matches, earlier);
+    conversation.historyPartial = true;
+    return;
   }
   const tools = staged.tools;
   const lastOrder = Math.max(
