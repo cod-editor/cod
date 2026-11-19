@@ -1479,19 +1479,35 @@ async function backgroundFixture(
 }
 
 test("Codex late background results preserve the parent reply, composer and native continuation", async () => {
-  await shell.configure({ codex: { backgroundActivity: true } });
+  await shell.configure({ codex: { backgroundActivity: true, options: true } });
   const workspace = await shell.create("Background checks");
   const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  const summary = pane.locator(
+    ".composer-actions .composer-background-summary",
+  );
+  await expect(summary).toHaveCount(0);
   await shell.send(chat.id, "Check the fixture in a child");
   await expect.poll(() => status(chat.id)).toBe("ready");
   await expect(transcript(chat)).toContainText(
     "Tests are running in the background.",
   );
-  const pane = shell.pane(chat.paneId);
-  const summary = pane.locator(
-    ".composer-actions details.composer-background summary",
+  await expect(summary).toHaveAccessibleName(
+    "Background activity: 1 agent, 1 shell",
   );
-  await expect(summary).toHaveText("In background · 1 subagent · 1 command");
+  await expect(summary.locator(":scope > span")).toHaveText([
+    "1 agent",
+    "1 shell",
+  ]);
+  await expect(summary.locator("svg")).toHaveCount(0);
+  const model = pane.getByRole("button", { name: "Model", exact: true });
+  await expect(model).toBeEnabled();
+  const modelBounds = await model.boundingBox();
+  const summaryBounds = await summary.boundingBox();
+  expect(Math.abs(modelBounds!.y - summaryBounds!.y)).toBeLessThanOrEqual(1);
+  await pane.locator(".composer-actions").screenshot({
+    path: test.info().outputPath("background-counts.png"),
+  });
   const list = pane.getByRole("list", { name: "Background activity" });
   await expect(list).toBeHidden();
   await summary.focus();
@@ -1513,7 +1529,12 @@ test("Codex late background results preserve the parent reply, composer and nati
   const close = await shell.raw("workspace", "close", "--id", workspace);
   expect(close.code).not.toBe(0);
   expect(close.stderr).toContain("Workspace has running agents or terminals");
-  await shell.page.setViewportSize({ width: 750, height: 650 });
+  await shell.page.setViewportSize({ width: 390, height: 650 });
+  const composer = await pane.locator(".composer").boundingBox();
+  const counts = await summary.boundingBox();
+  expect(counts!.x + counts!.width).toBeLessThanOrEqual(
+    composer!.x + composer!.width,
+  );
   await expect(list).toBeVisible();
   await shell.page.screenshot({
     path: test.info().outputPath("background-activity-narrow.png"),
@@ -1561,7 +1582,8 @@ test("Codex late background results preserve the parent reply, composer and nati
     childDone,
     childDone,
   ]);
-  await expect(summary).toHaveText("In background · 1 command");
+  await expect(summary).toHaveAccessibleName("Background activity: 1 shell");
+  await expect(summary).toHaveText("1 shell");
   await expect(list).toContainText("Invented child result");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this unrelated draft");
@@ -1644,7 +1666,7 @@ test("Codex running background state becomes unknown on restart", async () => {
     .toBe(3);
   await expect(
     shell.pane(chat.paneId).locator(".composer-background summary"),
-  ).toHaveText("In background · 1 subagent · 2 commands");
+  ).toHaveAccessibleName("Background activity: 1 agent, 2 shells");
   await backgroundFixture(chat, "legacy-child-done", [
     {
       method: "turn/completed",
@@ -1656,7 +1678,7 @@ test("Codex running background state becomes unknown on restart", async () => {
   ]);
   await expect(
     shell.pane(chat.paneId).locator(".composer-background summary"),
-  ).toHaveText("In background · 2 commands");
+  ).toHaveText("2 shells");
   await shell.stop();
   await shell.start();
   await shell.cli("conversation", "show", "--id", chat.id);
