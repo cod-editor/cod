@@ -29,13 +29,17 @@ trap cleanup EXIT
 
 package=$(COD_PACKAGE_VERSION="$version" node scripts/package.mjs)
 artifact=$(node -p 'JSON.parse(process.argv[1]).artifact' "$package")
-hdiutil create -volname "Cod Preview" -srcfolder "$artifact" -fs HFS+ -format UDZO "$stage/$name" >&2
+mkdir "$stage/image"
+ditto "$artifact/Cod.app" "$stage/image/Cod.app"
+ln -s /Applications "$stage/image/Applications"
+hdiutil create -volname "Cod Preview" -srcfolder "$stage/image" -fs HFS+ -format UDZO "$stage/$name" >&2
 hdiutil verify "$stage/$name" >&2
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$stage/$name" >&2
 mounted=true
+test "$(readlink "$mount/Applications")" = /Applications
 mkdir "$stage/installed"
 ditto "$mount/Cod.app" "$stage/installed/Cod.app"
-ditto "$mount/codctl" "$stage/installed/codctl"
+ditto "$artifact/codctl" "$stage/installed/codctl"
 node tests/support/electron/check-package.mjs "$stage/installed" "$version" >&2
 hdiutil detach "$mount" >&2
 mounted=false
