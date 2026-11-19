@@ -19,6 +19,12 @@ export function keyboardSurface(
   if (element?.matches(".composer textarea")) return "composer";
   if (element?.closest(".review-line, .review-document")) return "review";
   if (element?.closest(".file-editor")) return "editor";
+  if (
+    element
+      ?.closest("[data-browser-pane]")
+      ?.querySelector(".browser-navigation:not([hidden])")
+  )
+    return "browser-controls";
   return "shell";
 }
 export function isReviewCommentSave(event: KeyboardEvent): boolean {
@@ -120,7 +126,7 @@ export function showKeyboardShortcuts(
       ].join(" / ");
       const surfaces = [...new Set(bindings.flatMap((b) => b.surfaces))];
       const context =
-        surfaces.length === 7
+        surfaces.length === 8
           ? "Anywhere in Cod"
           : surfaces.length
             ? surfaces
@@ -132,6 +138,7 @@ export function showKeyboardShortcuts(
                       composer: "Chat input",
                       terminal: "Terminal",
                       browser: "Web page",
+                      "browser-controls": "Browser controls",
                       "agent-page": "Agent page",
                       review: "Review source",
                     })[s],

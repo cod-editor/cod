@@ -1051,6 +1051,13 @@ export function createCommands(
       pane?.kind !== "browser"
     )
       return "Select a browser tab first";
+    if (
+      id === "browser.reload" &&
+      (pane?.kind !== "browser" ||
+        getState().browsers.find((item) => item.id === pane.browserId)
+          ?.agentPage)
+    )
+      return "Select a web browser tab first";
     if (id === "pane.focusRight" && !layout.sidePane("right", w))
       return "Right pane is not open";
     if (
@@ -1309,6 +1316,10 @@ export function createCommands(
           break;
         case "browser.default":
           defaultBrowserDialog();
+          break;
+        case "browser.reload":
+          if (pane?.kind === "browser")
+            await invoke("browser.reload", { id: pane.browserId });
           break;
         case "browser.address": {
           const input = panes.querySelector<HTMLInputElement>(

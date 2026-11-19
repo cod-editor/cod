@@ -509,7 +509,9 @@ export class BrowserApplicationService {
       // Hiding a pane chooses its replacement after layout is committed. Moving
       // native focus first can revive a stale editor and echo pane.focus back,
       // racing the hide and reopening the pane that was just hidden.
+      // Reload keeps focus in its native web view.
       if (
+        match.command !== "browser.reload" &&
         match.command !== "pane.toggleLeft" &&
         match.command !== "pane.toggleRight" &&
         match.command !== "pane.zoom"
