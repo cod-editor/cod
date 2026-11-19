@@ -1365,15 +1365,14 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
   await expect(sourceTab.locator(".tab-pin")).toBeVisible();
   await expect(sourceTab.locator(".tab-modified")).toBeVisible();
   await sourceTab.click({ button: "right" });
-  await expect(
-    app.page
-      .locator("dialog.context-menu")
-      .getByRole("button", {
-        name: "Close tab",
-        exact: true,
-      })
-      .locator("kbd"),
-  ).toHaveText("");
+  const closePinned = app.page
+    .locator("dialog.context-menu")
+    .getByRole("button", {
+      name: "Close tab",
+      exact: true,
+    });
+  await expect(closePinned).toBeVisible();
+  await expect(closePinned.locator("kbd")).toHaveCount(0);
   await app.page.keyboard.press("Escape");
   await app.page.screenshot({
     path: info.outputPath("source-modified-tabs.png"),

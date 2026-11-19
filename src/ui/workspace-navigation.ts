@@ -7,6 +7,7 @@ import {
   type NavigationItem,
 } from "./navigation-model";
 import { icon, menu, type MenuAction } from "./controls";
+import { confirmAction } from "./dialogs";
 import { readPreference, writePreference } from "./preferences";
 import type { AppState, ConversationState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
@@ -18,10 +19,6 @@ interface NavigationActions {
     conversation: ConversationState,
     rename?: () => void,
   ) => Array<NavigationAction | null>;
-  paneButton: (
-    label: string,
-    action: () => Promise<unknown>,
-  ) => HTMLButtonElement;
 }
 export function createWorkspaceNavigation(
   tree: HTMLElement,
@@ -29,8 +26,7 @@ export function createWorkspaceNavigation(
   invoke: Invoke,
   actions: NavigationActions,
 ) {
-  const { newConversation, folderDialog, conversationActions, paneButton } =
-    actions;
+  const { newConversation, folderDialog, conversationActions } = actions;
   function applyStatus(
     row: HTMLElement,
     label: string,
@@ -98,22 +94,13 @@ export function createWorkspaceNavigation(
       void close();
       return;
     }
-    const dialog = document.createElement("dialog");
-    dialog.setAttribute("aria-label", "Close workspace");
-    const title = document.createElement("h2");
-    title.textContent = `Close ${workspace.name}?`;
-    const text = document.createElement("p");
-    text.textContent = `${agents.length} active agent${agents.length === 1 ? "" : "s"} and ${terminals.length} running terminal${terminals.length === 1 ? "" : "s"} will stop.`;
-    const cancel = paneButton("Cancel", async () => dialog.close());
-    const confirm = paneButton("Stop and close", async () => {
-      await close(true);
-      dialog.close();
-    });
-    dialog.append(title, text, cancel, confirm);
-    document.body.append(dialog);
-    dialog.onclose = () => dialog.remove();
-    dialog.showModal();
-    cancel.focus();
+    confirmAction(
+      `Close ${workspace.name}?`,
+      `${agents.length} active agent${agents.length === 1 ? "" : "s"} and ${terminals.length} running terminal${terminals.length === 1 ? "" : "s"} will stop.`,
+      "Stop and close",
+      () => close(true),
+      "Close workspace",
+    );
   }
   tree.addEventListener("focusin", (event) => {
     const row = (event.target as HTMLElement).closest<HTMLElement>(
@@ -344,12 +331,14 @@ export function createWorkspaceNavigation(
             : renameConversation(item.id));
     const open = () =>
       overrides.open ? overrides.open(item) : void openItem(item);
+    const inTree = !overrides.open;
+    const activeWorkspace = state.activeWorkspaceId === workspace.id;
     if (item.kind === "workspace")
       return [
-        { label: "Open workspace", run: open },
+        { label: "Open workspace", key: inTree ? "Space" : "Enter", run: open },
         {
           label: "New chat",
-          command: "chat.new",
+          command: activeWorkspace ? "chat.new" : undefined,
           run: () =>
             overrides.newConversation
               ? overrides.newConversation(item.workspaceId)
@@ -357,10 +346,15 @@ export function createWorkspaceNavigation(
                   newConversation(),
                 ),
         },
-        { label: "Rename workspace", command: "workspace.rename", run: rename },
+        {
+          label: "Rename workspace",
+          command: "workspace.rename",
+          key: inTree ? "Enter" : undefined,
+          run: rename,
+        },
         {
           label: "Add folder...",
-          command: "folders.add",
+          command: activeWorkspace ? "folders.add" : undefined,
           run: () => folderDialog(item.workspaceId),
         },
         null,
@@ -371,6 +365,7 @@ export function createWorkspaceNavigation(
         },
       ];
     const pane = workspace.panes.find((p) => p.id === item.paneId);
+    const activeTab = activeWorkspace && workspace.activePaneId === pane?.id;
     const group = workspace.groups?.find((g) =>
       g.paneIds.includes(item.paneId ?? ""),
     );
@@ -379,7 +374,7 @@ export function createWorkspaceNavigation(
           null,
           {
             label: pane.pinned ? "Unpin tab" : "Pin tab",
-            command: "tab.togglePin",
+            command: activeTab ? "tab.togglePin" : undefined,
             run: () =>
               void invoke("pane.pin", {
                 workspace: workspace.id,
@@ -389,13 +384,17 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Close tab",
-            command: pane.pinned ? undefined : "tab.close",
+            command: activeTab && !pane.pinned ? "tab.close" : undefined,
+            key:
+              inTree && item.kind === "browser" && !pane.pinned
+                ? "Delete"
+                : undefined,
             run: () =>
               void closeItem(item, true, overrides.restoreTree !== false),
           },
           {
             label: "Close other tabs",
-            command: "tab.closeOthers",
+            command: activeTab ? "tab.closeOthers" : undefined,
             disabled: !group?.paneIds.some(
               (id) =>
                 id !== pane.id &&
@@ -411,7 +410,7 @@ export function createWorkspaceNavigation(
           },
           {
             label: "Close all tabs",
-            command: "tab.closeAll",
+            command: activeTab ? "tab.closeAll" : undefined,
             disabled: !group?.paneIds.some(
               (id) => !workspace.panes.find((p) => p.id === id)?.pinned,
             ),
@@ -428,8 +427,14 @@ export function createWorkspaceNavigation(
     if (item.kind === "conversation") {
       const conversation = state.conversations.find((c) => c.id === item.id)!;
       return [
-        { label: "Open conversation", run: open },
+        {
+          label: "Open conversation",
+          key: inTree ? "Space" : "Enter",
+          run: open,
+        },
         ...conversationActions(conversation, rename).map((action) => {
+          if (action?.command === "conversation.rename" && inTree)
+            return { ...action, key: "Enter" as const };
           if (action?.command !== "conversation.openCli" || !overrides.openPane)
             return action;
           const terminal = state.terminals.find(
@@ -447,7 +452,7 @@ export function createWorkspaceNavigation(
     }
     if (item.kind === "browser")
       return [
-        { label: "Open tab", run: open },
+        { label: "Open tab", key: "Enter", run: open },
         {
           label: "Reload",
           run: () => void invoke("browser.reload", { id: item.id }),
@@ -455,7 +460,10 @@ export function createWorkspaceNavigation(
         ...tabActions,
       ];
     if (item.kind === "terminal")
-      return [{ label: "Open terminal", run: open }, ...tabActions];
+      return [
+        { label: "Open terminal", key: "Enter", run: open },
+        ...tabActions,
+      ];
     return [{ label: "Open review", run: open }, ...tabActions];
   }
   let renderedSignature = "";

@@ -1330,8 +1330,9 @@ for (const feedback of [false, true])
     await expect(
       shell.page
         .locator(".context-menu")
-        .getByRole("button", { name: "Add comment", exact: true }),
-    ).toBeVisible();
+        .getByRole("button", { name: "Add comment", exact: true })
+        .locator("kbd"),
+    ).toHaveText(process.platform === "darwin" ? "⌘⇧M" : "Ctrl+Shift+M");
     await shell.page.keyboard.press("Escape");
     await expect(more).toBeFocused();
     await tabTo(shell.page, preview());

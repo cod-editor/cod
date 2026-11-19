@@ -81,7 +81,6 @@ const navigation = createWorkspaceNavigation(tree, () => state, invoke, {
   folderDialog: (workspace, restoreFocus) =>
     commands.folder(workspace, restoreFocus),
   conversationActions: (c, rename) => commands.conversationActions(c, rename),
-  paneButton,
 });
 const projects = new FileTree(
   document.querySelector("#project-panel")!,

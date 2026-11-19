@@ -990,6 +990,14 @@ test("Settings-related input dialogs retain native submission and exact cancel f
       name: "Chat maximum width (pixels)",
       exact: true,
     });
+    await expect(
+      dialog
+        .getByRole("button", { name: "Cancel", exact: true })
+        .locator("kbd"),
+    ).toHaveText("Esc");
+    await expect(
+      dialog.getByRole("button", { name: "Save", exact: true }).locator("kbd"),
+    ).toHaveText("Enter");
     await value.fill("1250");
     await value.press("Escape");
     await expect(dialog).toHaveCount(0);

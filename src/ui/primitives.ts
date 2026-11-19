@@ -18,6 +18,35 @@ export function uiButton(
   }
   return button;
 }
+export function shortcutHint(text = ""): HTMLElement {
+  const key = document.createElement("kbd");
+  key.className = "shortcut-hint";
+  key.textContent = text;
+  key.setAttribute("aria-hidden", "true");
+  return key;
+}
+export function keyHintButton(button: HTMLButtonElement, key: string) {
+  button.classList.add("with-key-hint");
+  button.append(shortcutHint(key));
+  return button;
+}
+export function pickerShortcuts(activate: string): HTMLElement {
+  const footer = document.createElement("footer");
+  footer.className = "picker-footer";
+  footer.setAttribute("aria-hidden", "true");
+  footer.setAttribute("data-no-results", "");
+  for (const [label, keys] of [
+    ["Select", "↑ ↓"],
+    [activate, "Enter"],
+    ["Close", "Esc"],
+  ]) {
+    const item = document.createElement("span");
+    item.toggleAttribute("data-result-shortcut", label !== "Close");
+    item.append(label, shortcutHint(keys));
+    footer.append(item);
+  }
+  return footer;
+}
 export function actionRow(...children: Array<Node | string>) {
   const row = document.createElement("div");
   row.className = "ui-actions";

@@ -401,10 +401,15 @@ export function formatBinding(
 export function formatShortcut(
   id: CommandId,
   platform: KeyboardPlatform,
+  surface?: KeyboardSurface,
 ): string {
   const binding = commands
     .find((command) => command.id === id)
-    ?.bindings.find((item) => !item.platform || item.platform === platform);
+    ?.bindings.find(
+      (item) =>
+        (!item.platform || item.platform === platform) &&
+        (!surface || item.surfaces.includes(surface)),
+    );
   return binding ? formatBinding(binding, platform) : "";
 }
 

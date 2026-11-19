@@ -5,6 +5,7 @@ import type { WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
 import { icon, menu } from "./controls";
+import { pickerShortcuts } from "./primitives";
 interface Entry {
   name: string;
   path: string;
@@ -63,7 +64,11 @@ export class FileTree {
       event.preventDefault();
       const id = this.workspace.id;
       menu({ x: event.clientX, y: event.clientY }, [
-        { label: "Add folder...", run: () => this.addFolder(id) },
+        {
+          label: "Add folder...",
+          command: "folders.add",
+          run: () => this.addFolder(id),
+        },
       ]);
     };
     this.timer = setInterval(() => {
@@ -237,7 +242,11 @@ export class FileTree {
     };
     const context = (x: number, y: number) =>
       menu({ x, y }, [
-        { label: "Search in files...", run: () => this.search() },
+        {
+          label: "Search in files...",
+          command: "files.search",
+          run: () => this.search(),
+        },
         {
           label: "Open terminal here",
           run: () =>
@@ -318,7 +327,7 @@ export class FileTree {
       e.preventDefault();
       e.stopPropagation();
       menu({ x: e.clientX, y: e.clientY }, [
-        { label: "Open", run: open },
+        { label: "Open", key: "Enter", run: open },
         {
           label: "Review document",
           run: () =>
@@ -500,7 +509,8 @@ export class FileTree {
     results.className = "command-list";
     results.setAttribute("role", "region");
     results.setAttribute("aria-label", "Search results");
-    dialog.append(input, results);
+    const footer = pickerShortcuts("Open");
+    dialog.append(input, results, footer);
     document.body.append(dialog);
     const restore = () => this.focus.restore(previous);
     dialog.oncancel = (event) => {
@@ -515,7 +525,9 @@ export class FileTree {
       dialog.remove();
       if (!performed && abandoned) restore();
     };
-    const selection = createSearchList(input, results);
+    const selection = createSearchList(input, results, {
+      onSelect: (row) => footer.toggleAttribute("data-no-results", !row),
+    });
     let generation = 0,
       timer: ReturnType<typeof setTimeout>;
     let fileList: Entry[] = [];
@@ -574,6 +586,7 @@ export class FileTree {
       }
       if (!input.value.trim()) {
         results.replaceChildren();
+        selection.update();
         return;
       }
       try {
@@ -591,7 +604,10 @@ export class FileTree {
         );
         if (current === generation) fill(result.matches, result.truncated);
       } catch (e) {
-        if (current === generation) results.textContent = String(e);
+        if (current === generation) {
+          results.textContent = String(e);
+          selection.update();
+        }
       }
     };
     if (files) {
