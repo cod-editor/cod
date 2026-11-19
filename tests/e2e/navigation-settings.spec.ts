@@ -212,7 +212,7 @@ test("Settings adjust the actual interface, editor and chat text and survive res
   }
 });
 
-test("Folder actions use the native chooser from Commands and empty and populated file trees", async ({}, info) => {
+test("Folder actions use the native chooser from Commands, Overview and empty and populated file trees", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -230,6 +230,28 @@ test("Folder actions use the native chooser from Commands and empty and populate
     await app.command("Add folder");
     expect((await app.workspace(workspace)).folders).toHaveLength(0);
     await expect(app.page.getByRole("dialog")).toHaveCount(0);
+    const background = await app.cli<{ id: string }>(
+      "workspace",
+      "create",
+      "--name",
+      "Background folder target",
+    );
+    const overview = await app.overview();
+    const search = overview.getByRole("combobox", { name: "Search Overview" });
+    await search.fill("Background folder target");
+    await choose(app.folders[0]);
+    await app.row("Background folder target").click({ button: "right" });
+    await app.page
+      .getByRole("button", { name: "Add folder...", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await app.workspace(background.id)).folders.length)
+      .toBe(1);
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("Background folder target");
+    expect((await app.state()).activeWorkspaceId).toBe(workspace);
+    expect((await app.workspace(workspace)).folders).toHaveLength(0);
+    await search.press("Escape");
     const filesToggle = app.page.getByRole("button", {
       name: "Toggle files",
       exact: true,
@@ -278,7 +300,7 @@ test("Folder actions use the native chooser from Commands and empty and populate
   }
 });
 
-test("Header split mode follows position while the sidebars stay independent", async ({}, info) => {
+test("Header split mode follows position while the Files panel stays independent", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -402,9 +424,10 @@ test("Searchable command palette keeps typing focus and shows the action Enter w
       app.page.getByRole("textbox", { name: "Workspace name", exact: true }),
     ).toBeFocused();
     await app.page.keyboard.press("Escape");
-    await expect(
-      app.page.getByRole("treeitem", { name: /Keyboard navigation/ }).first(),
-    ).toBeFocused();
+    const search = app.page.getByRole("combobox", { name: "Search Overview" });
+    await expect(search).toBeFocused();
+    await search.press("Escape");
+    await expect(composer).toBeFocused();
     expect(
       await composer.evaluate(
         (node) => (node as HTMLTextAreaElement).selectionStart,

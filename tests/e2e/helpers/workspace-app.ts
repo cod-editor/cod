@@ -246,10 +246,23 @@ export class WorkspaceApp {
     await dialog.getByRole("textbox").fill(name);
     await dialog.getByRole("button", { name, exact: true }).click();
   }
-  row(name: string) {
-    return this.page.getByRole("treeitem", {
-      name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  async overview() {
+    const dialog = this.page.getByRole("dialog", {
+      name: "Overview",
+      exact: true,
     });
+    if (!(await dialog.isVisible()))
+      await this.page.keyboard.press(`${modifier}+Shift+O`);
+    await expect(dialog).toBeVisible();
+    return dialog;
+  }
+
+  row(name: string) {
+    return this.page
+      .getByRole("dialog", { name: "Overview", exact: true })
+      .getByRole("gridcell", {
+        name: new RegExp("^" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      });
   }
   pane(id: string) {
     return this.page

@@ -817,19 +817,12 @@ export class WorkspaceApplicationService {
           )
             throw new Error("settings must be an object");
           const settings = object(request.settings);
-          for (const key of ["filesVisible", "workspacesVisible"])
-            if (
-              settings[key] !== undefined &&
-              typeof settings[key] !== "boolean"
-            )
-              throw new Error(`${key} must be boolean`);
-          const allowed = [
-            "filesVisible",
-            "workspacesVisible",
-            "chatMaxWidth",
-            "workspacesWidth",
-            "filesWidth",
-          ];
+          if (
+            settings.filesVisible !== undefined &&
+            typeof settings.filesVisible !== "boolean"
+          )
+            throw new Error("filesVisible must be boolean");
+          const allowed = ["filesVisible", "chatMaxWidth", "filesWidth"];
           if (Object.keys(settings).some((key) => !allowed.includes(key)))
             throw new Error("Unknown workspace setting");
           if (
@@ -840,17 +833,15 @@ export class WorkspaceApplicationService {
               settings.chatMaxWidth > 10000)
           )
             throw new Error("chatMaxWidth must be between 320 and 10000");
-          for (const key of ["workspacesWidth", "filesWidth"]) {
-            const width = settings[key];
-            if (
-              width !== undefined &&
-              (typeof width !== "number" ||
-                !Number.isFinite(width) ||
-                width < 160 ||
-                width > 800)
-            )
-              throw new Error(`${key} must be between 160 and 800`);
-          }
+          const width = settings.filesWidth;
+          if (
+            width !== undefined &&
+            (typeof width !== "number" ||
+              !Number.isFinite(width) ||
+              width < 160 ||
+              width > 800)
+          )
+            throw new Error("filesWidth must be between 160 and 800");
           workspace.settings = { ...workspace.settings, ...settings };
           return workspace.settings;
         });

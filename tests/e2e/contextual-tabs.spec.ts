@@ -1312,16 +1312,39 @@ test("Newer navigation cancels automatic follow while a contextual terminal is b
 });
 
 test("Tabs keep review identity and unsaved state visible beside truncated filenames", async ({}, info) => {
-  await app.page
-    .locator(`[data-navigation-key="workspace:${workspace}"]`)
+  const overview = await app.overview();
+  await overview
+    .locator(
+      `button.overview-item[data-navigation-key="workspace:${workspace}"]`,
+    )
     .click({ button: "right" });
   await expect(
     app.page
       .locator("dialog.context-menu")
       .getByRole("button", { name: "New chat", exact: true })
       .locator("kbd"),
-  ).toHaveText(process.platform === "darwin" ? /⌘.*N/ : /Ctrl.*N/);
+  ).toHaveText("");
   await app.page.keyboard.press("Escape");
+  const search = overview.getByRole("combobox", { name: "Search Overview" });
+  await expect(search).toBeFocused();
+  await search.press("Escape");
+
+  await app.page.keyboard.press(`${modifier}+Shift+P`);
+  const commands = app.page.getByRole("dialog", {
+    name: "Command palette",
+    exact: true,
+  });
+  const filter = commands.getByRole("textbox", {
+    name: "Filter commands",
+    exact: true,
+  });
+  await filter.fill("New chat");
+  await expect(
+    commands
+      .getByRole("button", { name: "New chat", exact: true })
+      .locator("kbd"),
+  ).toHaveText(process.platform === "darwin" ? /⌘.*N/ : /Ctrl.*N/);
+  await filter.press("Escape");
   const filename =
     "An intentionally long document name shared by the source and its review snapshot.md";
   const file = path.join(app.folders[0], filename);

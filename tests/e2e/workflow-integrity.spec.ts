@@ -686,14 +686,13 @@ test("Navigation disclosures and installation forms share compact geometry witho
     const fileRoot = app.page
       .getByRole("tree", { name: "File tree", exact: true })
       .getByRole("treeitem", { name: "alpha repo", exact: true });
-    const workspaceRow = app.row(workspace.name).first();
     const size = async (node: typeof fileRoot) =>
-      node.locator(".folder-state, .tree-disclosure .icon").evaluate((el) => ({
+      node.locator(".folder-state").evaluate((el) => ({
         w: el.getBoundingClientRect().width,
         h: el.getBoundingClientRect().height,
       }));
     await expect(fileRoot).toBeVisible();
-    expect(await size(fileRoot)).toEqual(await size(workspaceRow));
+    expect(await size(fileRoot)).toEqual({ w: 16, h: 16 });
     await fileRoot.focus();
     await fileRoot.press("ArrowLeft");
     await expect(fileRoot).toHaveAttribute("aria-expanded", "false");
@@ -707,13 +706,16 @@ test("Navigation disclosures and installation forms share compact geometry witho
       name: "Workspace name",
       exact: true,
     });
-    await expect(app.page.getByRole("dialog")).toHaveCount(0);
-    expect(await rename.evaluate((el) => !!el.closest(".workspace-row"))).toBe(
+    await expect(
+      app.page.getByRole("dialog", { name: "Overview", exact: true }),
+    ).toBeVisible();
+    expect(await rename.evaluate((el) => !!el.closest(".overview-row"))).toBe(
       true,
     );
     await app.page.screenshot({
       path: info.outputPath("inline-workspace-rename.png"),
     });
+    await app.page.keyboard.press("Escape");
     await app.page.keyboard.press("Escape");
     await app.command("Install agent integration...");
     const dialog = app.page.getByRole("dialog");

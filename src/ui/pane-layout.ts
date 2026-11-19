@@ -48,7 +48,9 @@ export function createPaneLayout(
   });
   splitButton.onpointerdown = (event) => event.preventDefault();
   document.querySelector("#pane-visibility")!.append(splitButton);
-  let settingsSignature = "";
+  const filesButton = iconButton("folder", "Toggle files", toggleFiles);
+  document.querySelector("#visibility-controls")!.append(filesButton);
+  const filesPanel = document.querySelector<HTMLElement>("#project-panel")!;
   function applyWorkspaceSettings(workspace?: WorkspaceState): void {
     splitButton.disabled = !workspace;
     splitButton.title = shortcutTitle("pane.zoom", "Toggle split view");
@@ -59,83 +61,20 @@ export function createPaneLayout(
           workspace.groups.every((group) => !group.hidden),
       ),
     );
-    if (!workspace) {
-      navigationWidths.clear();
-      settingsSignature = "";
-      for (const element of document.querySelectorAll<HTMLElement>(
-        ".sidebar, #project-panel, .navigation-handle",
-      ))
-        element.hidden = true;
-      const hasWorkspaces = getState().workspaces.length > 0;
-      if (hasWorkspaces)
-        document.querySelector<HTMLElement>(".sidebar")!.hidden = false;
-      const controls = document.querySelector("#visibility-controls")!;
-      controls.replaceChildren(
-        ...(["Toggle workspaces", "Toggle files"] as const).map(
-          (label, index) => {
-            const button = iconButton(
-              index ? "folder" : "workspace",
-              label,
-              () => {},
-            );
-            button.disabled = true;
-            button.setAttribute(
-              "aria-pressed",
-              String(hasWorkspaces && index === 0),
-            );
-            button.title = "Select a workspace to change panels";
-            return button;
-          },
-        ),
-      );
-      return;
-    }
+    const settings = workspace?.settings;
+    filesPanel.hidden = settings?.filesVisible !== true;
+    filesButton.disabled = !workspace;
+    filesButton.setAttribute("aria-pressed", String(!filesPanel.hidden));
+    filesButton.title = workspace
+      ? shortcutTitle("navigation.toggleFiles", "Toggle files")
+      : "Select a workspace to show files";
     navigationWidths.apply(workspace);
-    const settings = workspace.settings;
-    document
-      .querySelector(".sidebar")!
-      .toggleAttribute("hidden", settings?.workspacesVisible === false);
-    document
-      .querySelector("#project-panel")!
-      .toggleAttribute("hidden", settings?.filesVisible !== true);
     document.documentElement.style.setProperty(
       "--chat-max-width",
       settings?.chatMaxWidth
         ? `${settings.chatMaxWidth}px`
         : "var(--chat-default-max-width, 1100px)",
     );
-    const signature = JSON.stringify([
-      workspace.id,
-      settings?.workspacesVisible,
-      settings?.filesVisible,
-      shortcutTitle("navigation.toggleWorkspaces"),
-      shortcutTitle("navigation.toggleFiles"),
-    ]);
-    if (signature === settingsSignature) return;
-    settingsSignature = signature;
-    const controls = document.querySelector("#visibility-controls")!;
-    controls.replaceChildren();
-    for (const [key, name, label, command, enabled] of [
-      [
-        "workspacesVisible",
-        "workspace",
-        "Toggle workspaces",
-        "navigation.toggleWorkspaces",
-        settings?.workspacesVisible !== false,
-      ],
-      [
-        "filesVisible",
-        "folder",
-        "Toggle files",
-        "navigation.toggleFiles",
-        settings?.filesVisible === true,
-      ],
-    ] as const) {
-      const button = iconButton(name, label, () => toggleSetting(key));
-      button.setAttribute("aria-pressed", String(enabled));
-      button.title = shortcutTitle(command, label);
-      controls.append(button);
-    }
   }
   async function toggleSplit(workspace = activeWorkspace()): Promise<void> {
     if (workspace)
@@ -190,16 +129,12 @@ export function createPaneLayout(
     )
       return "At least one pane must remain open";
   }
-  function toggleSetting(key: "workspacesVisible" | "filesVisible"): void {
-    const w = activeWorkspace();
-    if (w)
+  function toggleFiles(): void {
+    const workspace = activeWorkspace();
+    if (workspace)
       void invoke("workspace.settings", {
-        id: w.id,
-        settings: {
-          [key]: !(key === "workspacesVisible"
-            ? w.settings?.[key] !== false
-            : w.settings?.[key] === true),
-        },
+        id: workspace.id,
+        settings: { filesVisible: workspace.settings?.filesVisible !== true },
       });
   }
   function renderWorkspace(workspace: WorkspaceState): HTMLElement {
@@ -705,7 +640,7 @@ export function createPaneLayout(
     dispose: () => navigationWidths.dispose(),
     render: renderWorkspace,
     applySettings: applyWorkspaceSettings,
-    toggle: toggleSetting,
+    toggleFiles,
     togglePane,
     sidePane,
     paneToggleReason,

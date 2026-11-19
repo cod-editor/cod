@@ -7,7 +7,7 @@ Product requirements, distinct from the capabilities currently shipped in [READM
 Cod is a simple desktop workspace for directing local coding agents and reviewing their work across several tasks.
 It brings conversations, repositories, documents, reviews, terminals and everyday browsing into persistent workspaces.
 Everything in Cod's own interface works from the keyboard and is controllable through its CLI.
-The workspace panel shows which sessions need attention.
+Overview shows which sessions need attention.
 
 Cod is for agent-driven work, including discussing requirements, writing specs, implementing changes and reviewing results.
 It includes basic editing for documentation and quick corrections.
@@ -47,14 +47,14 @@ The expected daily use includes 2-4 parallel tasks plus temporary conversations 
 
 ### Workspaces and attention
 
-| ID  | Requirement                                                                                                                                                                                                                                                       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WS1 | Create, name, switch and close workspaces containing zero or more folders and multiple repositories.                                                                                                                                                              |
-| WS2 | Workspaces can start empty and gain chats, folders and other panes as needed.                                                                                                                                                                                     |
-| WS3 | A visible workspace/session panel shows session activity and attention states, with workspace-level indications when a session needs attention.                                                                                                                   |
-| WS4 | A shortcut focuses the panel. Arrow keys navigate its workspace and session rows, with keyboard activation. A searchable Overview groups workspaces with chats, browser pages and terminals in a quick-switcher overlay; the sidebar retains detailed navigation. |
-| WS6 | Restore workspaces as left: pane layouts, open files and pages, saved conversations and the active pane.                                                                                                                                                          |
-| WS9 | CLI consumers can observe relevant workspace, session and review state changes. Transport and event schema are implementation decisions.                                                                                                                          |
+| ID  | Requirement                                                                                                                                                         |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS1 | Create, name, switch and close workspaces containing zero or more folders and multiple repositories.                                                                |
+| WS2 | Workspaces can start empty and gain chats, folders and other panes as needed.                                                                                       |
+| WS3 | Overview shows session activity and attention states with workspace-level indications.                                                                              |
+| WS4 | A shortcut opens Overview. Arrow keys select grouped workspaces, chats, browser pages, terminals and pending reviews, with keyboard actions on the selected result. |
+| WS6 | Restore workspaces as left: pane layouts, open files and pages, saved conversations and the active pane.                                                            |
+| WS9 | CLI consumers can observe relevant workspace, session and review state changes. Transport and event schema are implementation decisions.                            |
 
 Ship a provider integration plugin with the Cod skill and ready-made status hooks so users do not have to build their own status system. Offer setup in the first conversation for each detected provider profile, with a preview and an explicit install action. Remember dismissal for that profile and keep setup available in Commands. The plugin owns the rules mapping provider events to working, waiting and completion statuses. Users may extend these rules through hooks and scripts.
 Cod owns status storage, display and CLI updates, plus technical process and connection state. Do not duplicate the plugin's task-status rules in the application or infer task completion from a disconnected process.
@@ -131,16 +131,15 @@ Agent screenshots and agent browser control are outside v1; opening a URL throug
 
 ### Terminals, platform and interaction
 
-| ID  | Requirement                                                                                                                                             |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| T1  | Ordinary interactive terminal panes for shell commands and tools, alongside the proper agent chat UI.                                                   |
-| P1  | Linux and macOS support, with Linux first.                                                                                                              |
-| P2  | Simple, opinionated interface with few settings.                                                                                                        |
-| P3  | All Cod controls work from the keyboard, including chats, reviews, the workspace panel and pane management. Web pages keep their own keyboard behavior. |
-| P4  | Clear modules, few dependencies, quick builds and modest development disk use.                                                                          |
+| ID  | Requirement                                                                                                                                  |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| T1  | Ordinary interactive terminal panes for shell commands and tools, alongside the proper agent chat UI.                                        |
+| P1  | Linux and macOS support, with Linux first.                                                                                                   |
+| P2  | Simple, opinionated interface with few settings.                                                                                             |
+| P3  | All Cod controls work from the keyboard, including chats, reviews, Overview and pane management. Web pages keep their own keyboard behavior. |
+| P4  | Clear modules, few dependencies, quick builds and modest development disk use.                                                               |
 
-The visible workspace panel is the starting navigation model. It lists expandable workspaces with summarized attention status, conversation and browser-tab children and pending review requests beneath their originating conversations. Selecting a conversation or request jumps directly to it, including across workspaces. Tabs still arrange open content within each workspace. Browser notifications may later join this navigation model; notification infrastructure is deferred. Workspace-row context menus provide Rename, Add folder and Close workspace. Repository-root context menus provide removal from the workspace without deleting files. File browsing, quick-open by filename and workspace text search are separate interactions.
-Workspace rows have no separate disclosure arrow. Clicking the workspace icon toggles its children; clicking its label selects the workspace. A collapsed row shows a muted count of its conversations and browser tabs. Preserve manual collapse across restart and ordinary selection/status updates; explicitly navigating to a hidden conversation reveals it.
+Overview groups workspaces with their attention status, chats, browser tabs, terminals and reviews. Selecting a result jumps directly to it across workspaces. Workspace actions include Rename, Add folder and Close workspace. The independent Files panel shows attached roots and can detach them while preserving files on disk.
 Overview is a compact grouped quick switcher, not a dashboard or a second file tree. It shares workspace navigation identities and actions while leaving detailed file/review nesting inside the workspace.
 A new workspace opens with chat as its main view, with a provider selector in the chat rather than a separate provider-selection step. Existing workspaces reopen as left.
 The general New tab action creates a fresh tab matching the selected content kind; review and empty contexts fall back to a blank tab with a compact choice of file, browser, chat or terminal. The Plus control opens that type menu directly. Choosing content replaces a blank tab in place. Direct creation commands remain available, and blank tabs survive restart without starting a native process.
@@ -152,7 +151,7 @@ Keyboard navigation uses a shared command catalog for bindings, Commands, toolti
 Cod's own controls expose accessible names, roles and current states or values, including tab selection, expanded menus and splitter positions. Keyboard focus remains visible. Embedded web pages and extension popups keep their own accessibility behavior.
 
 Use compact creation controls rather than oversized workspace buttons. Discover shortcuts through tooltips and the command palette rather than permanent instructional labels.
-The default working arrangement places documents, reviews and browser pages on the left, and conversations and terminals in a tabbed area on the right. A new workspace shows only chat. Panes are universal tab groups: visibility and focus commands target their left/right position, not the kind of content currently open. Either area can hide or expand without closing its tabs, and restoring it preserves the previous arrangement and state. No bottom terminal dock is part of this default. The workspace panel remains at the far left; file navigation opens when needed.
+The default working arrangement places documents, reviews and browser pages on the left, and conversations and terminals in a tabbed area on the right. A new workspace shows only chat. Panes are universal tab groups: visibility and focus commands target their left/right position, not the kind of content currently open. Either area can hide or expand without closing its tabs, and restoring it preserves the previous arrangement and state. No bottom terminal dock is part of this default. The Files panel opens when needed.
 
 ## Technical direction and feasibility gates
 
@@ -196,7 +195,7 @@ Tests and screenshots compare against the agreed Cod experience, not Zed.
 The team performs QA; the stakeholder gives product and daily-use feedback.
 
 Success means the user can manage several local agent-driven tasks, write and review specs, review repository changes and do everyday browsing inside Cod.
-They can spot sessions needing attention in the workspace panel and reach them from the keyboard.
+They can spot sessions needing attention in Overview and reach them from the keyboard.
 Quick edits do not require leaving Cod; substantial traditional coding can remain in another editor.
 Agents understand and use Cod's CLI without repeatedly being taught their environment.
 
@@ -214,9 +213,9 @@ Competitor comparisons from earlier descriptions are not requirements and need f
 
 ## Interface conventions
 
-Use a fixed, bounded workspace selector centered in the title bar. Workspace and file visibility controls sit on its left, after native window controls; one split-view control sits on its right. There is no persistent footer. The workspace tree provides task/session/attention navigation; the independent file tree browses attached roots. Neither needs a redundant heading or bottom creation shelf. Text search belongs in Commands and its shortcut. Transient feedback stays visible without reserving a bottom strip.
+The workspace title opens Overview from the middle of the title bar. The Files button sits to the left and the split-view control sits to the right. The independent file tree browses attached roots. Text search remains available through Commands and its shortcut. Transient feedback uses the title bar.
 
-The split-view control switches between one tab group and both. The workspace and file sidebars have independent visibility. A split keeps its saved width, active group and tabs when toggled.
+The split-view control switches between one tab group and both. The Files panel has its own visibility. A split keeps its saved width, active group and tabs when toggled.
 
 Use compact One Dark editor conventions: neutral selection and focus, consistent row/tab sizing, content-sized tabs with bounded width and truncation, and no active-tab underline. Keep keyboard focus visible. Native window chrome follows the platform; websites and Bitwarden keep their own appearance. Secondary actions belong in context menus, shortcuts and Commands rather than persistent buttons or explanatory hints.
 
@@ -232,8 +231,8 @@ Reviews are actions on existing material, not a tab type to create from a generi
 
 Workspace and tab closure is recoverable. Closing a chat view preserves its session; closing a terminal ends its owned shell. Closing active workspace activity requires an explicit stop decision, with Cancel selected by default. Hiding only changes visibility. Saved context can reopen; ended processes never pretend to survive or replay their former commands.
 
-New workspace, browser tab and terminal actions open their working surface immediately without a preliminary form. A new workspace starts as Untitled and can be renamed later. A browser tab starts blank with its address field focused. A terminal uses the first workspace folder, or the home directory when no folder is attached. Navigation panel buttons align to the right edge of the workspace sidebar in the title bar.
+New workspace, browser tab and terminal actions open their working surface immediately without a preliminary form. A new workspace starts as Untitled and can be renamed later. A browser tab starts blank with its address field focused. A terminal uses the first workspace folder, or the home directory when no folder is attached. The Files button and workspace title are available in the title bar.
 
 Agents discover and control Cod through its CLI and installed skill. Environment variables identify the conversation and socket; `codctl context` reads current membership after moves. A separate agent-facing protocol is not needed for context or help.
 
-Rename edits the object label in place. Workspace rows support Rename from Commands/context menu and double-clicking their label. Enter or leaving the field saves a nonempty name; Escape cancels. Background updates preserve the edit and caret.
+Rename opens an inline editor in Overview for the selected workspace or conversation. Commands and the corresponding context menus use the same editor. Enter or leaving the field saves a nonempty name. Escape cancels. Background updates preserve the edit and caret.

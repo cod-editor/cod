@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { AppState } from "../../src/types";
 import { ChatApp } from "./helpers/chat-fixture/harness";
+import { modifier } from "./helpers/workspace-app";
 let shell: ChatApp;
 test.beforeEach(async () => {
   shell = new ChatApp();
@@ -11,95 +12,90 @@ test.afterEach(async () => {
   await shell?.cleanup();
 });
 
-test("Rename from a chat tab reveals collapsed and hidden workspace navigation in single-group view", async () => {
+const overviewRow = (kind: string, id: string) =>
+  shell.page.locator(
+    `.workspace-overview .overview-item[data-navigation-key="${kind}:${id}"]`,
+  );
+
+async function overviewAction(kind: string, id: string, label: string) {
+  const overview = await shell.overview();
+  await overviewRow(kind, id).click({ button: "right" });
+  await shell.page.getByRole("button", { name: label, exact: true }).click();
+  return overview;
+}
+
+test("Rename from a chat tab opens the targeted inline editor in Overview", async () => {
   const workspace = await shell.create("Rename navigation");
   const chat = await shell.newChat(workspace, "codex");
-  const parent = shell.page.locator(
-    `[role=treeitem][data-workspace-id="${workspace}"]`,
-  );
-  const row = shell.page.locator(
-    `[role=treeitem][data-workspace-id="${chat.id}"]`,
-  );
   const tab = shell.page.locator(`[role=tab][data-tab-id="${chat.paneId}"]`);
-  await parent
-    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
-    .click();
-  await expect(row).toHaveCount(0);
-  await tab.click({ button: "right" });
-  await shell.page.getByRole("button", { name: "Rename", exact: true }).click();
+  const rename = async () => {
+    await tab.click({ button: "right" });
+    await shell.page
+      .getByRole("button", { name: "Rename", exact: true })
+      .click();
+  };
   const input = shell.page.getByRole("textbox", {
     name: "Conversation name",
     exact: true,
   });
+  await rename();
   await expect(input).toBeFocused();
   await input.fill("Cancelled inline name");
   await input.press("Escape");
-  await expect(row).toBeFocused();
-  await expect(row).not.toContainText("Cancelled inline name");
-  await parent
-    .getByRole("button", { name: "Expand or collapse workspace", exact: true })
-    .click();
-  await shell.cli(
-    "workspace",
-    "settings",
-    "--id",
-    workspace,
-    "--settings",
-    JSON.stringify({ workspacesVisible: false }),
+  await expect(overviewRow("conversation", chat.id)).not.toContainText(
+    "Cancelled inline name",
   );
+  await shell.page.keyboard.press("Escape");
   await shell.cli("group", "toggle-split", "--workspace", workspace);
   await shell.cli("group", "toggle-split", "--workspace", workspace);
-  await tab.click({ button: "right" });
-  await shell.page.getByRole("button", { name: "Rename", exact: true }).click();
+  await rename();
   await expect(input).toBeFocused();
-  await expect(row).toBeVisible();
-  expect(
-    (await shell.cli<AppState>("state")).workspaces
-      .find((w) => w.id === workspace)!
-      .groups.filter((group) => !group.hidden),
-  ).toHaveLength(1);
   await input.fill("Visible renamed chat");
   await input.press("Enter");
-  await expect(row).toContainText("Visible renamed chat");
-  await expect(row).toBeFocused();
+  await expect(overviewRow("conversation", chat.id)).toContainText(
+    "Visible renamed chat",
+  );
+  await expect((await shell.overview()).getByRole("combobox")).toBeFocused();
+  expect(
+    (await shell.cli<AppState>("state")).workspaces
+      .find((item) => item.id === workspace)!
+      .groups.filter((group) => !group.hidden),
+  ).toHaveLength(1);
   expect(await shell.prompts()).toHaveLength(0);
 });
 
-test("Closing workspace rows keeps keyboard focus on a surviving neighbor and the empty-state switcher", async () => {
+test("Closing workspace results selects a surviving neighbor and supports reopen", async () => {
   const first = await shell.create("First navigation workspace");
   const middle = await shell.create("Middle navigation workspace");
   const last = await shell.create("Last navigation workspace");
-  const row = (id: string) =>
-    shell.page.locator(`[role=treeitem][data-workspace-id="${id}"]`);
-  const close = async (id: string) => {
-    await row(id).click({ button: "right" });
-    await shell.page
-      .getByRole("button", { name: "Close workspace", exact: true })
-      .click();
-    await expect(row(id)).toHaveCount(0);
-  };
-  await close(middle);
-  await expect(row(last)).toBeFocused();
-  await row(last).press("ArrowUp");
-  await expect(row(first)).toBeFocused();
-  await row(first).press("Space");
+  const overview = await overviewAction("workspace", middle, "Close workspace");
+  await expect(overviewRow("workspace", middle)).toHaveCount(0);
+  await expect(overviewRow("workspace", last)).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(overview.getByRole("combobox")).toBeFocused();
+  await overviewAction("workspace", last, "Close workspace");
+  await expect(overviewRow("workspace", first)).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await overview.getByRole("combobox").press("Enter");
   await expect
     .poll(async () => (await shell.state()).activeWorkspaceId)
     .toBe(first);
-  await close(first);
-  await expect(row(last)).toBeFocused();
-  await close(last);
-  // First launch may already have created its ordinary Untitled workspace.
-  // Close every surviving fixture workspace before asserting the empty state.
-  for (const workspace of (await shell.state()).workspaces)
-    await close(workspace.id);
-  await expect(
-    shell.page.getByRole("button", { name: "Overview", exact: true }),
-  ).toBeFocused();
+  for (const workspace of (await shell.state()).workspaces) {
+    await overviewAction("workspace", workspace.id, "Close workspace");
+    await expect(overviewRow("workspace", workspace.id)).toHaveCount(0);
+  }
+  await expect(overview).toContainText("No workspaces");
   expect((await shell.state()).workspaces).toHaveLength(0);
+  await overview.getByRole("combobox").press("Escape");
+  await shell.command("Reopen closed workspace");
+  expect((await shell.state()).workspaces).toHaveLength(1);
 });
 
-test("Workspace review rows open with Space or Enter and expose a single selected item", async () => {
+test("A pending review opens through Overview by keyboard and mouse after closing its tab", async () => {
   const workspace = await shell.create("Review keyboard navigation");
   await shell.cli(
     "workspace",
@@ -120,37 +116,45 @@ test("Workspace review rows open with Space or Enter and expose a single selecte
     "--conversation",
     chat.id,
   );
-  await shell.cli("conversation", "show", "--id", chat.id);
-  const row = shell.page.locator(
-    `[role=treeitem][data-workspace-id="${review.reviewId}"]`,
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    review.paneId,
   );
-  const parent = shell.page.locator(
-    `[role=treeitem][data-workspace-id="${workspace}"]`,
+  const overview = await shell.overview();
+  const search = overview.getByRole("combobox");
+  await search.fill("Review: spec.md");
+  await search.press("ArrowDown");
+  await expect(overviewRow("review", review.reviewId)).toHaveAttribute(
+    "aria-current",
+    "true",
   );
-  const chatRow = shell.page.locator(
-    `[role=treeitem][data-workspace-id="${chat.id}"]`,
+  await search.press("Enter");
+  await expect(shell.page.locator(".review-body")).toBeVisible();
+  const active = (await shell.cli<AppState>("state")).workspaces.find(
+    (item) => item.id === workspace,
+  )!;
+  expect(
+    active.panes.find((pane) => pane.id === active.activePaneId),
+  ).toMatchObject({ kind: "review", reviewId: review.reviewId });
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    active.activePaneId,
   );
-  await row.focus();
-  await row.press("Space");
-  await expect
-    .poll(async () => (await shell.workspace(workspace)).activePaneId)
-    .toBe(review.paneId);
-  await expect(row).toHaveAttribute("aria-selected", "true");
-  await expect(parent).toHaveAttribute("aria-selected", "false");
-  await expect(chatRow).toHaveAttribute("aria-selected", "false");
-  await shell.cli("conversation", "show", "--id", chat.id);
-  await expect(row).toHaveAttribute("aria-selected", "false");
-  await row.focus();
-  await row.press("Enter");
-  await expect(row).toHaveAttribute("aria-selected", "true");
-  await expect(
-    shell.page.getByRole("textbox", { name: "Conversation name", exact: true }),
-  ).toHaveCount(0);
+  await shell.overview();
+  await overviewRow("review", review.reviewId).click();
+  await expect(shell.page.locator(".review-body")).toBeVisible();
   expect(await shell.prompts()).toHaveLength(0);
 });
 
 async function palette() {
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   return shell.page.getByRole("dialog", {
     name: "Command palette",
@@ -158,14 +162,12 @@ async function palette() {
   });
 }
 
-test("Commands exposes conversation management and targets a focused background conversation", async () => {
+test("Commands and Overview expose conversation management with exact targets", async () => {
   const first = await shell.create("Source command workspace");
   const chat = await shell.newChat(first, "codex");
   const second = await shell.create("Destination command workspace");
   const other = await shell.newChat(second, "codex");
-  const row = () =>
-    shell.page.locator(`[role=treeitem][data-workspace-id="${chat.id}"]`);
-  await row().focus();
+  await shell.cli("conversation", "show", "--id", chat.id);
   let commands = await palette();
   for (const label of [
     "Rename conversation",
@@ -191,8 +193,11 @@ test("Commands exposes conversation management and targets a focused background 
   await expect(input).toBeFocused();
   await input.fill("Command renamed conversation");
   await input.press("Enter");
-  await expect(row()).toContainText("Command renamed conversation");
-  expect((await shell.state()).activeWorkspaceId).toBe(second);
+  await expect(overviewRow("conversation", chat.id)).toContainText(
+    "Command renamed conversation",
+  );
+  await shell.page.keyboard.press("Escape");
+  expect((await shell.state()).activeWorkspaceId).toBe(first);
   commands = await palette();
   await commands
     .getByRole("button", {
@@ -216,15 +221,8 @@ test("Commands exposes conversation management and targets a focused background 
     )
     .toBe(second);
   expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
-  await row().focus();
-  commands = await palette();
-  await commands
-    .getByRole("button", {
-      name: "Remove conversation from workspace",
-      exact: true,
-    })
-    .click();
-  await expect(row()).toHaveCount(0);
+  await overviewAction("conversation", chat.id, "Remove from workspace");
+  await expect(overviewRow("conversation", chat.id)).toHaveCount(0);
   expect(
     (await shell.cli<AppState>("state")).conversations.some(
       (item) => item.id === other.id,
@@ -232,13 +230,7 @@ test("Commands exposes conversation management and targets a focused background 
   ).toBe(true);
   await shell.cli("pane", "reopen", "--workspace", second);
   expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
-  await shell.page
-    .locator(`[role=treeitem][data-workspace-id="${first}"]`)
-    .focus();
-  commands = await palette();
-  await commands
-    .getByRole("button", { name: "Close workspace", exact: true })
-    .click();
+  await overviewAction("workspace", first, "Close workspace");
   await expect
     .poll(async () =>
       (await shell.state()).workspaces.some((item) => item.id === first),
@@ -309,9 +301,7 @@ test("Commands never retargets a removed conversation to another active chat", a
   const chat = await shell.newChat(first, "codex");
   const second = await shell.create("Other active command target");
   const other = await shell.newChat(second, "codex");
-  await shell.page
-    .locator(`[role=treeitem][data-workspace-id="${chat.id}"]`)
-    .focus();
+  await shell.cli("conversation", "show", "--id", chat.id);
   await shell.app!.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(780, 650),
   );
@@ -326,6 +316,7 @@ test("Commands never retargets a removed conversation to another active chat", a
     exact: true,
   });
   await expect(rename).toBeEnabled();
+  await shell.cli("workspace", "focus", "--id", second);
   await shell.cli("conversation", "remove", "--id", chat.id);
   await expect(rename).toBeDisabled();
   await expect(search).toBeFocused();

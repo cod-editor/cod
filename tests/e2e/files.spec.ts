@@ -135,9 +135,9 @@ test("S3 keyboard tree, highlighted editing, save and reopening preserve the int
     .locator("..")
     .getByRole("treeitem", { name: "same.ts", exact: true });
   await focusTreeItem(file);
-  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await app.overview();
   await expect(file).not.toBeFocused();
-  await app.page.keyboard.press(`${modifier}+Shift+W`);
+  await app.page.keyboard.press("Escape");
   await expect(file).toBeFocused();
   await activate(file);
   const pane = app.page

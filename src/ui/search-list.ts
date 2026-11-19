@@ -9,6 +9,7 @@ export function createSearchList(
     onSelect?: (row: HTMLButtonElement | undefined) => void;
   } = {},
 ) {
+  let rowSequence = 0;
   let selected: HTMLButtonElement | undefined;
   const prefix = `search-results-${++sequence}`;
   list.id ||= prefix;
@@ -37,10 +38,10 @@ export function createSearchList(
   }
   function update(preferred?: HTMLButtonElement): void {
     const visible = rows();
-    for (const [index, row] of [
-      ...list.querySelectorAll<HTMLButtonElement>(options.selector ?? "button"),
-    ].entries()) {
-      row.id ||= `${prefix}-${index}`;
+    for (const row of list.querySelectorAll<HTMLButtonElement>(
+      options.selector ?? "button",
+    )) {
+      row.id ||= `${prefix}-${++rowSequence}`;
       row.tabIndex = -1;
       row.classList.remove("selected");
       row.removeAttribute("aria-current");

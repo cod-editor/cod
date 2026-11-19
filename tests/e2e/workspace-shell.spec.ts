@@ -23,7 +23,7 @@ async function createFromUI(name: string) {
     shell.page.getByRole("textbox", { name: "Message", exact: true }),
   ).toBeFocused();
   await shell.command("Rename workspace");
-  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  const overview = await shell.overview();
   const rename = shell.page.getByRole("textbox", {
     name: "Workspace name",
     exact: true,
@@ -31,7 +31,8 @@ async function createFromUI(name: string) {
   await rename.fill(name);
   await rename.press("Enter");
   await expect(shell.row(name)).toBeVisible();
-  await expect(shell.row(name)).toBeFocused();
+  await expect(overview.getByRole("combobox")).toBeFocused();
+  await shell.page.keyboard.press("Escape");
   const workspace = (await shell.state()).workspaces.find(
     (item) => item.name === name,
   );
@@ -53,17 +54,13 @@ async function assertActive(workspaceId: string, paneId?: string) {
 
 test("AC1 creates and renames through UI, tracks two repositories, and switches workspaces", async () => {
   const first = await createFromUI("Draft task");
-  const controls = (await shell.page
-    .locator("#visibility-controls")
-    .boundingBox())!;
-  const sidebar = (await shell.page.locator(".sidebar").boundingBox())!;
-  expect(
-    Math.abs(controls.x + controls.width - (sidebar.x + sidebar.width - 8)),
-  ).toBeLessThan(2);
+  await expect(
+    shell.page.getByRole("button", { name: "Toggle files" }),
+  ).toBeVisible();
   expect((await shell.workspace(first)).folders).toEqual([]);
   expect((await shell.workspace(first)).panes).toHaveLength(1);
   await shell.command("Rename workspace");
-  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  const overview = await shell.overview();
   const rename = shell.page.getByRole("textbox", {
     name: "Workspace name",
     exact: true,
@@ -72,6 +69,8 @@ test("AC1 creates and renames through UI, tracks two repositories, and switches 
   await rename.press("Enter");
   await expect(shell.row("Specification task")).toBeVisible();
   await expect(shell.row("Draft task")).toHaveCount(0);
+  await expect(overview.getByRole("combobox")).toBeFocused();
+  await shell.page.keyboard.press("Escape");
   for (const folder of shell.folders)
     await shell.cli("workspace", "add-folder", "--id", first, "--path", folder);
   const workspace = await shell.workspace(first);
@@ -80,28 +79,39 @@ test("AC1 creates and renames through UI, tracks two repositories, and switches 
     expect(JSON.stringify(workspace.folders)).toContain(folder);
   const second = await createFromUI("Second task");
   await assertActive(second);
+  await shell.overview();
   await shell.row("Specification task").click();
   await assertActive(first);
   await shell.cli("workspace", "focus", "--id", second);
   await assertActive(second);
+  await shell.overview();
   await shell.row("Specification task").click();
   await assertActive(first);
 });
 
-test("AC2 navigates the panel and opens/dismisses the palette entirely by keyboard", async () => {
+test("AC2 navigates Overview and opens or dismisses Commands entirely by keyboard", async () => {
   const first = await shell.create("Alpha keyboard");
   const second = await shell.create("Beta keyboard");
   await shell.cli("workspace", "focus", "--id", first);
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  await expect(shell.row("Alpha keyboard")).toBeFocused();
+  await shell.overview();
+  await expect(shell.row("Alpha keyboard")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await shell.page.keyboard.press("ArrowDown");
-  await expect(shell.row("Beta keyboard")).toBeFocused();
-  await shell.page.keyboard.press("Space");
+  await expect(shell.row("Beta keyboard")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await shell.page.keyboard.press("Enter");
   await assertActive(second);
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await shell.overview();
   await shell.page.keyboard.press("ArrowUp");
-  await expect(shell.row("Alpha keyboard")).toBeFocused();
-  await shell.page.keyboard.press("Space");
+  await expect(shell.row("Alpha keyboard")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await shell.page.keyboard.press("Enter");
   await assertActive(first);
   const before = await shell.state();
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
@@ -347,7 +357,9 @@ test("AC6 applies explicit background targets without stealing workspace or pane
     "--path",
     shell.folders[1],
   );
+  await shell.overview();
   await expect(shell.row("Renamed background")).toBeVisible();
+  await shell.page.keyboard.press("Escape");
   await assertActive(foreground, paneId);
   expect((await shell.workspace(background)).name).toBe("Renamed background");
   expect((await shell.workspace(foreground)).folders).toEqual([]);
@@ -444,7 +456,9 @@ test("AC7 isolates renderer privileges and rejects commands from arbitrary web c
       "--name",
       "Legitimate private-state marker",
     );
+    await shell.overview();
     await expect(shell.row("Legitimate private-state marker")).toBeVisible();
+    await shell.page.keyboard.press("Escape");
     await shell.page.waitForTimeout(300);
     const leaked = await shell.app!.evaluate(
       async ({ webContents }, contentsId) => {
@@ -596,7 +610,9 @@ test("S1 recovers persisted state and stale socket after an abrupt app crash", a
   shell.app = undefined;
   await shell.start();
   expect(await shell.state()).toEqual(before);
+  await shell.overview();
   await expect(shell.row("Crash recovery fixture")).toBeVisible();
+  await shell.page.keyboard.press("Escape");
 });
 
 test("S1 rejects a second controller without unlinking the live instance socket", async () => {
@@ -642,7 +658,9 @@ test("S1 rejects a second controller without unlinking the live instance socket"
       "--name",
       "Still controlled by first instance",
     );
+    await shell.overview();
     await expect(shell.row("Still controlled by first instance")).toBeVisible();
+    await shell.page.keyboard.press("Escape");
   } finally {
     if (second.exitCode === null && second.signalCode === null)
       second.kill("SIGTERM");
@@ -734,7 +752,7 @@ test("S1 metadata updates preserve editor focus, draft and keyboard selection", 
     [background, "Background renamed"],
   ]) {
     await shell.cli("workspace", "rename", "--id", id, "--name", name);
-    await expect(shell.row(name)).toBeVisible();
+    expect((await shell.workspace(id)).name).toBe(name);
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("123456789");
     expect(
@@ -749,16 +767,20 @@ test("S1 metadata updates preserve editor focus, draft and keyboard selection", 
 test("Workspace rename stays inline through updates, saves on blur and cancels with Escape", async ({}, info) => {
   const first = await shell.create("Inline first");
   const second = await shell.create("Inline second");
-  await shell.row("Inline first").click({ button: "right" });
-  await shell.page
-    .getByRole("button", { name: "Rename workspace", exact: true })
-    .click();
+  const overview = await shell.overview();
+  const rename = async (label: string) => {
+    await shell.row(label).click({ button: "right" });
+    await shell.page
+      .getByRole("button", { name: "Rename workspace", exact: true })
+      .click();
+  };
+  await rename("Inline first");
   const input = shell.page.getByRole("textbox", {
     name: "Workspace name",
     exact: true,
   });
   await expect(input).toBeFocused();
-  await expect(shell.page.getByRole("dialog")).toHaveCount(0);
+  await expect(overview).toBeVisible();
   await input.fill("Edited first");
   await input.press("ArrowLeft");
   const caret = await input.evaluate(
@@ -782,22 +804,23 @@ test("Workspace rename stays inline through updates, saves on blur and cancels w
   await input.press("Escape");
   await expect(input).toHaveCount(0);
   expect((await shell.workspace(first)).name).toBe("Inline first");
-  await shell.row("Inline first").locator(".tree-label").dblclick();
+  await rename("Inline first");
   await expect(input).toBeFocused();
   await input.fill("Saved on blur");
-  await shell.row("Background update").click();
+  await overview.getByRole("combobox").focus();
   await expect(shell.row("Saved on blur")).toBeVisible();
-  await shell.row("Saved on blur").locator(".tree-label").dblclick();
+  await rename("Saved on blur");
   await input.fill("   ");
   await input.press("Enter");
   await expect(input).toHaveCount(0);
   expect((await shell.workspace(first)).name).toBe("Saved on blur");
   await shell.stop();
   await shell.start();
+  await shell.overview();
   await expect(shell.row("Saved on blur")).toBeVisible();
 });
 
-test("Workspace panel shortcut uses the selected workspace when its tree render is pending", async () => {
+test("Overview reads the active workspace while the shell render is pending", async () => {
   const first = await shell.create("Alpha pending render");
   await shell.create("Beta current render");
   await shell.page.evaluate(() => {
@@ -829,28 +852,23 @@ test("Workspace panel shortcut uses the selected workspace when its tree render 
   await expect(
     shell.page.getByRole("button", { name: "Overview", exact: true }),
   ).toHaveText("Beta current render");
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
+  await shell.overview();
   await shell.page.evaluate(() =>
     (
       window as unknown as { finishPendingFrame: () => void }
     ).finishPendingFrame(),
   );
-  await expect(shell.row("Alpha pending render")).toBeFocused();
   await expect(shell.row("Alpha pending render")).toHaveAttribute(
-    "aria-selected",
+    "aria-current",
     "true",
   );
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  const firstPane = (await shell.workspace(first)).activePaneId;
-  await expect(
-    shell
-      .pane(firstPane)
-      .getByRole("textbox", { name: "Message", exact: true }),
-  ).toBeFocused();
-  await shell.page.keyboard.press(`${modifier}+Shift+W`);
-  await expect(shell.row("Alpha pending render")).toBeFocused();
   await shell.page.keyboard.press("ArrowDown");
-  await expect(shell.row("Beta current render")).toBeFocused();
+  await expect(shell.row("Beta current render")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await shell.page.keyboard.press("Escape");
+  await assertActive(first);
 });
 
 test("Reopening a tab wins over a delayed focus continuation from the preceding close", async () => {

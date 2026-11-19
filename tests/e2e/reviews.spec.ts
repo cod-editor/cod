@@ -760,7 +760,7 @@ test("Review preflight failure retains definitely unsent feedback queued", async
   expect(await feedbackPrompts(submission.id)).toHaveLength(0);
 });
 
-test("Review closed panes reopen from workspace panel and private drafts protect workspace closure", async () => {
+test("Review closed panes reopen from Overview and private drafts protect workspace closure", async () => {
   const workspace = await shell.create("Persistent review access");
   const review = await open(workspace);
   await comment(review, "Keep accessible after pane close");
@@ -775,8 +775,8 @@ test("Review closed panes reopen from workspace panel and private drafts protect
   const failed = await shell.raw("workspace", "close", "--id", workspace);
   expect(failed.code).not.toBe(0);
   expect(failed.stderr).toContain("review drafts");
-  const row = shell.page.getByRole("treeitem", {
-    name: "spec.md, Review requested",
+  const row = (await shell.overview()).getByRole("gridcell", {
+    name: "Review: spec.md, Review requested",
     exact: true,
   });
   await row.click();

@@ -116,9 +116,6 @@ export const commands = [
     [key("KeyO", { mod: true, shift: true })],
     ["switch workspace", "switch conversation", "switch browser"],
   ),
-  entry("workspace.focusTree", "Focus workspaces / return", "Navigation", [
-    key("KeyW", { mod: true, shift: true }),
-  ]),
   entry("files.open", "Open file", "Files", [
     key("KeyP", { mod: true, platform: "darwin" }, host),
     key("KeyP", { mod: true, platform: "linux" }, cod),
@@ -281,9 +278,6 @@ export const commands = [
   entry("navigation.toggleFiles", "Toggle files", "Navigation", [
     key("KeyB", { mod: true, platform: "darwin" }, host),
     key("KeyB", { mod: true, platform: "linux" }, cod),
-  ]),
-  entry("navigation.toggleWorkspaces", "Toggle workspaces", "Navigation", [
-    key("KeyB", { mod: true, shift: true }),
   ]),
   entry("workspace.reopen", "Reopen closed workspace", "Workspace"),
 ] as const;
@@ -467,32 +461,20 @@ export const localGestures: readonly {
   {
     title: "Navigate tree",
     keys: ["Up", "Down", "Home", "End"],
-    context: "Workspace and file trees",
+    context: "File tree",
     aliases: ["arrow", "row", "first", "last"],
   },
   {
     title: "Expand or enter folder",
     keys: ["Right"],
-    context: "File tree; expands workspace rows in the workspace tree",
+    context: "File tree",
     aliases: ["arrow", "expand"],
   },
   {
     title: "Collapse or go to parent",
     keys: ["Left"],
-    context: "Workspace and file trees",
+    context: "File tree",
     aliases: ["arrow", "collapse"],
-  },
-  {
-    title: "Open selected workspace or conversation",
-    keys: ["Space"],
-    context: "Workspace tree",
-    aliases: ["activate", "select"],
-  },
-  {
-    title: "Rename selected workspace or conversation",
-    keys: ["Enter"],
-    context: "Workspace tree; Enter saves, Escape cancels",
-    aliases: ["name", "rename"],
   },
   {
     title: "Open selected item",

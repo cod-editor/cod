@@ -149,7 +149,7 @@ test("Fallback new tab retains persistent choices and replaces itself with each 
   expect((await state()).activePaneId).toBe(blankTab.paneId);
 });
 
-test("Workspace browser rows retain title, selection, keyboard navigation and recovery through restart", async ({}, info) => {
+test("Overview browser results retain title, selection, keyboard navigation and recovery through restart", async ({}, info) => {
   const file = path.join(app.folders[0], "invented.html");
   await writeFile(
     file,
@@ -163,16 +163,19 @@ test("Workspace browser rows retain title, selection, keyboard navigation and re
     "--url",
     pathToFileURL(file).href,
   );
+  const overview = await app.overview();
+  const search = overview.getByRole("combobox");
   const row = () =>
-    app.page.locator(`[role=treeitem][data-browser-id="${browser.id}"]`);
+    app.page
+      .getByRole("dialog", { name: "Overview", exact: true })
+      .locator(`.overview-item[data-navigation-key="browser:${browser.id}"]`);
   await expect(row()).toContainText("Invented browser page");
   await expect(row()).toHaveAttribute("aria-selected", "true");
-  await row().focus();
-  await row().press("ArrowUp");
+  await search.press("ArrowUp");
   expect((await state()).activePaneId).toBe(browser.paneId);
-  await app.page.keyboard.press("ArrowDown");
-  await expect(row()).toBeFocused();
-  await row().press("Enter");
+  await search.press("ArrowDown");
+  await expect(row()).toHaveAttribute("aria-current", "true");
+  await search.press("Enter");
   await expect(app.pane(browser.paneId)).toBeVisible();
   await expect(
     app.page.getByRole("textbox", { name: "Conversation name", exact: true }),
@@ -181,16 +184,17 @@ test("Workspace browser rows retain title, selection, keyboard navigation and re
     .app!.context()
     .pages()
     .find((page) => page.url() === pathToFileURL(file).href)!;
-  await row().focus();
+  await app.overview();
   await site.evaluate(() => {
     document.title = "Updated browser page " + "x".repeat(100000);
   });
   await expect(row()).toContainText("Updated browser page");
   expect((await row().textContent())!.length).toBeLessThanOrEqual(160);
-  await expect(row()).toBeFocused();
+  await expect(search).toBeFocused();
   await app.page.screenshot({
     path: info.outputPath("browser-workspace-row.png"),
   });
+  await search.press("Escape");
   const sourceGroup = (await state()).groups!.find((g) =>
     g.paneIds.includes(browser.paneId),
   )!.id;
@@ -223,21 +227,23 @@ test("Workspace browser rows retain title, selection, keyboard navigation and re
     "Other task",
   );
   await app.cli("workspace", "focus", "--id", other.id);
-  await row().focus();
-  await row().press("Space");
+  await app.overview();
+  await row().hover();
+  await search.press("Enter");
   await expect
     .poll(async () => (await app.state()).activeWorkspaceId)
     .toBe(workspace);
   await expect(app.pane(browser.paneId)).toBeVisible();
-  await row().press("Delete");
+  await app.overview();
+  await row().hover();
+  await search.press(`${modifier}+w`);
   await expect(row()).toHaveCount(0);
-  await expect(
-    app.page.locator(`[role=treeitem][data-workspace-id="${other.id}"]`),
-  ).toBeFocused();
+  await expect(search).toBeFocused();
   await app.cli("pane", "reopen", "--workspace", workspace);
   await expect(row()).toBeVisible();
   await app.stop();
   await app.start();
+  await app.overview();
   await expect(row()).toBeVisible();
   await expect(row()).toContainText("Invented browser page");
 });
