@@ -1,7 +1,7 @@
 import { test, expect, type Locator } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
-import { writeFile, realpath, readFile } from "node:fs/promises";
+import { mkdir, writeFile, realpath, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
@@ -360,18 +360,14 @@ test("Review AC2 separate real repositories retain old/new diff anchors and priv
       origin.id,
     );
     opened.push(review);
+    const headings = pane(review).getByRole("heading", { level: 3 });
+    await expect(headings).toHaveCount(2);
     await expect(
-      pane(review).getByRole("heading", {
-        name: `Old: ${canonicalFile}`,
-        exact: true,
-      }),
-    ).toBeVisible();
+      headings.filter({ hasText: "same ü file.txt" }),
+    ).toHaveAccessibleDescription(canonicalFile);
     await expect(
-      pane(review).getByRole("heading", {
-        name: `New: ${await realpath(secondFile)}`,
-        exact: true,
-      }),
-    ).toBeVisible();
+      headings.filter({ hasText: "other.txt" }),
+    ).toHaveAccessibleDescription(await realpath(secondFile));
     if (index === 0)
       await pane(review).screenshot({
         path: testInfo.outputPath("review-two-file-diff.png"),
@@ -1155,6 +1151,128 @@ test("Diff review keeps unchanged context neutral and anchors keyboard comments 
   await expect(removed).toBeFocused();
   expect((await inspect(review)).rounds[0].submission).toBeUndefined();
   await host.screenshot({ path: info.outputPath("unified-diff.png") });
+});
+
+test("Diff review headings keep paths and revision labels compact in a narrow pane", async ({}, info) => {
+  const workspace = await shell.create("Compact diff review");
+  const folder = shell.folders[0];
+  const canonical = await realpath(folder);
+  const same = "model.txt";
+  const dir = "collection-" + "nested".repeat(23);
+  const old = `${dir}/old report.txt`;
+  const next = `${dir}/renamed report.txt`;
+  const branch = "review-" + "revision".repeat(20);
+  const namedRevision = `refs/heads/${branch}`;
+  const previousLines = Array.from({ length: 24 }, (_, i) => `item ${i + 1}`);
+  await mkdir(path.join(folder, dir));
+  await writeFile(path.join(folder, old), previousLines.join("\n") + "\n");
+  await writeFile(path.join(folder, same), "Original value\n");
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: folder,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    }).trim();
+  git("add", "--all");
+  git("commit", "-m", "Invented baseline");
+  const base = git("rev-parse", "HEAD");
+  git("mv", old, next);
+  const updatedLines = [...previousLines];
+  updatedLines[2] = "changed item 3";
+  await writeFile(path.join(folder, next), updatedLines.join("\n") + "\n");
+  await writeFile(path.join(folder, same), "Modified value\n");
+  git("add", "--all");
+  git("commit", "-m", "Invented changes");
+  const head = git("rev-parse", "HEAD");
+  git("update-ref", namedRevision, head);
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const origin = await shell.newChat(workspace, "codex");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--base",
+    base,
+    "--head",
+    namedRevision,
+    "--conversation",
+    origin.id,
+  );
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(760, 680),
+  );
+  const host = pane(review);
+  const content = host.getByRole("region", {
+    name: "Review content",
+    exact: true,
+  });
+  const headings = content.getByRole("heading", { level: 3 });
+  await expect(headings).toHaveCount(2);
+  const regular = headings.filter({ hasText: /^model\.txt$/ });
+  await expect(regular).toHaveText(same);
+  await expect(regular).toHaveAccessibleDescription(path.join(canonical, same));
+  const renamed = headings.filter({ hasText: `${old} → ${next}` });
+  const fullRename = `${path.join(canonical, old)} → ${path.join(canonical, next)}`;
+  await expect(renamed).toHaveAttribute("title", fullRename);
+  await expect(renamed).toHaveAccessibleDescription(fullRename);
+  const comparison = content.locator(".review-diff-comparison");
+  const fullRevisions = `${base} → ${namedRevision} (${head})`;
+  await expect(comparison).toHaveText(`${base.slice(0, 12)} → ${branch}`);
+  await expect(comparison).toHaveAttribute("title", fullRevisions);
+  await expect(comparison).toHaveAccessibleDescription(fullRevisions);
+  await expect
+    .poll(async () => (await host.boundingBox())!.width)
+    .toBeLessThan(390);
+  for (const label of [comparison, regular, renamed]) {
+    expect(
+      await label.evaluate((node) => node.scrollWidth - node.clientWidth),
+    ).toBeLessThanOrEqual(1);
+  }
+  for (const part of [
+    comparison.locator("span").first(),
+    comparison.locator("span").last(),
+    renamed.locator(".review-diff-path > :last-child").first(),
+    renamed.locator(".review-diff-path > :last-child").last(),
+  ]) {
+    await expect(part).toBeVisible();
+    expect((await part.boundingBox())!.width).toBeGreaterThan(50);
+  }
+  await host.screenshot({
+    path: info.outputPath("compact-diff-headings-narrow.png"),
+  });
+
+  const removed = content.getByRole("button", {
+    name: `Old line 3 ${path.join(canonical, old)}`,
+    exact: true,
+  });
+  await removed.focus();
+  await removed.press(`${modifier}+Shift+M`);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await input.fill("Old path remains anchored");
+  await input.press(`${modifier}+Enter`);
+  await expect(removed.locator("+ .review-comment")).toContainText(
+    "Old path remains anchored",
+  );
+  await expect(removed).toBeFocused();
+  expect((await inspect(review)).rounds[0].submission).toBeUndefined();
 });
 
 for (const feedback of [false, true])
