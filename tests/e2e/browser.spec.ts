@@ -35,7 +35,7 @@ async function open(workspace: string, route = "/one") {
     origin + route,
   );
 }
-async function remote(route: string, source: string) {
+async function remote(route: string, source: string, pageOrigin = origin) {
   await expect
     .poll(() =>
       shell.app!.evaluate(
@@ -43,7 +43,7 @@ async function remote(route: string, source: string) {
           webContents
             .getAllWebContents()
             .some((w) => w.getURL() === url && !w.isLoadingMainFrame()),
-        origin + route,
+        pageOrigin + route,
       ),
     )
     .toBe(true);
@@ -55,7 +55,7 @@ async function remote(route: string, source: string) {
       if (!wc) throw new Error("Fixture browser view absent");
       return wc.executeJavaScript(source);
     },
-    { url: origin + route, source },
+    { url: pageOrigin + route, source },
   );
 }
 async function nativeView(route: string) {
@@ -122,6 +122,30 @@ test.beforeEach(async () => {
           `<title>Posted tab fixture</title><body>${request.method}:${Buffer.concat(chunks).toString("utf8")}</body>`,
         );
       });
+      return;
+    }
+    if (route === "/clipboard-fixture") {
+      response.setHeader("Content-Type", "text/html");
+      response.end(`<!doctype html><title>Clipboard fixture</title>
+        <button id="copy">Copy</button><button id="read">Read</button><output></output>
+        <script>
+          const status = document.querySelector("output");
+          document.querySelector("#copy").onclick = () => {
+            status.value = "pending";
+            const value = new URLSearchParams(location.search).get("value");
+            navigator.clipboard.writeText(value).then(
+              () => status.value = "copied",
+              error => status.value = error.name,
+            );
+          };
+          document.querySelector("#read").onclick = () => {
+            status.value = "pending";
+            navigator.clipboard.readText().then(
+              () => status.value = "read",
+              error => status.value = error.name,
+            );
+          };
+        </script>`);
       return;
     }
     if (route === "/scrollbars") {
@@ -1170,6 +1194,133 @@ test("Local address suggestions, searchable history and search engine settings s
     .getByRole("button", { name: "Clear history", exact: true })
     .click();
   expect(await shell.cli("browser", "history")).toEqual([]);
+});
+
+test("Site clipboard write follows tab permissions and keeps clipboard reads separate", async () => {
+  const route = "/clipboard-fixture?value=";
+  const workspace = await shell.create("Clipboard permissions");
+  let currentRoute = route + "temporary";
+  let currentOrigin = origin;
+  const otherOrigin = origin.replace("127.0.0.1", "localhost");
+  const record = await open(workspace, currentRoute);
+  const prompt = () =>
+    shell
+      .pane(record.paneId)
+      .getByRole("region", { name: "Site permission request" });
+  const action = (label: string) =>
+    prompt().getByRole("button", { name: label, exact: true });
+  const status = () =>
+    remote(
+      currentRoute,
+      "document.querySelector('output').value",
+      currentOrigin,
+    );
+  const readClipboard = () =>
+    shell.app!.evaluate(({ clipboard }) => clipboard.readText());
+  const clickPage = async (button: "copy" | "read") => {
+    const point = await remote(
+      currentRoute,
+      `(() => {
+        const { x, y, width, height } = document.getElementById("${button}").getBoundingClientRect();
+        return { x: Math.round(x + width / 2), y: Math.round(y + height / 2) };
+      })()`,
+      currentOrigin,
+    );
+    await shell.app!.evaluate(
+      ({ webContents }, { url, point }) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((page) => page.getURL() === url)!;
+        contents.focus();
+        contents.sendInputEvent({
+          type: "mouseDown",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+        contents.sendInputEvent({
+          type: "mouseUp",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+      },
+      { url: currentOrigin + currentRoute, point },
+    );
+  };
+  const navigate = async (value: string, site = origin) => {
+    currentRoute = route + value;
+    currentOrigin = site;
+    await shell.cli(
+      "browser",
+      "navigate",
+      "--id",
+      record.id,
+      "--url",
+      site + currentRoute,
+    );
+  };
+  const policies = () => shell.cli("browser", "permissions");
+
+  await clickPage("copy");
+  await expect(prompt()).toContainText("copy to clipboard");
+  await action("Allow once").click();
+  await expect.poll(status).toBe("copied");
+  expect(await readClipboard()).toBe("temporary");
+  expect(await policies()).toEqual([]);
+
+  await navigate("remembered");
+  await clickPage("copy");
+  await expect(prompt()).toContainText(origin);
+  await action("Always allow").click();
+  await expect.poll(status).toBe("copied");
+  expect(await readClipboard()).toBe("remembered");
+
+  await clickPage("read");
+  await expect(prompt()).toContainText("read from clipboard");
+  await action("Block").click();
+  await expect.poll(status).toBe("NotAllowedError");
+
+  await navigate("blocked", otherOrigin);
+  await clickPage("copy");
+  await expect(prompt()).toContainText(otherOrigin);
+  await action("Block").click();
+  await expect.poll(status).toBe("NotAllowedError");
+  expect(await readClipboard()).toBe("remembered");
+
+  await shell.stop();
+  await shell.start();
+  await clickPage("copy");
+  await expect.poll(status).toBe("NotAllowedError");
+  await expect(prompt()).toHaveCount(0);
+
+  await navigate("after-restart");
+  await clickPage("copy");
+  await expect.poll(status).toBe("copied");
+  await expect(prompt()).toHaveCount(0);
+  expect(await readClipboard()).toBe("after-restart");
+  expect(await policies()).toEqual(
+    expect.arrayContaining([
+      {
+        origin,
+        topOrigin: origin,
+        permission: "clipboard-sanitized-write",
+        decision: "allow",
+      },
+      {
+        origin,
+        topOrigin: origin,
+        permission: "clipboard-read",
+        decision: "block",
+      },
+      {
+        origin: otherOrigin,
+        topOrigin: otherOrigin,
+        permission: "clipboard-sanitized-write",
+        decision: "block",
+      },
+    ]),
+  );
 });
 
 test("Site media permissions require a page-bound decision and retain only remembered grants", async ({}, info) => {

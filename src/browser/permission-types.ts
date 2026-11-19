@@ -3,7 +3,8 @@ export const sitePermissionNames = {
   microphone: "Microphone",
   geolocation: "Location",
   notifications: "Notifications",
-  "clipboard-read": "Clipboard",
+  "clipboard-read": "Read from clipboard",
+  "clipboard-sanitized-write": "Copy to clipboard",
   fullscreen: "Fullscreen",
   pointerLock: "Pointer lock",
 } as const;
