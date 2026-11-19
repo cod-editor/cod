@@ -40,7 +40,11 @@ test("Overview keeps selection separate from activation, preserves workspace gro
   for (const workspace of (await app.cli<AppState>("state")).workspaces)
     await app.cli("workspace", "close", "--id", workspace.id);
   await app.command("Overview");
-  await expect(overview()).toHaveText("No workspaces");
+  await expect(overview().getByRole("status")).toHaveText("No workspaces");
+  const emptyHints = overview().locator(".picker-footer");
+  await expect(emptyHints.getByText("Esc", { exact: true })).toBeVisible();
+  await expect(emptyHints.getByText("Enter", { exact: true })).toBeHidden();
+  await expect(emptyHints.getByText("↑ ↓", { exact: true })).toBeHidden();
   await search().press("Enter");
   await expect(overview()).toBeVisible();
   await search().press("Escape");
@@ -845,10 +849,15 @@ test("Overview reconciles review, streaming and removal updates without losing i
     name: "Close workspace",
     exact: true,
   });
+  const cancel = guard.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancel).toBeFocused();
+  await expect(cancel.locator("kbd")).toHaveText("Esc");
   await expect(
-    guard.getByRole("button", { name: "Cancel", exact: true }),
-  ).toBeFocused();
-  await guard.getByRole("button", { name: "Cancel", exact: true }).click();
+    guard
+      .getByRole("button", { name: "Stop and close", exact: true })
+      .locator("kbd"),
+  ).toHaveCount(0);
+  await cancel.press("Escape");
   await expect(search()).toHaveValue("guarded");
   await expect(search()).toBeFocused();
   await app.cli(

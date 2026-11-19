@@ -1,7 +1,12 @@
-import { uiButton } from "./primitives";
+import { shortcutHint, uiButton } from "./primitives";
 import { icon } from "./icons";
 export { icon, icons } from "./icons";
-import { formatShortcut, type CommandId } from "../keyboard";
+import {
+  formatShortcut,
+  type CommandId,
+  type KeyboardSurface,
+} from "../keyboard";
+import { keyboardPlatform } from "./keyboard-ui";
 let menuSequence = 0;
 let currentMenu: HTMLDialogElement | undefined;
 let releaseMenuTrigger: (() => void) | undefined;
@@ -26,11 +31,13 @@ export type MenuAction = {
   title?: string;
   selected?: boolean;
   command?: CommandId;
+  surface?: KeyboardSurface;
+  key?: "Enter" | "Space" | "Delete";
 } | null;
 export function menu(
   anchor: HTMLElement | { x: number; y: number },
   items: MenuAction[],
-  options: { restoreFocus?: () => void } = {},
+  options: { restoreFocus?: () => void; showCommands?: boolean } = {},
 ): void {
   releaseMenuTrigger?.();
   currentMenu?.close();
@@ -62,6 +69,8 @@ export function menu(
   };
   releaseMenuTrigger = releaseTrigger;
   dialog.setAttribute("aria-label", "Actions");
+  const hints: Array<() => void> = [];
+  const events = new AbortController();
   for (const item of items) {
     if (!item) {
       dialog.append(document.createElement("hr"));
@@ -74,17 +83,24 @@ export function menu(
     label.textContent = item.label;
     button.append(label);
     button.setAttribute("aria-label", item.label);
-    const shortcut = item.command
-      ? formatShortcut(
-          item.command,
-          /Mac/.test(navigator.platform) ? "darwin" : "linux",
-        )
-      : "";
-    const hint = document.createElement("kbd");
-    hint.className = "menu-shortcut";
-    hint.textContent = shortcut;
-    hint.setAttribute("aria-hidden", "true");
-    button.append(hint);
+    if (item.command || item.key) {
+      const hint = shortcutHint();
+      hint.classList.add("menu-shortcut");
+      const update = () => {
+        const shortcut =
+          options.showCommands !== false && item.command
+            ? formatShortcut(
+                item.command,
+                keyboardPlatform,
+                item.surface ?? "shell",
+              )
+            : "";
+        hint.textContent = item.disabled ? "" : shortcut || item.key || "";
+      };
+      update();
+      if (item.command && options.showCommands !== false) hints.push(update);
+      button.append(hint);
+    }
     if (item.selected !== undefined) {
       button.setAttribute("aria-pressed", String(item.selected));
       button.classList.add("choice-row");
@@ -102,18 +118,33 @@ export function menu(
     };
     dialog.append(button);
   }
-  const rect =
-    anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : undefined;
-  const x = rect ? rect.left : (anchor as { x: number; y: number }).x,
-    y = rect ? rect.bottom : (anchor as { x: number; y: number }).y;
+  const place = () => {
+    const rect =
+      anchor instanceof HTMLElement
+        ? anchor.getBoundingClientRect()
+        : undefined;
+    const x = rect ? rect.left : (anchor as { x: number; y: number }).x,
+      y = rect ? rect.bottom : (anchor as { x: number; y: number }).y;
+    dialog.style.left = `${Math.max(4, Math.min(x, innerWidth - dialog.offsetWidth - 4))}px`;
+    const top =
+      y + dialog.offsetHeight > innerHeight - 4 && rect
+        ? rect.top - dialog.offsetHeight
+        : y;
+    dialog.style.top = `${Math.max(4, Math.min(top, innerHeight - dialog.offsetHeight - 4))}px`;
+  };
   document.body.append(dialog);
   dialog.showModal();
-  dialog.style.left = `${Math.max(4, Math.min(x, innerWidth - dialog.offsetWidth - 4))}px`;
-  const top =
-    y + dialog.offsetHeight > innerHeight - 4 && rect
-      ? rect.top - dialog.offsetHeight
-      : y;
-  dialog.style.top = `${Math.max(4, Math.min(top, innerHeight - dialog.offsetHeight - 4))}px`;
+  place();
+  if (hints.length)
+    document.addEventListener(
+      "cod:keymap-changed",
+      () => {
+        if (!dialog.open) return;
+        for (const update of hints) update();
+        place();
+      },
+      { signal: events.signal },
+    );
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) {
       const r = dialog.getBoundingClientRect();
@@ -135,6 +166,7 @@ export function menu(
     }
   });
   dialog.onclose = () => {
+    events.abort();
     const isCurrent = currentMenu === dialog;
     if (isCurrent) {
       currentMenu = undefined;

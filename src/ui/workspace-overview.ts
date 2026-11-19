@@ -8,7 +8,7 @@ import {
   type NavigationItem,
 } from "./navigation-model";
 import { createSearchList } from "./search-list";
-import { dialogSurface, uiButton } from "./primitives";
+import { dialogSurface, pickerShortcuts, uiButton } from "./primitives";
 import { icon, iconButton, menu } from "./controls";
 import { showActionError } from "./action-feedback";
 
@@ -60,7 +60,8 @@ export function createWorkspaceOverview(
     const empty = document.createElement("p");
     empty.className = "settings-note";
     empty.setAttribute("role", "status");
-    dialog.append(input, list, empty);
+    const footer = pickerShortcuts("Open");
+    dialog.append(input, list, empty, footer);
     let items = navigation.items("overview");
     const active = items.find((item) => item.active);
     let selectedKey = active?.key;
@@ -79,6 +80,7 @@ export function createWorkspaceOverview(
     const selection = createSearchList(input, list, {
       selector: "button.overview-item:not([hidden])",
       onSelect: (row) => {
+        footer.toggleAttribute("data-no-results", !row);
         highlighted?.setAttribute("aria-selected", "false");
         highlighted?.parentElement?.setAttribute("aria-selected", "false");
         highlighted = row;
@@ -211,6 +213,7 @@ export function createWorkspaceOverview(
                 }
               : action,
           ),
+        { showCommands: false },
       );
     }
     function refresh() {

@@ -277,7 +277,12 @@ export function createConversationViews({
       if (e.target === input) return;
       e.preventDefault();
       menu({ x: e.clientX, y: e.clientY }, [
-        { label: "Send message", run: () => void send() },
+        {
+          label: "Send message",
+          command: "chat.send",
+          surface: "composer",
+          run: () => void send(),
+        },
       ]);
     };
     const actions = document.createElement("div");
@@ -1196,7 +1201,12 @@ export function createConversationViews({
       if (e.target === input) return;
       e.preventDefault();
       menu({ x: e.clientX, y: e.clientY }, [
-        { label: "Send message", run: () => void sendMessage(conversation.id) },
+        {
+          label: "Send message",
+          command: "chat.send",
+          surface: "composer",
+          run: () => void sendMessage(conversation.id),
+        },
         {
           label: "Session info...",
           run: () =>

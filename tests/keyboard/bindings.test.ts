@@ -546,3 +546,18 @@ test("Developer Tools uses function keys without admitting text shortcuts or ter
   );
   configureKeymap({}, "linux");
 });
+
+test("Shortcut labels follow the command's effective platform and content scope", () => {
+  try {
+    configureKeymap({}, "linux");
+    assert.equal(formatShortcut("files.save", "linux", "shell"), "");
+    assert.equal(formatShortcut("files.save", "linux", "editor"), "Ctrl+S");
+    configureKeymap({ "files.save": ["Alt+Q"] }, "darwin");
+    assert.equal(formatShortcut("files.save", "darwin", "editor"), "⌥Q");
+    assert.equal(formatShortcut("files.save", "darwin", "review"), "");
+    configureKeymap({ "files.save": null }, "darwin");
+    assert.equal(formatShortcut("files.save", "darwin", "editor"), "");
+  } finally {
+    configureKeymap({}, "linux");
+  }
+});

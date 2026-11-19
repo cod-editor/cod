@@ -3,6 +3,8 @@ import {
   actionRow,
   dialogSurface,
   describeButton,
+  pickerShortcuts,
+  shortcutHint,
 } from "./primitives";
 import { createWorkspaceOverview } from "./workspace-overview";
 import type { createWorkspaceNavigation } from "./workspace-navigation";
@@ -21,7 +23,6 @@ import {
   commands as commandDefinitions,
   resolveKeybinding,
   formatShortcut,
-  formatBinding,
   type CommandId,
 } from "../keyboard";
 import {
@@ -515,7 +516,11 @@ export function createCommands(
     const run = (op: Parameters<typeof create>[0]) =>
       void create(op).catch(() => undefined);
     menu(anchor, [
-      { label: "New file", run: () => run("file.new") },
+      {
+        label: "New file",
+        command: group.id === workspace.activeGroupId ? "files.new" : undefined,
+        run: () => run("file.new"),
+      },
       { label: "Browser", run: () => run("browser.open") },
       { label: "Chat", run: () => run("conversation.draft") },
       { label: "Terminal", run: () => run("terminal.open") },
@@ -1570,6 +1575,14 @@ export function createCommands(
   function commandPalette(): void {
     if (document.querySelector("dialog[open]")) return;
     const returnFocus = focus.capture();
+    const originBrowser = getState().browsers.find(
+      (browser) => browser.id === returnFocus.browserId,
+    );
+    const surface = originBrowser
+      ? originBrowser.agentPage
+        ? "agent-page"
+        : "browser"
+      : keyboardSurface(returnFocus.element);
     const workspace = workspaceTarget();
     const conversation = conversationTarget();
     const context: CommandContext = {
@@ -1612,11 +1625,8 @@ export function createCommands(
       label.textContent = name;
       button.append(label);
       button.setAttribute("aria-label", name);
-      const shortcut = formatShortcut(definition.id, keyboardPlatform);
-      const hint = document.createElement("kbd");
-      hint.className = "command-shortcut";
-      hint.textContent = shortcut;
-      hint.setAttribute("aria-hidden", "true");
+      const hint = shortcutHint();
+      hint.classList.add("command-shortcut");
       const history = document.createElement("span");
       history.className = "command-history";
       history.title = "Recently used";
@@ -1646,7 +1656,10 @@ export function createCommands(
       buttons.set(definition.id, button);
       list.append(button);
     }
-    const selection = createSearchList(input, list);
+    const footer = pickerShortcuts("Run");
+    const selection = createSearchList(input, list, {
+      onSelect: (row) => footer.toggleAttribute("data-no-results", !row),
+    });
     const empty = document.createElement("p");
     empty.className = "picker-empty";
     empty.setAttribute("role", "status");
@@ -1683,10 +1696,9 @@ export function createCommands(
           conversation,
           context.linkUrl,
         );
-        button.querySelector("kbd")!.textContent = formatShortcut(
-          id,
-          keyboardPlatform,
-        );
+        button.querySelector("kbd")!.textContent = reason
+          ? ""
+          : formatShortcut(id, keyboardPlatform, surface);
         if (button.disabled === !!reason && button.title === (reason ?? ""))
           continue;
         changed = true;
@@ -1710,23 +1722,6 @@ export function createCommands(
     refresh();
     input.addEventListener("input", filter);
     dialog.classList.add("picker", "command-palette", "search-picker");
-    const footer = document.createElement("div");
-    footer.className = "picker-footer";
-    footer.setAttribute("aria-hidden", "true");
-    const runHint = document.createElement("span");
-    runHint.append("Run ");
-    const enter = document.createElement("kbd");
-    enter.textContent = formatBinding(
-      { code: "Enter", surfaces: ["shell"] },
-      keyboardPlatform,
-    );
-    runHint.append(enter);
-    const cancelHint = document.createElement("span");
-    cancelHint.append("Close ");
-    const escape = document.createElement("kbd");
-    escape.textContent = "Esc";
-    cancelHint.append(escape);
-    footer.append(cancelHint, runHint);
     dialog.append(input, list, empty, footer);
     document.body.append(dialog);
     const cancel = () => {

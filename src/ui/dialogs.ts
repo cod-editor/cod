@@ -1,4 +1,9 @@
-import { uiButton, dialogRegions, dialogSurface } from "./primitives";
+import {
+  uiButton,
+  dialogRegions,
+  dialogSurface,
+  keyHintButton,
+} from "./primitives";
 let formSequence = 0;
 import { formField } from "./form-field";
 import { actionButton } from "./action-feedback";
@@ -73,9 +78,15 @@ export function inputDialog(options: InputDialog): void {
     event.preventDefault();
     close();
   };
-  const cancel = actionButton("Cancel", async () => close());
+  const cancel = keyHintButton(
+    actionButton("Cancel", async () => close()),
+    "Esc",
+  );
   cancel.classList.add("quiet");
-  const submit = uiButton(options.submitLabel, "primary");
+  const submit = keyHintButton(
+    uiButton(options.submitLabel, "primary"),
+    "Enter",
+  );
   submit.type = "submit";
   submit.setAttribute("form", form.id);
   actions.append(cancel, submit);
@@ -121,13 +132,16 @@ export function confirmAction(
   text: string,
   label: string,
   action: () => Promise<unknown>,
+  ariaLabel = title,
 ): void {
-  const dialog = dialogSurface(title);
-  dialog.setAttribute("aria-label", title);
+  const dialog = dialogSurface(ariaLabel);
   const { body, actions } = dialogRegions(dialog, title);
   const description = document.createElement("p");
   description.textContent = text;
-  const cancel = actionButton("Cancel", async () => dialog.close());
+  const cancel = keyHintButton(
+    actionButton("Cancel", async () => dialog.close()),
+    "Esc",
+  );
   const accept = actionButton(label, async () => {
     await action();
     dialog.close();

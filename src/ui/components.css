@@ -551,8 +551,9 @@ option {
 .picker-footer {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-3);
+  gap: var(--space-1) var(--space-3);
   align-items: center;
   border-top: 1px solid var(--border-subtle);
   margin-top: var(--space-1);
@@ -562,12 +563,28 @@ option {
 }
 .picker-footer span {
   display: flex;
-  gap: var(--space-1);
+  gap: var(--space-2);
   align-items: baseline;
 }
-.picker-footer kbd,
-.menu-shortcut {
+.picker-footer[data-no-results] [data-result-shortcut] {
+  display: none;
+}
+.shortcut-hint {
   font: inherit;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.ui-button.with-key-hint {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.ui-button.with-key-hint:disabled .shortcut-hint {
+  visibility: hidden;
+}
+.ui-button.with-key-hint.primary .shortcut-hint {
+  color: inherit;
 }
 .context-menu {
   position: fixed;
@@ -598,6 +615,7 @@ option {
   grid-column: 1;
   min-width: 0;
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 .menu-shortcut {
   grid-column: 2;

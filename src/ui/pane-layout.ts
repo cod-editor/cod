@@ -584,15 +584,23 @@ export function createPaneLayout(
         actions.unshift(
           {
             label: "Save as...",
+            command: "files.save",
+            surface: "editor",
             run: () => void saveFile(workspace.id, pane.id),
           },
           null,
         );
       if (pane.kind === "document" && pane.filePath)
         actions.unshift(
-          { label: "Save", run: () => void saveFile(workspace.id, pane.id) },
+          {
+            label: "Save",
+            command: "files.save",
+            surface: "editor",
+            run: () => void saveFile(workspace.id, pane.id),
+          },
           {
             label: "Review document",
+            command: "review.document",
             run: () =>
               void invoke("review.open-document", {
                 workspace: workspace.id,
@@ -603,6 +611,7 @@ export function createPaneLayout(
             ? [
                 {
                   label: "Markdown preview",
+                  command: "files.preview" as const,
                   run: () =>
                     void invoke("preview.open", {
                       workspace: workspace.id,

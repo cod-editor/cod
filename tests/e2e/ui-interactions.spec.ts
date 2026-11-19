@@ -1037,6 +1037,94 @@ test("Commands ranks tokens and recent activations without losing the cancelled 
   }
 });
 
+test("File shortcuts distinguish editor focus from file tree actions", async () => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const workspace = await app.create("Invented shortcut scope");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const search = app.page.getByRole("dialog", {
+      name: "Open file",
+      exact: true,
+    });
+    await app.command("Open file");
+    await expect(search.locator(".picker-footer kbd")).toHaveText([
+      "↑ ↓",
+      "Enter",
+      "Esc",
+    ]);
+    const pickerInput = search.getByRole("textbox", {
+      name: "Open file",
+      exact: true,
+    });
+    await pickerInput.fill("spec.md");
+    await expect(
+      search.getByRole("button", { name: "spec.md", exact: true }),
+    ).toHaveAttribute("aria-current", "true");
+    await pickerInput.press("Enter");
+    const editor = app.page.getByRole("textbox", {
+      name: "File contents",
+      exact: true,
+    });
+    await expect(editor).toBeFocused();
+    const key = process.platform === "darwin" ? "⌘S" : "Ctrl+S";
+    const commands = app.page.getByRole("dialog", {
+      name: "Command palette",
+      exact: true,
+    });
+    const filter = commands.getByRole("textbox", {
+      name: "Filter commands",
+      exact: true,
+    });
+    const save = commands.getByRole("button", {
+      name: "Save file",
+      exact: true,
+    });
+    await editor.press(`${modifier}+Shift+P`);
+    await filter.fill("Save file");
+    await expect(save.locator("kbd")).toHaveText(key);
+    await filter.press("Escape");
+    await expect(editor).toBeFocused();
+    const files = app.page.locator("#project-panel");
+    if (!(await files.isVisible()))
+      await app.page
+        .getByRole("button", { name: "Toggle files", exact: true })
+        .click();
+    const root = files.getByRole("treeitem", {
+      name: "alpha repo",
+      exact: true,
+    });
+    await root.focus();
+    await root.press("ArrowRight");
+    const file = files.getByRole("treeitem", { name: "spec.md", exact: true });
+    await file.focus();
+    await file.press("Shift+F10");
+    const menu = app.page.getByRole("dialog", { name: "Actions", exact: true });
+    await expect(
+      menu.getByRole("button", { name: "Open", exact: true }).locator("kbd"),
+    ).toHaveText("Enter");
+    await app.page.keyboard.press("Escape");
+    await expect(file).toBeFocused();
+    await file.press(`${modifier}+Shift+P`);
+    await filter.fill("Save file");
+    await expect(save.locator("kbd")).toHaveText("");
+    await filter.press("Escape");
+    await expect(file).toBeFocused();
+    await file.press("Enter");
+    await expect(editor).toBeFocused();
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Shared picker roles, shortcut columns and menu geometry survive narrow enlarged text", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
@@ -1074,6 +1162,12 @@ test("Shared picker roles, shortcut columns and menu geometry survive narrow enl
     await query.fill("Save file");
     const save = dialog.getByRole("button", { name: "Save file", exact: true });
     await expect(save).toBeDisabled();
+    await expect(save.locator("kbd")).toHaveText("");
+    await expect(dialog.locator(".picker-footer kbd")).toHaveText([
+      "↑ ↓",
+      "Enter",
+      "Esc",
+    ]);
     await app.app!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(800, 700),
     );
@@ -1120,6 +1214,52 @@ test("Shared picker roles, shortcut columns and menu geometry survive narrow enl
     );
     expect((await menu.boundingBox())!.width).toBeGreaterThanOrEqual(220);
     await menu.screenshot({ path: info.outputPath("tab-menu-shortcuts.png") });
+    const keymap = path.join(app.data, "keymap.json");
+    await close.focus();
+    await writeFile(
+      keymap,
+      JSON.stringify({
+        "tab.close": ["Alt+X"],
+        "tab.togglePin": ["Alt+Y"],
+        "tab.closeOthers": ["Alt+Z"],
+      }),
+    );
+    const alt = process.platform === "darwin" ? "⌥" : "Alt+";
+    await expect(close.locator("kbd")).toHaveText(alt + "X");
+    const pin = menu.getByRole("button", { name: "Pin tab", exact: true });
+    await expect(pin.locator("kbd")).toHaveText(alt + "Y");
+    const columns = await menu
+      .locator("button:not(:disabled) kbd")
+      .evaluateAll((keys) =>
+        keys
+          .filter((key) => key.textContent)
+          .map((key) => key.getBoundingClientRect().right),
+      );
+    expect(columns).toHaveLength(2);
+    expect(Math.max(...columns) - Math.min(...columns)).toBeLessThan(1);
+    const others = menu.getByRole("button", {
+      name: "Close other tabs",
+      exact: true,
+    });
+    await expect(others).toBeDisabled();
+    await expect(others.locator("kbd")).toHaveText("");
+    await expect(close).toBeFocused();
+    await writeFile(keymap, JSON.stringify({ "tab.close": null }));
+    await expect(close.locator("kbd")).toHaveText("");
+    await expect(close).toBeFocused();
+    await writeFile(keymap, "{}");
+    await expect(close.locator("kbd")).toHaveText(
+      process.platform === "darwin" ? "⌘W" : "Ctrl+W",
+    );
+    await pin.click();
+    const tab = app.page.getByRole("tab").first();
+    await expect(tab).toHaveAttribute("data-pinned", "true");
+    await tab.click({ button: "right" });
+    await expect(
+      menu
+        .getByRole("button", { name: "Close tab", exact: true })
+        .locator("kbd"),
+    ).toHaveCount(0);
     await app.page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     const plus = app.page

@@ -359,6 +359,8 @@ export function reviewPane(
     menu(more, [
       {
         label: "Add comment",
+        command: "review.addComment",
+        surface: "review",
         disabled: addComment.disabled,
         run: () => addComment.click(),
       },
@@ -559,6 +561,8 @@ export function reviewPane(
           menu({ x: event.clientX, y: event.clientY }, [
             {
               label: "Add comment",
+              command: "review.addComment",
+              surface: "review",
               disabled:
                 round.status !== "draft" || round.id !== detail!.currentRoundId,
               run: () => openComment(),

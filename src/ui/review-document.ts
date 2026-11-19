@@ -16,6 +16,7 @@ export function reviewDocument(
   const element = document.createElement("div");
   element.className = "review-document";
   const sourceView = createReviewSource(source, path, comment);
+  let commenting = false;
   const rendered = document.createElement("article");
   rendered.className = "review-markdown";
   rendered.setAttribute("aria-label", "Review preview");
@@ -156,7 +157,13 @@ export function reviewDocument(
       const range = capture();
       if (range)
         menu({ x: event.clientX, y: event.clientY }, [
-          { label: "Add comment", run: () => comment(range) },
+          {
+            label: "Add comment",
+            command: "review.addComment",
+            surface: "review",
+            disabled: !commenting,
+            run: () => comment(range),
+          },
         ]);
     });
   }
@@ -179,7 +186,10 @@ export function reviewDocument(
     element,
     capture,
     focus,
-    setCommenting: sourceView.setCommenting,
+    setCommenting(enabled: boolean) {
+      commenting = enabled;
+      sourceView.setCommenting(enabled);
+    },
     clearAnnotations(retain?: HTMLElement) {
       for (const node of anchored.keys()) {
         if (node !== retain) node.remove();
