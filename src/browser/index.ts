@@ -554,6 +554,24 @@ export class BrowserService {
       throw new Error("Invalid browser view bounds");
     resource.view.setBounds(bounds);
   }
+  async captureOverviewBackdrop(id: string) {
+    const resource = this.resource(id);
+    const { contents, view } = resource;
+    const { width, height } = view.getBounds();
+    if (!resource.visible || width * height > 9_000_000) return;
+    const url = contents.getURL();
+    let image = await contents.capturePage(undefined, { stayHidden: true });
+    if (contents.isDestroyed() || contents.getURL() !== url || image.isEmpty())
+      return;
+    const size = image.getSize();
+    const scale = Math.min(1, 1600 / Math.max(size.width, size.height));
+    if (scale < 1)
+      image = image.resize({
+        width: Math.max(1, Math.floor(size.width * scale)),
+      });
+    const bytes = image.toJPEG(75);
+    return bytes.length <= 384 * 1024 ? { url, bytes } : undefined;
+  }
   setVisible(id: string, visible: boolean) {
     const resource = this.resource(id);
     if (typeof visible !== "boolean")

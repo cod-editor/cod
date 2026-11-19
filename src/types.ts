@@ -325,6 +325,9 @@ export interface CodBridge {
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;
+  browserOverviewBackdrop(
+    ids: string[],
+  ): Promise<{ id: string; url: string; bytes: Uint8Array }[]>;
   browserSelect(id: string): void;
   browserFind(
     id: string,

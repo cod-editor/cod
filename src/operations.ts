@@ -88,6 +88,9 @@ export class ApplicationOperations {
   browserLayout(rectangles: BrowserRectangle[]): void {
     this.browsers.browserLayout(rectangles);
   }
+  browserOverviewBackdrop(ids: unknown) {
+    return this.browsers.browserOverviewBackdrop(ids);
+  }
   browserFind(
     id: string,
     text: string,
