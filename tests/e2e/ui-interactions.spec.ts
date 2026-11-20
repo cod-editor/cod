@@ -229,6 +229,76 @@ test("Integration setup can be deferred, reopened and installed only after previ
   }
 });
 
+test("A preview update notice only hands off the asset on explicit activation", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    await app.start();
+    const action = app.page.getByRole("button", { name: "Download update" });
+    await expect(action).toBeHidden();
+    await app.app!.evaluate(({ BrowserWindow, ipcMain }) => {
+      const state = { opened: 0 };
+      Object.assign(globalThis, { previewNoticeFixture: state });
+      ipcMain.removeHandler("cod:preview-update-open");
+      ipcMain.handle("cod:preview-update-open", () => {
+        state.opened++;
+      });
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setContentSize(760, 650);
+      window.webContents.send("cod:preview-update", "0.1.0-preview.2");
+    });
+    await expect(action).toBeVisible();
+    await expect(action).toHaveAttribute(
+      "title",
+      "Download Cod 0.1.0-preview.2",
+    );
+    for (const fontSize of [20, 32]) {
+      await app.cli(
+        "settings",
+        "update",
+        "--values",
+        JSON.stringify({ "ui.fontSize": fontSize }),
+      );
+      await expect(app.page.locator("html")).toHaveCSS(
+        "font-size",
+        `${fontSize}px`,
+      );
+      expect(
+        await action.evaluate((node) => {
+          const action = node.getBoundingClientRect();
+          const area = node.parentElement!.getBoundingClientRect();
+          return (
+            action.left >= area.left &&
+            action.right <= area.right &&
+            action.top >= area.top &&
+            action.bottom <= area.bottom
+          );
+        }),
+      ).toBe(true);
+    }
+    const handoffs = () =>
+      app.app!.evaluate(() => (globalThis as any).previewNoticeFixture.opened);
+    expect(await handoffs()).toBe(0);
+    await action.focus();
+    await expect(action).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("preview-update-notice.png"),
+    });
+    await action.press("Enter");
+    await expect.poll(handoffs).toBe(1);
+    await app.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(
+        "cod:preview-update",
+        null,
+      );
+    });
+    await expect(action).toBeHidden();
+    expect(await handoffs()).toBe(1);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Compact tab actions have visible mouse feedback without disturbing the selected view", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();

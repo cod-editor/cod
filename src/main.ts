@@ -2,6 +2,11 @@ import { toggleDevTools } from "./devtools";
 import os from "node:os";
 import { DiagnosticJournal } from "./diagnostics";
 import { startupBuildInfo } from "./build-info";
+import {
+  checkForPreviewUpdate,
+  packagedPreviewTag,
+  type PreviewUpdate,
+} from "./preview-update";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -91,6 +96,38 @@ async function reloadKeymap(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let previewUpdate: PreviewUpdate | undefined;
+function startPreviewChecks(): void {
+  const current = packagedPreviewTag(
+    app.isPackaged,
+    process.platform,
+    process.arch,
+    app.getVersion(),
+  );
+  if (!current) return;
+  const stop = new AbortController();
+  const refresh = async () => {
+    try {
+      const update = await checkForPreviewUpdate(current, stop.signal);
+      if (stop.signal.aborted || update?.version === previewUpdate?.version)
+        return;
+      previewUpdate = update;
+      mainWindow?.webContents.send(
+        "cod:preview-update",
+        update?.version ?? null,
+      );
+    } catch {
+      // The preview notice is optional. Keep the last successful result if the feed is unavailable.
+    }
+  };
+  void refresh();
+  const timer = setInterval(() => void refresh(), 6 * 60 * 60 * 1000);
+  timer.unref();
+  app.once("will-quit", () => {
+    clearInterval(timer);
+    stop.abort();
+  });
+}
 let commandServer: Server | null = null;
 const rendererPath = path.join(__dirname, "index.html");
 const rendererUrl = pathToFileURL(rendererPath).href;
@@ -228,6 +265,10 @@ function createWindow(): void {
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url !== rendererUrl) event.preventDefault();
   });
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (previewUpdate)
+      mainWindow?.webContents.send("cod:preview-update", previewUpdate.version);
+  });
   void mainWindow.loadFile(rendererPath);
 }
 
@@ -254,14 +295,18 @@ async function start(): Promise<void> {
       void reloadKeymap();
     });
     app.once("will-quit", () => unwatchFile(keymapPath));
-    const trustedKeymap = (event: Electron.IpcMainInvokeEvent) => {
+    const requireShellRenderer = (event: Electron.IpcMainInvokeEvent) => {
       if (
         event.sender !== mainWindow?.webContents ||
         event.senderFrame !== mainWindow.webContents.mainFrame ||
         event.senderFrame.url !== rendererUrl
       )
-        throw new Error("Untrusted keymap request");
+        throw new Error("Untrusted renderer request");
     };
+    ipcMain.handle("cod:preview-update-open", async (event) => {
+      requireShellRenderer(event);
+      if (previewUpdate) await shell.openExternal(previewUpdate.downloadUrl);
+    });
     ipcMain.handle("cod:devtools", (event, id: unknown) => {
       if (
         event.sender !== mainWindow?.webContents ||
@@ -277,18 +322,18 @@ async function start(): Promise<void> {
       }
     });
     ipcMain.handle("cod:settings-open", async (event) => {
-      trustedKeymap(event);
+      requireShellRenderer(event);
       if (!operations.settings.state.error)
         await operations.settings.update({});
       const error = await shell.openPath(operations.settings.state.path);
       if (error) throw new Error(error);
     });
     ipcMain.handle("cod:keymap", (event) => {
-      trustedKeymap(event);
+      requireShellRenderer(event);
       return keymapState;
     });
     ipcMain.handle("cod:keymap-open", async (event) => {
-      trustedKeymap(event);
+      requireShellRenderer(event);
       await mkdir(dataDirectory, { recursive: true });
       try {
         await writeFile(keymapPath, "{}\n", { flag: "wx", mode: 0o600 });
@@ -505,6 +550,7 @@ async function start(): Promise<void> {
     };
     refreshKeyboardMenu();
     createWindow();
+    startPreviewChecks();
     canOpenUrls = true;
     for (const url of [
       ...pendingUrls.splice(0),
