@@ -222,9 +222,18 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
     );
     await draft.press("Enter");
     await expect(draft).toHaveValue(admitted);
+    const nextDraft = "A different draft typed while disconnected";
+    await draft.fill(nextDraft);
     await desktop.command("Reconnect to Linux workspace");
-    await expect(draft).toHaveValue("");
+    await expect(draft).toHaveValue(nextDraft);
     await expect(unknown).toBeHidden();
+    await expect
+      .poll(async () => (await linux.raw("state")).stdout)
+      .toContain(nextDraft);
+    await draft.press("Enter");
+    await expect(
+      desktop.page.getByText("DONE " + nextDraft, { exact: true }),
+    ).toBeVisible();
     expect(
       (await linux.inspect(hosted.id)).messages.filter(
         (item) => item.role === "user" && item.text === admitted,

@@ -1392,6 +1392,12 @@ export function createConversationViews({
         skillDrafts.delete(id);
         if (discard) await persistComposer(id);
       }
+      if (
+        !discard &&
+        dirtyComposers.has(id) &&
+        getState().remoteWorkspace?.connected
+      )
+        await persistComposer(id);
       rememberRemoteSend(id, null);
       sendErrors.delete(id);
       invalidate();
