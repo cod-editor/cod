@@ -188,6 +188,15 @@ export function createPaneLayout(
       if (!child.hidden) {
         const section = renderGroup(workspace, group);
         if (child.firstElementChild !== section) child.replaceChildren(section);
+      } else if (group?.paneIds.length === 1 && child.firstElementChild) {
+        const pane = workspace.panes.find(
+          (item) => item.id === group.paneIds[0],
+        );
+        if (pane?.kind === "empty" && !pane.launcher) {
+          // Closing the last tab can hide this group before it renders its empty state.
+          child.replaceChildren();
+          groupViews.delete(group.id);
+        }
       }
     }
     handle.className = "split-handle";
