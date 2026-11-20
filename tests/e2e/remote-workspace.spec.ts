@@ -1,10 +1,96 @@
 import { expect, test } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { connect } from "node:net";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
+import type { AppState } from "../../src/types";
+
+async function readUnpairedWatch(socketPath: string): Promise<AppState> {
+  const peer = connect(socketPath);
+  peer.setEncoding("utf8");
+  peer.once("connect", () => peer.write('{"op":"workspace.watch"}\n'));
+  try {
+    let input = "";
+    for await (const chunk of peer) {
+      input += chunk;
+      const newline = input.indexOf("\n");
+      if (newline !== -1) {
+        const frame = JSON.parse(input.slice(0, newline));
+        expect(frame.type).toBe("state");
+        return frame.value;
+      }
+    }
+    throw new Error("Linux workspace did not send state");
+  } finally {
+    peer.destroy();
+  }
+}
+
+async function installWorkspaceRelay(desktop: ChatApp, dropReply?: string) {
+  const forwarder = path.resolve("tests/e2e/helpers/unix-socket-forward.mjs");
+  await desktop.app!.evaluate(
+    (_electron, { fixture, dropReply }) => {
+      const childProcess = process.getBuiltinModule(
+        "node:child_process",
+      ) as typeof import("node:child_process");
+      const original = childProcess.spawn;
+      let pid = 0;
+      childProcess.spawn = ((
+        command: string,
+        args: string[],
+        options: import("node:child_process").SpawnOptions,
+      ) => {
+        if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
+          return original(command, args, options);
+        }
+        const forward = args[args.indexOf("-L") + 1];
+        const relay = original(
+          process.execPath,
+          [fixture, forward, dropReply || ""],
+          {
+            ...options,
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+          },
+        );
+        pid = relay.pid!;
+        return relay;
+      }) as typeof original;
+      process.on("cod-test-stop-forward", () => process.kill(pid, "SIGTERM"));
+    },
+    { fixture: forwarder, dropReply },
+  );
+}
+
+async function connectWorkspace(
+  desktop: ChatApp,
+  socket: string,
+  key?: string,
+) {
+  await desktop.command("Connect to Linux workspace");
+  const connect = desktop.page.getByRole("dialog", {
+    name: "Connect to Linux workspace",
+  });
+  await expect(
+    connect.getByRole("textbox", { name: "SSH host alias" }),
+  ).toBeFocused();
+  await connect
+    .getByRole("textbox", { name: "SSH host alias" })
+    .fill("invented-linux");
+  await connect
+    .getByRole("textbox", { name: "Linux socket path" })
+    .fill(socket);
+  if (key)
+    await connect
+      .getByRole("textbox", {
+        name: "SSH public key for private review (optional)",
+      })
+      .fill(key);
+  await connect.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(connect).not.toBeVisible();
+}
 
 test("Linux workspace reconnect preserves host files, Codex chat and a running terminal", async ({}) => {
   test.skip(
@@ -80,56 +166,9 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
     });
     await draft.fill("Unsaved desktop draft");
 
-    const forwarder = path.resolve("tests/e2e/helpers/unix-socket-forward.mjs");
     const dropReply = path.join(desktop.temporary, "drop-reply");
-    const stopForward = await desktop.app!.evaluate(
-      (_electron, { fixture, dropReply }) => {
-        const childProcess = process.getBuiltinModule(
-          "node:child_process",
-        ) as typeof import("node:child_process");
-        const original = childProcess.spawn;
-        let pid = 0;
-        childProcess.spawn = ((
-          command: string,
-          args: string[],
-          options: import("node:child_process").SpawnOptions,
-        ) => {
-          if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
-            return original(command, args, options);
-          }
-          const forward = args[args.indexOf("-L") + 1];
-          const relay = original(
-            process.execPath,
-            [fixture, forward, dropReply],
-            {
-              ...options,
-              env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-            },
-          );
-          pid = relay.pid!;
-          return relay;
-        }) as typeof original;
-        process.on("cod-test-stop-forward", () => process.kill(pid, "SIGTERM"));
-        return true;
-      },
-      { fixture: forwarder, dropReply },
-    );
-    expect(stopForward).toBe(true);
-
-    await desktop.command("Connect to Linux workspace");
-    const connect = desktop.page.getByRole("dialog", {
-      name: "Connect to Linux workspace",
-    });
-    await expect(
-      connect.getByRole("textbox", { name: "SSH host alias" }),
-    ).toBeFocused();
-    await connect
-      .getByRole("textbox", { name: "SSH host alias" })
-      .fill("invented-linux");
-    await connect
-      .getByRole("textbox", { name: "Linux socket path" })
-      .fill(linux.socket);
-    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    await installWorkspaceRelay(desktop, dropReply);
+    await connectWorkspace(desktop, linux.socket);
     const header = desktop.page.getByRole("button", {
       name: "Overview",
       exact: true,
@@ -299,6 +338,240 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
       .getByRole("tab", { name: "spec.md", exact: true })
       .click();
     await expect(editor).toHaveValue("# Changed while disconnected\n");
+  } finally {
+    await desktop.cleanup();
+    if (host?.exitCode === null) host.kill("SIGTERM");
+    await exited;
+    await linux.cleanup();
+  }
+});
+
+test("Paired Linux review and approval preserve privacy, draft and exactly-once native feedback", async ({}) => {
+  test.skip(
+    process.platform !== "linux",
+    "The production workspace host runs on Linux",
+  );
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  let host: ChildProcess | undefined;
+  let exited: Promise<unknown> | undefined;
+  await desktop.prepare();
+  await linux.prepare();
+  try {
+    linux.socket = path.join(linux.data, "cod.sock");
+    linux.environment.COD_SOCKET_PATH = linux.socket;
+    host = spawn(process.execPath, ["dist/workspace-host.cjs", linux.data], {
+      env: linux.environment,
+      stdio: "ignore",
+    });
+    exited = once(host, "exit");
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    const workspace = (await linux.state()).activeWorkspaceId!;
+    await linux.cli(
+      "workspace",
+      "rename",
+      "--id",
+      workspace,
+      "--name",
+      "Remote review fixture",
+    );
+    const repo = linux.folders[0];
+    const source = path.join(repo, "unified.txt");
+    await writeFile(source, "header\nold anchor\nend\n");
+    execFileSync("git", ["add", "unified.txt"], { cwd: repo });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "Invented baseline",
+      ],
+      { cwd: repo },
+    );
+    await writeFile(source, "header\nnew anchor\nend\n");
+    await linux.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      repo,
+    );
+    const chat = await linux.newChat(workspace, "codex");
+    const other = await linux.newChat(workspace, "codex");
+    await linux.cli("conversation", "show", "--id", chat.id);
+    const prompt = "Invented permission [approve]";
+    await linux.send(chat.id, prompt);
+    await expect
+      .poll(async () => (await linux.inspect(chat.id)).status)
+      .toBe("waiting");
+
+    await desktop.start();
+    const key = path.join(desktop.temporary, "invented-desktop");
+    execFileSync("/usr/bin/ssh-keygen", [
+      "-q",
+      "-N",
+      "",
+      "-t",
+      "ed25519",
+      "-f",
+      key,
+    ]);
+    const signer = path.join(linux.data, "desktop-signers");
+    const pairedSigner =
+      'cod-desktop namespaces="cod-review" ' +
+      (await readFile(key + ".pub", "utf8"));
+    await writeFile(signer, pairedSigner, { mode: 0o600 });
+    const dropReply = path.join(desktop.temporary, "drop-next-submit");
+    await installWorkspaceRelay(desktop, dropReply);
+    const chatPane = desktop.pane(chat.paneId);
+    await connectWorkspace(desktop, linux.socket);
+    await expect(
+      chatPane.getByText("Pair this desktop to respond to the approval."),
+    ).toBeVisible();
+    await expect(
+      chatPane.getByRole("button", { name: "Deny", exact: true }),
+    ).toHaveCount(0);
+
+    await connectWorkspace(desktop, linux.socket, key + ".pub");
+    await chatPane.getByRole("button", { name: "Deny", exact: true }).click();
+    await expect(
+      chatPane.getByText("DENIED " + prompt, { exact: true }),
+    ).toBeVisible();
+    await linux.send(chat.id, "[hold] Continue the same native turn");
+    await expect(
+      chatPane.getByRole("status", { name: "Turn activity", exact: true }),
+    ).toContainText("Working");
+    const liveFollowUp = "Changed direction from the paired desktop";
+    const composer = chatPane.getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill(liveFollowUp);
+    await writeFile(dropReply, "conversation.send");
+    await composer.press("Enter");
+    const overview = desktop.page.getByRole("button", {
+      name: "Overview",
+      exact: true,
+    });
+    await expect(overview).toHaveText(
+      "Remote review fixture (invented-linux, disconnected)",
+    );
+    await expect(
+      chatPane.getByRole("status", { name: "Conversation status" }),
+    ).toContainText("The Linux host did not confirm this message.");
+    await expect(composer).toHaveValue(liveFollowUp);
+    await composer.press("Enter");
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(composer).toHaveValue("");
+    await expect
+      .poll(
+        async () =>
+          (await linux.records()).filter(
+            (entry) => entry.message?.method === "turn/steer",
+          ).length,
+      )
+      .toBe(1);
+    expect(
+      (await linux.inspect(chat.id)).messages.filter(
+        (item) => item.role === "user" && item.text === liveFollowUp,
+      ),
+    ).toHaveLength(1);
+    await linux.cli("conversation", "interrupt", "--id", chat.id);
+    await expect
+      .poll(async () => (await linux.inspect(chat.id)).status)
+      .toBe("ready");
+
+    const review = await linux.cli<{
+      id: string;
+      paneId: string;
+      roundId: string;
+    }>(
+      "review",
+      "open-diff",
+      "--workspace",
+      workspace,
+      "--repo-root",
+      repo,
+      "--conversation",
+      chat.id,
+    );
+    const reviewPane = desktop.pane(review.paneId);
+    const addComment = async () => {
+      await reviewPane
+        .getByRole("button", { name: `Old line 2 ${source}`, exact: true })
+        .focus();
+      await desktop.page.keyboard.press(`${modifier}+Shift+M`);
+      const input = reviewPane.getByRole("textbox", {
+        name: "Comment",
+        exact: true,
+      });
+      await expect(input).toBeFocused();
+      return input;
+    };
+    const message = "Keep the invented old anchor in the design";
+    const input = await addComment();
+    await input.fill(message);
+    await writeFile(signer, "");
+    await input.press(`${modifier}+Enter`);
+    await expect(
+      reviewPane.getByText("Pair this desktop to open private review."),
+    ).toBeVisible();
+    expect((await linux.raw("state")).stdout).not.toContain(message);
+    expect(await linux.prompts()).toHaveLength(2);
+
+    await writeFile(signer, pairedSigner);
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(input).toHaveValue(message);
+    await input.press(`${modifier}+Enter`);
+    await expect(
+      reviewPane.getByLabel("Draft comment", { exact: true }),
+    ).toContainText(message);
+    expect(await linux.prompts()).toHaveLength(2);
+    const beforeSubmit = await readUnpairedWatch(linux.socket);
+    expect(JSON.stringify(beforeSubmit)).not.toContain(message);
+    expect(
+      beforeSubmit.reviews?.find((item) => item.id === review.id)?.rounds.at(-1)
+        ?.commentCount,
+    ).toBe(1);
+    expect(
+      (await linux.raw("review", "inspect", "--id", review.id)).stdout,
+    ).not.toContain(message);
+
+    await writeFile(dropReply, "review.submit");
+    await reviewPane
+      .getByRole("button", { name: "Send feedback", exact: true })
+      .click();
+    await expect(overview).toHaveText(
+      "Remote review fixture (invented-linux, disconnected)",
+    );
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(overview).toHaveText("Remote review fixture (invented-linux)");
+    await expect(
+      reviewPane.getByLabel("Sent comment", { exact: true }),
+    ).toContainText(message);
+    await expect(
+      reviewPane.getByRole("button", { name: "Send feedback", exact: true }),
+    ).toHaveCount(0);
+    await expect.poll(async () => (await linux.prompts()).length).toBe(3);
+    expect(
+      (await linux.inspect(chat.id)).messages.filter(
+        (item) => item.role === "user" && item.text.includes(message),
+      ),
+    ).toHaveLength(1);
+    const state = await readUnpairedWatch(linux.socket);
+    expect(JSON.stringify(state.reviews)).not.toContain(message);
+    expect(
+      state.reviews?.find((item) => item.id === review.id)?.rounds.at(-1)
+        ?.submission?.envelope,
+    ).toBe("");
+    expect((await linux.inspect(other.id)).messages).toHaveLength(0);
   } finally {
     await desktop.cleanup();
     if (host?.exitCode === null) host.kill("SIGTERM");

@@ -997,9 +997,8 @@ export function createConversationViews({
       }
     }
     groupTurnActivity(transcript, conversation);
-    const remote = getState().remoteWorkspace?.ids.includes(
-      conversation.workspaceId,
-    );
+    const remoteHost = getState().remoteWorkspace;
+    const remote = remoteHost?.ids.includes(conversation.workspaceId);
     const setup = remote ? null : integration.offer(conversation.provider);
     if (setup && !conversation.messages.length && !conversation.error)
       transcript.append(setup);
@@ -1022,12 +1021,16 @@ export function createConversationViews({
       title.textContent = "Approval requested";
       card.append(title);
       card.append(permissionContent(permission.details));
-      if (remote) {
+      const available =
+        !remote || (remoteHost?.connected && remoteHost.reviewAccess);
+      if (!available) {
         const note = document.createElement("p");
-        note.textContent = "Resolve this request on the Linux host.";
+        note.textContent = remoteHost?.connected
+          ? "Pair this desktop to respond to the approval."
+          : "Reconnect to respond to the approval.";
         card.append(note);
       }
-      for (const option of remote ? [] : permission.options) {
+      for (const option of available ? permission.options : []) {
         const permissionButton = paneButton(option.label, () =>
           invoke("conversation.permission", {
             id: conversation.id,

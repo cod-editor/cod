@@ -948,11 +948,7 @@ export function createCommands(
     if (id === "workspace.remoteDisconnect")
       return host ? undefined : "Connect to a Linux workspace first";
     if (id === "workspace.remoteReconnect")
-      return !host
-        ? "Connect to a Linux workspace first"
-        : host.connected
-          ? "The Linux workspace is already connected"
-          : undefined;
+      return host ? undefined : "Connect to a Linux workspace first";
     if (id === "link.open")
       return linkUrl && w ? undefined : "Place the caret on a web link first";
     if (id === "browser.openExternal") {
@@ -1179,7 +1175,11 @@ export function createCommands(
       }
       switch (id) {
         case "workspace.remoteConnect":
-          remoteWorkspaceDialog(invoke, () => {
+          remoteWorkspaceDialog(invoke, (reviewAccess, selectedKey) => {
+            if (selectedKey && !reviewAccess)
+              setStatus(
+                "Connected. Private review is unavailable with this key.",
+              );
             const intent = keys.beginFocus();
             void features
               .whenRendered(
