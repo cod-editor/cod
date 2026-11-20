@@ -7,11 +7,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { CommandSocketError, invokeCommand } from "../command-client";
 import type { AppState, OperationRequest } from "../types";
 import {
+  canUsePairedDesktop,
   maximumWorkspaceFrameBytes,
   unconfirmedRemoteSend,
   type WorkspaceHostFrame,
   type WorkspaceHostTarget,
 } from "./protocol";
+import { signWorkspaceReview } from "./review-signature";
 
 function validTarget(target: WorkspaceHostTarget): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(target.alias))
@@ -28,6 +30,7 @@ export interface HostLink {
   target: WorkspaceHostTarget;
   state: AppState;
   connected: boolean;
+  reviewAccess: boolean;
   invoke(request: OperationRequest): Promise<unknown>;
   close(): void;
 }
@@ -83,9 +86,19 @@ export async function attachWorkspaceHost(
   let link: HostLink | undefined;
   let stopped = false;
   let rejectInitial: ((error: Error) => void) | undefined;
+  let pendingReview:
+    | {
+        id: number;
+        complete(
+          frame: Extract<WorkspaceHostFrame, { type: "review-reply" }>,
+        ): void;
+        unconfirmed(): void;
+      }
+    | undefined;
   const close = () => {
     if (stopped) return;
     stopped = true;
+    pendingReview?.unconfirmed();
     stream?.destroy();
     if (ssh.pid && ssh.exitCode === null && ssh.signalCode === null)
       ssh.kill("SIGTERM");
@@ -139,8 +152,69 @@ export async function attachWorkspaceHost(
       connection.setEncoding("utf8");
       let chunks: string[] = [];
       let bytes = 0;
+      let nextReviewId = 0;
+      let reviewQueue: Promise<unknown> = Promise.resolve();
+      let reviewNegotiation: ReturnType<typeof setTimeout> | undefined;
+      const accept = () => {
+        if (link && rejectInitial) {
+          clearTimeout(reviewNegotiation);
+          rejectInitial = undefined;
+          resolve(link);
+        }
+      };
+      const invokeReview = (request: OperationRequest) => {
+        const next = reviewQueue
+          .catch(() => undefined)
+          .then(() => {
+            if (stopped || !link?.connected)
+              throw new Error("Reconnect to the Linux workspace first");
+            if (!link.reviewAccess)
+              throw new Error(
+                "Pair this desktop to use remote review and approvals",
+              );
+            return new Promise<unknown>((resolve, reject) => {
+              const id = ++nextReviewId;
+              const unconfirmed = () => {
+                clearTimeout(deadline);
+                pendingReview = undefined;
+                reject(
+                  new Error(
+                    "The host did not confirm this review operation. Reopen its round before retrying.",
+                  ),
+                );
+              };
+              const deadline = setTimeout(() => {
+                unconfirmed();
+                fail(
+                  "The Linux workspace stopped responding to review requests",
+                );
+              }, 30_000);
+              pendingReview = {
+                id,
+                unconfirmed,
+                complete(frame) {
+                  clearTimeout(deadline);
+                  pendingReview = undefined;
+                  if (typeof frame.error === "string")
+                    reject(new Error(frame.error));
+                  else resolve(frame.result);
+                },
+              };
+              connection.write(
+                JSON.stringify({ type: "review-command", id, request }) + "\n",
+              );
+            });
+          });
+        reviewQueue = next;
+        return next;
+      };
       connection.on("connect", () =>
-        connection.write('{"op":"workspace.watch"}\n'),
+        connection.write(
+          JSON.stringify({
+            op: "workspace.watch",
+            ...(target.publicKey ? { review: true } : {}),
+          }) + "\n",
+        ),
       );
       connection.on("data", (chunk: string) => {
         for (let start = 0; start < chunk.length;) {
@@ -172,13 +246,18 @@ export async function attachWorkspaceHost(
               update(link, frame);
             } else {
               clearTimeout(timeout);
-              rejectInitial = undefined;
               link = {
                 target,
                 state: frame.value,
                 connected: true,
+                reviewAccess: false,
                 close,
                 async invoke(request) {
+                  if (
+                    canUsePairedDesktop(request) &&
+                    (request.op !== "conversation.send" || this.reviewAccess)
+                  )
+                    return invokeReview(request);
                   if (!this.connected || stopped)
                     throw new Error("Reconnect to the Linux workspace first");
                   try {
@@ -194,10 +273,36 @@ export async function attachWorkspaceHost(
                   }
                 },
               };
-              resolve(link);
+              if (target.publicKey)
+                reviewNegotiation = setTimeout(accept, 9000);
+              else accept();
             }
           } else if (frame?.type === "terminal" && link) update(link, frame);
-          else {
+          else if (
+            frame?.type === "review-challenge" &&
+            link &&
+            target.publicKey &&
+            rejectInitial
+          ) {
+            void signWorkspaceReview(target.publicKey, frame.value).then(
+              (signature) => {
+                if (!stopped && rejectInitial)
+                  connection.write(
+                    JSON.stringify({ type: "review-proof", signature }) + "\n",
+                  );
+              },
+              accept,
+            );
+          } else if (frame?.type === "review-access" && link) {
+            link.reviewAccess = frame.value === true;
+            accept();
+            update(link, frame);
+          } else if (
+            frame?.type === "review-reply" &&
+            pendingReview?.id === frame.id
+          ) {
+            pendingReview.complete(frame);
+          } else {
             fail("This socket is not a compatible Cod workspace host");
             return;
           }
@@ -206,6 +311,7 @@ export async function attachWorkspaceHost(
       connection.once("error", () => fail("The workspace connection failed"));
       connection.once("close", () => {
         clearTimeout(timeout);
+        clearTimeout(reviewNegotiation);
         fail("The workspace connection closed");
       });
     });

@@ -97,6 +97,13 @@ export function reviewPane(
     writePreference(`review-editor.${id}`, null);
     staleEditor = false;
   };
+  const pendingSubmissionKey = `review-submission.${id}`;
+  let pendingSubmission = readPreference<{
+    round: string;
+    version: number;
+    requestId: string;
+  } | null>(pendingSubmissionKey, null);
+  let remoteConnected: boolean | undefined;
   let textRange: Range | undefined;
   let presentationToken: string | undefined;
   let presentCurrent = false;
@@ -335,10 +342,24 @@ export function reviewPane(
   });
   const submit = button("Submit round", async () => {
     if (!detail) return;
+    let requestId: string = crypto.randomUUID();
+    if (remoteConnected) {
+      if (
+        pendingSubmission?.round === selectedRound &&
+        pendingSubmission.version === detail.version
+      )
+        requestId = pendingSubmission.requestId;
+      pendingSubmission = {
+        round: selectedRound,
+        version: detail.version,
+        requestId,
+      };
+      writePreference(pendingSubmissionKey, pendingSubmission);
+    }
     await invoke("review.submit", {
       id,
       round: selectedRound,
-      requestId: crypto.randomUUID(),
+      requestId,
       expectedVersion: detail.version,
     });
     await reload();
@@ -893,6 +914,16 @@ export function reviewPane(
       selectedRound === detail?.currentRoundId;
     presentCurrent = false;
     detail = next;
+    if (
+      pendingSubmission &&
+      next.rounds.some(
+        (round) =>
+          round.id === pendingSubmission?.round && round.status !== "draft",
+      )
+    ) {
+      pendingSubmission = null;
+      writePreference(pendingSubmissionKey, null);
+    }
     if (followCurrent && selectedRound !== next.currentRoundId)
       chooseRound(next.currentRoundId);
     shownError = false;
@@ -932,6 +963,19 @@ export function reviewPane(
   function update(next: AppState) {
     state = next;
     const review = state.reviews?.find((r) => r.id === id);
+    const remote = state.remoteWorkspace;
+    const connected =
+      review && remote?.ids.includes(review.workspaceId)
+        ? remote.connected
+        : undefined;
+    if (connected !== remoteConnected) {
+      remoteConnected = connected;
+      if (connected === true) version = -1;
+    }
+    if (connected === false) {
+      status.textContent = "Reconnect to use this review.";
+      return;
+    }
     const origin = state.conversations.find(
       (c) => c.id === review?.originConversationId,
     );

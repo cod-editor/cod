@@ -78,7 +78,19 @@ Set `COD_SOCKET_PATH` to the profile's `cod.sock` to use `codctl` on Linux. On y
 
 From the connected workspace, you can open and edit existing text files, use terminals, and work in Codex chats. A lost connection is marked in the workspace title. Use **Reconnect to Linux workspace** to see the Linux host's current state and terminal output. Disconnecting or quitting the desktop leaves Linux work running. After restarting the desktop, use **Connect to Linux workspace** again.
 
-Browser tabs, cookies and device permissions stay on the desktop. Use the Linux host's CLI to add folders, save a new file to a Linux path, handle provider approvals and use review commands. Inline review editing, file previews, and steering a chat during an active turn remain local desktop features in this checkpoint.
+Browser tabs, cookies and device permissions stay on the desktop. Use the Linux host's CLI to add folders and save a new file to a Linux path. File previews remain local in this checkpoint.
+
+### Pair review and approvals
+
+On the Linux host, add your chosen existing SSH public key to the private profile's `desktop-signers` file with an entry in the OpenSSH allowed-signers format:
+
+```text
+cod-desktop namespaces="cod-review" ssh-ed25519 YOUR_PUBLIC_KEY
+```
+
+Use the full type and key data from your local public key file and keep the signer file writable only by its owner. In **Connect to Linux workspace**, enter the matching absolute `.pub` path in **SSH public key for private review**. OpenSSH must be available on both machines and the matching private key must be usable on the desktop, for example through the local SSH agent.
+
+A paired connection can annotate a remote review, respond to Codex approvals and steer an active Codex turn using ordinary send. A missing or rejected key leaves ordinary chat, files and terminals available. Removing a signer blocks the next private operation. Reconnect with an authorized key to resume review. The desktop remembers the entered host alias and paths for its next connection. The private key remains on the desktop, and pairings do not change SSH server configuration.
 
 ## Development
 

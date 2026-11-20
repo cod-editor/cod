@@ -158,8 +158,15 @@ export function createWorkspaceView(
 
   function renderPane(workspace: WorkspaceState, pane: PaneState): HTMLElement {
     let container = resourcePanes.get(pane.id);
-    const kind =
-      pane.kind === "document" && !pane.filePath
+    const remoteHost = getState().remoteWorkspace;
+    const remote = remoteHost?.ids.includes(workspace.id)
+      ? remoteHost
+      : undefined;
+    const privateReviewUnavailable =
+      pane.kind === "review" && remote && !remote.reviewAccess;
+    const kind = privateReviewUnavailable
+      ? "remote-review-unavailable"
+      : pane.kind === "document" && !pane.filePath
         ? "draft-chat"
         : pane.kind === "preview"
           ? `preview:${pane.format ?? "markdown"}`
@@ -203,8 +210,8 @@ export function createWorkspaceView(
         ?.dispatchEvent(new Event("cod:refresh-preview"));
     let content: HTMLElement | undefined;
     if (
-      getState().remoteWorkspace?.ids.includes(workspace.id) &&
-      ["preview", "diff", "review", "browser"].includes(pane.kind)
+      privateReviewUnavailable ||
+      (remote && ["preview", "diff", "browser"].includes(pane.kind))
     ) {
       container.setAttribute("aria-label", "Unavailable view");
       content =
@@ -213,7 +220,9 @@ export function createWorkspaceView(
       content.textContent =
         pane.kind === "browser"
           ? "Web pages open on this computer."
-          : "This view is unavailable in a Linux workspace.";
+          : pane.kind === "review"
+            ? "Pair this desktop to open private review."
+            : "This view is unavailable in a Linux workspace.";
     } else if (pane.kind === "empty") {
       container.setAttribute("aria-label", "Empty pane");
       container.tabIndex = 0;

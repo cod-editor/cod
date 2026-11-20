@@ -1179,7 +1179,11 @@ export function createCommands(
       }
       switch (id) {
         case "workspace.remoteConnect":
-          remoteWorkspaceDialog(invoke, () => {
+          remoteWorkspaceDialog(invoke, (reviewAccess, selectedKey) => {
+            if (selectedKey && !reviewAccess)
+              setStatus(
+                "Connected. Private review is unavailable with this key.",
+              );
             const intent = keys.beginFocus();
             void features
               .whenRendered(

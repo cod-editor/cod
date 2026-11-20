@@ -32,7 +32,10 @@ async function prepareSocket(socketPath: string): Promise<void> {
 export async function startCommandSocket(
   socketPath: string,
   dispatch: (request: OperationRequest) => Promise<unknown>,
-  watchWorkspace?: (connection: Socket) => Promise<void>,
+  watchWorkspace?: (
+    connection: Socket,
+    request: OperationRequest,
+  ) => Promise<void>,
 ): Promise<Server> {
   await prepareSocket(socketPath);
   const server = createServer((connection) => {
@@ -62,7 +65,7 @@ export async function startCommandSocket(
         try {
           const request = JSON.parse(line) as OperationRequest;
           if (request?.op === "workspace.watch" && watchWorkspace) {
-            await watchWorkspace(connection);
+            await watchWorkspace(connection, request);
             return;
           }
           const result = await dispatch(request);

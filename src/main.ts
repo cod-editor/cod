@@ -38,6 +38,10 @@ import { BrowserApplicationService } from "./application/browser-service";
 import { startCommandSocket } from "./application/command-socket";
 import { defaultDataDirectory, defaultSocketPath } from "./paths";
 import type { AppState, OperationRequest } from "./types";
+import {
+  canUsePairedDesktop,
+  type WorkspaceHostTarget,
+} from "./remote-workspace/protocol";
 import { attachWorkspaceHost, type HostLink } from "./remote-workspace/client";
 import {
   combineWorkspaces,
@@ -146,6 +150,7 @@ function displayState(local = operations.snapshot(true)): AppState {
     state: link.state,
     alias: link.target.alias,
     connected: link.connected,
+    reviewAccess: link.reviewAccess,
     viewing: remoteView,
   });
 }
@@ -155,14 +160,14 @@ function showWorkspaceState(local?: AppState) {
     mainWindow.webContents.send("cod:state", displayState(local));
 }
 
-async function connectRemoteWorkspace(alias: string, socketPath: string) {
+async function connectRemoteWorkspace(target: WorkspaceHostTarget) {
   if (attachingWorkspace)
     throw new Error("A Linux workspace connection is in progress");
   const attempt = new AbortController();
   attachingWorkspace = attempt;
   try {
     const link = await attachWorkspaceHost(
-      { alias, socketPath },
+      target,
       (link, frame) => {
         if (remoteWorkspace !== link) return;
         if (frame?.type === "terminal")
@@ -188,6 +193,7 @@ async function connectRemoteWorkspace(alias: string, socketPath: string) {
         state: link.state,
         alias: link.target.alias,
         connected: link.connected,
+        reviewAccess: link.reviewAccess,
       });
     } catch (error) {
       link.close();
@@ -198,6 +204,7 @@ async function connectRemoteWorkspace(alias: string, socketPath: string) {
     remoteView = link.state.activeWorkspaceId ?? undefined;
     if (remoteView) operations.browserLayout([]);
     showWorkspaceState();
+    return link.reviewAccess;
   } finally {
     if (attachingWorkspace === attempt) attachingWorkspace = undefined;
   }
@@ -212,15 +219,18 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       typeof request.socketPath !== "string"
     )
       throw new Error("Choose an SSH host and socket path");
-    return connectRemoteWorkspace(
-      request.alias.trim(),
-      request.socketPath.trim(),
-    );
+    return connectRemoteWorkspace({
+      alias: request.alias.trim(),
+      socketPath: request.socketPath.trim(),
+      publicKey:
+        typeof request.publicKey === "string"
+          ? request.publicKey.trim() || undefined
+          : undefined,
+    });
   }
   if (request.op === "remote.reconnect") {
     if (!link) throw new Error("Connect to a Linux workspace first");
-    if (!link.connected)
-      return connectRemoteWorkspace(link.target.alias, link.target.socketPath);
+    if (!link.connected) return connectRemoteWorkspace(link.target);
     remoteView = link.state.activeWorkspaceId ?? undefined;
     if (remoteView) operations.browserLayout([]);
     showWorkspaceState();
@@ -245,6 +255,8 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       /^https?:\/\//i.test(request.url)
     )
       return openExternalUrl(request.url);
+    if (canUsePairedDesktop(request) && request.op !== "conversation.send")
+      return link.invoke(request);
     validateRemoteRequest(request);
     if (request.op === "workspace.focus") {
       if (link.connected) await link.invoke(request);
@@ -256,7 +268,7 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       return;
     }
     return link.invoke(
-      request.op === "conversation.send"
+      request.op === "conversation.send" && !link.reviewAccess
         ? { ...request, requireIdle: true }
         : request,
     );

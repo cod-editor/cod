@@ -3,6 +3,7 @@ import type { Socket } from "node:net";
 import path from "node:path";
 import { ApplicationOperations } from "./operations";
 import { startCommandSocket } from "./application/command-socket";
+import { serveWorkspaceReview } from "./remote-workspace/review-session";
 import {
   maximumWorkspaceFrameBytes,
   type WorkspaceHostFrame,
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
       await requireReady();
       return runtime.dispatch(request);
     },
-    async (connection) => {
+    async (connection, request) => {
       await requireReady();
       if (connection.destroyed) return;
       watchers.add(connection);
@@ -74,6 +75,13 @@ async function main(): Promise<void> {
         connection,
         JSON.stringify({ type: "state", value: newestState }) + "\n",
       );
+      if (request.review === true)
+        serveWorkspaceReview(
+          connection,
+          directory,
+          (frame) => send(connection, JSON.stringify(frame) + "\n"),
+          (operation) => runtime.dispatch(operation, true),
+        );
     },
   );
   ready = runtime.initialize();

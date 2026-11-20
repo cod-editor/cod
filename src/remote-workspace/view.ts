@@ -59,6 +59,9 @@ const chatOperations = new Set([
   "conversation.option",
   "conversation.send",
   "conversation.interrupt",
+  "conversation.queue-edit",
+  "conversation.queue-remove",
+  "conversation.queue-resume",
   "conversation.rename",
   "conversation.acknowledge",
   "conversation.inspect",
@@ -110,10 +113,11 @@ export function combineWorkspaces(
     state: AppState;
     alias: string;
     connected: boolean;
+    reviewAccess: boolean;
     viewing?: string;
   },
 ): AppState {
-  const { state, alias, connected, viewing } = host;
+  const { state, alias, connected, reviewAccess, viewing } = host;
   if (
     state.workspaces.some((workspace) =>
       local.workspaces.some((item) => item.id === workspace.id),
@@ -130,9 +134,13 @@ export function combineWorkspaces(
     conversations: [...local.conversations, ...state.conversations],
     terminals: [...local.terminals, ...state.terminals],
     reviews: [...(local.reviews ?? []), ...(state.reviews ?? [])],
+    reviewPresentation: viewing
+      ? state.reviewPresentation
+      : local.reviewPresentation,
     remoteWorkspace: {
       alias,
       connected,
+      reviewAccess,
       ids: state.workspaces.map((workspace) => workspace.id),
     },
   };
