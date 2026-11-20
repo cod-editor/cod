@@ -1,5 +1,7 @@
 import type { AppState, TerminalUiEvent } from "../types";
 
+export const unconfirmedRemoteSend =
+  "The Linux host did not confirm this message.";
 export const maximumWorkspaceFrameBytes = 32 * 1024 * 1024;
 
 export interface WorkspaceHostTarget {

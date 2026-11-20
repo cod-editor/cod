@@ -81,31 +81,39 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
     await draft.fill("Unsaved desktop draft");
 
     const forwarder = path.resolve("tests/e2e/helpers/unix-socket-forward.mjs");
-    const stopForward = await desktop.app!.evaluate((_electron, fixture) => {
-      const childProcess = process.getBuiltinModule(
-        "node:child_process",
-      ) as typeof import("node:child_process");
-      const original = childProcess.spawn;
-      let pid = 0;
-      childProcess.spawn = ((
-        command: string,
-        args: string[],
-        options: import("node:child_process").SpawnOptions,
-      ) => {
-        if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
-          return original(command, args, options);
-        }
-        const forward = args[args.indexOf("-L") + 1];
-        const relay = original(process.execPath, [fixture, forward], {
-          ...options,
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-        });
-        pid = relay.pid!;
-        return relay;
-      }) as typeof original;
-      process.on("cod-test-stop-forward", () => process.kill(pid, "SIGTERM"));
-      return true;
-    }, forwarder);
+    const dropReply = path.join(desktop.temporary, "drop-reply");
+    const stopForward = await desktop.app!.evaluate(
+      (_electron, { fixture, dropReply }) => {
+        const childProcess = process.getBuiltinModule(
+          "node:child_process",
+        ) as typeof import("node:child_process");
+        const original = childProcess.spawn;
+        let pid = 0;
+        childProcess.spawn = ((
+          command: string,
+          args: string[],
+          options: import("node:child_process").SpawnOptions,
+        ) => {
+          if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
+            return original(command, args, options);
+          }
+          const forward = args[args.indexOf("-L") + 1];
+          const relay = original(
+            process.execPath,
+            [fixture, forward, dropReply],
+            {
+              ...options,
+              env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+            },
+          );
+          pid = relay.pid!;
+          return relay;
+        }) as typeof original;
+        process.on("cod-test-stop-forward", () => process.kill(pid, "SIGTERM"));
+        return true;
+      },
+      { fixture: forwarder, dropReply },
+    );
     expect(stopForward).toBe(true);
 
     await desktop.command("Connect to Linux workspace");
@@ -194,6 +202,34 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
       (await linux.prompts()).map((record) => JSON.stringify(record)),
     ).not.toContainEqual(expect.stringContaining(followUp));
     await linux.cli("conversation", "interrupt", "--id", hosted.id);
+
+    await expect
+      .poll(async () => (await linux.inspect(hosted.id)).status)
+      .toBe("ready");
+    const admitted = "Accepted by the host before the connection dropped";
+    await draft.fill(admitted);
+    await writeFile(dropReply, "conversation.send");
+    await draft.press("Enter");
+    await expect(header).toHaveText(
+      "Remote fixture (invented-linux, disconnected)",
+    );
+    await expect(draft).toHaveValue(admitted);
+    const unknown = desktop.page.getByRole("status", {
+      name: "Conversation status",
+    });
+    await expect(unknown).toContainText(
+      "The Linux host did not confirm this message.",
+    );
+    await draft.press("Enter");
+    await expect(draft).toHaveValue(admitted);
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(draft).toHaveValue("");
+    await expect(unknown).toBeHidden();
+    expect(
+      (await linux.inspect(hosted.id)).messages.filter(
+        (item) => item.role === "user" && item.text === admitted,
+      ),
+    ).toHaveLength(1);
 
     await desktop.overview();
     await desktop.row("Local fixture").click();

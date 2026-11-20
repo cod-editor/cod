@@ -19,6 +19,9 @@ import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
 import { icon, iconButton, menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history";
+import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
+import { readPreference, writePreference } from "./preferences";
+import { confirmAction } from "./dialogs";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 function setChoiceCaption(button: HTMLButtonElement, text: string): void {
@@ -261,7 +264,7 @@ export function createConversationViews({
         composerDrafts.set(result.id, text);
         attachmentDrafts.set(result.id, images);
         skillDrafts.set(result.id, selectedSkills(pane.id));
-        await sendMessage(result.id, workspace.id);
+        await sendMessage(result.id, workspace.id, versions.get(pane.id));
         composerDrafts.delete(pane.id);
         attachmentDrafts.delete(pane.id);
         skillDrafts.delete(pane.id);
@@ -1055,6 +1058,23 @@ export function createConversationViews({
     if (conversation.handoffTerminalId)
       currentStatus.textContent =
         "Open in the CLI terminal. Exit the CLI before returning to chat.";
+    const unconfirmed = remoteSend(conversation.id);
+    if (unconfirmed && !pendingSends.has(conversation.id)) {
+      currentStatus.textContent = unconfirmedRemoteSend;
+      currentStatus.append(
+        actionRow(
+          paneButton("Discard unconfirmed draft", async () => {
+            confirmAction(
+              "Discard the unconfirmed draft?",
+              "Already accepted messages remain in the Linux chat.",
+              "Discard draft",
+              () => settleRemoteSend(conversation.id, unconfirmed, true),
+              "Discard unconfirmed draft",
+            );
+          }),
+        ),
+      );
+    }
     currentStatus.hidden = !currentStatus.textContent;
     body.append(currentStatus);
 
@@ -1311,11 +1331,90 @@ export function createConversationViews({
       },
     };
   }
-  async function sendMessage(id: string, workspace?: string): Promise<void> {
+  type RemoteSend = { writer: string; version: string; fingerprint: string };
+  const remoteSends = new Map<string, RemoteSend | null>();
+  const checkingRemoteSends = new Set<string>();
+  function remoteSend(id: string): RemoteSend | null {
+    if (!remoteSends.has(id))
+      remoteSends.set(
+        id,
+        readPreference<RemoteSend | null>(`remote-send.${id}`, null),
+      );
+    return remoteSends.get(id) ?? null;
+  }
+  function rememberRemoteSend(id: string, pending: RemoteSend | null): void {
+    remoteSends.set(id, pending);
+    writePreference(`remote-send.${id}`, pending);
+  }
+  async function messageFingerprint(
+    text: string,
+    images: readonly ChatImage[],
+    skills: ReturnType<typeof selectedSkills>,
+  ): Promise<string> {
+    const content = JSON.stringify({
+      text,
+      images: images.map(({ data, mimeType, reference }) => ({
+        data,
+        mimeType,
+        reference,
+      })),
+      skills,
+    });
+    const hash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(content),
+    );
+    return Array.from(new Uint8Array(hash), (value) =>
+      value.toString(16).padStart(2, "0"),
+    ).join("");
+  }
+  async function settleRemoteSend(
+    id: string,
+    pending: RemoteSend,
+    discard: boolean,
+  ): Promise<void> {
+    if (checkingRemoteSends.has(id)) return;
+    checkingRemoteSends.add(id);
+    try {
+      const text = composerDrafts.get(id) ?? "";
+      const images = attachmentDrafts.get(id) ?? [];
+      const skills = selectedSkills(id);
+      const fingerprint = await messageFingerprint(text, images, skills);
+      if (remoteSend(id) !== pending) return;
+      if (
+        fingerprint === pending.fingerprint &&
+        text === (composerDrafts.get(id) ?? "") &&
+        images === (attachmentDrafts.get(id) ?? images) &&
+        JSON.stringify(skills) === JSON.stringify(selectedSkills(id))
+      ) {
+        composerDrafts.delete(id);
+        attachmentDrafts.delete(id);
+        skillDrafts.delete(id);
+        if (discard) await persistComposer(id);
+      }
+      rememberRemoteSend(id, null);
+      sendErrors.delete(id);
+      invalidate();
+    } finally {
+      checkingRemoteSends.delete(id);
+    }
+  }
+
+  async function sendMessage(
+    id: string,
+    workspace?: string,
+    draftVersion?: string,
+  ): Promise<void> {
     if (pendingSends.has(id)) return;
-    const turn = getState()
-      .conversations.find((item) => item.id === id)
-      ?.turns?.at(-1);
+    if (remoteSend(id)) {
+      setStatus("Wait for confirmation or discard the unconfirmed draft.");
+      return;
+    }
+    const state = getState();
+    const conversation = state.conversations.find((item) => item.id === id);
+    const owner = workspace ?? conversation?.workspaceId;
+    const remote = owner && state.remoteWorkspace?.ids.includes(owner);
+    const turn = conversation?.turns?.at(-1);
     const expectedTurn = turn && !turn.finishedAt ? turn.id : undefined;
     if (loadingImages.has(id)) {
       setStatus("Wait for the image to finish loading");
@@ -1348,6 +1447,13 @@ export function createConversationViews({
         invalidate();
         return;
       }
+      if (remote) {
+        rememberRemoteSend(id, {
+          writer,
+          version: draftVersion ?? versions.get(id) ?? "",
+          fingerprint: await messageFingerprint(text, images, skills),
+        });
+      }
       await invoke(
         "conversation.send",
         {
@@ -1361,11 +1467,12 @@ export function createConversationViews({
         },
         { reportError: false },
       );
+      if (remote) rememberRemoteSend(id, null);
     } catch (error) {
-      sendErrors.set(
-        id,
-        error instanceof Error ? error.message : String(error),
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      if (remote && !message.includes(unconfirmedRemoteSend))
+        rememberRemoteSend(id, null);
+      sendErrors.set(id, message);
       invalidate();
       return;
     } finally {
@@ -1401,6 +1508,14 @@ export function createConversationViews({
         );
         const key = conversation?.id ?? paneId;
         const version = draft.version ?? "";
+        const unconfirmed = remoteSend(key);
+        if (
+          unconfirmed &&
+          !pendingSends.has(key) &&
+          draft.writer === unconfirmed.writer &&
+          draft.clearedFromVersion === unconfirmed.version
+        )
+          void settleRemoteSend(key, unconfirmed, false).catch(() => {});
         const hydrated = hydratedComposers.has(key);
         if (hydrated && version === seenVersions.get(key)) continue;
         hydratedComposers.add(key);

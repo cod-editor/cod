@@ -8,6 +8,7 @@ import { CommandSocketError, invokeCommand } from "../command-client";
 import type { AppState, OperationRequest } from "../types";
 import {
   maximumWorkspaceFrameBytes,
+  unconfirmedRemoteSend,
   type WorkspaceHostFrame,
   type WorkspaceHostTarget,
 } from "./protocol";
@@ -185,7 +186,9 @@ export async function attachWorkspaceHost(
                   } catch (error) {
                     if (error instanceof CommandSocketError && error.sent)
                       throw new Error(
-                        "The host did not confirm this operation. Check its state before retrying.",
+                        request.op === "conversation.send"
+                          ? unconfirmedRemoteSend
+                          : "The host did not confirm this operation. Check its state before retrying.",
                       );
                     throw error;
                   }
