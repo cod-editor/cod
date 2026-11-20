@@ -20,6 +20,17 @@ const { stdout: plistJson } = await execute("plutil", [
   path.join(bundle, "Contents/Info.plist"),
 ]);
 const plist = JSON.parse(plistJson);
+const expectedVersion = process.argv[3];
+const manifest = JSON.parse(
+  await readFile(path.join(app, "package.json"), "utf8"),
+);
+if (
+  expectedVersion &&
+  (manifest.version !== expectedVersion ||
+    plist.CFBundleShortVersionString !== expectedVersion.split("-")[0] ||
+    plist.CFBundleVersion !== expectedVersion.split("-")[0])
+)
+  throw new Error("Packaged preview version does not match the release tag");
 const schemes = (plist.CFBundleURLTypes ?? []).flatMap(
   (entry) => entry.CFBundleURLSchemes ?? [],
 );
