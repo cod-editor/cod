@@ -47,21 +47,40 @@ export function createPaneLayout(
   const splitButton = iconButton("split", "Toggle split view", () => {
     void toggleSplit().catch(() => undefined);
   });
+  splitButton.classList.add("split-view-button");
+  const splitLeft = splitButton.querySelector<SVGPathElement>(".split-left")!;
+  const splitRight = splitButton.querySelector<SVGPathElement>(".split-right")!;
   splitButton.onpointerdown = (event) => event.preventDefault();
   document.querySelector("#pane-visibility")!.append(splitButton);
   const filesButton = iconButton("folder", "Toggle files", toggleFiles);
   document.querySelector("#visibility-controls")!.append(filesButton);
   const filesPanel = document.querySelector<HTMLElement>("#project-panel")!;
   function applyWorkspaceSettings(workspace?: WorkspaceState): void {
+    const [left, right] = workspace ? orderedGroups(workspace) : [];
+    const bothVisible = !!right && !left.hidden && !right.hidden;
+    const active = workspace?.activeGroupId;
+    for (const [half, group] of [
+      [splitLeft, left],
+      [splitRight, right],
+    ] as const) {
+      half.dataset.state =
+        !right || !group || group.hidden
+          ? "outline"
+          : bothVisible && group.id === active
+            ? "focused"
+            : "visible";
+    }
+    const layout = !workspace
+      ? "Open a workspace first"
+      : !right
+        ? "No split"
+        : bothVisible
+          ? `Both panes visible, ${right.id === active ? "right" : "left"} pane active`
+          : `Only ${right.hidden ? "left" : "right"} pane visible`;
     splitButton.disabled = !workspace;
-    splitButton.title = shortcutTitle("pane.zoom", "Toggle split view");
-    splitButton.setAttribute(
-      "aria-pressed",
-      String(
-        workspace?.groups.length === 2 &&
-          workspace.groups.every((group) => !group.hidden),
-      ),
-    );
+    splitButton.title = `${shortcutTitle("pane.zoom", "Toggle split view")} · ${layout}`;
+    splitButton.setAttribute("aria-pressed", String(bothVisible));
+    splitButton.setAttribute("aria-description", layout);
     const settings = workspace?.settings;
     filesPanel.hidden = settings?.filesVisible !== true;
     filesButton.disabled = !workspace;
