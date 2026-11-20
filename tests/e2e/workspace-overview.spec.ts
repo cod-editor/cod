@@ -1494,7 +1494,7 @@ test("Overview and Commands open from a Markdown preview and return to its focus
   }
 });
 
-test("Overview quick actions target the selected tab from search without closing the active workspace", async ({}, info) => {
+test("Overview quick actions close a selected tab or remove a saved chat from search", async ({}, info) => {
   const first = await app.create("Active navigation fixture");
   const active = await app.newChat(first, "codex");
   const second = await app.create("Other navigation fixture");
@@ -1630,9 +1630,41 @@ test("Overview quick actions target the selected tab from search without closing
   expect(afterClose.conversations.some((chat) => chat.id === selected.id)).toBe(
     true,
   );
+  await search().fill("Taken aside fixture");
+  await search().press("ArrowDown");
+  await expect(selection()).toHaveAttribute("aria-current", "true");
+  await expect(footer()).toContainText("Remove from workspace");
+  await expect(footer()).toContainText(
+    process.platform === "darwin" ? "⌘⇧Y" : "Ctrl+Shift+Y",
+  );
+  await search().dispatchEvent("keydown", {
+    key: "Y",
+    code: "KeyY",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+    shiftKey: true,
+    repeat: true,
+  });
+  await expect(selection()).toBeVisible();
+  await search().press(`${modifier}+Shift+Y`);
+  await expect(selection()).toHaveCount(0);
+  await expect(search()).toBeFocused();
+  await expect(search()).toHaveValue("Taken aside fixture");
+  const afterRemoval = await snapshots();
+  expect(afterRemoval.activeWorkspaceId).toBe(first);
+  expect(
+    afterRemoval.conversations.some((chat) => chat.id === selected.id),
+  ).toBe(false);
   await search().press("Escape");
   await expect(activeComposer).toBeFocused();
   await expect(activeComposer).toHaveValue(
     "Preserve this active composer draft",
   );
+  await app.cli("pane", "reopen", "--workspace", second);
+  expect(
+    (await snapshots()).conversations.find((chat) => chat.id === selected.id),
+  ).toMatchObject({
+    nativeId: selected.nativeId,
+    displayName: "Taken aside fixture",
+  });
 });
