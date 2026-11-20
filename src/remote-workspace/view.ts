@@ -84,10 +84,7 @@ export function requestBelongsToHost(
   return false;
 }
 
-export function validateRemoteRequest(
-  state: AppState,
-  request: OperationRequest,
-): void {
+export function validateRemoteRequest(request: OperationRequest): void {
   if (
     ![
       workspaceOperations,
@@ -105,13 +102,6 @@ export function validateRemoteRequest(
     request.provider !== "codex"
   )
     throw new Error("This Linux workspace connection supports Codex");
-  if (request.op === "conversation.send") {
-    const chat = state.conversations.find((item) => item.id === request.id);
-    if (chat && ["working", "waiting", "starting"].includes(chat.status))
-      throw new Error(
-        "Wait for the active Codex turn before sending from this connection",
-      );
-  }
 }
 
 export function combineWorkspaces(

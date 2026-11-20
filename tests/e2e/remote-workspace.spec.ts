@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ChatApp } from "./helpers/chat-fixture/harness";
+import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 
 test("Linux workspace reconnect preserves host files, Codex chat and a running terminal", async ({}) => {
@@ -158,6 +158,27 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
     ).toBeVisible();
     expect((await desktop.raw("state")).stdout).not.toContain(message);
     expect((await linux.raw("state")).stdout).toContain(message);
+
+    const hosted = (
+      await linux.cli<{ conversations: Chat[] }>("state")
+    ).conversations.find((conversation) =>
+      conversation.messages.some((item) => item.text === message),
+    )!;
+    await linux.send(hosted.id, "[hold] Another active Linux turn");
+    await expect
+      .poll(async () => (await linux.inspect(hosted.id)).status)
+      .toBe("working");
+    const followUp = "Unsent while the host is busy";
+    await draft.fill(followUp);
+    await draft.press("Enter");
+    await expect(
+      desktop.page.getByRole("status", { name: "Conversation status" }),
+    ).toHaveText("Wait for the active or queued Codex work before sending");
+    await expect(draft).toHaveValue(followUp);
+    expect(
+      (await linux.prompts()).map((record) => JSON.stringify(record)),
+    ).not.toContainEqual(expect.stringContaining(followUp));
+    await linux.cli("conversation", "interrupt", "--id", hosted.id);
 
     await desktop.overview();
     await desktop.row("Local fixture").click();

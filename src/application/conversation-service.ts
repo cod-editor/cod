@@ -891,6 +891,10 @@ export class ConversationApplicationService {
       !fromQueue &&
       (this.isActive(conversation.id) || conversation.queuedMessages?.length)
     ) {
+      if (request.requireIdle === true)
+        throw new Error(
+          "Wait for the active or queued Codex work before sending",
+        );
       const messageId = randomUUID();
       await this.store.change(() => {
         if (this.store.closing) throw new Error("Cod is shutting down");

@@ -245,7 +245,7 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       /^https?:\/\//i.test(request.url)
     )
       return openExternalUrl(request.url);
-    validateRemoteRequest(link.state, request);
+    validateRemoteRequest(request);
     if (request.op === "workspace.focus") {
       if (link.connected) await link.invoke(request);
       if (remoteWorkspace === link) {
@@ -255,7 +255,11 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       }
       return;
     }
-    return link.invoke(request);
+    return link.invoke(
+      request.op === "conversation.send"
+        ? { ...request, requireIdle: true }
+        : request,
+    );
   }
   if (
     remoteView &&
