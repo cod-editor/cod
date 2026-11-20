@@ -1267,7 +1267,11 @@ export function createCommands(
           }
           break;
         case "chat.new":
-          await newConversation(w?.id);
+          await newConversation(
+            w && getState().remoteWorkspace?.ids.includes(w.id)
+              ? w.id
+              : undefined,
+          );
           break;
         case "chat.width":
           chatWidthDialog();
