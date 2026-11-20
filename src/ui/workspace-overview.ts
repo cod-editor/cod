@@ -13,6 +13,7 @@ import { icon, iconButton, menu } from "./controls";
 import { commands, formatBinding, resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { showActionError } from "./action-feedback";
+import { conversationRemovalReason } from "../conversation-actions";
 
 // Leave retained rows attached so a background update cannot cancel a pressed action.
 function syncChildren(parent: HTMLElement, ordered: HTMLElement[]): void {
@@ -218,7 +219,8 @@ export function createWorkspaceOverview(
         hints.push(["Open", "Enter"]);
         if (selected.kind === "workspace" || selected.kind === "conversation")
           hints.push(["Rename", renameBinding]);
-        if (canClose(selected)) {
+        const action = closeAction(selected);
+        if (action) {
           const close = commands
             .find((command) => command.id === "tab.close")
             ?.bindings.filter(
@@ -228,7 +230,7 @@ export function createWorkspaceOverview(
             )
             .map((binding) => formatBinding(binding, keyboardPlatform))
             .find((shortcut) => shortcut !== renameBinding);
-          if (close) hints.push(["Close tab", close]);
+          if (close) hints.push([action, close]);
         }
       } else if (document.activeElement === input && !selected && !edit) {
         hints.push(["Close Overview", "Esc"]);
@@ -250,17 +252,24 @@ export function createWorkspaceOverview(
         }),
       );
     }
-    function canClose(item: NavigationItem | undefined): boolean {
-      return (
-        !!item?.paneId &&
-        !!getState()
-          .workspaces.find((workspace) => workspace.id === item.workspaceId)
-          ?.panes.some((pane) => pane.id === item.paneId && !pane.pinned)
+    function closeAction(item: NavigationItem | undefined) {
+      if (!item) return;
+      const state = getState();
+      const pane = state.workspaces
+        .find((workspace) => workspace.id === item.workspaceId)
+        ?.panes.find((pane) => pane.id === item.paneId);
+      if (pane) return pane.pinned ? undefined : "Close tab";
+      if (item.kind !== "conversation") return;
+      const conversation = state.conversations.find(
+        (chat) => chat.id === item.id,
       );
+      if (conversation && !conversationRemovalReason(state, conversation))
+        return "Remove from workspace";
     }
     async function closeSelected() {
       const item = find();
-      if (!item || !canClose(item) || closing) return;
+      const action = closeAction(item);
+      if (!item || !action || closing) return;
       const version = queryVersion;
       const index = visible.findIndex((row) => row.key === item.key);
       const neighbors = [
@@ -270,8 +279,12 @@ export function createWorkspaceOverview(
       closing = true;
       dialog.querySelector(".action-error")?.remove();
       try {
+        const changed =
+          action === "Remove from workspace"
+            ? !!(await invoke("conversation.remove", { id: item.id }))
+            : await navigation.close(item);
         if (
-          (await navigation.close(item)) &&
+          changed &&
           dialog.open &&
           queryVersion === version &&
           item.key === selectedKey
