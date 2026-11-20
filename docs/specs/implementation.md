@@ -130,7 +130,7 @@ The shipped integration has one source tree at `plugins/cod`, containing its REA
 
 The provider plugin owns task-status policy. Cod owns technical connection state, status storage, CLI reporting and presentation. A failed process or pending permission cannot be hidden by a stale plugin-ready report. Pending review remains visible until submitted, and hook lifecycle reports cannot overwrite explicit review status.
 
-Technical `ready` means idle; it is not itself a new notification. A successful native completion advances a revision. Explicit chat activation or acknowledgment marks that revision read; a later completion becomes visible again. Options discovery, resume and cancelled turns do not create new completion attention. Completion and acknowledgment revisions persist through restart. Workspace and child rows use the same status meaning and marker.
+Technical `ready` means idle; it is not itself a new notification. A successful native completion advances a revision. Explicit chat activation or acknowledgment marks that revision read; a later completion becomes visible again. Opening a chat from Overview acknowledges the revision in the same operation that opens it, even if a newer keyboard or pointer action supersedes only the pending focus return. Options discovery, resume and cancelled turns do not create new completion attention. Completion and acknowledgment revisions persist through restart. Workspace and child rows use the same status meaning and marker.
 
 Plugin installation previews an explicit provider profile, preserves unrelated configuration, backs up modifications and rejects edited managed files or changed preview inputs. It never bypasses native trust, changes authentication or installs silently at startup.
 

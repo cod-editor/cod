@@ -1,5 +1,12 @@
 import type { AppState, ConversationState } from "./types";
 
+export function acknowledgeConversation(conversation: ConversationState): void {
+  conversation.taskStatusAcknowledgedAt =
+    conversation.taskStatusUpdatedAt ?? new Date().toISOString();
+  conversation.acknowledgedCompletionRevision =
+    conversation.completionRevision ?? 0;
+}
+
 export function hasRunningBackground(conversation: ConversationState): boolean {
   return (
     conversation.backgroundActivities?.some(

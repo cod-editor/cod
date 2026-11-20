@@ -58,9 +58,10 @@ export function createWorkspaceNavigation(
     await focusWorkspace(current.workspaceId);
     if (signal?.aborted) return;
     if (current.kind === "conversation") {
-      await invoke("conversation.show", { id: current.id });
-      if (!signal?.aborted)
-        await invoke("conversation.acknowledge", { id: current.id });
+      await invoke("conversation.show", {
+        id: current.id,
+        acknowledge: true,
+      });
     } else if (current.kind === "review")
       await invoke("review.show", { id: current.id });
     else if (current.kind === "browser" || current.kind === "terminal")
