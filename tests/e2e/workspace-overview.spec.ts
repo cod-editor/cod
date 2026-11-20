@@ -235,6 +235,11 @@ test("Overview uses one compact selection surface with first-line controls at no
     });
   }
   await search().press("Tab");
+  const filter = overview().getByRole("checkbox", {
+    name: "Show closed workspaces",
+  });
+  await expect(filter).toBeFocused();
+  await filter.press("Tab");
   const actions = overview().getByRole("gridcell", {
     name: `Actions for ${label}`,
     exact: true,
@@ -318,6 +323,11 @@ test("Overview exposes valid workspace groups and independently reachable row ac
     (await row("conversation", chat.id).getAttribute("id")) as string,
   );
   await search().press("Tab");
+  const filter = overview().getByRole("checkbox", {
+    name: "Show closed workspaces",
+  });
+  await expect(filter).toBeFocused();
+  await filter.press("Tab");
   const actions = overview().getByRole("gridcell", {
     name: "Actions for Alpha complete conversation label",
     exact: true,

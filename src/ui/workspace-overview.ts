@@ -9,6 +9,7 @@ import {
 } from "./navigation-model";
 import { createSearchList } from "./search-list";
 import { dialogSurface, shortcutHint, uiButton } from "./primitives";
+import { confirmAction } from "./dialogs";
 import { icon, iconButton, menu } from "./controls";
 import { commands, formatBinding, resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
@@ -36,7 +37,7 @@ export function createWorkspaceOverview(
     "items" | "actions" | "close"
   >,
   focus: ReturnType<typeof createFocusManager>,
-  activate: (item: NavigationItem) => Promise<void>,
+  activate: (item: NavigationItem, newShell?: boolean) => Promise<void>,
   destinations: {
     newConversation: (workspace: string) => Promise<void>;
     openPane: (workspace: string, pane: string) => Promise<void>;
@@ -51,7 +52,7 @@ export function createWorkspaceOverview(
         rename: (key: string) => void;
       }
     | undefined;
-  function toggle(renameKey?: string): void {
+  function toggle(renameKey?: string, showClosed = false): void {
     if (current && !current.dialog.open) {
       current.dialog.remove();
       current = undefined;
@@ -78,6 +79,12 @@ export function createWorkspaceOverview(
     input.setAttribute("aria-expanded", "true");
     input.setAttribute("aria-haspopup", "grid");
     input.setAttribute("aria-autocomplete", "list");
+    const filterLabel = document.createElement("label");
+    filterLabel.className = "overview-filter";
+    const includeClosed = document.createElement("input");
+    includeClosed.type = "checkbox";
+    includeClosed.checked = showClosed;
+    filterLabel.append(includeClosed, "Show closed workspaces");
     const list = document.createElement("div");
     list.className = "command-list overview-list";
     list.setAttribute("role", "grid");
@@ -87,12 +94,13 @@ export function createWorkspaceOverview(
     empty.setAttribute("role", "status");
     const footer = document.createElement("footer");
     footer.className = "picker-footer";
-    dialog.append(input, list, empty, footer);
+    dialog.append(input, filterLabel, list, empty, footer);
     const renameBinding = formatBinding(
       { code: "Enter", mod: true, surfaces: ["shell"] },
       keyboardPlatform,
     );
-    let items = navigation.items();
+    const navigationItems = () => navigation.items(includeClosed.checked);
+    let items = navigationItems();
     const active = items.find((item) => item.active);
     let selectedKey = active?.key;
     let retainedKey: string | undefined;
@@ -136,8 +144,28 @@ export function createWorkspaceOverview(
       selection.select(row, scroll);
     }
     function open(item: NavigationItem) {
-      const latest = navigation.items().find((row) => row.key === item.key);
-      if (latest) perform(() => activate(latest));
+      const latest = navigationItems().find((row) => row.key === item.key);
+      if (!latest) {
+        if (item.closed)
+          showActionError("This workspace is no longer closed", dialog);
+        return;
+      }
+      if (
+        latest.closed &&
+        getState().closedWorkspaces?.find(
+          ({ workspace }) => workspace.id === latest.id,
+        )?.terminals.length
+      ) {
+        const confirmation = confirmAction(
+          "Reopen workspace?",
+          `Reopen ${latest.label} with new shells? Previous terminal processes have ended. Commands will not be replayed.`,
+          "Reopen workspace",
+          async () => {
+            confirmation.close();
+            perform(() => activate(latest, true));
+          },
+        );
+      } else perform(() => activate(latest));
     }
     function perform(task: () => Promise<void>) {
       if (performed) return;
@@ -209,15 +237,22 @@ export function createWorkspaceOverview(
     }
     function renameSelected(key: string) {
       const item = find(key);
-      if (item && (item.kind === "workspace" || item.kind === "conversation"))
+      if (
+        item &&
+        !item.closed &&
+        (item.kind === "workspace" || item.kind === "conversation")
+      )
         rename(item);
     }
     function updateHints() {
       const selected = find();
       const hints: [string, string][] = [];
       if (document.activeElement === input && selected && !edit) {
-        hints.push(["Open", "Enter"]);
-        if (selected.kind === "workspace" || selected.kind === "conversation")
+        hints.push([selected.closed ? "Reopen" : "Open", "Enter"]);
+        if (
+          !selected.closed &&
+          (selected.kind === "workspace" || selected.kind === "conversation")
+        )
           hints.push(["Rename", renameBinding]);
         const action = closeAction(selected);
         if (action) {
@@ -289,7 +324,7 @@ export function createWorkspaceOverview(
           queryVersion === version &&
           item.key === selectedKey
         ) {
-          const remaining = new Set(navigation.items().map((row) => row.key));
+          const remaining = new Set(navigationItems().map((row) => row.key));
           const neighbor = neighbors.find((row) => remaining.has(row.key));
           if (neighbor) highlight(neighbor.key);
         }
@@ -341,7 +376,7 @@ export function createWorkspaceOverview(
     }
     function refresh() {
       if (!dialog.open) return;
-      items = navigation.items();
+      items = navigationItems();
       if (
         edit &&
         list.querySelector(".overview-name") === document.activeElement
@@ -429,6 +464,7 @@ export function createWorkspaceOverview(
         row.dataset.status = item.status;
         row.dataset.kind = item.kind;
         row.dataset.navigationKey = item.key;
+        row.toggleAttribute("data-closed", !!item.closed);
         row.setAttribute("role", "row");
         row.setAttribute("aria-selected", "false");
         row.style.setProperty(
@@ -444,6 +480,7 @@ export function createWorkspaceOverview(
         button.setAttribute("aria-selected", "false");
         button.dataset.active = String(item.active);
         const description = [
+          item.closed ? "Closed workspace" : "",
           item.active ? "Currently open" : "",
           item.hint ?? "",
         ]
@@ -453,7 +490,7 @@ export function createWorkspaceOverview(
         if (item.hint) button.title = item.hint;
         button.setAttribute(
           "aria-label",
-          `${item.label}${item.kind === "browser" ? "" : ", " + describeNavigationStatus(item.status, item.context)}${item.pinned ? ", Pinned" : ""}${host ? ", " + host : ""}`,
+          `${item.label}${item.kind === "browser" || item.closed ? "" : ", " + describeNavigationStatus(item.status, item.context)}${item.pinned ? ", Pinned" : ""}${host ? ", " + host : ""}`,
         );
         button.onclick = () => open(item);
         const label = document.createElement("span");
@@ -541,6 +578,7 @@ export function createWorkspaceOverview(
       updateHints();
     }
     dialog.addEventListener("focusin", updateHints);
+    includeClosed.addEventListener("change", refresh);
     input.addEventListener("input", () => {
       queryVersion++;
       retainedKey = undefined;
@@ -663,6 +701,7 @@ export function createWorkspaceOverview(
   }
   return {
     toggle: () => toggle(),
+    openClosed: () => toggle(undefined, true),
     rename: (key: string) => toggle(key),
     refresh: () => current?.refresh(),
     isOpen: () => !!current,

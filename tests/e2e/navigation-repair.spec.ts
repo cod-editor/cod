@@ -27,10 +27,13 @@ async function overviewAction(kind: string, id: string, label: string) {
 async function reopenPicker() {
   await shell.command("Reopen closed workspace");
   const picker = shell.page.getByRole("dialog", {
-    name: "Reopen closed workspace",
+    name: "Overview",
     exact: true,
   });
   await expect(picker).toBeVisible();
+  await expect(
+    picker.getByRole("checkbox", { name: "Show closed workspaces" }),
+  ).toBeChecked();
   return picker;
 }
 
@@ -103,13 +106,13 @@ test("Closing workspace results selects a surviving neighbor and supports reopen
   await overview.getByRole("combobox").press("Escape");
   const picker = await reopenPicker();
   expect((await shell.state()).workspaces).toHaveLength(0);
-  await picker.getByRole("textbox").press("Enter");
+  await picker.getByRole("combobox").press("Enter");
   await expect
     .poll(async () => (await shell.state()).workspaces)
     .toHaveLength(1);
 });
 
-test("Search closed workspaces and reopen the selected older workspace", async ({}, info) => {
+test("Filter closed workspaces in Overview and reopen the selected older workspace", async ({}, info) => {
   const earlier = await shell.create("Northstar Planning");
   const earlierPane = (await shell.workspace(earlier)).activePaneId;
   const draft = (paneId: string) =>
@@ -127,21 +130,40 @@ test("Search closed workspaces and reopen the selected older workspace", async (
   await currentDraft.evaluate((element: HTMLTextAreaElement) =>
     element.setSelectionRange(5, 12),
   );
-  const picker = await reopenPicker();
-  const search = picker.getByRole("textbox", {
-    name: "Search closed workspaces",
+  const picker = await shell.overview();
+  const search = picker.getByRole("combobox");
+  const filter = picker.getByRole("checkbox", {
+    name: "Show closed workspaces",
   });
-  const results = picker.getByRole("region", { name: "Closed workspaces" });
+  const results = picker.locator("[data-closed] button.overview-item");
   await expect(search).toBeFocused();
-  await expect(results.getByRole("button")).toHaveText([
+  await expect(filter).not.toBeChecked();
+  await search.fill("NORTHSTAR");
+  await expect(results).toHaveCount(0);
+  await search.press("Tab");
+  await expect(filter).toBeFocused();
+  await filter.press("Space");
+  await expect(filter).toBeChecked();
+  await expect(search).toHaveValue("NORTHSTAR");
+  await expect(results).toHaveText([
+    "Northstar Follow-up",
+    "Northstar Planning",
+  ]);
+  await filter.click();
+  await expect(filter).not.toBeChecked();
+  await expect(search).toHaveValue("NORTHSTAR");
+  await expect(results).toHaveCount(0);
+  await filter.press("Space");
+  await filter.press("Shift+Tab");
+  await expect(search).toBeFocused();
+  await search.fill("");
+  await expect(results).toHaveText([
     "Northstar Follow-up",
     "Release 2042",
     "Northstar Planning",
   ]);
   await search.fill("missing");
-  await expect(picker.getByRole("status")).toHaveText(
-    "No matching closed workspaces",
-  );
+  await expect(picker.getByRole("status")).toHaveText("No matching items");
   await search.press("Enter");
   expect((await shell.state()).activeWorkspaceId).toBe(current);
   await search.press("Escape");
@@ -156,13 +178,21 @@ test("Search closed workspaces and reopen the selected older workspace", async (
 
   await reopenPicker();
   await search.fill("NORTHSTAR");
-  await expect(results.getByRole("button")).toHaveText([
+  await expect(results).toHaveText([
     "Northstar Follow-up",
     "Northstar Planning",
   ]);
   await search.press("ArrowDown");
-  const olderRow = results.getByRole("button", { name: "Northstar Planning" });
+  const olderRow = overviewRow("closed-workspace", earlier);
   await expect(olderRow).toHaveAttribute("aria-current", "true");
+  await expect(olderRow).toHaveAccessibleDescription("Closed workspace");
+  await expect(olderRow.locator(".navigation-item-icon")).toHaveCSS(
+    "opacity",
+    "0.7",
+  );
+  await expect(picker.locator(".picker-footer")).toContainText(
+    /Reopen\s*Enter/,
+  );
   expect(await search.getAttribute("aria-activedescendant")).toBe(
     await olderRow.getAttribute("id"),
   );
@@ -170,7 +200,7 @@ test("Search closed workspaces and reopen the selected older workspace", async (
     BrowserWindow.getAllWindows()[0].setContentSize(760, 700),
   );
   await shell.page.screenshot({
-    path: info.outputPath("closed-workspace-picker.png"),
+    path: info.outputPath("overview-closed-workspaces.png"),
   });
   await search.press("Enter");
   await expect(picker).toBeHidden();
@@ -179,20 +209,26 @@ test("Search closed workspaces and reopen the selected older workspace", async (
   expect((await shell.state()).activeWorkspaceId).toBe(earlier);
 
   await reopenPicker();
-  await expect(results.getByRole("button")).toHaveText([
-    "Northstar Follow-up",
-    "Release 2042",
-  ]);
+  await expect(results).toHaveText(["Northstar Follow-up", "Release 2042"]);
+  const staleRow = await overviewRow(
+    "closed-workspace",
+    latest,
+  ).elementHandle();
   await shell.cli("workspace", "reopen", "--id", latest);
   await shell.cli("workspace", "focus", "--id", earlier);
-  await search.press("Enter");
+  await expect(overviewRow("closed-workspace", latest)).toHaveCount(0);
+  await staleRow!.evaluate((row) => {
+    if (!(row instanceof HTMLButtonElement)) throw new Error("Missing result");
+    row.click();
+  });
   await expect(picker.getByRole("alert")).toContainText(/no longer closed/i);
+  await expect(search).toBeFocused();
   expect((await shell.state()).activeWorkspaceId).toBe(earlier);
   expect(
     (await shell.state()).workspaces.some(({ id }) => id === release),
   ).toBe(false);
   await search.fill("release");
-  await results.getByRole("button", { name: "Release 2042" }).click();
+  await overviewRow("closed-workspace", release).click();
   await expect
     .poll(async () => (await shell.state()).activeWorkspaceId)
     .toBe(release);
@@ -237,11 +273,13 @@ test("A closed workspace with a terminal requires confirmation to start fresh sh
   );
   await shell.cli("workspace", "close", "--id", workspace, "--force", "true");
   const picker = await reopenPicker();
-  await expect(
-    picker.getByRole("button", { name: "Terminal archive" }),
-  ).toBeVisible();
+  const search = picker.getByRole("combobox");
+  await search.fill("Terminal archive");
+  const terminalRow = overviewRow("closed-workspace", workspace);
+  await expect(terminalRow).toBeVisible();
+  await expect(picker.getByRole("row")).toHaveCount(1);
   expect((await state()).terminals).toHaveLength(0);
-  await picker.getByRole("textbox").press("Enter");
+  await search.press("Enter");
   const confirmation = shell.page.getByRole("dialog", {
     name: "Reopen workspace?",
     exact: true,
@@ -252,9 +290,10 @@ test("A closed workspace with a terminal requires confirmation to start fresh sh
   ).toBeFocused();
   await confirmation.getByRole("button", { name: "Cancel" }).click();
   await expect(confirmation).toBeHidden();
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("Terminal archive");
   expect((await state()).terminals).toHaveLength(0);
-  await reopenPicker();
-  await picker.getByRole("button", { name: "Terminal archive" }).click();
+  await terminalRow.click();
   await confirmation
     .getByRole("button", { name: "Reopen workspace", exact: true })
     .click();
