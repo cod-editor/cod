@@ -24,6 +24,16 @@ async function overviewAction(kind: string, id: string, label: string) {
   return overview;
 }
 
+async function reopenPicker() {
+  await shell.command("Reopen closed workspace");
+  const picker = shell.page.getByRole("dialog", {
+    name: "Reopen closed workspace",
+    exact: true,
+  });
+  await expect(picker).toBeVisible();
+  return picker;
+}
+
 test("Rename from a chat tab opens the targeted inline editor in Overview", async () => {
   const workspace = await shell.create("Rename navigation");
   const chat = await shell.newChat(workspace, "codex");
@@ -91,8 +101,198 @@ test("Closing workspace results selects a surviving neighbor and supports reopen
   await expect(overview).toContainText("No workspaces");
   expect((await shell.state()).workspaces).toHaveLength(0);
   await overview.getByRole("combobox").press("Escape");
-  await shell.command("Reopen closed workspace");
-  expect((await shell.state()).workspaces).toHaveLength(1);
+  const picker = await reopenPicker();
+  expect((await shell.state()).workspaces).toHaveLength(0);
+  await picker.getByRole("textbox").press("Enter");
+  await expect
+    .poll(async () => (await shell.state()).workspaces)
+    .toHaveLength(1);
+});
+
+test("Search closed workspaces and reopen the selected older workspace", async ({}, info) => {
+  const earlier = await shell.create("Northstar Planning");
+  const earlierPane = (await shell.workspace(earlier)).activePaneId;
+  const draft = (paneId: string) =>
+    shell.pane(paneId).getByRole("textbox", { name: "Message", exact: true });
+  await draft(earlierPane).fill("Saved planning draft");
+  await shell.cli("group", "toggle-split", "--workspace", earlier);
+  const savedLayout = (await shell.workspace(earlier)).groupLayout;
+  const release = await shell.create("Release 2042");
+  const latest = await shell.create("Northstar Follow-up");
+  const current = await shell.create("Current work");
+  for (const id of [earlier, release, latest])
+    await shell.cli("workspace", "close", "--id", id);
+  const currentDraft = draft((await shell.workspace(current)).activePaneId);
+  await currentDraft.fill("Keep editing here");
+  await currentDraft.evaluate((element: HTMLTextAreaElement) =>
+    element.setSelectionRange(5, 12),
+  );
+  const picker = await reopenPicker();
+  const search = picker.getByRole("textbox", {
+    name: "Search closed workspaces",
+  });
+  const results = picker.getByRole("region", { name: "Closed workspaces" });
+  await expect(search).toBeFocused();
+  await expect(results.getByRole("button")).toHaveText([
+    "Northstar Follow-up",
+    "Release 2042",
+    "Northstar Planning",
+  ]);
+  await search.fill("missing");
+  await expect(picker.getByRole("status")).toHaveText(
+    "No matching closed workspaces",
+  );
+  await search.press("Enter");
+  expect((await shell.state()).activeWorkspaceId).toBe(current);
+  await search.press("Escape");
+  await expect(picker).toBeHidden();
+  await expect(currentDraft).toBeFocused();
+  expect(
+    await currentDraft.evaluate((element: HTMLTextAreaElement) => [
+      element.selectionStart,
+      element.selectionEnd,
+    ]),
+  ).toEqual([5, 12]);
+
+  await reopenPicker();
+  await search.fill("NORTHSTAR");
+  await expect(results.getByRole("button")).toHaveText([
+    "Northstar Follow-up",
+    "Northstar Planning",
+  ]);
+  await search.press("ArrowDown");
+  const olderRow = results.getByRole("button", { name: "Northstar Planning" });
+  await expect(olderRow).toHaveAttribute("aria-current", "true");
+  expect(await search.getAttribute("aria-activedescendant")).toBe(
+    await olderRow.getAttribute("id"),
+  );
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 700),
+  );
+  await shell.page.screenshot({
+    path: info.outputPath("closed-workspace-picker.png"),
+  });
+  await search.press("Enter");
+  await expect(picker).toBeHidden();
+  await expect(draft(earlierPane)).toHaveValue("Saved planning draft");
+  expect((await shell.workspace(earlier)).groupLayout).toEqual(savedLayout);
+  expect((await shell.state()).activeWorkspaceId).toBe(earlier);
+
+  await reopenPicker();
+  await expect(results.getByRole("button")).toHaveText([
+    "Northstar Follow-up",
+    "Release 2042",
+  ]);
+  await shell.cli("workspace", "reopen", "--id", latest);
+  await shell.cli("workspace", "focus", "--id", earlier);
+  await search.press("Enter");
+  await expect(picker.getByRole("alert")).toContainText(/no longer closed/i);
+  expect((await shell.state()).activeWorkspaceId).toBe(earlier);
+  expect(
+    (await shell.state()).workspaces.some(({ id }) => id === release),
+  ).toBe(false);
+  await search.fill("release");
+  await results.getByRole("button", { name: "Release 2042" }).click();
+  await expect
+    .poll(async () => (await shell.state()).activeWorkspaceId)
+    .toBe(release);
+});
+
+test("A closed workspace with a terminal requires confirmation to start fresh shells", async () => {
+  const state = () => shell.cli<AppState>("state");
+  const workspace = await shell.create("Terminal archive");
+  const terminal = await shell.cli<{ id: string; paneId: string }>(
+    "terminal",
+    "open",
+    "--workspace",
+    workspace,
+    "--cwd",
+    shell.folders[0],
+  );
+  await shell.cli(
+    "terminal",
+    "write",
+    "--id",
+    terminal.id,
+    "--data",
+    "echo ARCHIVED_SHELL_MARKER\n",
+  );
+  await expect
+    .poll(
+      async () =>
+        (await state()).terminals.find((item) => item.id === terminal.id)
+          ?.output,
+    )
+    .toContain("ARCHIVED_SHELL_MARKER");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Saved handoff conversation");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("ready");
+  const handoff = await shell.cli<{ terminalId: string; paneId: string }>(
+    "conversation",
+    "handoff",
+    "--id",
+    chat.id,
+  );
+  await shell.cli("workspace", "close", "--id", workspace, "--force", "true");
+  const picker = await reopenPicker();
+  await expect(
+    picker.getByRole("button", { name: "Terminal archive" }),
+  ).toBeVisible();
+  expect((await state()).terminals).toHaveLength(0);
+  await picker.getByRole("textbox").press("Enter");
+  const confirmation = shell.page.getByRole("dialog", {
+    name: "Reopen workspace?",
+    exact: true,
+  });
+  await expect(confirmation).toContainText("Terminal archive");
+  await expect(
+    confirmation.getByRole("button", { name: "Cancel" }),
+  ).toBeFocused();
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toBeHidden();
+  expect((await state()).terminals).toHaveLength(0);
+  await reopenPicker();
+  await picker.getByRole("button", { name: "Terminal archive" }).click();
+  await confirmation
+    .getByRole("button", { name: "Reopen workspace", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await state()).terminals.find(
+          (item) => item.paneId === terminal.paneId,
+        )?.status,
+    )
+    .toBe("running");
+  const restored = await state();
+  const fresh = restored.terminals.find(
+    (item) => item.paneId === terminal.paneId,
+  )!;
+  expect(fresh.id).not.toBe(terminal.id);
+  expect(fresh.output).not.toContain("ARCHIVED_SHELL_MARKER");
+  const panes = restored.workspaces.find(({ id }) => id === workspace)!.panes;
+  expect(panes.find(({ id }) => id === terminal.paneId)).toMatchObject({
+    kind: "terminal",
+    terminalId: fresh.id,
+  });
+  expect(panes.find(({ id }) => id === handoff.paneId)).toMatchObject({
+    kind: "terminal",
+    terminalId: handoff.terminalId,
+  });
+  expect(
+    restored.terminals.find(({ id }) => id === handoff.terminalId),
+  ).toMatchObject({
+    nativeConversationId: chat.id,
+    status: "exited",
+    pid: 0,
+  });
+  expect(
+    restored.conversations.find(({ id }) => id === chat.id)?.handoffTerminalId,
+  ).toBe(handoff.terminalId);
+  await shell.cli("conversation", "reclaim", "--id", chat.id);
+  expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
 });
 
 test("A pending review opens through Overview by keyboard and mouse after closing its tab", async () => {

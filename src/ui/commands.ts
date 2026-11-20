@@ -567,23 +567,78 @@ export function createCommands(
     else void reopen();
   }
   function reopenWorkspace(): void {
-    const closed = getState().closedWorkspaces?.at(-1);
-    if (!closed) {
+    const closed = getState().closedWorkspaces;
+    if (!closed?.length) {
       setStatus("No closed workspace");
       return;
     }
-    if (closed.terminals.length)
-      confirmAction(
-        "Reopen workspace?",
-        `Reopen ${closed.workspace.name} with new shells? Previous terminal processes have ended; commands will not be replayed.`,
-        "Reopen workspace",
-        () =>
-          invoke("workspace.reopen", {
-            id: closed.workspace.id,
-            newShell: true,
-          }),
-      );
-    else void invoke("workspace.reopen", { id: closed.workspace.id });
+    const returnFocus = focus.capture();
+    const dialog = dialogSurface("Reopen closed workspace");
+    dialog.className = "picker search-picker";
+    const input = document.createElement("input");
+    input.setAttribute("aria-label", "Search closed workspaces");
+    input.placeholder = "Search closed workspaces...";
+    const list = document.createElement("div");
+    list.className = "command-list";
+    list.setAttribute("role", "region");
+    list.setAttribute("aria-label", "Closed workspaces");
+    const empty = document.createElement("p");
+    empty.className = "picker-empty";
+    empty.setAttribute("role", "status");
+    empty.textContent = "No matching closed workspaces";
+    const footer = pickerShortcuts("Reopen");
+    const selection = createSearchList(input, list, {
+      onSelect: (row) => footer.toggleAttribute("data-no-results", !row),
+    });
+    const rows = [...closed].reverse().map(({ workspace: { id, name } }) => {
+      const row = uiButton(name);
+      row.title = name;
+      row.onclick = () => {
+        if (!dialog.open) return;
+        const current = getState().closedWorkspaces?.find(
+          (entry) => entry.workspace.id === id,
+        );
+        if (!current) {
+          showActionError("This workspace is no longer closed", dialog);
+          return;
+        }
+        dialog.close();
+        if (current.terminals.length) {
+          prepareDialogOrigin(returnFocus);
+          confirmAction(
+            "Reopen workspace?",
+            `Reopen ${current.workspace.name} with new shells? Previous terminal processes have ended; commands will not be replayed.`,
+            "Reopen workspace",
+            () => invoke("workspace.reopen", { id, newShell: true }),
+          );
+        } else {
+          focus.restore(returnFocus);
+          void invoke("workspace.reopen", { id }).catch(() => undefined);
+        }
+      };
+      return row;
+    });
+    list.append(...rows);
+    const filter = () => {
+      dialog.querySelector(".action-error")?.remove();
+      const query = input.value.trim().toLowerCase();
+      for (const row of rows)
+        row.hidden = !row.title.toLowerCase().includes(query);
+      empty.hidden = rows.some((row) => !row.hidden);
+      selection.update();
+    };
+    input.oninput = filter;
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      dialog.close();
+      focus.restore(returnFocus);
+    };
+    dialog.onclose = () => dialog.remove();
+    dialog.append(input, list, empty, footer);
+    document.body.append(dialog);
+    filter();
+    dialog.showModal();
+    input.focus();
   }
   function sendActiveMessage(pane: PaneState | undefined): void {
     if (pane?.kind === "conversation") void chats.send(pane.conversationId);
@@ -1687,7 +1742,12 @@ export function createCommands(
         // The next dialog must inherit the original invoker, not the palette
         // or a transient native focus restoration while close is dispatched.
         if (
-          ["settings", "browser.settings", "shortcuts"].includes(definition.id)
+          [
+            "settings",
+            "browser.settings",
+            "shortcuts",
+            "workspace.reopen",
+          ].includes(definition.id)
         )
           prepareDialogOrigin(returnFocus);
         else focus.restore(returnFocus);

@@ -150,27 +150,27 @@ export class WorkspaceApplicationService {
   }
 
   async reopenWorkspace(request: OperationRequest): Promise<{ id: string }> {
-    const record =
-      typeof request.id === "string"
-        ? this.store.data.closedWorkspaces?.find(
-            (item) => item.workspace.id === request.id,
-          )
-        : this.store.data.closedWorkspaces?.at(-1);
-    if (!record) throw new Error("No closed workspace to reopen");
-    assertWorkspaceLayout(record.workspace);
-    if (
-      record.conversations.some((saved) =>
-        this.store.data.conversations.some(
-          (active) =>
-            active.provider === saved.provider &&
-            active.nativeId === saved.nativeId,
-        ),
+    const record = await this.store.change(() => {
+      const record =
+        typeof request.id === "string"
+          ? this.store.data.closedWorkspaces?.find(
+              (item) => item.workspace.id === request.id,
+            )
+          : this.store.data.closedWorkspaces?.at(-1);
+      if (!record) throw new Error("No closed workspace to reopen");
+      assertWorkspaceLayout(record.workspace);
+      if (
+        record.conversations.some((saved) =>
+          this.store.data.conversations.some(
+            (active) =>
+              active.provider === saved.provider &&
+              active.nativeId === saved.nativeId,
+          ),
+        )
       )
-    )
-      throw new Error(
-        "A native session from this workspace is already controlled elsewhere",
-      );
-    await this.store.change(() => {
+        throw new Error(
+          "A native session from this workspace is already controlled elsewhere",
+        );
       this.store.data.closedWorkspaces =
         this.store.data.closedWorkspaces!.filter((item) => item !== record);
       this.store.data.workspaces.push(record.workspace);
@@ -182,6 +182,25 @@ export class WorkspaceApplicationService {
         conversation.error = undefined;
         this.store.data.conversations.push(conversation);
       }
+      // Exited PTYs retain their IDs in the terminal service. Reopening
+      // starts new shells in the saved panes, with fresh process records.
+      for (const pane of record.workspace.panes) {
+        if (pane.kind !== "terminal") continue;
+        const terminal = record.terminals.find(
+          (item) => item.id === pane.terminalId,
+        );
+        if (!terminal || terminal.nativeConversationId) continue;
+        pane.terminalId = randomUUID();
+        Object.assign(terminal, {
+          id: pane.terminalId,
+          status: "starting",
+          pid: 0,
+          output: "",
+          sequence: 0,
+          exitCode: undefined,
+          error: undefined,
+        });
+      }
       this.store.data.terminals.push(...record.terminals);
       this.store.data.browsers.push(
         ...record.browsers.map((browser) => ({
@@ -191,6 +210,7 @@ export class WorkspaceApplicationService {
         })),
       );
       this.store.data.activeWorkspaceId = record.workspace.id;
+      return record;
     });
     for (const terminal of record.terminals)
       this.terminals.restoreTerminal(terminal);
