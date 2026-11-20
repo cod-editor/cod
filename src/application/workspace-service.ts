@@ -1,5 +1,6 @@
 import { tabInsertionIndex } from "../tab-order";
 import {
+  acknowledgeConversation,
   backgroundWithUnknownState,
   conversationRemovalReason,
   hasRunningBackground,
@@ -975,6 +976,8 @@ export class WorkspaceApplicationService {
             });
           workspace.activePaneId = conversation.paneId;
           this.store.data.activeWorkspaceId = workspace.id;
+          if (trustedUi && request.acknowledge === true)
+            acknowledgeConversation(conversation);
           return { paneId: conversation.paneId };
         });
 

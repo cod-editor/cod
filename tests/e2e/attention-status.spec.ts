@@ -47,8 +47,60 @@ for (const provider of ["codex", "kimi"] as const) {
     await quiet();
     await shell.send(chat.id, "First completed answer");
     await ready();
-    await row().locator(".overview-item").click();
-    await quiet();
+    // Hold only the completed host operation's reply. Reopening the
+    // picker supersedes keyboard focus while the first selection settles.
+    await shell.app!.evaluate(({ ipcMain }, conversationId) => {
+      const handlers = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+        }
+      )._invokeHandlers;
+      const original = handlers.get("cod:invoke")!;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        const result = await original(event, request);
+        if (
+          request.op === "conversation.show" &&
+          request.id === conversationId
+        ) {
+          ipcMain.removeHandler("cod:invoke");
+          ipcMain.handle("cod:invoke", original);
+          await new Promise<void>((resolve) => {
+            (globalThis as any).releaseOverviewShow = resolve;
+          });
+        }
+        return result;
+      });
+    }, chat.id);
+    if (provider === "kimi") await row().locator(".overview-item").click();
+    else {
+      const overview = await shell.overview();
+      await overview
+        .getByRole("combobox", { name: "Search Overview" })
+        .fill("First completed answer");
+      await expect(row()).toHaveAttribute("aria-selected", "true");
+      await overview
+        .getByRole("combobox", { name: "Search Overview" })
+        .press("Enter");
+    }
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(
+          () => typeof (globalThis as any).releaseOverviewShow,
+        ),
+      )
+      .toBe("function");
+    const nextOverview = await shell.overview();
+    try {
+      await quiet();
+    } finally {
+      await shell.app!.evaluate(() =>
+        (globalThis as any).releaseOverviewShow(),
+      );
+    }
+    await expect(
+      nextOverview.getByRole("combobox", { name: "Search Overview" }),
+    ).toBeFocused();
     await shell.cli("conversation", "options", "--id", chat.id);
     await quiet();
     await shell.stop();

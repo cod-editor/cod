@@ -1,5 +1,6 @@
 import { normalizeGroups } from "../workspace-layout";
 import {
+  acknowledgeConversation,
   backgroundWithUnknownState,
   conversationHandoffReason,
 } from "../conversation-actions";
@@ -1646,10 +1647,7 @@ export class ConversationApplicationService {
           const conversation = this.store.conversation(
             requiredString(request, "id"),
           );
-          conversation.taskStatusAcknowledgedAt =
-            conversation.taskStatusUpdatedAt ?? new Date().toISOString();
-          conversation.acknowledgedCompletionRevision =
-            conversation.completionRevision ?? 0;
+          acknowledgeConversation(conversation);
           return { id: conversation.id };
         });
 
