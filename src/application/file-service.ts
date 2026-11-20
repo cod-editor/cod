@@ -152,11 +152,28 @@ export class FileApplicationService {
     if (!(await stat(filePath)).isFile())
       throw new Error("File path is not a regular file");
     await readTextFile(filePath);
-    const opening = this.store.openingPane(workspace, request);
     const existing = workspace.panes.find(
       (pane) =>
         pane.kind === "document" && pane.canonicalPath === canonicalPath,
     );
+    if (request.besideConversation !== undefined) {
+      const pane = existing ?? {
+        id: randomUUID(),
+        kind: "document" as const,
+        filePath,
+        canonicalPath,
+      };
+      if (
+        pane.kind === "document" &&
+        (pane.id !== workspace.activePaneId ||
+          request.focus === true ||
+          request.focus === "true")
+      )
+        pane.line = line;
+      this.store.presentBesideConversation(workspace, request, pane);
+      return { paneId: pane.id };
+    }
+    const opening = this.store.openingPane(workspace, request);
     if (existing && existing.kind === "document") {
       existing.line = line;
       if (opening.kind === "empty" && opening.launcher) {
@@ -259,13 +276,20 @@ export class FileApplicationService {
     }
     return this.store.change(() => {
       const workspace = this.store.workspace(workspaceId);
-      const opening = this.store.openingPane(workspace, request);
       const existing =
         resource.kind === "preview"
           ? workspace.panes.find(
               (p) => p.kind === "preview" && p.filePath === resource.filePath,
             )
           : undefined;
+      if (request.besideConversation !== undefined) {
+        const pane = existing ?? { id: randomUUID(), ...resource };
+        if (pane.kind === "preview" && resource.kind === "preview")
+          pane.format = resource.format;
+        this.store.presentBesideConversation(workspace, request, pane);
+        return { paneId: pane.id };
+      }
+      const opening = this.store.openingPane(workspace, request);
       if (existing) {
         if (existing.kind === "preview" && resource.kind === "preview")
           existing.format = resource.format;

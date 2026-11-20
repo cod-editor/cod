@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile, readFile, realpath, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, tabTo, modifier } from "./helpers/workspace-app";
+import { orderedGroups } from "../../src/workspace-layout";
 
 let app: WorkspaceApp;
 let workspace: string;
@@ -616,6 +617,31 @@ test("S3 explicit chat file references show both matching roots and open the key
     "--text",
     "Please inspect `same.ts:2` in the intended repository.",
   );
+  await app.cli("group", "toggle-split", "--workspace", workspace);
+  const [left, right] = orderedGroups(await app.workspace(workspace));
+  await app.cli(
+    "pane",
+    "move",
+    "--workspace",
+    workspace,
+    "--id",
+    chat.paneId,
+    "--group",
+    right.id,
+  );
+  const existing = await app.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    path.join(app.folders[1], "same.ts"),
+    "--group",
+    right.id,
+    "--source-pane",
+    chat.paneId,
+  );
+  await app.cli("group", "toggle-split", "--workspace", workspace);
   const transcript = app
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
@@ -662,6 +688,16 @@ test("S3 explicit chat file references show both matching roots and open the key
       .getByRole("textbox", { name: "File contents", exact: true })
       .last(),
   ).toHaveValue(source(1));
+  const selected = await app.workspace(workspace);
+  expect(selected.activePaneId).toBe(existing.paneId);
+  expect(orderedGroups(selected)[1].paneIds).toEqual([chat.paneId]);
+  expect(selected.activeGroupId).toBe(left.id);
+  expect(orderedGroups(selected).map((group) => group.hidden)).toEqual([
+    false,
+    false,
+  ]);
+  await expect(editor(app.pane(selected.activePaneId))).toBeFocused();
+  await expect(transcript).toBeVisible();
   expect(await readFile(path.join(app.folders[0], "same.ts"), "utf8")).toBe(
     source(0),
   );
@@ -954,6 +990,36 @@ test("HTML chat references open the browser while explicit file opening retains 
     "--text",
     "Open `report.html`",
   );
+  const sourceBox = app
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await sourceBox.focus();
+  app.environment.COD_CONVERSATION_ID = chat.id;
+  const current = await app.cli<{
+    workspace: { id: string };
+    conversation: { id: string };
+  }>("context");
+  expect(current.workspace.id).toBe(workspace);
+  expect(current.conversation.id).toBe(chat.id);
+  // An agent explicitly requests placement beside the chat, without moving focus.
+  const previous = await app.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    current.workspace.id,
+    "--path",
+    path.join(app.folders[0], "spec.md"),
+    "--beside-conversation",
+    current.conversation.id,
+  );
+  let model = await app.workspace(workspace);
+  const [left, right] = orderedGroups(model);
+  expect(left.activePaneId).toBe(chat.paneId);
+  expect(right.activePaneId).toBe(previous.paneId);
+  expect(model.activePaneId).toBe(chat.paneId);
+  await expect(sourceBox).toBeFocused();
+  await app.cli("group", "toggle-split", "--workspace", workspace);
+  await expect(app.pane(previous.paneId)).toBeHidden();
   const transcript = app
     .pane(chat.paneId)
     .getByRole("region", { name: "Conversation transcript", exact: true });
@@ -979,6 +1045,56 @@ test("HTML chat references open the browser while explicit file opening retains 
   await expect(
     content.getByRole("heading", { name: "Report from chat" }),
   ).toBeVisible();
+  await expect
+    .poll(async () => (await app.workspace(workspace)).activeGroupId)
+    .toBe(right.id);
+  model = await app.workspace(workspace);
+  const target = orderedGroups(model)[1];
+  expect(target.paneIds).toEqual([previous.paneId, model.activePaneId]);
+  expect(orderedGroups(model).map((group) => group.hidden)).toEqual([
+    false,
+    false,
+  ]);
+  await expect(transcript).toBeVisible();
+  const reportUrl = content.url();
+  const agentBrowser = await app.cli<{ paneId: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    reportUrl,
+    "--beside-conversation",
+    chat.id,
+    "--focus",
+    "false",
+  );
+  model = await app.workspace(workspace);
+  expect(model.activePaneId).toBe(target.activePaneId);
+  expect(orderedGroups(model)[1].paneIds).toEqual([
+    ...target.paneIds,
+    agentBrowser.paneId,
+  ]);
+  const background = await app.cli<{ paneId: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    "about:blank",
+    "--group",
+    left.id,
+    "--source-pane",
+    chat.paneId,
+    "--focus",
+    "false",
+  );
+  model = await app.workspace(workspace);
+  expect(model.activePaneId).toBe(target.activePaneId);
+  expect(orderedGroups(model)[0].paneIds).toEqual([
+    chat.paneId,
+    background.paneId,
+  ]);
   const document = await open(file);
   await expect(editor(document)).toHaveValue(source);
   await expect(document.locator(".editor-colors")).toBeHidden();

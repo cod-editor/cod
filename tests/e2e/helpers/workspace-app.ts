@@ -32,7 +32,8 @@ export interface WorkspaceState {
   folders: unknown[];
   panes: PaneState[];
   activePaneId: string;
-  groupLayout: unknown;
+  activeGroupId: string;
+  groupLayout: import("../../../src/types").GroupLayout;
   groups: import("../../../src/types").TabGroup[];
 }
 export interface AppState {

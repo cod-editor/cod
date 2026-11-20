@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
+import { orderedGroups } from "../../src/workspace-layout";
 import type { AppState } from "../../src/types";
 const execute = promisify(execFile);
 let app: ChatApp, server: Server, origin: string, workspace: string;
@@ -596,7 +597,7 @@ test("Chat link menus preserve a cancelled composer draft and explicit handoff n
   const chat = await app.newChat(workspace, "codex");
   await app.send(
     chat.id,
-    `[Fixture link](${origin}/from-chat?q=one%26two#part)`,
+    `[Fixture link](${origin}/from-chat?q=one%26two#part) [Slow link](${origin}/slow)`,
   );
   await expect
     .poll(async () => (await app.inspect(chat.id)).status)
@@ -634,6 +635,38 @@ test("Chat link menus preserve a cancelled composer draft and explicit handoff n
   expect((await browserRecords())[0].url).toBe(
     origin + "/from-chat?q=one%26two#part",
   );
+  const first = (await browserRecords())[0];
+  await expect
+    .poll(async () => (await app.workspace(workspace)).activePaneId)
+    .toBe(first.paneId);
+  const [left, right] = orderedGroups(await app.workspace(workspace));
+  expect(left.activePaneId).toBe(chat.paneId);
+  expect(right.activePaneId).toBe(first.paneId);
+
+  // A second link starts opening beside the chat. Newer chat focus wins
+  // even when the navigation result arrives later.
+  await app
+    .pane(chat.paneId)
+    .getByRole("link", { name: "Slow link", exact: true })
+    .last()
+    .click();
+  await composer.click();
+  await expect
+    .poll(
+      async () =>
+        (await browserRecords()).find(
+          (record) => record.url === origin + "/slow",
+        )?.loading,
+    )
+    .toBe(false);
+  await expect(composer).toBeFocused();
+  const current = await app.workspace(workspace);
+  expect(current.activePaneId).toBe(chat.paneId);
+  expect(orderedGroups(current)[1].paneIds).toEqual([
+    first.paneId,
+    (await browserRecords()).find((record) => record.url === origin + "/slow")!
+      .paneId,
+  ]);
 });
 
 test("Markdown preview and source caret share handoff actions without granting a preview bridge to other frames", async ({}, info) => {

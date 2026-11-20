@@ -13,7 +13,9 @@ export function tabGroup(pane: PaneState): TabGroup {
   };
 }
 
-export function orderedGroups(workspace: WorkspaceState): TabGroup[] {
+export function orderedGroups(
+  workspace: Pick<WorkspaceState, "groups" | "groupLayout">,
+): TabGroup[] {
   const { groupLayout, groups } = workspace;
   const ids =
     groupLayout.type === "leaf"

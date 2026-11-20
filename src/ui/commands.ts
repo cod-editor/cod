@@ -466,6 +466,27 @@ export function createCommands(
     if (!workspace || !group) throw new Error("Select a pane first");
     return { workspace, group, sourcePane: group.activePaneId };
   }
+  function chatOpen(
+    workspace: string,
+    conversation: string,
+    intent = keys.beginFocus(),
+  ) {
+    return {
+      signal: intent.signal,
+      open: async (
+        op: "file.open" | "browser.open",
+        values: { path: string; line?: number } | { url: string },
+      ) => {
+        const result = await invoke<{ paneId?: string }>(op, {
+          ...values,
+          workspace,
+          besideConversation: conversation,
+        });
+        if (result?.paneId && activeWorkspace()?.id === workspace)
+          await keys.focusPane(result.paneId, intent);
+      },
+    };
+  }
   async function createTab(
     op:
       | "pane.new"
@@ -1210,7 +1231,13 @@ export function createCommands(
           await invoke("remote.disconnect");
           break;
         case "link.open":
-          await invoke("browser.open", { workspace: w!.id, url: linkUrl! });
+          if (pane?.kind === "conversation")
+            await chatOpen(w!.id, pane.conversationId, focusIntent).open(
+              "browser.open",
+              { url: linkUrl! },
+            );
+          else
+            await invoke("browser.open", { workspace: w!.id, url: linkUrl! });
           break;
         case "browser.openExternal": {
           const current =
@@ -1884,5 +1911,6 @@ export function createCommands(
     folder: folderDialog,
     workspace: workspaceDialog,
     conversationActions,
+    chatOpen,
   };
 }

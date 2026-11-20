@@ -41,7 +41,11 @@ interface ChatDependencies {
   host: HTMLElement;
   invalidate: () => void;
   report: (message: string) => void;
-  openReference: (workspace: string, reference: string) => Promise<void>;
+  openReference: (
+    workspace: string,
+    reference: string,
+    conversation: string,
+  ) => Promise<void>;
   actionButton: (
     label: string,
     action: () => Promise<unknown>,
@@ -368,6 +372,11 @@ export function createConversationViews({
             reference,
             owner,
             invoke,
+            undefined,
+            (url) =>
+              void openReference(owner, url, conversationId).catch(
+                () => undefined,
+              ),
           )
         )
           event.preventDefault();
@@ -378,13 +387,10 @@ export function createConversationViews({
           getState().conversations.find(
             (conversation) => conversation.id === conversationId,
           )?.workspaceId ?? workspace;
-        if (/^https?:\/\//.test(reference))
-          void invoke("browser.open", {
-            workspace: owner,
-            url: reference,
-          }).catch(() => undefined);
-        else if (!/^[a-z]+:/i.test(reference))
-          void openReference(owner, reference).catch(() => undefined);
+        if (/^https?:\/\//i.test(reference) || !/^[a-z]+:/i.test(reference))
+          void openReference(owner, reference, conversationId).catch(
+            () => undefined,
+          );
       };
     };
     for (const anchor of target.querySelectorAll<HTMLAnchorElement>("a")) {
