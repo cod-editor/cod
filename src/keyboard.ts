@@ -116,6 +116,17 @@ export const commands = [
     [key("KeyO", { mod: true, shift: true })],
     ["switch workspace", "switch conversation", "switch browser"],
   ),
+  entry("workspace.remoteConnect", "Connect to Linux workspace", "Workspace"),
+  entry(
+    "workspace.remoteReconnect",
+    "Reconnect to Linux workspace",
+    "Workspace",
+  ),
+  entry(
+    "workspace.remoteDisconnect",
+    "Disconnect Linux workspace",
+    "Workspace",
+  ),
   entry("files.open", "Open file", "Files", [
     key("KeyP", { mod: true, platform: "darwin" }, host),
     key("KeyP", { mod: true, platform: "linux" }, cod),

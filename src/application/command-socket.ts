@@ -1,5 +1,5 @@
 import { chmod, lstat, unlink } from "node:fs/promises";
-import { connect, createServer, type Server } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import type { OperationRequest } from "../types";
 
 async function prepareSocket(socketPath: string): Promise<void> {
@@ -32,6 +32,7 @@ async function prepareSocket(socketPath: string): Promise<void> {
 export async function startCommandSocket(
   socketPath: string,
   dispatch: (request: OperationRequest) => Promise<unknown>,
+  watchWorkspace?: (connection: Socket) => Promise<void>,
 ): Promise<Server> {
   await prepareSocket(socketPath);
   const server = createServer((connection) => {
@@ -60,6 +61,10 @@ export async function startCommandSocket(
       void (async () => {
         try {
           const request = JSON.parse(line) as OperationRequest;
+          if (request?.op === "workspace.watch" && watchWorkspace) {
+            await watchWorkspace(connection);
+            return;
+          }
           const result = await dispatch(request);
           connection.end(`${JSON.stringify({ ok: true, result })}\n`);
         } catch (error) {

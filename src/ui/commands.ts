@@ -1,3 +1,4 @@
+import { remoteWorkspaceDialog } from "./remote-workspace";
 import {
   uiButton,
   actionRow,
@@ -942,6 +943,16 @@ export function createCommands(
     ) ?? null,
     linkUrl = focusedWebLink(document.activeElement),
   ): string | undefined {
+    const host = getState().remoteWorkspace;
+    if (id === "workspace.remoteConnect") return;
+    if (id === "workspace.remoteDisconnect")
+      return host ? undefined : "Connect to a Linux workspace first";
+    if (id === "workspace.remoteReconnect")
+      return !host
+        ? "Connect to a Linux workspace first"
+        : host.connected
+          ? "The Linux workspace is already connected"
+          : undefined;
     if (id === "link.open")
       return linkUrl && w ? undefined : "Place the caret on a web link first";
     if (id === "browser.openExternal") {
@@ -1167,6 +1178,27 @@ export function createCommands(
         return;
       }
       switch (id) {
+        case "workspace.remoteConnect":
+          remoteWorkspaceDialog(invoke, () => {
+            const intent = keys.beginFocus();
+            void features
+              .whenRendered(
+                () =>
+                  getState().remoteWorkspace?.connected === true || undefined,
+                intent.signal,
+              )
+              .then((ready) => {
+                const pane = activeWorkspace()?.activePaneId;
+                if (ready && pane) void keys.focusPane(pane, intent);
+              });
+          });
+          break;
+        case "workspace.remoteReconnect":
+          await invoke("remote.reconnect");
+          break;
+        case "workspace.remoteDisconnect":
+          await invoke("remote.disconnect");
+          break;
         case "link.open":
           await invoke("browser.open", { workspace: w!.id, url: linkUrl! });
           break;
@@ -1235,7 +1267,11 @@ export function createCommands(
           }
           break;
         case "chat.new":
-          await newConversation();
+          await newConversation(
+            w && getState().remoteWorkspace?.ids.includes(w.id)
+              ? w.id
+              : undefined,
+          );
           break;
         case "chat.width":
           chatWidthDialog();

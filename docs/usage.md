@@ -74,7 +74,11 @@ The Linux build includes a Node workspace host for the remote-workspace developm
 
 On the Linux machine, build with `npm ci --ignore-scripts` and `npm run build`. Start `node dist/workspace-host.cjs "$HOME/.local/state/cod-host"` in an independent user service or a persistent host terminal. The host owns that profile and the terminal and provider processes for its lifetime. Reconnecting a client leaves those processes running. Closing the host itself ends its owned processes.
 
-The host accepts existing `codctl` commands at `cod.sock` in that private profile. Set `COD_SOCKET_PATH` to that socket. A developer can connect to it through OpenSSH Unix-socket forwarding using a private local directory. The desktop connection picker, live updates, approval and review editing over SSH are still being implemented. Browser tabs, browsing data and device permissions belong to the desktop profile.
+Set `COD_SOCKET_PATH` to the profile's `cod.sock` to use `codctl` on Linux. On your desktop, run **Connect to Linux workspace** from Commands and enter your existing OpenSSH host alias and the absolute Linux socket path. The desktop uses your existing verified host key and non-interactive SSH authentication. The connected workspaces appear in Overview alongside your local workspaces.
+
+From the connected workspace, you can open and edit existing text files, use terminals, and work in Codex chats. A lost connection is marked in the workspace title. Use **Reconnect to Linux workspace** to see the Linux host's current state and terminal output. Disconnecting or quitting the desktop leaves Linux work running. After restarting the desktop, use **Connect to Linux workspace** again.
+
+Browser tabs, cookies and device permissions stay on the desktop. Use the Linux host's CLI to add folders, save a new file to a Linux path, handle provider approvals and use review commands. Inline review editing, file previews, and steering a chat during an active turn remain local desktop features in this checkpoint.
 
 ## Development
 

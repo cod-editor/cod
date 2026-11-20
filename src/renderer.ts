@@ -4,7 +4,7 @@ import { configureKeymap } from "./keyboard";
 import { keyboardPlatform, updateKeymapStatus } from "./ui/keyboard-ui";
 import { createContentFind } from "./ui/content-find";
 import { applyAppearance, initializeAppearance } from "./ui/appearance";
-import type { OperationName } from "./command-catalog";
+import type { DesktopOperationName } from "./ui/contracts";
 import { createWorkspaceView } from "./ui/workspace-view";
 import { createCommands } from "./ui/commands";
 import { createFocusManager } from "./ui/focus";
@@ -195,7 +195,7 @@ function setStatus(message: string): void {
 }
 
 async function invoke<T>(
-  op: OperationName,
+  op: DesktopOperationName,
   values: Record<string, unknown> = {},
   options: { reportError?: boolean } = {},
 ): Promise<T> {

@@ -1,7 +1,12 @@
 import { lstat, mkdir } from "node:fs/promises";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { ApplicationOperations } from "./operations";
 import { startCommandSocket } from "./application/command-socket";
+import {
+  maximumWorkspaceFrameBytes,
+  type WorkspaceHostFrame,
+} from "./remote-workspace/protocol";
 
 async function main(): Promise<void> {
   const [directory, ...rest] = process.argv.slice(2);
@@ -22,15 +27,59 @@ async function main(): Promise<void> {
   process.env.COD_DATA_DIR = directory;
   process.env.COD_SOCKET_PATH = socketPath;
   const runtime = new ApplicationOperations(directory);
+  const watchers = new Set<Socket>();
+  const send = (connection: Socket, frame: string) => {
+    if (
+      connection.writableLength + Buffer.byteLength(frame) >
+      maximumWorkspaceFrameBytes
+    )
+      connection.destroy();
+    else connection.write(frame);
+  };
+  const broadcast = (update: WorkspaceHostFrame) => {
+    if (!watchers.size) return;
+    const frame = JSON.stringify(update) + "\n";
+    for (const connection of watchers) send(connection, frame);
+  };
+  let newestState: ReturnType<typeof runtime.snapshot>;
+  let stateTimer: ReturnType<typeof setTimeout> | undefined;
+  runtime.onDidChange = (value) => {
+    if (!watchers.size) return;
+    newestState = value;
+    stateTimer ??= setTimeout(() => {
+      stateTimer = undefined;
+      broadcast({ type: "state", value: newestState });
+    }, 50);
+    stateTimer.unref();
+  };
+  runtime.onDidTerminal = (value) => broadcast({ type: "terminal", value });
   let ready: Promise<void> | undefined;
-  const server = await startCommandSocket(socketPath, async (request) => {
+  const requireReady = () => {
     if (!ready) throw new Error("The workspace host is starting");
-    await ready;
-    return runtime.dispatch(request);
-  });
+    return ready;
+  };
+  const server = await startCommandSocket(
+    socketPath,
+    async (request) => {
+      await requireReady();
+      return runtime.dispatch(request);
+    },
+    async (connection) => {
+      await requireReady();
+      if (connection.destroyed) return;
+      watchers.add(connection);
+      connection.once("close", () => watchers.delete(connection));
+      newestState = runtime.snapshot(true);
+      send(
+        connection,
+        JSON.stringify({ type: "state", value: newestState }) + "\n",
+      );
+    },
+  );
   ready = runtime.initialize();
 
   const shutdown = async () => {
+    for (const connection of watchers) connection.end();
     server.close();
     await ready;
     await runtime.shutdown();

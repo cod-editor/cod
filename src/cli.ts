@@ -1,68 +1,13 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { connect } from "node:net";
+import { invokeCommand } from "./command-client";
 import { defaultSocketPath } from "./paths";
 import { help, parseArguments } from "./command-catalog";
 import type { OperationRequest, ReviewSummary } from "./types";
 
-async function invoke(request: OperationRequest): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const connection = connect(defaultSocketPath());
-    let input: string[] = [],
-      bytes = 0,
-      settled = false;
-    const finish = (error?: Error, result?: unknown) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      input = [];
-      connection.destroy();
-      if (error) reject(error);
-      else resolve(result);
-    };
-    const deadline = setTimeout(
-      () => finish(new Error("Cod operation timed out")),
-      30_000,
-    );
-    connection.setEncoding("utf8");
-    connection.on("connect", () =>
-      connection.write(`${JSON.stringify(request)}\n`),
-    );
-    connection.on("data", (chunk: string) => {
-      if (settled) return;
-      bytes += Buffer.byteLength(chunk);
-      if (bytes > 128 * 1024 * 1024) {
-        finish(new Error("Cod response exceeds 128 MiB"));
-        return;
-      }
-      // Search only the new chunk. Flattening and rescanning every growing
-      // prefix makes a large response quadratic in CPU and transient memory.
-      const newline = chunk.indexOf("\n");
-      input.push(newline < 0 ? chunk : chunk.slice(0, newline));
-      if (newline < 0) return;
-      try {
-        const response: unknown = JSON.parse(input.join(""));
-        if (!response || typeof response !== "object")
-          throw new Error("Invalid response envelope");
-        const value = response as Record<string, unknown>;
-        if (value.ok === true && Object.hasOwn(value, "result"))
-          finish(undefined, value.result);
-        else if (value.ok === false && typeof value.error === "string")
-          finish(new Error(value.error));
-        else throw new Error("Invalid response envelope");
-      } catch {
-        finish(new Error("Malformed Cod response"));
-      }
-    });
-    connection.on("end", () =>
-      finish(new Error("Cod connection ended before a complete response")),
-    );
-    connection.on("close", () =>
-      finish(new Error("Cod connection closed before a complete response")),
-    );
-    connection.on("error", (error) => finish(error));
-  });
-}
+const invoke = (request: OperationRequest) =>
+  invokeCommand(defaultSocketPath(), request);
+
 async function main(): Promise<void> {
   try {
     const request = parseArguments(process.argv.slice(2));
