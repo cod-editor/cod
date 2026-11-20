@@ -532,6 +532,82 @@ test("Browser reload shortcut targets the focused page or address and leaves oth
   expect(await rendererIdentity()).toBe("retain");
 });
 
+test("Browser reload shortcut works from a newly selected tab header", async () => {
+  const workspace = await shell.create("Reload from browser tab strip");
+  const browser = await open(workspace);
+  await remote("/one", "window.identity");
+  await open(workspace, "/other-tab");
+  await remote("/other-tab", "window.identity");
+  const tab = shell.page.getByRole("tab", {
+    name: "Fixture /one",
+    exact: true,
+  });
+  const otherTab = shell.page.getByRole("tab", {
+    name: "Fixture /other-tab",
+    exact: true,
+  });
+  const reloadCount = () => requests.filter((url) => url === "/one").length;
+
+  await otherTab.click();
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(tab).toBeFocused();
+  const initial = reloadCount();
+  await shell.page.keyboard.press(`${modifier}+r`);
+  await expect.poll(reloadCount).toBe(initial + 1);
+  await expect(tab).toBeFocused();
+  await remote("/one", "window.identity");
+
+  await otherTab.click();
+  await otherTab.press("ArrowLeft");
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(tab).toBeFocused();
+  await shell.page.keyboard.press(`${modifier}+r`);
+  await expect.poll(reloadCount).toBe(initial + 2);
+  await remote("/one", "window.identity");
+
+  const overview = await shell.overview();
+  const search = overview.getByRole("combobox");
+  await search.press(`${modifier}+r`);
+  await expect(overview).toBeVisible();
+  await expect(search).toBeFocused();
+  expect(reloadCount()).toBe(initial + 2);
+  await search.fill("Fixture /other-tab");
+  await expect(
+    overview.getByRole("gridcell", { name: "Fixture /other-tab", exact: true }),
+  ).toBeVisible();
+  await search.press("Enter");
+  await expect(overview).toBeHidden();
+  await expect(otherTab).toHaveAttribute("aria-selected", "true");
+  const otherCount = requests.filter((url) => url === "/other-tab").length;
+  await shell.page.keyboard.press(`${modifier}+r`);
+  await expect
+    .poll(() => requests.filter((url) => url === "/other-tab").length)
+    .toBe(otherCount + 1);
+  expect(reloadCount()).toBe(initial + 2);
+
+  await shell.command("Move tab to right pane");
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  const file = await shell.cli<{ paneId: string }>(
+    "file",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    shell.file,
+  );
+  await shell.page.locator(`[data-tab-id="${file.paneId}"]`).click();
+  await expect(shell.pane(file.paneId)).toBeVisible();
+  await expect
+    .poll(async () => (await nativeView("/other-tab"))?.visible)
+    .toBe(true);
+  await shell.page.keyboard.press(`${modifier}+r`);
+  expect(requests.filter((url) => url === "/other-tab").length).toBe(
+    otherCount + 1,
+  );
+});
+
 test("Browser AC2 native bounds stay inside split panes and overlays hide views without losing page state", async ({}, info) => {
   const workspace = await shell.create("Browser layout");
   const browser = await open(workspace);

@@ -921,6 +921,21 @@ export function createCommands(
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);
   };
+  function isOrdinaryBrowserPane(pane: PaneState | null | undefined): boolean {
+    return (
+      pane?.kind === "browser" &&
+      !getState().browsers.find((browser) => browser.id === pane.browserId)
+        ?.agentPage
+    );
+  }
+  function shortcutSurface(element = document.activeElement) {
+    const surface = keyboardSurface(element);
+    // Selecting a browser tab can leave keyboard focus in the tab strip or
+    // workspace shell until the user moves into the page.
+    return surface === "shell" && isOrdinaryBrowserPane(currentPane())
+      ? "browser-controls"
+      : surface;
+  }
   function conversationTarget(pane = currentPane()) {
     return pane?.kind === "conversation"
       ? getState().conversations.find((c) => c.id === pane.conversationId)
@@ -1042,12 +1057,7 @@ export function createCommands(
       pane?.kind !== "browser"
     )
       return "Select a browser tab first";
-    if (
-      id === "browser.reload" &&
-      (pane?.kind !== "browser" ||
-        getState().browsers.find((item) => item.id === pane.browserId)
-          ?.agentPage)
-    )
+    if (id === "browser.reload" && !isOrdinaryBrowserPane(pane))
       return "Select a web browser tab first";
     if (id === "pane.focusRight" && !layout.sidePane("right", w))
       return "Right pane is not open";
@@ -1589,7 +1599,7 @@ export function createCommands(
       ? originBrowser.agentPage
         ? "agent-page"
         : "browser"
-      : keyboardSurface(returnFocus.element);
+      : shortcutSurface(returnFocus.element);
     const workspace = activeWorkspace();
     const conversation = conversationTarget();
     const context: CommandContext = {
@@ -1832,7 +1842,7 @@ export function createCommands(
           altGraph: event.getModifierState("AltGraph"),
         },
         keyboardPlatform,
-        keyboardSurface(),
+        shortcutSurface(),
       );
       if (!match || (openDialog && match.command !== "workspace.overview"))
         return;
