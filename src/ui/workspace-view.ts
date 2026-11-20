@@ -82,15 +82,14 @@ export function createWorkspaceView(
       terminals.reconcile();
       const workspace = activeWorkspace();
       projects.update(workspace);
-      for (const id of resourcePanes.keys())
+      for (const [id, view] of resourcePanes)
         if (
           !getState().workspaces.some((workspace) =>
             workspace.panes.some((pane) => pane.id === id),
           )
         ) {
-          resourcePanes
-            .get(id)
-            ?.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
+          view.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
+          view.remove();
           resourcePanes.delete(id);
         }
       const remote = getState().remoteWorkspace;

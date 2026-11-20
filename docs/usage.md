@@ -43,6 +43,8 @@ CLI creation stays in the background unless focus is explicitly requested. Set `
 
 Overview lists conversations and browser tabs. A pane's `+` opens Open file / Browser / Chat / Terminal choices. New tab (`Cmd/Ctrl+T` or a double-click in free tab-bar space) creates a fresh tab of the current kind: a blank browser, empty chat with the same provider/model, fresh shell in the terminal's current directory, or untitled text buffer. Reviews and empty panes offer the four-choice tab instead. The source content is never copied. Direct creation commands remain available. Drag tabs to the insertion marker to reorder or move between panes; context menus provide keyboard alternatives. Tabs and their order survive restart.
 
+Closing the last tab on either side of a visible split collapses that side. Reopen closed tab restores the tab to its original side and brings back the split at its previous width.
+
 Very high line-count text can stall the native editor during insertion; this is tracked in [#187](https://github.com/cod-editor/cod/issues/187).
 
 Untitled buffers keep unsaved text through closing and restart; Reopen closed tab restores them. Save (`Cmd/Ctrl+S`) opens the native Save As chooser until a path is chosen. Commands > New file creates an untitled buffer directly. From the CLI, `pane new --workspace WORKSPACE_ID --same-as PANE_ID` creates the current kind in the source pane without changing foreground selection; add `--focus true` to select it. `file new` and `file save-as` expose the same buffer and destination operations; see `codctl --help` for arguments.

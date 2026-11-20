@@ -105,12 +105,15 @@ export class WorkspaceApplicationService {
     for (const browser of this.store.data.browsers.filter(
       (item) => item.workspaceId === id,
     )) {
-      const result = await this.closePane({
-        op: "pane.close",
-        workspace: id,
-        id: browser.paneId,
-        includePinned: true,
-      });
+      const result = await this.closePane(
+        {
+          op: "pane.close",
+          workspace: id,
+          id: browser.paneId,
+          includePinned: true,
+        },
+        { collapseSplit: false },
+      );
       if (result.closed === false) return { id, closed: false };
     }
     this.store.data.closedWorkspaces ??= [];
@@ -312,6 +315,7 @@ export class WorkspaceApplicationService {
 
   async closePane(
     request: OperationRequest,
+    { collapseSplit = true }: { collapseSplit?: boolean } = {},
   ): Promise<{ paneId: string; closed?: boolean }> {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
@@ -353,9 +357,17 @@ export class WorkspaceApplicationService {
     const group = workspace.groups?.find((group) =>
       group.paneIds.includes(pane.id),
     );
+    const survivingGroup =
+      collapseSplit &&
+      group?.paneIds.length === 1 &&
+      (pane.kind !== "empty" || pane.launcher || pane.pinned) &&
+      workspace.groups.every((item) => !item.hidden)
+        ? workspace.groups.find((item) => item !== group)
+        : undefined;
     workspace.closedTabs.push({
       groupId: group?.id,
       index: group?.paneIds.indexOf(pane.id),
+      ...(survivingGroup ? { collapsedSplit: true } : {}),
       pane: structuredClone(pane),
       ...(pane.kind === "browser"
         ? { browser: structuredClone(this.browsers.browser(pane.browserId)) }
@@ -369,28 +381,28 @@ export class WorkspaceApplicationService {
     this.pruneClosedTabs(workspace);
     if (pane.kind === "browser") {
       this.browsers.removeBrowser(this.browsers.browser(pane.browserId));
-      return { paneId: pane.id };
+    } else {
+      if (pane.kind === "terminal") {
+        if (
+          this.terminals.terminal(pane.terminalId).status !== "failed" &&
+          this.terminals.terminal(pane.terminalId).pid !== 0
+        )
+          await this.terminals.stopProcess(pane.terminalId);
+        this.store.data.terminals = this.store.data.terminals.filter(
+          (item) => item.id !== pane.terminalId,
+        );
+      }
+      workspace.panes = workspace.panes.filter((item) => item.id !== pane.id);
+      if (!workspace.panes.length) {
+        workspace.panes.push({
+          id: randomUUID(),
+          kind: "document",
+          draftChat: true,
+        });
+      }
+      normalizeGroups(workspace);
     }
-    if (pane.kind === "terminal") {
-      if (
-        this.terminals.terminal(pane.terminalId).status !== "failed" &&
-        this.terminals.terminal(pane.terminalId).pid !== 0
-      )
-        await this.terminals.stopProcess(pane.terminalId);
-      this.store.data.terminals = this.store.data.terminals.filter(
-        (item) => item.id !== pane.terminalId,
-      );
-    }
-    workspace.panes = workspace.panes.filter((item) => item.id !== pane.id);
-    if (!workspace.panes.length) {
-      const empty = {
-        id: randomUUID(),
-        kind: "document",
-        draftChat: true,
-      } as const;
-      workspace.panes.push(empty);
-    }
-    normalizeGroups(workspace);
+    if (survivingGroup) showGroupOnly(workspace, survivingGroup);
     return { paneId: pane.id };
   }
 
@@ -563,6 +575,11 @@ export class WorkspaceApplicationService {
       import("../types").WorkspaceState["closedTabs"]
     >[number],
   ): void {
+    const reveal =
+      closed.collapsedSplit &&
+      workspace.groups.some(
+        (group) => group.id === closed.groupId && group.hidden,
+      );
     normalizeGroups(workspace);
     const target = workspace.groups!.find(
       (group) => group.id === closed.groupId,
@@ -581,6 +598,7 @@ export class WorkspaceApplicationService {
       id,
     );
     target.activePaneId = id;
+    if (reveal) revealSplit(workspace);
     selectGroup(workspace, target);
   }
 

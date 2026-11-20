@@ -454,7 +454,11 @@ export function createPaneLayout(
             ? undefined
             : true;
         }, AbortSignal.timeout(2000));
-        if (ready && document.activeElement === document.body) {
+        if (
+          ready &&
+          (document.activeElement === document.body ||
+            item.contains(document.activeElement))
+        ) {
           const visibleBar = bar.getClientRects().length
             ? bar
             : splitViews
