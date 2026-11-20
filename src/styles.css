@@ -22,6 +22,7 @@
   --panel: var(--surface-raised);
   --control-hover: var(--element-hover);
   --control-pressed: var(--element-pressed);
+  --control-accent: #61afef;
   --focus: #7e9fc6;
 }
 * {
@@ -1149,7 +1150,17 @@ button[aria-busy="true"] {
 
 /* Panel state is spatial and visible even without hover. */
 .icon-button[aria-pressed="true"] {
-  color: #61afef;
+  color: var(--control-accent);
+}
+.split-view-button:not(:disabled) .split-outline {
+  stroke: var(--text-muted);
+}
+.split-view-button [data-state="visible"] {
+  fill: var(--text-muted);
+  opacity: 0.55;
+}
+.split-view-button [data-state="focused"] {
+  fill: var(--control-accent);
 }
 .settings-note {
   color: var(--muted);
