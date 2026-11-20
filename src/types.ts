@@ -304,6 +304,8 @@ export interface AppState {
   browsers: BrowserState[];
   drafts: Record<string, FileDraft>;
   reviews?: ReviewSummary[];
+  /** Desktop connection status. Never written to workspace data. */
+  remoteWorkspace?: import("./remote-workspace/protocol").RemoteWorkspaceView;
   /** Renderer-only navigation intent. Never written to application data. */
   reviewPresentation?: { paneId: string; token: string };
 }

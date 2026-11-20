@@ -91,7 +91,13 @@ export function createWorkspaceView(
             ?.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
           resourcePanes.delete(id);
         }
+      const remote = getState().remoteWorkspace;
+      const place =
+        workspace && remote?.ids.includes(workspace.id) ? remote : null;
       workspaceName.textContent = workspace?.name ?? "No workspace";
+      if (place)
+        workspaceName.textContent +=
+          " (" + place.alias + (place.connected ? ")" : ", disconnected)");
       if (!workspace) {
         layout.applySettings();
         const empty = document.createElement("div");
@@ -196,7 +202,19 @@ export function createWorkspaceView(
         .querySelector(".markdown-preview")
         ?.dispatchEvent(new Event("cod:refresh-preview"));
     let content: HTMLElement | undefined;
-    if (pane.kind === "empty") {
+    if (
+      getState().remoteWorkspace?.ids.includes(workspace.id) &&
+      ["preview", "diff", "review", "browser"].includes(pane.kind)
+    ) {
+      container.setAttribute("aria-label", "Unavailable view");
+      content =
+        (container.firstElementChild as HTMLElement | null) ??
+        document.createElement("p");
+      content.textContent =
+        pane.kind === "browser"
+          ? "Web pages open on this computer."
+          : "This view is unavailable in a Linux workspace.";
+    } else if (pane.kind === "empty") {
       container.setAttribute("aria-label", "Empty pane");
       container.tabIndex = 0;
       if (pane.launcher)
@@ -265,7 +283,9 @@ export function createWorkspaceView(
       line?: number;
     }>("file.resolve", { workspace, path: reference });
     const open = (path: string) =>
-      /\.html?$/i.test(path) && !result.line
+      /\.html?$/i.test(path) &&
+      !result.line &&
+      !getState().remoteWorkspace?.ids.includes(workspace)
         ? invoke("browser.open", { workspace, url: localFileAddress(path) })
         : invoke("file.open", {
             workspace,

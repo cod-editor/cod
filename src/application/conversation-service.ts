@@ -1540,7 +1540,12 @@ export class ConversationApplicationService {
         });
 
       case "conversation.composer": {
-        const textOnly = trustedUi && request.images === undefined;
+        const versioned =
+          trustedUi ||
+          (typeof request.expectedVersion === "string" &&
+            typeof request.writer === "string" &&
+            request.writer.length <= 64);
+        const textOnly = versioned && request.images === undefined;
         const save = textOnly
           ? (mutation: () => unknown) =>
               this.store.changeDraft(
@@ -1571,7 +1576,7 @@ export class ConversationApplicationService {
             typeof request.writer === "string" &&
             previous.writer === request.writer;
           if (
-            trustedUi &&
+            versioned &&
             request.saveConflict !== true &&
             !ownSubmittedVersion &&
             typeof request.expectedVersion === "string" &&
@@ -1595,7 +1600,7 @@ export class ConversationApplicationService {
               ? previous?.provider
               : providerId(request);
           workspace.chatDrafts ??= {};
-          if (trustedUi && request.saveConflict === true) {
+          if (versioned && request.saveConflict === true) {
             if (!previous)
               throw new Error("Conflicting draft is no longer available");
             workspace.chatDrafts[pane.id] = {
@@ -1626,10 +1631,10 @@ export class ConversationApplicationService {
             ...(provider === previous?.provider && previous?.initialSelection
               ? { initialSelection: previous.initialSelection }
               : {}),
-            ...(!trustedUi && previous?.localDraft
+            ...(!versioned && previous?.localDraft
               ? { localDraft: previous.localDraft }
               : {}),
-            ...(trustedUi &&
+            ...(versioned &&
             typeof request.writer === "string" &&
             request.writer.length <= 64
               ? { writer: request.writer }

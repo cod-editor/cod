@@ -37,7 +37,13 @@ import { ApplicationOperations } from "./operations";
 import { BrowserApplicationService } from "./application/browser-service";
 import { startCommandSocket } from "./application/command-socket";
 import { defaultDataDirectory, defaultSocketPath } from "./paths";
-import type { OperationRequest } from "./types";
+import type { AppState, OperationRequest } from "./types";
+import { attachWorkspaceHost, type HostLink } from "./remote-workspace/client";
+import {
+  combineWorkspaces,
+  requestBelongsToHost,
+  validateRemoteRequest,
+} from "./remote-workspace/view";
 
 registerAgentPageScheme([
   {
@@ -129,12 +135,155 @@ function startPreviewChecks(): void {
   });
 }
 let commandServer: Server | null = null;
+let remoteWorkspace: HostLink | undefined;
+let remoteView: string | undefined;
+let attachingWorkspace: AbortController | undefined;
+
+function displayState(local = operations.snapshot(true)): AppState {
+  const link = remoteWorkspace;
+  if (!link) return local;
+  return combineWorkspaces(local, {
+    state: link.state,
+    alias: link.target.alias,
+    connected: link.connected,
+    viewing: remoteView,
+  });
+}
+
+function showWorkspaceState(local?: AppState) {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send("cod:state", displayState(local));
+}
+
+async function connectRemoteWorkspace(alias: string, socketPath: string) {
+  if (attachingWorkspace)
+    throw new Error("A Linux workspace connection is in progress");
+  const attempt = new AbortController();
+  attachingWorkspace = attempt;
+  try {
+    const link = await attachWorkspaceHost(
+      { alias, socketPath },
+      (link, frame) => {
+        if (remoteWorkspace !== link) return;
+        if (frame?.type === "terminal")
+          mainWindow?.webContents.send("cod:terminal", frame.value);
+        else {
+          if (
+            !link.state.workspaces.some(
+              (workspace) => workspace.id === remoteView,
+            )
+          )
+            remoteView = undefined;
+          showWorkspaceState();
+        }
+      },
+      attempt.signal,
+    );
+    if (attempt.signal.aborted || shutdown || quitting) {
+      link.close();
+      return;
+    }
+    try {
+      combineWorkspaces(operations.snapshot(true), {
+        state: link.state,
+        alias: link.target.alias,
+        connected: link.connected,
+      });
+    } catch (error) {
+      link.close();
+      throw error;
+    }
+    remoteWorkspace?.close();
+    remoteWorkspace = link;
+    remoteView = link.state.activeWorkspaceId ?? undefined;
+    if (remoteView) operations.browserLayout([]);
+    showWorkspaceState();
+  } finally {
+    if (attachingWorkspace === attempt) attachingWorkspace = undefined;
+  }
+}
+
+async function displayCommand(request: OperationRequest): Promise<unknown> {
+  const link = remoteWorkspace;
+  if (request.op === "state") return displayState();
+  if (request.op === "remote.connect") {
+    if (
+      typeof request.alias !== "string" ||
+      typeof request.socketPath !== "string"
+    )
+      throw new Error("Choose an SSH host and socket path");
+    return connectRemoteWorkspace(
+      request.alias.trim(),
+      request.socketPath.trim(),
+    );
+  }
+  if (request.op === "remote.reconnect") {
+    if (!link) throw new Error("Connect to a Linux workspace first");
+    if (!link.connected)
+      return connectRemoteWorkspace(link.target.alias, link.target.socketPath);
+    remoteView = link.state.activeWorkspaceId ?? undefined;
+    if (remoteView) operations.browserLayout([]);
+    showWorkspaceState();
+    return;
+  }
+  if (request.op === "remote.cancel") {
+    attachingWorkspace?.abort();
+    return;
+  }
+  if (request.op === "remote.disconnect") {
+    attachingWorkspace?.abort();
+    link?.close();
+    remoteWorkspace = undefined;
+    remoteView = undefined;
+    showWorkspaceState();
+    return;
+  }
+  if (link && requestBelongsToHost(link.state, request)) {
+    if (
+      request.op === "browser.open" &&
+      typeof request.url === "string" &&
+      /^https?:\/\//i.test(request.url)
+    )
+      return openExternalUrl(request.url);
+    validateRemoteRequest(link.state, request);
+    if (request.op === "workspace.focus") {
+      if (link.connected) await link.invoke(request);
+      if (remoteWorkspace === link) {
+        remoteView = String(request.id);
+        operations.browserLayout([]);
+        showWorkspaceState();
+      }
+      return;
+    }
+    return link.invoke(request);
+  }
+  if (
+    remoteView &&
+    /^(conversation|terminal|project|git|file|pane|group|review)\./.test(
+      request.op,
+    ) &&
+    !requestBelongsToHost(operations.snapshot(true), request)
+  )
+    throw new Error("Select a tab or workspace for this operation");
+  const result = await operations.dispatch(request, true);
+  if (
+    remoteView &&
+    ["workspace.focus", "workspace.create", "workspace.reopen"].includes(
+      request.op,
+    )
+  ) {
+    remoteView = undefined;
+    showWorkspaceState();
+  }
+  return result;
+}
+
 const rendererPath = path.join(__dirname, "index.html");
 const rendererUrl = pathToFileURL(rendererPath).href;
 
 const pendingUrls: string[] = [];
 let canOpenUrls = false;
-async function openExternalUrl(raw: string): Promise<void> {
+async function openExternalUrl(raw: string): Promise<unknown> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -155,13 +304,18 @@ async function openExternalUrl(raw: string): Promise<void> {
           true,
         )) as { id: string }
       ).id;
-    await operations.dispatch(
+    const result = await operations.dispatch(
       { op: "browser.open", workspace, url: url.href },
       true,
     );
+    if (remoteView) {
+      remoteView = undefined;
+      showWorkspaceState();
+    }
     if (!mainWindow) createWindow();
     mainWindow?.show();
     mainWindow?.focus();
+    return result;
   } catch (error) {
     console.error(
       "Could not open external URL",
@@ -364,11 +518,7 @@ async function start(): Promise<void> {
         headers: { "Content-Type": type, "X-Content-Type-Options": "nosniff" },
       });
     });
-    operations.onDidChange = (state) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("cod:state", state);
-      }
-    };
+    operations.onDidChange = showWorkspaceState;
     operations.onDidTerminal = (event) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("cod:terminal", event);
@@ -438,7 +588,7 @@ async function start(): Promise<void> {
         event.sender === mainWindow?.webContents &&
         event.senderFrame?.url === rendererUrl
       )
-        operations.browserLayout(rectangles);
+        operations.browserLayout(remoteView ? [] : rectangles);
     });
     ipcMain.handle("cod:browser-overview-backdrop", (event, ids: unknown) => {
       if (
@@ -461,6 +611,8 @@ async function start(): Promise<void> {
           "Directory chooser rejected from an untrusted renderer",
         );
       }
+      if (remoteView)
+        throw new Error("Add a folder by its Linux path from the host CLI");
       const result = await dialog.showOpenDialog(parent, {
         title: "Add folder to workspace",
         properties: ["openDirectory", "createDirectory"],
@@ -478,6 +630,12 @@ async function start(): Promise<void> {
           event.senderFrame.url !== rendererUrl
         )
           throw new Error("Save chooser rejected from an untrusted renderer");
+        if (
+          remoteWorkspace?.state.workspaces.some(
+            (item) => item.id === workspace,
+          )
+        )
+          throw new Error("Save As in a Linux workspace is not available yet");
         const defaultPath = operations.fileSaveDefault(workspace, paneId);
         const result = await dialog.showSaveDialog(parent, {
           title: "Save file",
@@ -500,7 +658,7 @@ async function start(): Promise<void> {
       const started = Date.now();
       if (tracked) runtimeJournal?.record("close-tab-request");
       try {
-        const result = await operations.dispatch(request, true);
+        const result = await displayCommand(request);
         if (tracked)
           runtimeJournal?.record("close-tab-result", {
             elapsedMs: Date.now() - started,
@@ -714,6 +872,9 @@ let shutdown: Promise<void> | undefined;
 app.on("before-quit", (event) => {
   commandServer?.close();
   commandServer = null;
+  attachingWorkspace?.abort();
+  remoteWorkspace?.close();
+  remoteWorkspace = undefined;
   if (initialized && !quitting) {
     event.preventDefault();
     shutdown ??= operations.shutdown().finally(() => {

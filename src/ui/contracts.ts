@@ -1,7 +1,13 @@
 import type { OperationName } from "../command-catalog";
-/** Renderer operations use the same application commands as codctl. */
+export type DesktopOperationName =
+  | OperationName
+  | "remote.connect"
+  | "remote.reconnect"
+  | "remote.disconnect"
+  | "remote.cancel";
+
 export type Invoke = <T>(
-  op: OperationName,
+  op: DesktopOperationName,
   values?: Record<string, unknown>,
   options?: { reportError?: boolean },
 ) => Promise<T>;

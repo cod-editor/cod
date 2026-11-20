@@ -349,10 +349,12 @@ export function createWorkspaceOverview(
       const previous = visible;
       const query = input.value;
       visible = visibleNavigation(items, query, retainedKey);
+      const remote = getState().remoteWorkspace;
       const nextSignature = JSON.stringify([
         visible,
         !!query.trim(),
         edit?.key,
+        remote,
       ]);
       if (nextSignature === signature) {
         updateHints();
@@ -394,7 +396,15 @@ export function createWorkspaceOverview(
       for (const key of rowCache.keys())
         if (!surviving.has(key)) rowCache.delete(key);
       for (const item of visible) {
-        const rowSignature = JSON.stringify([item, edit?.key === item.key]);
+        const host =
+          item.kind === "workspace" && remote?.ids.includes(item.workspaceId)
+            ? remote.alias + (remote.connected ? "" : ", disconnected")
+            : undefined;
+        const rowSignature = JSON.stringify([
+          item,
+          edit?.key === item.key,
+          host,
+        ]);
         const cached = rowCache.get(item.key);
         if (cached?.signature === rowSignature) {
           groups.get(item.workspaceId)?.rows.push(cached.row);
@@ -430,13 +440,14 @@ export function createWorkspaceOverview(
         if (item.hint) button.title = item.hint;
         button.setAttribute(
           "aria-label",
-          `${item.label}${item.kind === "browser" ? "" : ", " + describeNavigationStatus(item.status, item.context)}${item.pinned ? ", Pinned" : ""}`,
+          `${item.label}${item.kind === "browser" ? "" : ", " + describeNavigationStatus(item.status, item.context)}${item.pinned ? ", Pinned" : ""}${host ? ", " + host : ""}`,
         );
         button.onclick = () => open(item);
         const label = document.createElement("span");
         label.className = "overview-label";
         label.textContent =
           item.kind === "browser" ? item.label.slice(0, 160) : item.label;
+        if (host) label.textContent += " (" + host + ")";
         button.append(label);
         if (item.pinned) button.append(icon("pin"));
         row.append(button);

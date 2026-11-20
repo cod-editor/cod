@@ -13,6 +13,7 @@ interface TerminalSession {
   observer: ResizeObserver;
   sequence: number;
   ready: boolean;
+  remoteConnected?: boolean;
   pending: TerminalUiEvent[];
 }
 
@@ -103,6 +104,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       observer,
       sequence: 0,
       ready: false,
+      remoteConnected: remoteConnected(record),
       pending: [],
     };
     terminalSessions.set(record.id, session);
@@ -112,10 +114,23 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       );
     });
     requestTerminalFit(session);
-    void invoke<TerminalState>("terminal.inspect", { id: record.id })
+    if (session.remoteConnected !== false) readTerminalOutput(session);
+  }
+
+  function remoteConnected(record: TerminalState): boolean | undefined {
+    const remote = getState().remoteWorkspace;
+    return remote?.ids.includes(record.workspaceId)
+      ? remote.connected
+      : undefined;
+  }
+
+  function readTerminalOutput(session: TerminalSession): void {
+    session.ready = false;
+    void invoke<TerminalState>("terminal.inspect", { id: session.id })
       .then((snapshot) => {
         session.sequence = snapshot.sequence;
-        if (snapshot.output) terminal.write(snapshot.output);
+        if (session.remoteConnected === true) session.terminal.reset();
+        if (snapshot.output) session.terminal.write(snapshot.output);
         session.ready = true;
         for (const event of session.pending.splice(0)) {
           if (event.sequence > session.sequence)
@@ -162,12 +177,22 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
   }
 
   function reconcile() {
-    for (const [id, session] of terminalSessions)
-      if (!getState().terminals.some((t) => t.id === id)) {
+    for (const [id, session] of terminalSessions) {
+      const record = getState().terminals.find(
+        (terminal) => terminal.id === id,
+      );
+      if (!record) {
         session.observer.disconnect();
         session.terminal.dispose();
         terminalSessions.delete(id);
+        continue;
       }
+      const connected = remoteConnected(record);
+      if (connected !== session.remoteConnected) {
+        session.remoteConnected = connected;
+        if (connected) readTerminalOutput(session);
+      }
+    }
   }
   function update(
     record: TerminalState,

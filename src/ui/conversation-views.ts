@@ -203,7 +203,10 @@ export function createConversationViews({
     const transcript = document.createElement("div");
     transcript.className = "transcript";
     body.append(transcript);
-    const setup = integration.offer(draftProviders.get(pane.id) ?? "codex");
+    const remote = getState().remoteWorkspace?.ids.includes(workspace.id);
+    const setup = remote
+      ? null
+      : integration.offer(draftProviders.get(pane.id) ?? "codex");
     if (setup) transcript.append(setup);
     const composer = document.createElement("div");
     composer.className = "composer";
@@ -258,7 +261,7 @@ export function createConversationViews({
         composerDrafts.set(result.id, text);
         attachmentDrafts.set(result.id, images);
         skillDrafts.set(result.id, selectedSkills(pane.id));
-        await sendMessage(result.id);
+        await sendMessage(result.id, workspace.id);
         composerDrafts.delete(pane.id);
         attachmentDrafts.delete(pane.id);
         skillDrafts.delete(pane.id);
@@ -293,6 +296,7 @@ export function createConversationViews({
     provider.className = "composer-choice";
     provider.setAttribute("aria-haspopup", "dialog");
     setChoiceCaption(provider, providerLabel(selected));
+    provider.disabled = remote === true;
     provider.onclick = () =>
       menu(
         provider,
@@ -990,7 +994,10 @@ export function createConversationViews({
       }
     }
     groupTurnActivity(transcript, conversation);
-    const setup = integration.offer(conversation.provider);
+    const remote = getState().remoteWorkspace?.ids.includes(
+      conversation.workspaceId,
+    );
+    const setup = remote ? null : integration.offer(conversation.provider);
     if (setup && !conversation.messages.length && !conversation.error)
       transcript.append(setup);
     body.append(transcript);
@@ -1012,7 +1019,12 @@ export function createConversationViews({
       title.textContent = "Approval requested";
       card.append(title);
       card.append(permissionContent(permission.details));
-      for (const option of permission.options) {
+      if (remote) {
+        const note = document.createElement("p");
+        note.textContent = "Resolve this request on the Linux host.";
+        card.append(note);
+      }
+      for (const option of remote ? [] : permission.options) {
         const permissionButton = paneButton(option.label, () =>
           invoke("conversation.permission", {
             id: conversation.id,
@@ -1299,7 +1311,7 @@ export function createConversationViews({
       },
     };
   }
-  async function sendMessage(id: string): Promise<void> {
+  async function sendMessage(id: string, workspace?: string): Promise<void> {
     if (pendingSends.has(id)) return;
     const turn = getState()
       .conversations.find((item) => item.id === id)
@@ -1340,6 +1352,7 @@ export function createConversationViews({
         "conversation.send",
         {
           id,
+          ...(workspace ? { workspace } : {}),
           text,
           images,
           skills,
