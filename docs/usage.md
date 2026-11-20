@@ -90,7 +90,7 @@ cod-desktop namespaces="cod-review" ssh-ed25519 YOUR_PUBLIC_KEY
 
 Use the full type and key data from your local public key file and keep the signer file writable only by its owner. In **Connect to Linux workspace**, enter the matching absolute `.pub` path in **SSH public key for private review**. OpenSSH must be available on both machines and the matching private key must be usable on the desktop, for example through the local SSH agent.
 
-A paired connection can annotate a remote review, respond to Codex approvals and steer an active Codex turn using ordinary send. A missing or rejected key leaves ordinary chat, files and terminals available. Removing a signer blocks the next private operation. Reconnect with an authorized key to resume review. The desktop remembers the entered host alias and paths for its next connection. The private key remains on the desktop, and pairings do not change SSH server configuration.
+A paired connection can annotate a remote review, respond to Codex approvals and steer an active Codex turn using ordinary send. A missing or rejected key leaves ordinary chat, files and terminals available. Removing a signer blocks the next private operation. Run **Reconnect to Linux workspace** with the same authorized key to resume review. The host-owner CLI retains its existing approval and review commands. The desktop remembers the entered host alias and paths for its next connection. The private key remains on the desktop, and pairings do not change SSH server configuration.
 
 ## Development
 

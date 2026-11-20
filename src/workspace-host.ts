@@ -2,12 +2,27 @@ import { lstat, mkdir } from "node:fs/promises";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { ApplicationOperations } from "./operations";
+import type { AppState } from "./types";
 import { startCommandSocket } from "./application/command-socket";
 import { serveWorkspaceReview } from "./remote-workspace/review-session";
 import {
   maximumWorkspaceFrameBytes,
   type WorkspaceHostFrame,
 } from "./remote-workspace/protocol";
+
+function watchState(state: AppState): AppState {
+  return {
+    ...state,
+    reviews: state.reviews?.map((review) => ({
+      ...review,
+      rounds: review.rounds.map((round) =>
+        round.submission
+          ? { ...round, submission: { ...round.submission, envelope: "" } }
+          : round,
+      ),
+    })),
+  };
+}
 
 async function main(): Promise<void> {
   const [directory, ...rest] = process.argv.slice(2);
@@ -49,7 +64,7 @@ async function main(): Promise<void> {
     newestState = value;
     stateTimer ??= setTimeout(() => {
       stateTimer = undefined;
-      broadcast({ type: "state", value: newestState });
+      broadcast({ type: "state", value: watchState(newestState) });
     }, 50);
     stateTimer.unref();
   };
@@ -73,7 +88,8 @@ async function main(): Promise<void> {
       newestState = runtime.snapshot(true);
       send(
         connection,
-        JSON.stringify({ type: "state", value: newestState }) + "\n",
+        JSON.stringify({ type: "state", value: watchState(newestState) }) +
+          "\n",
       );
       if (request.review === true)
         serveWorkspaceReview(

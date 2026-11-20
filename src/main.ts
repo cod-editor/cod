@@ -230,11 +230,7 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
   }
   if (request.op === "remote.reconnect") {
     if (!link) throw new Error("Connect to a Linux workspace first");
-    if (!link.connected) return connectRemoteWorkspace(link.target);
-    remoteView = link.state.activeWorkspaceId ?? undefined;
-    if (remoteView) operations.browserLayout([]);
-    showWorkspaceState();
-    return;
+    return connectRemoteWorkspace(link.target);
   }
   if (request.op === "remote.cancel") {
     attachingWorkspace?.abort();

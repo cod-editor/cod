@@ -1,10 +1,33 @@
 import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { connect } from "node:net";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
+import type { AppState } from "../../src/types";
+
+async function readUnpairedWatch(socketPath: string): Promise<AppState> {
+  const peer = connect(socketPath);
+  peer.setEncoding("utf8");
+  peer.once("connect", () => peer.write('{"op":"workspace.watch"}\n'));
+  try {
+    let input = "";
+    for await (const chunk of peer) {
+      input += chunk;
+      const newline = input.indexOf("\n");
+      if (newline !== -1) {
+        const frame = JSON.parse(input.slice(0, newline));
+        expect(frame.type).toBe("state");
+        return frame.value;
+      }
+    }
+    throw new Error("Linux workspace did not send state");
+  } finally {
+    peer.destroy();
+  }
+}
 
 async function installWorkspaceRelay(desktop: ChatApp, dropReply?: string) {
   const forwarder = path.resolve("tests/e2e/helpers/unix-socket-forward.mjs");
@@ -490,15 +513,24 @@ test("Paired Linux review and approval preserve privacy, draft and exactly-once 
     expect(await linux.prompts()).toHaveLength(2);
 
     await writeFile(signer, pairedSigner);
-    await connectWorkspace(desktop, linux.socket, key + ".pub");
+    await desktop.command("Reconnect to Linux workspace");
     await expect(input).toHaveValue(message);
     await input.press(`${modifier}+Enter`);
     await expect(
       reviewPane.getByLabel("Draft comment", { exact: true }),
     ).toContainText(message);
     expect(await linux.prompts()).toHaveLength(2);
+    const beforeSubmit = await readUnpairedWatch(linux.socket);
+    expect(JSON.stringify(beforeSubmit)).not.toContain(message);
+    expect(
+      beforeSubmit.reviews?.find((item) => item.id === review.id)?.rounds.at(-1)
+        ?.commentCount,
+    ).toBe(1);
+    expect(
+      (await linux.raw("review", "inspect", "--id", review.id)).stdout,
+    ).not.toContain(message);
 
-    await writeFile(dropReply, "");
+    await writeFile(dropReply, "review.submit");
     await reviewPane
       .getByRole("button", { name: "Send feedback", exact: true })
       .click();
@@ -523,6 +555,12 @@ test("Paired Linux review and approval preserve privacy, draft and exactly-once 
         (item) => item.role === "user" && item.text.includes(message),
       ),
     ).toHaveLength(1);
+    const state = await readUnpairedWatch(linux.socket);
+    expect(JSON.stringify(state.reviews)).not.toContain(message);
+    expect(
+      state.reviews?.find((item) => item.id === review.id)?.rounds.at(-1)
+        ?.submission?.envelope,
+    ).toBe("");
     expect((await linux.inspect(other.id)).messages).toHaveLength(0);
   } finally {
     await desktop.cleanup();
