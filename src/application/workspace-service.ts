@@ -963,6 +963,11 @@ export class WorkspaceApplicationService {
         return this.removeConversation(request);
 
       case "conversation.show":
+        if (
+          request.acknowledge !== undefined &&
+          typeof request.acknowledge !== "boolean"
+        )
+          throw new Error("acknowledge must be boolean");
         return this.store.change(() => {
           const conversation = this.store.conversation(
             requiredString(request, "id"),
@@ -976,7 +981,7 @@ export class WorkspaceApplicationService {
             });
           workspace.activePaneId = conversation.paneId;
           this.store.data.activeWorkspaceId = workspace.id;
-          if (trustedUi && request.acknowledge === true)
+          if (request.acknowledge === true)
             acknowledgeConversation(conversation);
           return { paneId: conversation.paneId };
         });

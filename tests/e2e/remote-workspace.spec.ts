@@ -164,6 +164,21 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
     ).conversations.find((conversation) =>
       conversation.messages.some((item) => item.text === message),
     )!;
+    await expect
+      .poll(async () => (await linux.inspect(hosted.id)).status)
+      .toBe("ready");
+    await linux.cli("conversation", "show", "--id", hosted.id);
+    await desktop.overview();
+    const completedRow = desktop.page.locator(
+      `.overview-row[data-navigation-key="conversation:${hosted.id}"]`,
+    );
+    await expect(completedRow).toHaveAttribute("data-status", "ready");
+    await completedRow.locator(".overview-item").click();
+    await expect(draft).toBeFocused();
+    await desktop.overview();
+    await expect(completedRow).toHaveAttribute("data-status", "");
+    await desktop.page.keyboard.press("Escape");
+
     await linux.send(hosted.id, "[hold] Another active Linux turn");
     await expect
       .poll(async () => (await linux.inspect(hosted.id)).status)
