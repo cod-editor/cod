@@ -4,7 +4,10 @@ import { IntegrationApplicationService } from "./application/integration-service
 import { WorkspaceApplicationService } from "./application/workspace-service";
 import { ReviewApplicationService } from "./application/review-service";
 import { ConversationApplicationService } from "./application/conversation-service";
-import { BrowserApplicationService } from "./application/browser-service";
+import type {
+  BrowserApplicationService,
+  BrowserConversationPort,
+} from "./application/browser-service";
 import { FileApplicationService } from "./application/file-service";
 import { TerminalApplicationService } from "./application/terminal-service";
 import { ApplicationStateStore } from "./application/state";
@@ -22,7 +25,7 @@ export class ApplicationOperations {
   readonly settings: SettingsService;
   private readonly integration = new IntegrationApplicationService();
   private readonly files: FileApplicationService;
-  private readonly browsers: BrowserApplicationService;
+  private readonly browserHost?: BrowserApplicationService;
   private readonly conversations: ConversationApplicationService;
   private readonly workspaces: WorkspaceApplicationService;
   private readonly store: ApplicationStateStore;
@@ -34,18 +37,22 @@ export class ApplicationOperations {
   constructor(
     dataDirectory: string,
     private readonly runtimeBuild: Readonly<BuildInfo> | null = null,
+    createBrowserHost?: (
+      store: ApplicationStateStore,
+      conversations: BrowserConversationPort,
+    ) => BrowserApplicationService,
   ) {
     this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
     this.files = new FileApplicationService(this.store, (request) =>
       this.browsers.openBrowser(request),
     );
-    this.browsers = new BrowserApplicationService(this.store, {
+    this.browserHost = createBrowserHost?.(this.store, {
       isActive: (id) => this.conversations.isActive(id),
       send: (request) => this.conversations.sendConversation(request),
     });
     this.store.onDidChange = (state) => this.onDidChange?.(state);
-    this.store.beforeNotify = () => this.browsers.synchronizeNativeViews();
+    this.store.beforeNotify = () => this.browserHost?.synchronizeNativeViews();
     this.terminals = new TerminalApplicationService(this.store);
     this.terminals.onDidTerminal = (event) => this.onDidTerminal?.(event);
     this.conversations = new ConversationApplicationService(
@@ -54,17 +61,23 @@ export class ApplicationOperations {
       {
         show: (id) => this.workspaces.handle({ op: "conversation.show", id }),
         finishPage: (request, id, status) =>
-          this.browsers.finishPage(request, id, status),
+          this.browserHost?.finishPage(request, id, status),
       },
     );
     this.reviews = new ReviewApplicationService(this.store, this.conversations);
     this.workspaces = new WorkspaceApplicationService(
       this.store,
       this.conversations,
-      this.browsers,
+      this.browserHost,
       this.terminals,
       this.reviews,
     );
+  }
+
+  private get browsers(): BrowserApplicationService {
+    if (!this.browserHost)
+      throw new Error("Browser operations require the desktop client");
+    return this.browserHost;
   }
 
   attachAgentPageHost(window: BrowserWindow, session: Session): void {
@@ -126,7 +139,7 @@ export class ApplicationOperations {
       );
     this.conversations.restoreInterrupted();
     await this.files.restoreIdentity();
-    this.browsers.restoreSubmissions();
+    this.browserHost?.restoreSubmissions();
     this.terminals.restoreAll();
     await this.reviews.reconcileOrigins();
     await this.reviews.refreshReviews();
@@ -233,7 +246,7 @@ export class ApplicationOperations {
         request.values,
         request.reset === true,
       );
-      if (request.reset === true) {
+      if (request.reset === true && this.browserHost) {
         try {
           await this.browsers.handle({
             op: "browser.settings",
@@ -287,7 +300,11 @@ export class ApplicationOperations {
       case "capabilities":
         return {
           runtime: { build: this.runtimeBuild },
-          operations,
+          operations: this.browserHost
+            ? operations
+            : operations.filter(
+                (op) => !op.startsWith("browser.") && !op.startsWith("page."),
+              ),
           providers: {
             codex: {
               available: true,
@@ -348,7 +365,7 @@ export class ApplicationOperations {
     this.store.beginShutdown();
     await this.conversations.shutdown();
     await this.reviews.shutdown();
-    await this.browsers.shutdown();
+    await this.browserHost?.shutdown();
     await this.terminals.shutdown();
     await this.store.serialize(() => this.store.persist());
   }

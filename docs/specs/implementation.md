@@ -14,6 +14,10 @@ Open existing native session opens a searchable picker for the selected provider
 
 Provider inspection is read-only and reports native capabilities rather than inventing equivalent controls. Standalone session commands such as `/skills` open inspection instead of becoming prompts. A selected skill carries its exact native name and path; ambiguous names require selection instead of dispatching several skills.
 
+## Linux workspace host
+
+The headless Linux host is the first checkpoint for remote workspaces. It runs the same application operation services and state format as the desktop. It owns an explicitly chosen private profile and one owner-only Unix command socket. Client exit or connection loss leaves the host, terminal processes and native provider controllers running. A fresh client reads the host's saved workspace, files and layout and the live PTY state from the same process. Closing the host has the existing shutdown semantics. Linux desktop and headless builds use the same operation dispatch and untrusted CLI admission. Browser and agent-page operations stay with the desktop. The Linux host does not accept trusted-review context from a request body. Interactive desktop routing, authorization for remote review, streaming reconnect and clean Mac deployment are subsequent validation boundaries.
+
 ## Identity, layout and focus
 
 A fresh profile exposes one Untitled workspace with an empty composer before either the GUI or command socket can observe it. Startup initialization must not race later workspace creation or capture focus after the user opens a command or starts typing. A profile with deliberately closed workspaces remains empty. Transient body focus during dialog teardown must not replace the remembered control, caret or selection.

@@ -68,6 +68,14 @@ Pin important views through the tab context menu or Commands > Toggle pin tab. P
 
 Manual Developer Tools are available with F12 or Commands > Toggle Developer Tools. The inspector follows the focused surface: Cod UI controls/chat/files inspect Cod, native page content inspects that exact page. Ordinary browser context menus also offer Inspect element. The alternate shortcut is Command+Option+I on macOS and Ctrl+Shift+I on Linux; optional overrides use the shared keymap. Close the detached inspector with its native controls, or toggle it again from the inspected surface.
 
+## Linux workspace host
+
+The Linux build includes a Node workspace host for the remote-workspace development checkpoint. It uses the regular Cod workspace, file, Git, terminal and native-provider services without launching Electron.
+
+On the Linux machine, build with `npm ci --ignore-scripts` and `npm run build`. Start `node dist/workspace-host.cjs "$HOME/.local/state/cod-host"` in an independent user service or a persistent host terminal. The host owns that profile and the terminal and provider processes for its lifetime. Reconnecting a client leaves those processes running. Closing the host itself ends its owned processes.
+
+The host accepts existing `codctl` commands at `cod.sock` in that private profile. Set `COD_SOCKET_PATH` to that socket. A developer can connect to it through OpenSSH Unix-socket forwarding using a private local directory. The desktop connection picker, live updates, approval and review editing over SSH are still being implemented. Browser tabs, browsing data and device permissions belong to the desktop profile.
+
 ## Development
 
 Read [AGENTS.md](../AGENTS.md), [the requirements](vision.md) and [implementation contracts](specs/implementation.md).
