@@ -270,12 +270,13 @@ test("AC4 shares pane operations, supports keyboard controls, and rejects invali
   );
   await assertActive(workspaceId, newPane);
   await shell.page.keyboard.press(`${modifier}+W`);
-  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(1);
   await expect(shell.pane(newPane)).toHaveCount(0);
+  await assertActive(workspaceId, initial);
+  await shell.page.keyboard.press("Shift+Escape");
+  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
   await shell.page.keyboard.press("Shift+Escape");
   await expect(shell.page.locator(".tab-group:visible")).toHaveCount(1);
-  await shell.page.keyboard.press("Shift+Escape");
-  await expect(shell.page.locator(".tab-group:visible")).toHaveCount(2);
 });
 
 test("AC5 restores folders, file references, split layout and selection in a fresh process", async ({}, testInfo) => {

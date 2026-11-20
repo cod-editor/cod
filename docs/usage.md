@@ -43,11 +43,15 @@ CLI creation stays in the background unless focus is explicitly requested. Set `
 
 Overview lists conversations and browser tabs. A pane's `+` opens Open file / Browser / Chat / Terminal choices. New tab (`Cmd/Ctrl+T` or a double-click in free tab-bar space) creates a fresh tab of the current kind: a blank browser, empty chat with the same provider/model, fresh shell in the terminal's current directory, or untitled text buffer. Reviews and empty panes offer the four-choice tab instead. The source content is never copied. Direct creation commands remain available. Drag tabs to the insertion marker to reorder or move between panes; context menus provide keyboard alternatives. Tabs and their order survive restart.
 
+Closing the last tab on either side of a visible split collapses that side. Reopen closed tab restores the tab to its original side and brings back the split at its previous width.
+
 Very high line-count text can stall the native editor during insertion; this is tracked in [#187](https://github.com/cod-editor/cod/issues/187).
 
 Untitled buffers keep unsaved text through closing and restart; Reopen closed tab restores them. Save (`Cmd/Ctrl+S`) opens the native Save As chooser until a path is chosen. Commands > New file creates an untitled buffer directly. From the CLI, `pane new --workspace WORKSPACE_ID --same-as PANE_ID` creates the current kind in the source pane without changing foreground selection; add `--focus true` to select it. `file new` and `file save-as` expose the same buffer and destination operations; see `codctl --help` for arguments.
 
 PNG, JPEG, GIF and WebP files open in Cod's image preview, with fit-to-pane, actual size, zoom and scrolling. Focus the preview and use `0` to fit, `1` for actual size and `+` / `-` to zoom; the same actions are in its context menu. Images are limited to 20 MiB. Explicit absolute file links can open files outside workspace folders, including Downloads; relative references are resolved inside workspace folders. Automatic inline image loading stays limited to workspace files.
+
+Opening a file or web link from a desktop chat shows it in the pane beside that conversation. Choose Open link in its menu for the same placement, or Open in system browser for a web URL. From the CLI, use `file open` or `browser open` with `--beside-conversation ID` to open material beside an originating chat while preserving current focus. Add `--focus true` if requested.
 
 Right-click a web link in chat, Markdown preview or a source file to open it in Cod or in the system browser. Commands > Open in system browser also opens the current web page or the link at the source caret; both actions can be assigned a shortcut in Keyboard shortcuts. Native page link menus offer Open link in new tab, which keeps the source active and adds a background tab at the end of its group. System-browser handoff supports HTTP/HTTPS and reports an error if Cod itself is the system default, to avoid reopening the link in Cod.
 

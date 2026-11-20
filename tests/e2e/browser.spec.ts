@@ -1781,6 +1781,8 @@ test("Development builds explain why default browser registration needs a packag
 test("Guarded tab close keeps the page and form on Stay and removes them only on Leave", async () => {
   const workspace = await shell.create("Protected form");
   const browser = await open(workspace);
+  const divider = shell.page.getByRole("separator", { name: "Resize panes" });
+  await expect(divider).toBeVisible();
   await expect
     .poll(async () => (await inspect(browser.id)).loading)
     .toBe(false);
@@ -1810,6 +1812,7 @@ test("Guarded tab close keeps the page and form on Stay and removes them only on
     )
     .toBe(1);
   await expect(shell.pane(browser.paneId)).toBeVisible();
+  await expect(divider).toBeVisible();
   expect(await remote("/one", `document.querySelector('input').value`)).toBe(
     typed,
   );
@@ -1828,6 +1831,7 @@ test("Guarded tab close keeps the page and form on Stay and removes them only on
   );
   expect(closed.closed).toBe(true);
   await expect(shell.pane(browser.paneId)).toHaveCount(0);
+  await expect(divider).toBeHidden();
 });
 
 test("Guarded workspace close cancels before removing the workspace or its page", async () => {

@@ -30,6 +30,7 @@ export function webLinkMenu(
   workspace: string,
   invoke: Invoke,
   restoreFocus?: () => void,
+  openHere?: (url: string) => void,
 ): boolean {
   const url = webLink(value);
   if (!url) return false;
@@ -45,7 +46,7 @@ export function webLinkMenu(
       {
         label: "Open link",
         command: "link.open",
-        run: () => run("browser.open"),
+        run: () => (openHere ? openHere(url) : run("browser.open")),
       },
       {
         label: "Open in system browser",

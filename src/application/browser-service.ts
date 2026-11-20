@@ -816,16 +816,20 @@ export class BrowserApplicationService {
       extension && this.browserAddons?.allows(requested)
         ? requested
         : this.browserUrl(requested);
-    const record = await this.store.serialize(async () => {
+    const record = await this.store.change(() => {
       this.requireBrowserService();
       const workspace = this.store.workspace(
         requiredString(request, "workspace"),
       );
-      const id = randomUUID(),
-        active = source
+      const beside = request.besideConversation !== undefined;
+      const id = randomUUID();
+      const active = beside
+        ? undefined
+        : source
           ? this.store.pane(workspace, source.paneId)
           : this.store.openingPane(workspace, request);
       const paneId =
+        active &&
         !source &&
         request.sourcePane === undefined &&
         ((active.kind === "document" &&
@@ -834,13 +838,19 @@ export class BrowserApplicationService {
           (active.kind === "empty" && active.launcher))
           ? active.id
           : randomUUID();
-      if (request.sourcePane !== undefined)
+      if (beside)
+        this.store.presentBesideConversation(workspace, request, {
+          id: paneId,
+          kind: "browser",
+          browserId: id,
+        });
+      else if (request.sourcePane !== undefined)
         this.store.insertPane(
           workspace,
           { id: paneId, kind: "browser", browserId: id },
           request,
         );
-      else if (paneId === active.id)
+      else if (active && paneId === active.id)
         workspace.panes[workspace.panes.indexOf(active)] = {
           id: paneId,
           pinned: active.pinned,
@@ -849,7 +859,7 @@ export class BrowserApplicationService {
         };
       else {
         workspace.panes.push({ id: paneId, kind: "browser", browserId: id });
-        if (source) {
+        if (source && active) {
           const group = workspace.groups?.find((item) =>
             item.paneIds.includes(active.id),
           );
@@ -857,7 +867,7 @@ export class BrowserApplicationService {
           group.paneIds.push(paneId);
         }
       }
-      if (!source && request.sourcePane === undefined)
+      if (!beside && !source && request.sourcePane === undefined)
         workspace.activePaneId = paneId;
       const record: BrowserState = {
         id,
@@ -872,13 +882,6 @@ export class BrowserApplicationService {
         addons: this.browserAddons?.status(url),
       };
       this.store.data.browsers.push(record);
-      try {
-        await this.store.persist();
-      } catch (error) {
-        this.removeBrowser(record);
-        throw error;
-      }
-      this.store.notify();
       return record;
     });
     await this.loadBrowser(record, url);

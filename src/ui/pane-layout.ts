@@ -188,6 +188,15 @@ export function createPaneLayout(
       if (!child.hidden) {
         const section = renderGroup(workspace, group);
         if (child.firstElementChild !== section) child.replaceChildren(section);
+      } else if (group?.paneIds.length === 1 && child.firstElementChild) {
+        const pane = workspace.panes.find(
+          (item) => item.id === group.paneIds[0],
+        );
+        if (pane?.kind === "empty" && !pane.launcher) {
+          // Closing the last tab can hide this group before it renders its empty state.
+          child.replaceChildren();
+          groupViews.delete(group.id);
+        }
       }
     }
     handle.className = "split-handle";
@@ -454,7 +463,11 @@ export function createPaneLayout(
             ? undefined
             : true;
         }, AbortSignal.timeout(2000));
-        if (ready && document.activeElement === document.body) {
+        if (
+          ready &&
+          (document.activeElement === document.body ||
+            item.contains(document.activeElement))
+        ) {
           const visibleBar = bar.getClientRects().length
             ? bar
             : splitViews

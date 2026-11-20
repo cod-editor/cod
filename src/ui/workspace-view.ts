@@ -12,7 +12,9 @@ import type { createTerminalViews } from "./terminal-views";
 import type { createPaneLayout } from "./pane-layout";
 import type { createFocusManager } from "./focus";
 import type { FileTree } from "./files";
+import type { createCommands } from "./commands";
 interface Views {
+  chatOpen: ReturnType<typeof createCommands>["chatOpen"];
   newTab: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
   chats: ReturnType<typeof createConversationViews>;
   documents: ReturnType<typeof createDocumentViews>;
@@ -80,15 +82,14 @@ export function createWorkspaceView(
       terminals.reconcile();
       const workspace = activeWorkspace();
       projects.update(workspace);
-      for (const id of resourcePanes.keys())
+      for (const [id, view] of resourcePanes)
         if (
           !getState().workspaces.some((workspace) =>
             workspace.panes.some((pane) => pane.id === id),
           )
         ) {
-          resourcePanes
-            .get(id)
-            ?.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
+          view.firstElementChild?.dispatchEvent(new Event("cod:dispose-view"));
+          view.remove();
           resourcePanes.delete(id);
         }
       const remote = getState().remoteWorkspace;
@@ -286,21 +287,35 @@ export function createWorkspaceView(
   async function openReference(
     workspace: string,
     reference: string,
+    conversation?: string,
   ): Promise<void> {
+    const chat = conversation
+      ? views.chatOpen(workspace, conversation)
+      : undefined;
+    if (chat && /^https?:\/\//i.test(reference)) {
+      await chat.open("browser.open", { url: reference });
+      return;
+    }
     const result = await invoke<{
       candidates: Array<{ path: string }>;
       line?: number;
     }>("file.resolve", { workspace, path: reference });
-    const open = (path: string) =>
-      /\.html?$/i.test(path) &&
-      !result.line &&
-      !getState().remoteWorkspace?.ids.includes(workspace)
-        ? invoke("browser.open", { workspace, url: localFileAddress(path) })
-        : invoke("file.open", {
-            workspace,
-            path,
-            ...(result.line ? { line: result.line } : {}),
-          });
+    const open = (path: string, target = chat) => {
+      if (
+        /\.html?$/i.test(path) &&
+        !result.line &&
+        !getState().remoteWorkspace?.ids.includes(workspace)
+      ) {
+        const url = localFileAddress(path);
+        return target
+          ? target.open("browser.open", { url })
+          : invoke("browser.open", { workspace, url });
+      }
+      const values = { path, ...(result.line ? { line: result.line } : {}) };
+      return target
+        ? target.open("file.open", values)
+        : invoke("file.open", { workspace, ...values });
+    };
     if (!result.candidates.length) {
       setStatus(`File not found: ${reference}`);
       return;
@@ -309,6 +324,7 @@ export function createWorkspaceView(
       await open(result.candidates[0].path);
       return;
     }
+    if (chat?.signal.aborted) return;
     const dialog = document.createElement("dialog");
     dialog.setAttribute("aria-label", "Choose file");
     const title = document.createElement("h2");
@@ -316,8 +332,11 @@ export function createWorkspaceView(
     dialog.append(title);
     for (const candidate of result.candidates) {
       const button = paneButton(candidate.path, async () => {
-        await open(candidate.path);
         dialog.close();
+        await open(
+          candidate.path,
+          conversation ? views.chatOpen(workspace, conversation) : undefined,
+        );
       });
       dialog.append(button);
     }

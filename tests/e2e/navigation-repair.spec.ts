@@ -124,14 +124,18 @@ test("A pending review opens through Overview by keyboard and mouse after closin
     "--id",
     review.paneId,
   );
+  expect((await shell.workspace(workspace)).activePaneId).toBe(chat.paneId);
   const overview = await shell.overview();
   const search = overview.getByRole("combobox");
   await search.fill("Review: spec.md");
-  await search.press("ArrowDown");
-  await expect(overviewRow("review", review.reviewId)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await expect(search).toBeFocused();
+  const row = overviewRow("review", review.reviewId);
+  const resultCount = await overview.locator(".overview-item:visible").count();
+  for (let step = 0; step < resultCount; step++) {
+    if ((await row.getAttribute("aria-current")) === "true") break;
+    await search.press("ArrowDown");
+  }
+  await expect(row).toHaveAttribute("aria-current", "true");
   await search.press("Enter");
   await expect(shell.page.locator(".review-body")).toBeVisible();
   const active = (await shell.cli<AppState>("state")).workspaces.find(

@@ -251,6 +251,7 @@ export interface WorkspaceState {
     pane: PaneState;
     groupId?: string;
     index?: number;
+    collapsedSplit?: true;
     browser?: BrowserState;
     terminal?: TerminalState;
     conversation?: ConversationState;

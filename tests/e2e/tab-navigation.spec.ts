@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
+import { orderedGroups } from "../../src/workspace-layout";
 
 let app: WorkspaceApp;
 let workspace: string;
@@ -109,6 +110,94 @@ test("The pane separator exposes its live and restored position", async ({}, inf
   await app.start();
   separator = app.page.getByRole("separator", { name: "Resize panes" });
   await expect(separator).toHaveAttribute("aria-valuenow", pending!);
+});
+
+test("Closing the last tab on either side collapses and reopens the saved split", async () => {
+  const original = await state();
+  await app.page.keyboard.press("Shift+Escape");
+  const divider = () =>
+    app.page.getByRole("separator", { name: "Resize panes" });
+  await expect(divider()).toBeVisible();
+  const [left, right] = orderedGroups(await state());
+  await expect(app.page.locator(".tab-group")).toHaveCount(2);
+  await expect(
+    app.page.locator(`[data-tab-id="${right.activePaneId}"]`),
+  ).toHaveCount(0);
+  const file = await app.cli<{ paneId: string }>(
+    "file",
+    "new",
+    "--workspace",
+    workspace,
+    "--group",
+    right.id,
+    "--focus",
+    "true",
+  );
+  const textarea = () =>
+    app.pane(file.paneId).getByRole("textbox", { name: "File contents" });
+  await textarea().fill("Retained draft");
+  await divider().press("ArrowRight");
+  await expect(divider()).toHaveAttribute("aria-valuenow", "55");
+
+  await textarea().press(`${modifier}+w`);
+  await expect(divider()).toBeHidden();
+  const composer = () =>
+    app.pane(original.activePaneId).getByRole("textbox", { name: "Message" });
+  await expect(composer()).toBeFocused();
+  const leftOnly = await state();
+  expect(leftOnly.activeGroupId).toBe(left.id);
+  expect(orderedGroups(leftOnly).map((group) => Boolean(group.hidden))).toEqual(
+    [false, true],
+  );
+
+  await app.stop();
+  await app.start();
+  await app.command("Reopen closed tab");
+  await expect(divider()).toBeVisible();
+  await expect(divider()).toHaveAttribute("aria-valuenow", "55");
+  await expect(textarea()).toHaveValue("Retained draft");
+  await expect(textarea()).toBeFocused();
+
+  const leftTab = app.page.locator(
+    `[role=tab][data-tab-id="${original.activePaneId}"]`,
+  );
+  await leftTab.locator("..").locator(".tab-close").click();
+  await expect(divider()).toBeHidden();
+  const rightOnly = await state();
+  expect(rightOnly.activeGroupId).toBe(right.id);
+  expect(
+    orderedGroups(rightOnly).map((group) => Boolean(group.hidden)),
+  ).toEqual([true, false]);
+  await expect
+    .poll(() =>
+      app.page.evaluate(() => {
+        const active = document.activeElement?.closest<HTMLElement>(
+          "[data-pane-id], [data-tab-id]",
+        );
+        return (
+          active?.dataset.paneId ??
+          active?.dataset.tabId ??
+          document.activeElement?.outerHTML.slice(0, 150)
+        );
+      }),
+    )
+    .toBe(file.paneId);
+  await app.command("Reopen closed tab");
+  await expect(divider()).toBeVisible();
+  await expect(divider()).toHaveAttribute("aria-valuenow", "55");
+  await expect(composer()).toBeFocused();
+
+  const restored = await state();
+  expect(
+    orderedGroups(restored).map((group) => [
+      group.id,
+      group.activePaneId,
+      group.hidden,
+    ]),
+  ).toEqual([
+    [left.id, original.activePaneId, false],
+    [right.id, file.paneId, false],
+  ]);
 });
 
 test("Fallback new tab retains persistent choices and replaces itself with each content type", async ({}, info) => {

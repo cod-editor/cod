@@ -11,6 +11,7 @@ import type {
 import {
   assertWorkspaceLayout,
   normalizeGroups,
+  revealSplit,
   selectGroup,
 } from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
@@ -320,6 +321,57 @@ export class ApplicationStateStore {
       group.activePaneId = pane.id;
       selectGroup(workspace, group);
     }
+  }
+  /** Present material relative to its chat, independent of the active workspace view. */
+  presentBesideConversation(
+    workspace: WorkspaceState,
+    request: OperationRequest,
+    pane: PaneState,
+  ): void {
+    if (
+      [request.group, request.sourcePane, request.replacePane].some(
+        (value) => value !== undefined,
+      )
+    )
+      throw new Error("Choose a conversation or an explicit tab destination");
+    if (
+      request.focus !== undefined &&
+      ![true, false, "true", "false"].includes(request.focus as boolean)
+    )
+      throw new Error("focus must be true or false");
+    const conversation = this.conversation(
+      requiredString(request, "besideConversation"),
+    );
+    const source = workspace.groups.find((group) =>
+      group.paneIds.includes(conversation.paneId),
+    );
+    if (conversation.workspaceId !== workspace.id || !source)
+      throw new Error(
+        "The source conversation has no open tab in this workspace",
+      );
+
+    const focus = request.focus === true || request.focus === "true";
+    // Moving an already active file in the background would move focus too.
+    if (
+      !focus &&
+      workspace.activePaneId === pane.id &&
+      source.id === workspace.activeGroupId
+    )
+      return;
+    revealSplit(workspace);
+    const destination = workspace.groups.find((group) => group !== source)!;
+    if (!destination.paneIds.includes(pane.id)) {
+      const previous = workspace.groups.find((group) =>
+        group.paneIds.includes(pane.id),
+      );
+      if (previous)
+        previous.paneIds = previous.paneIds.filter((id) => id !== pane.id);
+      else workspace.panes.push(pane);
+      destination.paneIds.push(pane.id);
+    }
+    if (focus || workspace.activeGroupId !== destination.id)
+      destination.activePaneId = pane.id;
+    if (focus) selectGroup(workspace, destination);
   }
   pane(workspace: WorkspaceState, id: string): PaneState {
     const pane = workspace.panes.find((item) => item.id === id);
