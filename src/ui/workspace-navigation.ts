@@ -50,7 +50,13 @@ export function createWorkspaceNavigation(
   async function openItem(
     item: NavigationItem,
     signal?: AbortSignal,
+    newShell = false,
   ): Promise<void> {
+    if (signal?.aborted) return;
+    if (item.closed) {
+      await invoke("workspace.reopen", { id: item.id, newShell });
+      return;
+    }
     const current = projectNavigation(getState()).find(
       (row) => row.key === item.key,
     );
@@ -90,11 +96,19 @@ export function createWorkspaceNavigation(
     },
   ): Array<NavigationAction | null> {
     const state = getState();
-    const current = projectNavigation(state).find(
+    const current = projectNavigation(state, item.closed).find(
       (row) => row.key === item.key,
     );
     if (!current) return [];
     item = current;
+    if (item.closed)
+      return [
+        {
+          label: "Reopen workspace",
+          key: "Enter",
+          run: () => handlers.open(item),
+        },
+      ];
     const workspace = state.workspaces.find((w) => w.id === item.workspaceId)!;
     const rename = () => handlers.rename(item);
     const open = () => handlers.open(item);
@@ -214,7 +228,8 @@ export function createWorkspaceNavigation(
   }
 
   return {
-    items: () => projectNavigation(getState()),
+    items: (includeClosed = false) =>
+      projectNavigation(getState(), includeClosed),
     actions: itemActions,
     open: openItem,
     close: closeItem,

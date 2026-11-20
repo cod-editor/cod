@@ -19,6 +19,7 @@ export interface NavigationItem {
   hint?: string;
   active: boolean;
   pinned: boolean;
+  closed?: boolean;
 }
 export function describeNavigationStatus(
   status: string,
@@ -82,7 +83,10 @@ export function conversationAttention(
       : "";
   return conversation.status;
 }
-export function projectNavigation(state: AppState): NavigationItem[] {
+export function projectNavigation(
+  state: AppState,
+  includeClosed = false,
+): NavigationItem[] {
   const result: NavigationItem[] = [];
   for (const workspace of state.workspaces) {
     const root = `workspace:${workspace.id}`;
@@ -241,6 +245,21 @@ export function projectNavigation(state: AppState): NavigationItem[] {
       result.push(row);
     }
     result.push(...reviews.map(reviewItem));
+  }
+  if (includeClosed) {
+    for (const { workspace } of [...(state.closedWorkspaces ?? [])].reverse())
+      result.push({
+        key: `closed-workspace:${workspace.id}`,
+        id: workspace.id,
+        kind: "workspace",
+        workspaceId: workspace.id,
+        label: workspace.name,
+        search: workspace.name.toLowerCase(),
+        status: "",
+        active: false,
+        pinned: false,
+        closed: true,
+      });
   }
   return result;
 }

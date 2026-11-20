@@ -149,7 +149,10 @@ export class WorkspaceApplicationService {
     return { id };
   }
 
-  async reopenWorkspace(request: OperationRequest): Promise<{ id: string }> {
+  async reopenWorkspace(
+    request: OperationRequest,
+    trustedUi: boolean,
+  ): Promise<{ id: string }> {
     const record = await this.store.change(() => {
       const record =
         typeof request.id === "string"
@@ -158,6 +161,8 @@ export class WorkspaceApplicationService {
             )
           : this.store.data.closedWorkspaces?.at(-1);
       if (!record) throw new Error("No closed workspace to reopen");
+      if (trustedUi && record.terminals.length && request.newShell !== true)
+        throw new Error("Confirm reopening the workspace with new shells");
       assertWorkspaceLayout(record.workspace);
       if (
         record.conversations.some((saved) =>
@@ -813,7 +818,7 @@ export class WorkspaceApplicationService {
         });
 
       case "workspace.reopen":
-        return this.reopenWorkspace(request);
+        return this.reopenWorkspace(request, trustedUi);
 
       case "workspace.rename":
         return this.store.change(() => {

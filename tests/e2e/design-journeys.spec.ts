@@ -909,6 +909,10 @@ test("Header navigation and single-group view preserve the Files panel and expos
     expect((await state()).groupLayout).toEqual(before.groupLayout);
     // An enabled global command reports its empty result in the header.
     await shell.command("Reopen closed workspace");
+    await expect(
+      overview.getByRole("checkbox", { name: "Show closed workspaces" }),
+    ).toBeChecked();
+    await overview.getByRole("combobox").press("Escape");
     const error = shell.page.locator("#status");
     await expect(error).toContainText("No closed workspace");
     await expect(error).toBeVisible();

@@ -133,7 +133,7 @@ export function confirmAction(
   label: string,
   action: () => Promise<unknown>,
   ariaLabel = title,
-): void {
+): HTMLDialogElement {
   const dialog = dialogSurface(ariaLabel);
   const { body, actions } = dialogRegions(dialog, title);
   const description = document.createElement("p");
@@ -154,4 +154,5 @@ export function confirmAction(
   dialog.onclose = () => dialog.remove();
   dialog.showModal();
   cancel.focus();
+  return dialog;
 }

@@ -1942,6 +1942,16 @@ browser-action-list::part(action):focus-visible {
   display: flex;
   --picker-row-indent: var(--overview-indent, 0px);
 }
+.overview-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+}
+.overview-row[data-closed] .navigation-item-icon {
+  opacity: 0.7;
+}
 .overview-row .overview-item {
   flex: 1;
   min-width: 0;
