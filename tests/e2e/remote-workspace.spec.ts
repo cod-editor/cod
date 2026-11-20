@@ -454,7 +454,21 @@ test("Paired Linux review and approval preserve privacy, draft and exactly-once 
       exact: true,
     });
     await composer.fill(liveFollowUp);
+    await writeFile(dropReply, "conversation.send");
     await composer.press("Enter");
+    const overview = desktop.page.getByRole("button", {
+      name: "Overview",
+      exact: true,
+    });
+    await expect(overview).toHaveText(
+      "Remote review fixture (invented-linux, disconnected)",
+    );
+    await expect(
+      chatPane.getByRole("status", { name: "Conversation status" }),
+    ).toContainText("The Linux host did not confirm this message.");
+    await expect(composer).toHaveValue(liveFollowUp);
+    await composer.press("Enter");
+    await desktop.command("Reconnect to Linux workspace");
     await expect(composer).toHaveValue("");
     await expect
       .poll(
@@ -534,10 +548,6 @@ test("Paired Linux review and approval preserve privacy, draft and exactly-once 
     await reviewPane
       .getByRole("button", { name: "Send feedback", exact: true })
       .click();
-    const overview = desktop.page.getByRole("button", {
-      name: "Overview",
-      exact: true,
-    });
     await expect(overview).toHaveText(
       "Remote review fixture (invented-linux, disconnected)",
     );

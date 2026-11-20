@@ -179,7 +179,9 @@ export async function attachWorkspaceHost(
                 pendingReview = undefined;
                 reject(
                   new Error(
-                    "The host did not confirm this review operation. Reopen its round before retrying.",
+                    request.op === "conversation.send"
+                      ? unconfirmedRemoteSend
+                      : "The host did not confirm this operation. Check the host state before retrying.",
                   ),
                 );
               };
