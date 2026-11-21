@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
@@ -91,6 +91,263 @@ async function connectWorkspace(
   await connect.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(connect).not.toBeVisible();
 }
+
+test("agents prepare a task on the explicit host and follow the existing Linux chat", async () => {
+  test.skip(
+    process.platform !== "linux",
+    "The production workspace host runs on Linux",
+  );
+  test.setTimeout(60_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+
+  const host = spawn(
+    process.execPath,
+    ["dist/workspace-host.cjs", linux.data],
+    {
+      env: linux.environment,
+      stdio: "ignore",
+    },
+  );
+  const exited = once(host, "exit");
+  const prepare = (
+    location: "local" | "linux",
+    name: string,
+    folders: string[] = [],
+  ) => [
+    "workspace",
+    "prepare",
+    "--location",
+    location,
+    "--name",
+    name,
+    "--folders",
+    JSON.stringify(folders),
+  ];
+  const header = () =>
+    desktop.page.getByRole("button", { name: "Overview", exact: true });
+  const context = (runtime: ChatApp, id: string) =>
+    runtime.cli<{
+      location: string;
+      workspace: { id: string; folders: string[] };
+      conversation: { nativeId: string; cwd: string };
+    }>("context", "--conversation", id);
+  const focusWorkspace = async (name: string) => {
+    await desktop.overview();
+    await desktop.row(name).click();
+  };
+
+  try {
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    await desktop.start();
+
+    const local = await desktop.cli<{ id: string }>(
+      ...prepare("local", "Desktop intake", [desktop.folders[0]]),
+    );
+    await expect(header()).toHaveText("Desktop intake");
+    const origin = await desktop.newChat(local.id, "codex");
+    await desktop.send(origin.id, "Invented desktop task request");
+    await expect
+      .poll(async () => (await desktop.inspect(origin.id)).status)
+      .toBe("ready");
+    expect(await context(desktop, origin.id)).toMatchObject({
+      location: "local",
+      workspace: { id: local.id },
+      conversation: { nativeId: origin.nativeId },
+    });
+
+    const absent = await desktop.raw(...prepare("linux", "Linux task"));
+    expect(absent.code).toBe(1);
+    expect(absent.stderr).toContain(
+      "Connect to a Linux workspace from Commands",
+    );
+    expect(
+      (await desktop.state()).workspaces.map(({ name }) => name),
+    ).not.toContain("Linux task");
+
+    const dropReply = path.join(desktop.temporary, "drop-reply");
+    await installWorkspaceRelay(desktop, dropReply);
+    await connectWorkspace(desktop, linux.socket);
+    // A saved target is usable through the explicit CLI after restarting the
+    // desktop. Ordinary startup itself leaves the user in the local workspace.
+    await desktop.stop();
+    await desktop.start();
+    await expect(header()).toHaveText("Desktop intake");
+    await installWorkspaceRelay(desktop, dropReply);
+
+    const remoteFolders = [linux.folders[0], linux.folders[1]];
+    const request = prepare("linux", "Linux task", remoteFolders);
+    const prepared = await desktop.cli<{
+      id: string;
+      location: string;
+      folders: string[];
+    }>(...request);
+    expect(prepared).toMatchObject({
+      location: "linux",
+      folders: remoteFolders,
+    });
+    await expect(header()).toHaveText("Linux task (invented-linux)");
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    expect(
+      (await desktop.cli<AppState>("state")).conversations.map(({ id }) => id),
+    ).toEqual([origin.id]);
+    expect((await context(desktop, origin.id)).workspace.id).toBe(local.id);
+
+    // Ctrl+N uses the visible workspace on either side of the connection.
+    const previousPane = (await linux.workspace(prepared.id)).activePaneId;
+    await desktop.page.keyboard.press(`${modifier}+n`);
+    await expect
+      .poll(async () => (await linux.workspace(prepared.id)).activePaneId)
+      .not.toBe(previousPane);
+    await expect(header()).toHaveText("Linux task (invented-linux)");
+    expect((await linux.state()).activeWorkspaceId).toBe(prepared.id);
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+
+    const rejected = await desktop.raw(...request, "--conversation", origin.id);
+    expect(rejected.code).toBe(1);
+    expect(rejected.stderr).toContain("cannot move to a Linux workspace");
+    const invalid = await desktop.raw(
+      ...prepare("linux", "Missing folder task", [
+        linux.folders[0],
+        path.join(linux.temporary, "missing"),
+      ]),
+    );
+    expect(invalid.code).toBe(1);
+    expect(
+      (await linux.state()).workspaces.map(({ name }) => name),
+    ).not.toContain("Missing folder task");
+
+    await focusWorkspace("Desktop intake");
+    await expect(header()).toHaveText("Desktop intake");
+    await desktop.cli("workspace", "create", "--name", "Unrelated desktop");
+    const hold = dropReply + ".hold";
+    await writeFile(hold, "workspace.prepare");
+    const delayed = desktop.cli<{ id: string }>(
+      ...prepare("linux", "Delayed Linux task"),
+    );
+    try {
+      await expect
+        .poll(() =>
+          readFile(hold + ".seen").then(
+            () => true,
+            () => false,
+          ),
+        )
+        .toBe(true);
+      await focusWorkspace("Unrelated desktop");
+      await expect(header()).toHaveText("Unrelated desktop");
+    } finally {
+      await unlink(hold);
+    }
+    const completed = await delayed;
+    expect((await linux.workspace(completed.id)).name).toBe(
+      "Delayed Linux task",
+    );
+    await expect(header()).toHaveText("Unrelated desktop");
+    await focusWorkspace("Desktop intake");
+    const uncertain = prepare("linux", "Reply lost once", [linux.folders[0]]);
+    await writeFile(dropReply, "workspace.prepare");
+    const lost = await desktop.raw(...uncertain);
+    expect(lost.code).toBe(1);
+    expect(lost.stderr).toContain("did not confirm");
+    const committed = (await linux.state()).workspaces.filter(
+      ({ name }) => name === "Reply lost once",
+    );
+    expect(committed).toHaveLength(1);
+    await expect
+      .poll(() =>
+        desktop.page.evaluate(async () => {
+          const state = await window.cod.invoke<AppState>({ op: "state" });
+          return state.remoteWorkspace?.connected;
+        }),
+      )
+      .toBe(false);
+    const retry = await desktop.cli<{ id: string }>(...uncertain);
+    expect(retry.id).toBe(committed[0]!.id);
+    await expect(header()).toHaveText("Reply lost once (invented-linux)");
+    expect(
+      (await linux.state()).workspaces.filter(
+        ({ name }) => name === "Reply lost once",
+      ),
+    ).toHaveLength(1);
+
+    for (let attempt = 0; attempt < 2; attempt++)
+      await linux.cli("workspace", "create", "--name", "Ambiguous task");
+    const ambiguous = await desktop.raw(...prepare("linux", "Ambiguous task"));
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.stderr).toContain("More than one workspace");
+    await expect(header()).toHaveText("Reply lost once (invented-linux)");
+
+    const hosted = await linux.newChat(prepared.id, "codex");
+    await linux.send(hosted.id, "[hold] Invented Linux task");
+    await expect
+      .poll(async () => (await linux.inspect(hosted.id)).status)
+      .toBe("working");
+    await focusWorkspace("Linux task");
+    await expect(header()).toHaveText("Linux task (invented-linux)");
+    const destination = await linux.cli<{ id: string }>(
+      ...prepare("linux", "Moved Linux chat", [linux.folders[1]]),
+      "--conversation",
+      hosted.id,
+    );
+    await expect(header()).toHaveText("Moved Linux chat (invented-linux)");
+    await expect(desktop.pane(hosted.paneId)).toBeVisible();
+    expect(await context(linux, hosted.id)).toMatchObject({
+      location: "linux",
+      workspace: { id: destination.id, folders: [linux.folders[1]] },
+      conversation: { nativeId: hosted.nativeId, cwd: linux.folders[0] },
+    });
+    expect(await linux.inspect(hosted.id)).toMatchObject({
+      paneId: hosted.paneId,
+      nativeId: hosted.nativeId,
+      status: "working",
+      messages: expect.arrayContaining([
+        expect.objectContaining({ text: "[hold] Invented Linux task" }),
+      ]),
+    });
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(1);
+
+    // A Linux origin can only follow within that host. When the user has
+    // already navigated back to the desktop, the remote follow stays there.
+    await focusWorkspace("Desktop intake");
+    await expect(header()).toHaveText("Desktop intake");
+    await linux.cli(
+      ...prepare("linux", "Background Linux task"),
+      "--conversation",
+      hosted.id,
+    );
+    const movedAgain = await context(linux, hosted.id);
+    expect(movedAgain.workspace.id).not.toBe(destination.id);
+    await expect(header()).toHaveText("Desktop intake");
+    const crossHost = await linux.raw(
+      ...prepare("local", "Forbidden desktop task"),
+    );
+    expect(crossHost.code).toBe(1);
+    expect(crossHost.stderr).toContain("runs on the Linux workspace host");
+    expect(
+      (await desktop.cli<AppState>("state")).conversations.map(({ id }) => id),
+    ).toEqual([origin.id]);
+    expect(await desktop.inspect(origin.id)).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ text: "Invented desktop task request" }),
+      ]),
+    });
+  } finally {
+    try {
+      await desktop.cleanup();
+    } finally {
+      host.kill("SIGTERM");
+      await exited;
+      await linux.cleanup();
+    }
+  }
+});
 
 test("Linux workspace reconnect preserves host files, Codex chat and a running terminal", async ({}) => {
   test.skip(

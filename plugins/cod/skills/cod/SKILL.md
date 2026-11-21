@@ -19,6 +19,10 @@ App-managed Codex/Kimi agents inherit COD_CONVERSATION_ID, COD_WORKSPACE_ID, COD
 - file.resolve resolves explicit references only within the owning workspace roots and returns candidates. Do not guess when multiple repositories contain the same relative filename. UI references show a Choose file dialog. Native editing persists drafts separately; file save checks expected-content and never silently overwrites external edits.
 - Create or attach native Codex/Kimi conversations, send one turn, interrupt, answer pending permissions and inspect transcript/tool/permission state.
 
+For an explicit task location, use `codctl workspace prepare --location local|linux --name NAME --folders '["/absolute/host/path"]'`. The command matches an exact, unique workspace name, attaches the listed folders on that host, and opens the workspace. Keep the returned ID. Pass an empty list or omit `--folders` when no folders are needed. On the desktop, `linux` uses the configured Linux connection; report an unavailable host and preserve the requested location. A desktop chat stays in its original workspace when preparing a Linux workspace. The operation opens no second native session.
+
+Use `codctl context` to identify your current `location`. To move your existing session when it is already hosted at the requested location, add `--conversation "$COD_CONVERSATION_ID"` to workspace preparation. The native controller, history, and cwd are preserved. On Linux, the connected desktop follows when it is viewing the source workspace. If a creation reply was lost, rerun the same name and folders on the same host. Preparation checks the persisted name before creating anything, and refuses ambiguous or closed matches. If the host was changed or the workspace may have been renamed, confirm the destination state first.
+
 ## Native conversation workflow
 
 1. Create a workspace and note its opaque `id` from the JSON result.

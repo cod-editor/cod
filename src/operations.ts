@@ -231,6 +231,9 @@ export class ApplicationOperations {
     ) {
       throw new Error("An operation object with an op string is required");
     }
+    const location = this.browserHost ? "local" : "linux";
+    if (request.op === "workspace.prepare" && request.location !== location)
+      throw new Error("This workspace preparation targets a different host");
     if (request.op.startsWith("review."))
       return this.reviews.handle(request, trustedUi);
     if (request.op === "pane.new" && request.sameAs !== undefined) {
@@ -338,6 +341,7 @@ export class ApplicationOperations {
         if (!conversation) throw new Error("Unknown conversation");
         const workspace = this.store.workspace(conversation.workspaceId);
         return {
+          location,
           workspace: {
             id: workspace.id,
             name: workspace.name,

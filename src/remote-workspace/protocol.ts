@@ -1,4 +1,5 @@
 import { trustedReviewOperations } from "../command-catalog";
+import type { WorkspaceFollow } from "../application/workspace-preparation";
 import type { AppState, OperationRequest, TerminalUiEvent } from "../types";
 
 export const unconfirmedRemoteSend =
@@ -12,7 +13,7 @@ export interface WorkspaceHostTarget {
 }
 
 export type WorkspaceHostFrame =
-  | { type: "state"; value: AppState }
+  | { type: "state"; value: AppState; follow?: WorkspaceFollow }
   | { type: "terminal"; value: TerminalUiEvent }
   | { type: "review-challenge"; value: string }
   | { type: "review-access"; value: boolean }
