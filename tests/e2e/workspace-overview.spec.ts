@@ -1638,11 +1638,8 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     .toBe(false);
   await expect(search()).toHaveValue("Chosen chat");
   await expect(search()).toBeFocused();
-  await expect(row("workspace", second)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
-  await expect(footer()).toContainText("Close workspace");
+  await expect(selection()).toHaveAttribute("aria-current", "true");
+  await expect(footer()).toContainText("Remove from workspace");
   await search().dispatchEvent("keydown", {
     key: "Y",
     code: "KeyY",
@@ -1658,7 +1655,6 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     true,
   );
   await search().fill("Taken aside fixture");
-  await search().press("ArrowDown");
   await expect(selection()).toHaveAttribute("aria-current", "true");
   await expect(footer()).toContainText("Remove from workspace");
   await expect(footer()).toContainText(

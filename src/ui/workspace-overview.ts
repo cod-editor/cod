@@ -337,9 +337,15 @@ export function createWorkspaceOverview(
           queryVersion === version &&
           item.key === selectedKey
         ) {
-          const remaining = new Set(navigationItems().map((row) => row.key));
-          const neighbor = neighbors.find((row) => remaining.has(row.key));
-          if (neighbor) highlight(neighbor.key);
+          const remaining = new Set(
+            visibleNavigation(navigationItems(), input.value, retainedKey).map(
+              (row) => row.key,
+            ),
+          );
+          if (!remaining.has(item.key)) {
+            const neighbor = neighbors.find((row) => remaining.has(row.key));
+            if (neighbor) highlight(neighbor.key);
+          }
         }
         refresh();
       } catch (error) {
