@@ -2774,12 +2774,47 @@ for (const provider of ["codex", "kimi"] as const) {
     const field = queue.getByRole("textbox", { name: "Edit queued message" });
     await edit.click();
     await field.fill("Discard this unsaved revision");
-    await queue
-      .getByRole("button", {
-        name: provider === "codex" ? "Save" : "Cancel",
-        exact: true,
-      })
-      .press("Escape");
+    const cancelOrigin = queue.getByRole("button", {
+      name: provider === "codex" ? "Save" : "Cancel",
+      exact: true,
+    });
+    await shell.app!.evaluate(({ ipcMain }, id) => {
+      const handler = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (request.op === "conversation.queue-edit" && request.id === id) {
+          (globalThis as any).queueCancelHeld = true;
+          await gate;
+        }
+        return handler(event, request);
+      });
+      (globalThis as any).releaseQueueCancel = () => {
+        ipcMain.removeHandler("cod:invoke");
+        ipcMain.handle("cod:invoke", handler);
+        release();
+      };
+    }, chat.id);
+    await cancelOrigin.press("Escape");
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(() => (globalThis as any).queueCancelHeld),
+      )
+      .toBe(true);
+    expect(
+      await cancelOrigin.evaluate((button) => {
+        // A redraw can restore focus to a replacement control while IPC is pending.
+        const replacement = button.cloneNode(true) as HTMLButtonElement;
+        replacement.disabled = false;
+        button.replaceWith(replacement);
+        replacement.focus();
+        return replacement === document.activeElement;
+      }),
+    ).toBe(true);
+    await shell.app!.evaluate(() => (globalThis as any).releaseQueueCancel());
     await expect(field).toBeHidden();
     await expect(edit).toBeFocused();
     await expect(queue).toContainText("Original queued text");
