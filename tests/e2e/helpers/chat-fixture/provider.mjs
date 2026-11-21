@@ -613,6 +613,41 @@ function receive(message, external = false) {
       item: active.turn.items[0],
     });
   }
+  if (provider === "codex" && prompt.startsWith("[latency-fixture]")) {
+    const { latencyChunks = 105 } = configuration();
+    const item = {
+      id: "latency-" + active.turnId,
+      type: "agentMessage",
+      phase: prompt.includes("move-to-final") ? undefined : "final_answer",
+      text: "",
+    };
+    active.turn.items.push(item);
+    const turnId = active.turnId;
+    notify("item/started", { threadId: nativeId, turnId, item });
+    const finish = () => {
+      if (configuration().holdLatencyCompletion) {
+        later(finish, 30);
+        return;
+      }
+      notify("item/completed", { threadId: nativeId, turnId, item });
+      complete();
+    };
+    let step = 0;
+    const tick = () => {
+      const delta = `inventedstream-${++step}-${Date.now()}; `;
+      item.text += delta;
+      notify("item/agentMessage/delta", {
+        threadId: nativeId,
+        turnId,
+        itemId: item.id,
+        delta,
+      });
+      if (step < latencyChunks) later(tick, 50);
+      else finish();
+    };
+    later(tick, 150);
+    return;
+  }
   if (provider === "codex" && configuration().backgroundActivity) {
     const turnId = active.turnId;
     const child = "invented-child";

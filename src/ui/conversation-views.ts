@@ -941,9 +941,31 @@ export function createConversationViews({
     return count;
   }
 
+  type MessageContent = {
+    source: string;
+    label: string | undefined;
+  };
+
+  const renderedMessages = new WeakMap<
+    HTMLElement,
+    { workspace: string; contents: ReadonlyMap<string, MessageContent> }
+  >();
+
   function renderConversation(
     conversation: import("../types").ConversationState,
-  ): HTMLElement {
+    previous?: HTMLElement,
+  ) {
+    const old = previous && renderedMessages.get(previous);
+    const oldText = new Map<string, HTMLElement>();
+    if (previous && old?.workspace === conversation.workspaceId)
+      for (const text of previous.querySelectorAll<HTMLElement>(
+        ".chat-message > .message-text",
+      )) {
+        const id = text.parentElement?.dataset.messageId;
+        if (id) oldText.set(id, text);
+      }
+    const contents = new Map<string, MessageContent>();
+    const retained = new Map<Node, Node>();
     const body = document.createElement("div");
     body.className = "pane-body chat-body";
     const transcript = document.createElement("div");
@@ -1097,7 +1119,20 @@ export function createConversationViews({
           entry.message.text,
           getState(),
         );
-        if (structured) {
+        const source = entry.message.text;
+        const prior = old?.contents.get(entry.message.id);
+        const existing = oldText.get(entry.message.id);
+        contents.set(entry.message.id, { source, label: structured });
+        if (
+          existing &&
+          prior?.source === source &&
+          prior.label === structured
+        ) {
+          // Grouping inspects whether an assistant row contains visible text.
+          // Keep that result available without recreating its Markdown DOM.
+          text.textContent = existing.textContent;
+          retained.set(text, existing);
+        } else if (structured) {
           const details = document.createElement("details");
           details.className = "structured-message";
           const label = document.createElement("summary");
@@ -1468,7 +1503,7 @@ export function createConversationViews({
     const conflict = draftConflict(conversation.id, conversation.paneId);
     if (conflict) body.append(conflict);
     body.append(composer);
-    return body;
+    return { body, contents, retained };
   }
 
   function commandOptions(id: string) {
@@ -1731,10 +1766,14 @@ export function createConversationViews({
       }
   }
   const views = new Map<string, HTMLElement>();
-  function stable(id: string, next: HTMLElement) {
+  function stable(
+    id: string,
+    next: HTMLElement,
+    retained?: ReadonlyMap<Node, Node>,
+  ) {
     const previous = views.get(id);
     if (previous) {
-      reconcileView(previous, next);
+      reconcileView(previous, next, retained);
       return previous;
     }
     views.set(id, next);
@@ -1743,8 +1782,19 @@ export function createConversationViews({
   return {
     draft: (workspace: WorkspaceState, pane: PaneState) =>
       stable("draft:" + pane.id, renderDraftChat(workspace, pane)),
-    conversation: (conversation: import("../types").ConversationState) =>
-      stable("chat:" + conversation.id, renderConversation(conversation)),
+    conversation: (conversation: import("../types").ConversationState) => {
+      const id = "chat:" + conversation.id;
+      const { body, contents, retained } = renderConversation(
+        conversation,
+        views.get(id),
+      );
+      const view = stable(id, body, retained);
+      renderedMessages.set(view, {
+        workspace: conversation.workspaceId,
+        contents,
+      });
+      return view;
+    },
     integration: integration.open,
     send: sendMessage,
     reconcile() {
