@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
@@ -91,6 +91,303 @@ async function connectWorkspace(
   await connect.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(connect).not.toBeVisible();
 }
+
+test("A saved Codex chat moves to Linux once after a lost reply and restart", async ({}, info) => {
+  test.skip(process.platform !== "linux", "The workspace host requires Linux");
+  test.setTimeout(90_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  for (const runtime of [desktop, linux]) {
+    runtime.environment.CODEX_HOME = path.join(
+      runtime.temporary,
+      "isolated-native",
+    );
+    await runtime.configure({ codex: { portableRollout: true } });
+  }
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+  const startHost = () =>
+    spawn(process.execPath, ["dist/workspace-host.cjs", linux.data], {
+      env: linux.environment,
+      stdio: "ignore",
+    });
+  let host = startHost();
+  const stopHost = async (signal: NodeJS.Signals = "SIGTERM") => {
+    if (host.exitCode !== null || host.signalCode !== null) return;
+    const exited = once(host, "exit");
+    host.kill(signal);
+    await exited;
+  };
+  try {
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    const destination = await linux.cli<{ id: string }>(
+      "workspace",
+      "prepare",
+      "--name",
+      "Invented Linux project",
+      "--folders",
+      JSON.stringify(linux.folders),
+    );
+    // Keep an attached folder whose directory is no longer available.
+    await rm(linux.folders[1], { recursive: true });
+    await desktop.start();
+    const source = await desktop.create("Invented desktop project");
+    const chat = await desktop.newChat(source, "codex");
+    await desktop.send(chat.id, "Invented transfer history");
+    await expect
+      .poll(async () => (await desktop.inspect(chat.id)).status)
+      .toBe("ready");
+
+    const key = path.join(desktop.temporary, "invented-transfer-key");
+    execFileSync("/usr/bin/ssh-keygen", [
+      "-q",
+      "-N",
+      "",
+      "-t",
+      "ed25519",
+      "-f",
+      key,
+    ]);
+    await writeFile(
+      path.join(linux.data, "desktop-signers"),
+      'cod-desktop namespaces="cod-review" ' +
+        (await readFile(key + ".pub", "utf8")),
+      { mode: 0o600 },
+    );
+    const dropReply = path.join(desktop.temporary, "drop-transfer-reply");
+    await installWorkspaceRelay(desktop, dropReply);
+    const move = (cwd: string) => [
+      "conversation",
+      "transfer",
+      "--id",
+      chat.id,
+      "--workspace",
+      destination.id,
+      "--cwd",
+      cwd,
+    ];
+    await connectWorkspace(desktop, linux.socket);
+    expect((await desktop.raw(...move(linux.folders[0]))).stderr).toContain(
+      "Connect and pair",
+    );
+    expect(
+      (await desktop.cli<AppState>("state")).conversations[0].transfer,
+    ).toBeUndefined();
+    await connectWorkspace(desktop, linux.socket, key + ".pub");
+    const unavailable = await desktop.raw(...move(linux.folders[1]));
+    expect(unavailable.code).toBe(1);
+    expect(
+      (await desktop.cli<AppState>("state")).conversations[0].transfer,
+    ).toBeUndefined();
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    const rolloutName = path.join(
+      "sessions",
+      "2026",
+      "01",
+      "01",
+      `rollout-2026-01-01T12-00-00-${chat.nativeId}.jsonl`,
+    );
+    const localRollout = path.join(desktop.environment.CODEX_HOME, rolloutName);
+    const destinationCollision = path.join(
+      linux.environment.CODEX_HOME,
+      rolloutName,
+    );
+    await mkdir(path.dirname(destinationCollision), { recursive: true });
+    await writeFile(destinationCollision, "An independently existing file", {
+      mode: 0o600,
+    });
+    expect((await desktop.raw(...move(linux.folders[0]))).code).toBe(1);
+    expect(await readFile(destinationCollision, "utf8")).toBe(
+      "An independently existing file",
+    );
+    expect(
+      (await desktop.cli<AppState>("state")).conversations[0].transfer,
+    ).toBeUndefined();
+    await unlink(destinationCollision);
+    await desktop.send(chat.id, "Invented retry kept source usable");
+    await expect
+      .poll(async () => (await desktop.inspect(chat.id)).status)
+      .toBe("ready");
+    const originalBytes = await readFile(localRollout);
+
+    await desktop.cli(
+      "conversation",
+      "composer",
+      "--workspace",
+      source,
+      "--pane-id",
+      chat.paneId,
+      "--text",
+      "Invented unsent draft",
+    );
+    await desktop.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(760, 560);
+    });
+    const overview = await desktop.overview();
+    await overview
+      .locator(`button[data-navigation-key="conversation:${chat.id}"]`)
+      .hover();
+    await overview.getByRole("combobox").press("Shift+F10");
+    await desktop.page
+      .locator(".context-menu")
+      .getByRole("button", { name: "Move to workspace...", exact: true })
+      .click();
+    const picker = desktop.page.getByRole("dialog", {
+      name: "Move conversation to workspace",
+    });
+    const chosen = picker
+      .getByRole("button", { name: /Invented Linux project/ })
+      .filter({ hasText: path.basename(linux.folders[0]) });
+    await expect(chosen).toBeVisible();
+    await desktop.page.screenshot({
+      path: info.outputPath("linux-move-picker.png"),
+    });
+    await picker.getByRole("textbox").fill(path.basename(linux.folders[0]));
+    await picker.getByRole("textbox").press("Enter");
+    const confirm = desktop.page.getByRole("dialog", {
+      name: "Move conversation to Linux?",
+    });
+    await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(confirm).toContainText(linux.folders[0]);
+    await desktop.page.screenshot({
+      path: info.outputPath("linux-move-confirm.png"),
+    });
+    await confirm.press("Escape");
+    await expect(picker).toBeVisible();
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    await linux.configure({
+      codex: { portableRollout: true, holdPortableResume: true },
+    });
+    await chosen.click();
+    await confirm.getByRole("button", { name: "Move conversation" }).click();
+    await expect
+      .poll(async () =>
+        (await linux.records()).some(
+          (record) => record.message?.method === "thread/resume",
+        ),
+      )
+      .toBe(true);
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    await stopHost("SIGKILL");
+    await expect(confirm.getByRole("alert")).toContainText("did not confirm");
+    const held = (await desktop.cli<AppState>("state")).conversations[0];
+    expect(held.transfer?.cwd).toBe(linux.folders[0]);
+    expect(
+      (
+        await desktop.raw(
+          "conversation",
+          "send",
+          "--id",
+          chat.id,
+          "--text",
+          "Blocked second writer",
+        )
+      ).stderr,
+    ).toContain("pending move");
+    await confirm.press("Escape");
+    await picker.getByRole("textbox").press("Escape");
+    await (
+      await desktop.overview()
+    )
+      .getByRole("combobox")
+      .fill("Invented desktop project");
+    await desktop.row("Invented desktop project").click();
+    const heldPane = desktop.pane(chat.paneId);
+    await expect(
+      heldPane.getByRole("status", { name: "Conversation status" }),
+    ).toContainText("Move to invented-linux pending");
+    await expect(
+      heldPane.getByRole("textbox", { name: "Message", exact: true }),
+    ).not.toBeEditable();
+    await desktop.page.screenshot({
+      path: info.outputPath("linux-move-pending.png"),
+    });
+
+    await desktop.stop();
+    await linux.configure({ codex: { portableRollout: true } });
+    host = startHost();
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    await desktop.start();
+    await installWorkspaceRelay(desktop, dropReply);
+    await connectWorkspace(desktop, linux.socket, key + ".pub");
+    await writeFile(dropReply, "conversation.accept-transfer");
+    expect((await desktop.raw(...move(linux.folders[0]))).stderr).toContain(
+      "did not confirm",
+    );
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(1);
+    expect(
+      (await desktop.cli<AppState>("state")).conversations[0].transfer,
+    ).toBeDefined();
+
+    await desktop.stop();
+    await stopHost();
+    host = startHost();
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    await desktop.start();
+    await installWorkspaceRelay(desktop, dropReply);
+    await connectWorkspace(desktop, linux.socket, key + ".pub");
+    const receipt = await desktop.cli<Chat>(...move(linux.folders[0]));
+    expect(receipt.nativeId).toBe(chat.nativeId);
+    expect((await desktop.cli<AppState>("state")).conversations).toHaveLength(
+      0,
+    );
+    const after = await linux.cli<AppState>("state");
+    expect(after.conversations).toHaveLength(1);
+    expect(after.conversations[0]).toMatchObject({
+      id: receipt.id,
+      cwd: linux.folders[0],
+      nativeId: chat.nativeId,
+    });
+    expect(JSON.stringify(after.conversations[0].messages)).toContain(
+      "Invented transfer history",
+    );
+    expect(
+      after.workspaces.find((workspace) => workspace.id === destination.id)
+        ?.chatDrafts?.[receipt.paneId]?.text,
+    ).toBe("Invented unsent draft");
+    await expect(
+      desktop
+        .pane(receipt.paneId)
+        .getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue("Invented unsent draft");
+    expect(await linux.prompts()).toHaveLength(0);
+    await linux.send(receipt.id, "Invented Linux follow-up");
+    await expect
+      .poll(async () => (await linux.inspect(receipt.id)).status)
+      .toBe("ready");
+    expect(await linux.prompts()).toHaveLength(1);
+    expect(await desktop.prompts()).toHaveLength(2);
+    expect(await readFile(localRollout)).toEqual(originalBytes);
+    expect(
+      (
+        await desktop.raw(
+          "conversation",
+          "resume",
+          "--workspace",
+          source,
+          "--provider",
+          "codex",
+          "--native-id",
+          chat.nativeId,
+          "--cwd",
+          desktop.folders[0],
+        )
+      ).stderr,
+    ).toContain("moved to Linux");
+  } finally {
+    await desktop.cleanup();
+    await stopHost();
+    await linux.cleanup();
+  }
+});
 
 test("agents prepare a task on the explicit host and follow the existing Linux chat", async () => {
   test.skip(

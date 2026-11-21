@@ -40,6 +40,7 @@ export function conversationRemovalReason(
   state: AppState,
   conversation: ConversationState,
 ): string | undefined {
+  if (conversation.transfer) return "Resolve the pending move to Linux first.";
   if (
     state.workspaces.some((workspace) =>
       workspace.panes.some(
@@ -75,6 +76,7 @@ export function conversationHandoffReason(
   state: AppState,
   conversation: ConversationState,
 ): string | undefined {
+  if (conversation.transfer) return "Resolve the pending move to Linux first.";
   if (conversation.handoffTerminalId)
     return "Conversation is already handed off";
   if (conversation.queuedMessages?.length)

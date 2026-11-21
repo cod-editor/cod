@@ -181,6 +181,12 @@ export interface ConversationState {
   acknowledgedCompletionRevision?: number;
   id: string;
   detachedOwner?: import("./providers/local-owner-protocol").LocalOwnerCursor;
+  transfer?: {
+    id: string;
+    host: string;
+    workspace: string;
+    cwd: string;
+  };
   paneId: string;
   workspaceId: string;
   provider: ProviderId;
@@ -306,6 +312,15 @@ export interface AppState {
   browsers: BrowserState[];
   drafts: Record<string, FileDraft>;
   reviews?: ReviewSummary[];
+  transferredCodexSessions?: string[];
+  pendingCodexImports?: Record<
+    string,
+    { id: string; digest: string; workspace: string; cwd: string }
+  >;
+  completedCodexImports?: Record<
+    string,
+    { id: string; paneId: string; nativeId: string }
+  >;
   /** Desktop connection status. Never written to workspace data. */
   remoteWorkspace?: import("./remote-workspace/protocol").RemoteWorkspaceView;
   /** Renderer-only navigation intent. Never written to application data. */

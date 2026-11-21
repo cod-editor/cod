@@ -340,6 +340,48 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
   if (request.op === "state") return displayState();
   if (request.op === "workspace.prepare")
     return prepareDesktopWorkspace(request);
+  if (request.op === "conversation.accept-transfer")
+    throw new Error(
+      "A native session can only be sent by an explicit conversation move",
+    );
+  if (request.op === "conversation.transfer") {
+    if (!link?.connected || !link.reviewAccess)
+      throw new Error(
+        "Connect and pair with the Linux workspace to move this chat",
+      );
+    if (
+      typeof request.id !== "string" ||
+      typeof request.workspace !== "string" ||
+      typeof request.cwd !== "string"
+    )
+      throw new Error(
+        "Choose the conversation, Linux workspace, and its folder",
+      );
+    const workspace = link.state.workspaces.find(
+      (item) => item.id === request.workspace,
+    );
+    if (!workspace?.folders.includes(request.cwd))
+      throw new Error("Choose a folder attached to the Linux workspace");
+    const navigation = workspaceNavigation;
+    const receipt = await operations.transfers.move(
+      request.id,
+      { host: link.target.alias, workspace: workspace.id, cwd: request.cwd },
+      (operation) => link.invoke(operation),
+    );
+    if (remoteWorkspace === link && navigation === workspaceNavigation) {
+      try {
+        await link.invoke({ op: "conversation.show", id: receipt.id });
+        if (remoteWorkspace === link && navigation === workspaceNavigation) {
+          pendingWorkspace = { link, id: workspace.id, navigation };
+          followPreparedWorkspace(link);
+          showWorkspaceState();
+        }
+      } catch {
+        // The move is already confirmed. The destination may be opened after reconnecting.
+      }
+    }
+    return receipt;
+  }
   if (request.op === "remote.connect") {
     if (
       typeof request.alias !== "string" ||
@@ -586,7 +628,9 @@ async function start(): Promise<void> {
     commandServer = await startCommandSocket(defaultSocketPath(), (request) =>
       request?.op === "workspace.prepare"
         ? prepareDesktopWorkspace(request)
-        : operations.dispatch(request),
+        : request?.op === "conversation.transfer"
+          ? displayCommand(request)
+          : operations.dispatch(request),
     );
     await app.whenReady();
     operations.settings.onChange = (value) =>

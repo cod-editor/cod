@@ -28,6 +28,9 @@ export class ApplicationStateStore {
     pinnedSites: [],
     browserDownloads: [],
     drafts: {},
+    transferredCodexSessions: [],
+    pendingCodexImports: {},
+    completedCodexImports: {},
   };
   private composerCheckpoint = "initial";
   private draftOverlays: Record<
@@ -195,6 +198,9 @@ export class ApplicationStateStore {
     );
     return structuredClone({
       ...this.data,
+      pendingCodexImports: undefined,
+      completedCodexImports: undefined,
+      transferredCodexSessions: undefined,
       reviewPresentation: this.reviewPresentation,
       // Editors read their resource through file.read; unrelated navigation does
       // not need every open or recoverable file buffer's text.

@@ -457,6 +457,14 @@ export class ConversationApplicationService {
               : workspace.activePaneId,
           );
     const nativeId = resume ? requiredString(request, "nativeId") : "";
+    const verifyOwnership = () => {
+      if (provider !== "codex" || !nativeId) return;
+      if (this.store.data.transferredCodexSessions?.includes(nativeId))
+        throw new Error("This saved Codex session was moved to Linux");
+      if (this.store.data.pendingCodexImports?.[nativeId])
+        throw new Error("This Codex session is being moved into a workspace");
+    };
+    verifyOwnership();
     const attached = () =>
       resume
         ? this.store.data.conversations.find(
@@ -470,6 +478,7 @@ export class ConversationApplicationService {
       if (!this.store.data.workspaces.includes(workspace))
         throw new Error("Workspace was closed");
       // Another request may have attached it while this directory was checked.
+      verifyOwnership();
       existing = attached();
     }
     if (existing) {
@@ -563,6 +572,90 @@ export class ConversationApplicationService {
     }
   }
 
+  async importSavedCodex(input: {
+    transferId: string;
+    workspaceId: string;
+    nativeId: string;
+    cwd: string;
+    requestedCwd: string;
+    rolloutPath: string;
+    title?: string;
+    draft?: string;
+  }): Promise<{ id: string; paneId: string; nativeId: string }> {
+    const conversation: ConversationState = {
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      nativeId: input.nativeId,
+      cwd: input.cwd,
+      displayName: input.title,
+      provider: "codex",
+      paneId: "",
+      status: "ready",
+      messages: [],
+      tools: [],
+      pendingPermissions: [],
+    };
+    const history = emptyHistory();
+    const reader = await this.adapterFor(conversation, (event) => {
+      if (event.type === "history")
+        stageCodexSnapshot(history, event.details, undefined, input.nativeId);
+    });
+    this.replays.add(reader);
+    try {
+      const native = await reader.resume(input.nativeId);
+      const metadata = object(native.metadata);
+      if (metadata.cwd !== input.cwd)
+        throw new Error("Codex did not resume in the selected Linux directory");
+      if (object(metadata.thread).path !== input.rolloutPath)
+        throw new Error(
+          "The destination Codex session already has a different saved file",
+        );
+      if (metadata.turnsBackwardsCursor || metadata.itemsBackwardsCursor)
+        history.partial = true;
+      commitHistory(conversation, history);
+      conversation.metadata = native.metadata;
+    } finally {
+      this.replays.delete(reader);
+      await reader.dispose();
+    }
+    return this.store.change(() => {
+      if (this.store.closing)
+        throw new Error("The Linux workspace host is shutting down");
+      const workspace = this.store.workspace(input.workspaceId);
+      if (!workspace.folders.includes(input.requestedCwd))
+        throw new Error("The destination folder is no longer attached");
+      if (
+        this.store.data.pendingCodexImports?.[input.nativeId]?.id !==
+          input.transferId ||
+        this.store.data.conversations.some(
+          (item) =>
+            item.provider === "codex" && item.nativeId === input.nativeId,
+        )
+      )
+        throw new Error("Another move already owns this Codex session");
+      conversation.paneId = this.attachConversation(
+        workspace,
+        conversation.id,
+        false,
+      );
+      workspace.lastConversationId = conversation.id;
+      if (input.draft)
+        (workspace.chatDrafts ??= {})[conversation.paneId] = {
+          text: input.draft,
+        };
+      this.store.data.conversations.push(conversation);
+      const receipt = {
+        id: conversation.id,
+        paneId: conversation.paneId,
+        nativeId: input.nativeId,
+      };
+      (this.store.data.completedCodexImports ??= {})[input.transferId] =
+        receipt;
+      delete this.store.data.pendingCodexImports![input.nativeId];
+      return receipt;
+    });
+  }
+
   removeConversationRecord(
     conversation: ConversationState,
     restoreDraft?: import("../types").DocumentPane,
@@ -604,9 +697,10 @@ export class ConversationApplicationService {
   attachConversation(
     workspace: WorkspaceState,
     conversationId: string,
+    reuseDraft = true,
   ): string {
     const active = this.store.pane(workspace, workspace.activePaneId);
-    if (active.kind === "document" && !active.filePath) {
+    if (reuseDraft && active.kind === "document" && !active.filePath) {
       const index = workspace.panes.indexOf(active);
       workspace.panes[index] = {
         id: active.id,
@@ -683,6 +777,13 @@ export class ConversationApplicationService {
     const terminalId = randomUUID();
     const { conversation, workspace } = await this.store.serialize(() => {
       const conversation = this.store.conversation(id);
+      if (
+        conversation.provider === "codex" &&
+        this.store.data.transferredCodexSessions?.includes(
+          conversation.nativeId,
+        )
+      )
+        throw new Error("This saved Codex session was moved to Linux");
       const reason = conversationHandoffReason(this.store.data, conversation);
       if (reason) throw new Error(reason);
       if (this.isActive(id) || this.controllerInitializations.has(id))
@@ -771,6 +872,17 @@ export class ConversationApplicationService {
   }
 
   ensureController(conversation: ConversationState): Promise<ProviderAdapter> {
+    if (
+      conversation.provider === "codex" &&
+      this.store.data.transferredCodexSessions?.includes(conversation.nativeId)
+    )
+      return Promise.reject(
+        new Error("This saved Codex session was moved to Linux"),
+      );
+    if (conversation.transfer)
+      return Promise.reject(
+        new Error("Resolve the pending move to Linux first"),
+      );
     const pending = this.controllerInitializations.get(conversation.id);
     if (pending) return pending;
     const loading = this.loadController(conversation).then(async (adapter) => {
@@ -993,6 +1105,8 @@ export class ConversationApplicationService {
     trustedUi = false,
   ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
+    if (conversation.transfer)
+      throw new Error("Resolve the pending move to Linux first");
     const text = typeof request.text === "string" ? request.text : "";
     if (parseProviderCommand(text))
       throw new Error(
@@ -1677,6 +1791,16 @@ export class ConversationApplicationService {
     if (conversation) delete conversation.detachedOwner;
   }
 
+  checkTransferReadiness(conversation: ConversationState): void {
+    if (
+      this.isActive(conversation.id) ||
+      this.controllerInitializations.has(conversation.id)
+    )
+      throw new Error(
+        "Finish the current Codex activity before moving this chat",
+      );
+  }
+
   async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {
     switch (request.op) {
       case "conversation.discover": {
@@ -1739,6 +1863,11 @@ export class ConversationApplicationService {
             workspace,
             requiredString(request, "paneId"),
           );
+          if (
+            pane.kind === "conversation" &&
+            this.store.conversation(pane.conversationId).transfer
+          )
+            throw new Error("Resolve the pending move to Linux first");
           if (
             pane.kind !== "conversation" &&
             !(pane.kind === "document" && !pane.filePath)
