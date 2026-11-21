@@ -304,7 +304,8 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
   await app.prepare();
   try {
     await app.start();
-    const workspace = (await app.state()).activeWorkspaceId!;
+    const originalWorkspace = (await app.state()).activeWorkspaceId!;
+    const workspace = await app.create("Tabbed content");
     await app.newChat(workspace, "codex");
     const activeChat = await app.newChat(workspace, "codex");
     const tabs = app.page.locator(".tabs").first();
@@ -368,6 +369,7 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
     await app.page.screenshot({
       path: info.outputPath("tab-active-unpin-hover.png"),
     });
+    await app.cli("workspace", "focus", "--id", originalWorkspace);
     for (const name of [
       "Choose new tab type",
       "Toggle split view",
