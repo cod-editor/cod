@@ -526,9 +526,60 @@ function receive(message, external = false) {
       persist();
     }
     reply(message, { turnId: turn.id });
-    if (mode !== "silent" && mode !== "absent")
+    if (mode !== "silent" && mode !== "absent") {
       for (const method of ["item/started", "item/completed"])
         notify(method, { threadId: nativeId, turnId: turn.id, item });
+      if (configuration().steeringReply) {
+        const turnId = turn.id;
+        const event = (method, payload) =>
+          notify(method, { threadId: nativeId, turnId, ...payload });
+        const tool = (command) => {
+          const item = {
+            id: `steering-tool-${turnId}-${turn.items.length}`,
+            type: "commandExecution",
+            command,
+            status: "completed",
+          };
+          turn.items.push(item);
+          event("item/started", { item });
+          event("item/completed", { item });
+          persist();
+        };
+        tool("echo before-follow-up-reply");
+        const answer = {
+          id: `steering-answer-${turnId}-${turn.items.length}`,
+          type: "agentMessage",
+          phase: "commentary",
+          text: "",
+        };
+        turn.items.push(answer);
+        event("item/started", { item: answer });
+        const delta = (value) => {
+          answer.text += value;
+          event("item/agentMessage/delta", { itemId: answer.id, delta: value });
+          persist();
+        };
+        delta("I'll check the export format");
+        const finishTurn = () => {
+          if (configuration().finishSteeringReply) {
+            text("Export verified. The file is ready.");
+            complete();
+          } else later(finishTurn, 30);
+        };
+        const finishReply = () => {
+          if (configuration().holdSteeringReply) {
+            later(finishReply, 30);
+            return;
+          }
+          delta(" while the export continues.");
+          event("item/completed", { item: answer });
+          text("Inspecting the generated sample.", false, "commentary");
+          tool("node examples/export.mjs");
+          later(finishTurn, 30);
+        };
+        later(finishReply, 30);
+      }
+    }
     return;
   }
   if (!["turn/start", "session/prompt"].includes(message.method)) {
