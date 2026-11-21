@@ -763,7 +763,7 @@ option {
 }
 .ui-button.with-key-hint {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }

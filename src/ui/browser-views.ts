@@ -26,7 +26,18 @@ export function createBrowserViews(
       flushBrowserLayout();
     });
   }
-  let overviewDialog: HTMLDialogElement | null = null;
+  type CaptureSession = { dialog: HTMLDialogElement };
+  let captureSession: CaptureSession | null = null;
+  const openBackdropDialog = () =>
+    document.querySelector<HTMLDialogElement>(
+      "dialog[open][data-browser-backdrop]",
+    );
+  const passesCapture = (
+    previous: HTMLDialogElement,
+    next: HTMLDialogElement | null,
+  ) =>
+    previous.dataset.browserBackdrop === "prepare" &&
+    next?.dataset.browserBackdrop === "connection";
   const backdrops = new Map<
     HTMLImageElement,
     { pageUrl: string; objectUrl: string }
@@ -36,11 +47,13 @@ export function createBrowserViews(
     URL.revokeObjectURL(objectUrl);
     backdrops.delete(image);
   }
-  function updateOverviewBackdrops(
+  function updateBrowserBackdrops(
     dialog: HTMLDialogElement | null,
     visibleSlots: Map<string, HTMLElement>,
   ): void {
-    if (!dialog && !overviewDialog) return;
+    const previous = captureSession?.dialog;
+    if (!dialog && !previous) return;
+    const handoff = !!previous && passesCapture(previous, dialog);
     const state = getState();
     const workspace = state.workspaces.find(
       ({ id }) => id === state.activeWorkspaceId,
@@ -52,21 +65,29 @@ export function createBrowserViews(
       const source = browser(id);
       if (
         !dialog ||
-        dialog !== overviewDialog ||
+        (dialog !== previous && !handoff) ||
         visibleSlots.get(id) !== image.parentElement ||
         source?.workspaceId !== workspace?.id ||
         source?.url !== pageUrl
       )
         removeBackdrop(image, objectUrl);
     }
-    if (dialog === overviewDialog) return;
-    overviewDialog = dialog;
+    if (dialog === previous) return;
+    if (handoff && captureSession && dialog) {
+      captureSession.dialog = dialog;
+      return;
+    }
+    captureSession = null;
     if (!dialog || !workspace) return;
+    const overview = dialog.dataset.browserBackdrop === "overview";
+    const session = { dialog };
+    captureSession = session;
     const targets = state.browsers
       .filter(
         (item) =>
           item.workspaceId === workspace.id &&
           !item.agentPage &&
+          (overview || item.paneId === workspace.activePaneId) &&
           visibleSlots.has(item.id),
       )
       .sort(
@@ -74,16 +95,17 @@ export function createBrowserViews(
           Number(b.paneId === workspace.activePaneId) -
           Number(a.paneId === workspace.activePaneId),
       )
-      .slice(0, 4)
+      .slice(0, overview ? 4 : 1)
       .map(({ id }) => id);
     if (!targets.length) return;
     // Request the last visible frame before sending the ordered native hide.
     void window.cod
       .browserOverviewBackdrop(targets)
       .then((captures) => {
+        const open = openBackdropDialog();
         if (
-          overviewDialog !== dialog ||
-          !dialog.open ||
+          captureSession !== session ||
+          (open !== session.dialog && !passesCapture(session.dialog, open)) ||
           getState().activeWorkspaceId !== workspace.id
         )
           return;
@@ -94,6 +116,8 @@ export function createBrowserViews(
             !target ||
             !panes.contains(target) ||
             target.hidden ||
+            !target.getClientRects().length ||
+            source?.agentPage ||
             source?.url !== url ||
             source.workspaceId !== workspace.id
           )
@@ -118,12 +142,7 @@ export function createBrowserViews(
         .filter((element) => !element.hidden && element.getClientRects().length)
         .map((element) => [element.dataset.browserId!, element]),
     );
-    updateOverviewBackdrops(
-      document.querySelector<HTMLDialogElement>(
-        "dialog.workspace-overview[open]",
-      ),
-      slots,
-    );
+    updateBrowserBackdrops(openBackdropDialog(), slots);
     const rectangles = document.querySelector("dialog[open]")
       ? []
       : [...slots].map(([id, element]) => {
@@ -527,7 +546,7 @@ export function createBrowserViews(
       document.removeEventListener("scroll", scheduleBrowserLayout, true);
       for (const [image, { objectUrl }] of backdrops)
         removeBackdrop(image, objectUrl);
-      overviewDialog = null;
+      captureSession = null;
       browserPanes.clear();
       homes.clear();
       window.cod.browserLayout([]);

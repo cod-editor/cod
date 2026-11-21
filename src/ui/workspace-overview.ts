@@ -73,6 +73,7 @@ export function createWorkspaceOverview(
     const origin = focus.capture();
     const dialog = dialogSurface("Overview");
     dialog.className = "picker search-picker picker-wide workspace-overview";
+    dialog.dataset.browserBackdrop = "overview";
     const input = document.createElement("input");
     input.placeholder = "Search Overview…";
     input.setAttribute("aria-label", "Search Overview");

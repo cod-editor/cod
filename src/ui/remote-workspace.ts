@@ -9,31 +9,24 @@ import {
   uiButton,
 } from "./primitives";
 
-export async function remoteWorkspaceDialog(
+export function remoteWorkspaceDialog(
   invoke: Invoke,
+  restoreFocus: () => void,
   afterConnect: (reviewAccess: boolean, selectedKey: boolean) => void,
-): Promise<void> {
-  const previous = document.activeElement;
-  const remembered = await invoke<WorkspaceHostTarget | null>(
-    "remote.target",
-    {},
-    { reportError: false },
-  ).catch(() => null);
+): void {
   const dialog = dialogSurface("Connect to Linux workspace");
+  dialog.dataset.browserBackdrop = "connection";
   const { body, actions } = dialogRegions(dialog, "Connect to Linux workspace");
   const form = document.createElement("form");
   form.id = "connect-linux-workspace";
   const alias = document.createElement("input");
   alias.required = true;
   alias.autocomplete = "off";
-  alias.value = remembered?.alias ?? "";
   const socket = document.createElement("input");
   socket.required = true;
   socket.autocomplete = "off";
-  socket.value = remembered?.socketPath ?? "";
   const publicKey = document.createElement("input");
   publicKey.autocomplete = "off";
-  publicKey.value = remembered?.publicKey ?? "";
   form.append(
     formField("SSH host alias", alias),
     formField("Linux socket path", socket),
@@ -41,10 +34,26 @@ export async function remoteWorkspaceDialog(
   );
   body.append(form);
 
+  // Show the dialog in the same turn as Commands closes so it keeps the frame.
+  const initialized = invoke<WorkspaceHostTarget | null>(
+    "remote.target",
+    {},
+    { reportError: false },
+  )
+    .catch(() => null)
+    .then((target) => {
+      if (!dialog.open || !target) return;
+      alias.defaultValue = target.alias;
+      socket.defaultValue = target.socketPath;
+      publicKey.defaultValue = target.publicKey ?? "";
+    });
   let connecting = false;
+  let connectingToHost = false;
   const cancel = () => {
-    if (connecting) void invoke("remote.cancel", {}, { reportError: false });
+    if (connectingToHost)
+      void invoke("remote.cancel", {}, { reportError: false });
     dialog.close();
+    restoreFocus();
   };
   dialog.oncancel = (event) => {
     event.preventDefault();
@@ -54,15 +63,12 @@ export async function remoteWorkspaceDialog(
     actionButton("Cancel", async () => cancel()),
     "Esc",
   );
+  cancelButton.classList.add("quiet");
   const connect = keyHintButton(uiButton("Connect", "primary"), "Enter");
   connect.type = "submit";
   connect.setAttribute("form", form.id);
   actions.append(cancelButton, connect);
-  dialog.onclose = () => {
-    dialog.remove();
-    if (previous instanceof HTMLElement && previous.isConnected)
-      previous.focus({ preventScroll: true });
-  };
+  dialog.onclose = () => dialog.remove();
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (connecting) return;
@@ -71,11 +77,14 @@ export async function remoteWorkspaceDialog(
     connect.setAttribute("aria-busy", "true");
     dialog.querySelector(".action-error")?.remove();
     try {
+      await initialized;
+      if (!dialog.open) return;
       const target = {
         alias: alias.value.trim(),
         socketPath: socket.value.trim(),
         publicKey: publicKey.value.trim(),
       };
+      connectingToHost = true;
       const reviewAccess = await invoke<boolean>("remote.connect", target, {
         reportError: false,
       });
@@ -86,6 +95,7 @@ export async function remoteWorkspaceDialog(
     } catch (error) {
       if (dialog.open) showActionError(error, dialog);
     } finally {
+      connectingToHost = false;
       connecting = false;
       connect.disabled = false;
       connect.removeAttribute("aria-busy");
