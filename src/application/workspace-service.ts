@@ -95,6 +95,14 @@ export class WorkspaceApplicationService {
       (item) => item.id === id,
     );
     if (index < 0) throw new Error(`Workspace not found: ${id}`);
+    if (
+      this.store.data.conversations.some(
+        (chat) => chat.workspaceId === id && chat.transfer,
+      )
+    )
+      throw new Error(
+        "Resolve the pending move to Linux before closing this workspace",
+      );
     const archived = structuredClone({
       workspace: this.store.data.workspaces[index]!,
       conversations: this.store.data.conversations.filter(
@@ -682,6 +690,8 @@ export class WorkspaceApplicationService {
 
   async moveConversation(request: OperationRequest): Promise<unknown> {
     const conversation = this.store.conversation(requiredString(request, "id"));
+    if (conversation.transfer)
+      throw new Error("Resolve the pending move to Linux first");
     const destination = this.store.workspace(
       requiredString(request, "workspace"),
     );
@@ -719,6 +729,7 @@ export class WorkspaceApplicationService {
         // Resolve membership again inside the shared mutation queue.
         if (
           conversation.workspaceId !== source.id ||
+          conversation.transfer ||
           !this.store.data.workspaces.includes(destination)
         )
           throw new Error(
@@ -814,6 +825,42 @@ export class WorkspaceApplicationService {
       await this.reviews.reconcileOrigins();
       throw error;
     }
+  }
+
+  async finishTransfer(id: string, transferId: string): Promise<void> {
+    await this.store.change(async () => {
+      const conversation = this.store.conversation(id);
+      if (conversation.transfer?.id !== transferId)
+        throw new Error("The pending conversation move changed");
+      const workspace = this.store.workspace(conversation.workspaceId);
+      const tabs = workspace.panes.filter(
+        (pane) => pane.kind === "conversation" && pane.conversationId === id,
+      );
+      for (const tab of tabs)
+        await this.closePane({
+          op: "pane.close",
+          workspace: workspace.id,
+          id: tab.id,
+          includePinned: true,
+        });
+      workspace.closedTabs = workspace.closedTabs?.filter(
+        (record) =>
+          record.pane.kind !== "conversation" ||
+          record.pane.conversationId !== id,
+      );
+      this.store.data.conversations = this.store.data.conversations.filter(
+        (item) => item !== conversation,
+      );
+      if (workspace.chatDrafts)
+        delete workspace.chatDrafts[conversation.paneId];
+      if (workspace.lastConversationId === id)
+        workspace.lastConversationId = [...this.store.data.conversations]
+          .reverse()
+          .find((item) => item.workspaceId === workspace.id)?.id;
+      (this.store.data.transferredCodexSessions ??= []).push(
+        conversation.nativeId,
+      );
+    });
   }
 
   async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {

@@ -38,11 +38,33 @@ const kimiConfigOptions = () => [
 ];
 const historyDirectory = recording + ".sessions";
 mkdirSync(historyDirectory, { recursive: true });
+const portable = () => provider === "codex" && configuration().portableRollout;
+const rolloutFile = (id) =>
+  path.join(
+    process.env.CODEX_HOME,
+    "sessions",
+    "2026",
+    "01",
+    "01",
+    `rollout-2026-01-01T12-00-00-${id}.jsonl`,
+  );
 const persist = () => {
   const destination = path.join(historyDirectory, nativeId + ".json");
   const temporary = destination + ".tmp-" + process.pid;
   writeFileSync(temporary, JSON.stringify(history));
   renameSync(temporary, destination);
+  if (portable()) {
+    const file = rolloutFile(nativeId);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: "session_meta", payload: { id: nativeId } }),
+        JSON.stringify(history),
+        "",
+      ].join("\n"),
+    );
+  }
 };
 const configuration = () => {
   const file = recording + ".config.json";
@@ -367,6 +389,16 @@ function receive(message, external = false) {
     );
     return;
   }
+  if (message.method === "thread/read" && portable()) {
+    const file = rolloutFile(params.threadId);
+    if (!existsSync(file))
+      write({
+        id: message.id,
+        error: { code: -32602, message: "Session not found" },
+      });
+    else reply(message, { thread: { id: params.threadId, path: file } });
+    return;
+  }
   if (
     ["thread/start", "session/new", "thread/resume", "session/load"].includes(
       message.method,
@@ -375,12 +407,26 @@ function receive(message, external = false) {
     nativeId =
       params.threadId ??
       params.sessionId ??
-      `${provider}-fixture-${randomUUID()}`;
+      (portable() ? randomUUID() : `${provider}-fixture-${randomUUID()}`);
     if (path.basename(nativeId) !== nativeId)
       throw new Error("Invalid fixture identity");
     const saved = path.join(historyDirectory, nativeId + ".json");
-    history = existsSync(saved) ? JSON.parse(readFileSync(saved, "utf8")) : [];
+    const rollout = portable() ? rolloutFile(nativeId) : undefined;
+    history = existsSync(saved)
+      ? JSON.parse(readFileSync(saved, "utf8"))
+      : rollout && existsSync(rollout)
+        ? JSON.parse(readFileSync(rollout, "utf8").split("\n")[1])
+        : [];
     sequence = history.length;
+    if (
+      message.method === "thread/resume" &&
+      portable() &&
+      configuration().holdPortableResume
+    ) {
+      // Native resume can update the rollout before the destination commits.
+      appendFileSync(rollout, '{"type":"invented_resume_metadata"}\n');
+      return;
+    }
     if (provider === "kimi" && message.method === "session/load") replayKimi();
     if (
       provider === "codex" &&
@@ -407,7 +453,8 @@ function receive(message, external = false) {
         message,
         provider === "codex"
           ? {
-              thread: { id: nativeId, turns: history },
+              thread: { id: nativeId, turns: history, path: rollout },
+              ...(portable() ? { cwd: params.cwd } : {}),
               ...(configuration().reasoningOptions
                 ? { model: "fixture-model", reasoningEffort: "medium" }
                 : {}),

@@ -4,6 +4,7 @@ import { IntegrationApplicationService } from "./application/integration-service
 import { WorkspaceApplicationService } from "./application/workspace-service";
 import { ReviewApplicationService } from "./application/review-service";
 import { ConversationApplicationService } from "./application/conversation-service";
+import { ConversationTransferService } from "./application/conversation-transfer";
 import type {
   BrowserApplicationService,
   BrowserConversationPort,
@@ -24,6 +25,7 @@ import type {
 
 export class ApplicationOperations {
   readonly settings: SettingsService;
+  readonly transfers: ConversationTransferService;
   private readonly integration = new IntegrationApplicationService();
   private readonly files: FileApplicationService;
   private readonly browserHost?: BrowserApplicationService;
@@ -79,6 +81,11 @@ export class ApplicationOperations {
       this.browserHost,
       this.terminals,
       this.reviews,
+    );
+    this.transfers = new ConversationTransferService(
+      this.store,
+      this.conversations,
+      this.workspaces,
     );
   }
 
@@ -243,6 +250,11 @@ export class ApplicationOperations {
       throw new Error("An operation object with an op string is required");
     }
     const location = this.browserHost ? "local" : "linux";
+    if (request.op === "conversation.accept-transfer") {
+      if (!trustedUi || this.browserHost)
+        throw new Error("Pair the desktop to move a conversation to Linux");
+      return this.transfers.accept(request);
+    }
     if (request.op === "workspace.prepare" && request.location !== location)
       throw new Error("This workspace preparation targets a different host");
     if (request.op.startsWith("review."))

@@ -280,6 +280,27 @@ export class NativeAdapter implements ProviderAdapter {
     };
   }
 
+  async codexRolloutPath(nativeId: string): Promise<string> {
+    if (this.provider !== "codex" || this.id || this.binding)
+      throw new Error(
+        "Checking a saved Codex session requires an unbound client",
+      );
+    await this.initialize();
+    const response = object(
+      await this.rpc!.request(
+        "thread/read",
+        { threadId: nativeId, includeTurns: false },
+        undefined,
+        "read-only",
+      ),
+    );
+    const thread = object(response.thread);
+    const rollout = string(thread.path);
+    if (thread.id !== nativeId || !rollout || !isAbsolute(rollout))
+      throw new Error("Codex could not identify this saved session file");
+    return rollout;
+  }
+
   async discover(): Promise<Conversation[]> {
     await this.initialize();
     const result: Conversation[] = [];

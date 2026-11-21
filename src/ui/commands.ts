@@ -273,9 +273,54 @@ export function createCommands(
     const list = document.createElement("div");
     list.className = "command-list";
     dialog.append(input, list);
+    const host = getState().remoteWorkspace;
+    const sourceIsRemote = host?.ids.includes(conversation.workspaceId);
     for (const workspace of getState().workspaces.filter(
       (w) => w.id !== conversation.workspaceId,
     )) {
+      const destinationIsRemote = !!host?.ids.includes(workspace.id);
+      if (destinationIsRemote !== !!sourceIsRemote) {
+        if (
+          sourceIsRemote ||
+          conversation.provider !== "codex" ||
+          !host?.connected ||
+          !host.reviewAccess
+        )
+          continue;
+        for (const cwd of workspace.folders) {
+          const transfer = conversation.transfer;
+          if (
+            transfer &&
+            (transfer.workspace !== workspace.id ||
+              transfer.cwd !== cwd ||
+              transfer.host !== host.alias)
+          )
+            continue;
+          const label = `${workspace.name} (${host.alias})`;
+          list.append(
+            describeButton(
+              paneButton(label, async () => {
+                confirmAction(
+                  "Move conversation to Linux?",
+                  `Continue this saved Codex session on ${host.alias} in ${cwd}. Cod closes the local chat after Linux confirms.`,
+                  transfer ? "Retry move" : "Move conversation",
+                  async () => {
+                    await localInvoke("conversation.transfer", {
+                      id: conversation.id,
+                      workspace: workspace.id,
+                      cwd,
+                    });
+                    dialog.close();
+                  },
+                );
+              }),
+              cwd,
+            ),
+          );
+        }
+        continue;
+      }
+      if (conversation.transfer) continue;
       const button = paneButton(workspace.name, async () => {
         await localInvoke("conversation.move", {
           id: conversation.id,
@@ -285,6 +330,14 @@ export function createCommands(
         dialog.close();
       });
       list.append(button);
+    }
+    if (!list.childElementCount) {
+      const empty = document.createElement("p");
+      empty.setAttribute("role", "status");
+      empty.textContent = conversation.transfer
+        ? "Reconnect to the original paired Linux workspace to retry the move."
+        : "No eligible destination workspace.";
+      list.append(empty);
     }
     const selection = createSearchList(input, list);
     selection.update();

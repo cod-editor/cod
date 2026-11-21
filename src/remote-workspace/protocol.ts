@@ -31,6 +31,7 @@ const pairedDesktopOperations = new Set<string>([
   "conversation.permission",
   "conversation.send",
   "conversation.check-steer",
+  "conversation.accept-transfer",
 ]);
 
 export function canUsePairedDesktop(request: OperationRequest): boolean {

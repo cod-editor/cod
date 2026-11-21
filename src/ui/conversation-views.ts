@@ -1290,6 +1290,8 @@ export function createConversationViews({
     if (conversation.handoffTerminalId)
       currentStatus.textContent =
         "Open in the CLI terminal. Exit the CLI before returning to chat.";
+    if (conversation.transfer)
+      currentStatus.textContent = `Move to ${conversation.transfer.host} pending. Retry from Move to workspace.`;
     const unconfirmed = remoteSend(conversation.id);
     if (unconfirmed && !pendingSends.has(conversation.id)) {
       currentStatus.textContent = unconfirmedRemoteSend;
@@ -1490,6 +1492,7 @@ export function createConversationViews({
     const input = document.createElement("textarea");
     input.setAttribute("aria-label", "Message");
     input.placeholder = `Message ${providerLabel(conversation.provider)}...`;
+    input.readOnly = !!conversation.transfer;
     input.value = composerDrafts.get(conversation.id) ?? "";
     input.addEventListener("input", () => {
       composerDrafts.set(conversation.id, input.value);
@@ -1500,7 +1503,7 @@ export function createConversationViews({
     const provider = document.createElement("span");
     provider.textContent = providerLabel(conversation.provider);
     actions.append(provider);
-    if (!conversation.handoffTerminalId)
+    if (!conversation.handoffTerminalId && !conversation.transfer)
       actions.append(modelChoices(conversation));
     const end = document.createElement("span");
     end.className = "composer-end";
