@@ -119,6 +119,32 @@ test("Registered local form binds its real isolated view to one origin conversat
     shell.page.getByRole("dialog", { name: /command/i }),
   ).toBeVisible();
   await shell.page.keyboard.press("Escape");
+  await shell.cli("conversation", "show", "--id", origin.id);
+  const packet = shell
+    .pane(origin.paneId)
+    .locator("details.structured-message");
+  const summary = packet.locator("summary");
+  await expect(summary).toHaveText("Response to artifact.html");
+  await summary.click();
+  await expect(packet.locator("pre")).toBeVisible();
+  await expect(packet.locator("pre")).toContainText("100000 rows");
+  await shell.cli(
+    "conversation",
+    "rename",
+    "--id",
+    decoy.id,
+    "--name",
+    "Invented renamed conversation",
+  );
+  await expect(packet.locator("pre")).toBeVisible();
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    opened.paneId,
+  );
   await shell.stop();
   await shell.start();
   const restored = await shell.cli<{

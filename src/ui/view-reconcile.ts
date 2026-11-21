@@ -2,7 +2,11 @@
  * Callers key action identity (request, option, profile) and bind handlers to stable
  * resource IDs. Mutable state is read from the feature store when an action runs.
  */
-export function reconcileView(current: HTMLElement, next: HTMLElement): void {
+export function reconcileView(
+  current: HTMLElement,
+  next: HTMLElement,
+  retained?: ReadonlyMap<Node, Node>,
+): void {
   syncAttributes(current, next);
   if (
     current instanceof HTMLTextAreaElement &&
@@ -24,18 +28,22 @@ export function reconcileView(current: HTMLElement, next: HTMLElement): void {
   let cursor = current.firstChild;
   for (const child of [...next.childNodes]) {
     const key = identity(child);
-    const match = oldChildren.find(
-      (old) =>
-        !used.has(old) &&
-        identity(old) === key &&
-        old.nodeType === child.nodeType,
-    );
-    let resolved = child;
-    if (match) {
-      used.add(match);
+    const preserved = retained?.get(child);
+    const match =
+      preserved?.parentNode === current
+        ? preserved
+        : oldChildren.find(
+            (old) =>
+              !used.has(old) &&
+              identity(old) === key &&
+              old.nodeType === child.nodeType,
+          );
+    let resolved = preserved ?? child;
+    if (match) used.add(match);
+    if (match && !preserved) {
       resolved = match;
       if (match instanceof HTMLElement && child instanceof HTMLElement)
-        reconcileView(match, child);
+        reconcileView(match, child, retained);
       else if (
         match.nodeType === Node.TEXT_NODE &&
         match.textContent !== child.textContent
@@ -47,10 +55,11 @@ export function reconcileView(current: HTMLElement, next: HTMLElement): void {
         else match.textContent = value;
       } else if (!match.isEqualNode(child)) resolved = child;
     }
-    if (match && resolved !== match) {
+    if (match && resolved !== match && match.parentNode === current) {
       if (cursor === match) cursor = match.nextSibling;
-      match.remove();
+      current.removeChild(match);
     }
+    if (resolved === child && retained?.size) restoreRetained(child, retained);
     if (resolved !== cursor) current.insertBefore(resolved, cursor);
     cursor = resolved.nextSibling;
   }
@@ -59,6 +68,13 @@ export function reconcileView(current: HTMLElement, next: HTMLElement): void {
   if (current instanceof HTMLSelectElement && next instanceof HTMLSelectElement)
     current.value = next.value;
 }
+// A message can move between the live activity row and the final transcript.
+function restoreRetained(root: Node, retained: ReadonlyMap<Node, Node>): void {
+  for (const [placeholder, content] of retained)
+    if (root.contains(placeholder))
+      placeholder.parentNode?.replaceChild(content, placeholder);
+}
+
 function identity(node: Node): string {
   if (!(node instanceof Element)) return String(node.nodeType);
   for (const key of [
