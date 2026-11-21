@@ -360,6 +360,14 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
   let exited: Promise<unknown> | undefined;
   await desktop.prepare();
   await linux.prepare();
+  await linux.configure({
+    codex: {
+      options: true,
+      multipleModels: true,
+      reasoningOptions: true,
+      alternateReasoning: true,
+    },
+  });
   try {
     linux.socket = path.join(linux.data, "cod.sock");
     linux.environment.COD_SOCKET_PATH = linux.socket;
@@ -454,12 +462,45 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
 
     await desktop.command("New chat");
     await expect(draft).toBeVisible();
+    const remoteModel = desktop.page.getByRole("button", {
+      name: "Model",
+      exact: true,
+    });
+    const remoteEffort = desktop.page.getByRole("button", {
+      name: "Reasoning effort",
+      exact: true,
+    });
+    const choices = desktop.page.getByRole("dialog", {
+      name: "Actions",
+      exact: true,
+    });
+    await remoteModel.click();
+    await choices
+      .getByRole("button", { name: "Alternate fixture", exact: true })
+      .click();
+    await expect(remoteModel).toHaveText("Alternate fixture");
+    await remoteEffort.click();
+    await choices
+      .getByRole("button", { name: "Extra high", exact: true })
+      .click();
+    await expect(remoteEffort).toHaveText("Extra high");
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    expect(await linux.prompts()).toHaveLength(0);
+    expect(
+      (await desktop.records()).filter(
+        ({ message }) => message?.method === "model/list",
+      ),
+    ).toHaveLength(0);
     const message = "Invented remote chat input";
     await draft.fill(message);
     await draft.press("Enter");
     await expect(
       desktop.page.getByText("DONE " + message, { exact: true }),
     ).toBeVisible();
+    expect((await linux.prompts())[0].message?.params).toMatchObject({
+      model: "fixture-alternate",
+      effort: "xhigh",
+    });
     expect((await desktop.raw("state")).stdout).not.toContain(message);
     expect((await linux.raw("state")).stdout).toContain(message);
 

@@ -22,6 +22,207 @@ async function pasteFixtureImage(app: ChatApp) {
   await app.page.keyboard.press(`${modifier}+V`);
 }
 
+test("An unsent Codex draft selects model and effort for its first actual turn", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  const catalog = {
+    options: true,
+    multipleModels: true,
+    reasoningOptions: true,
+    alternateReasoning: true,
+  };
+  const menu = () => app.page.getByRole("dialog", { name: "Actions" });
+  const pick = (name: string) =>
+    menu().getByRole("button", { name, exact: true });
+  const findDraft = (paneId: string) => {
+    const pane = app.pane(paneId);
+    return {
+      model: pane.getByRole("button", { name: "Model", exact: true }),
+      effort: pane.getByRole("button", {
+        name: "Reasoning effort",
+        exact: true,
+      }),
+      provider: pane.getByRole("button", { name: "Provider", exact: true }),
+      input: pane.getByRole("textbox", { name: "Message", exact: true }),
+      images: pane.locator(".composer-images img"),
+    };
+  };
+  const requests = async (method: string) =>
+    (await app.records()).filter((item) => item.message?.method === method);
+
+  try {
+    await app.start();
+    const workspace = await app.create("Draft model verification");
+    const saved = () => app.cli<AppState>("state");
+    const draftSelections = async () =>
+      (await saved()).workspaces.find((item) => item.id === workspace)
+        ?.chatDrafts;
+    const paneId = (await app.workspace(workspace)).activePaneId;
+    let first = findDraft(paneId);
+    await expect(first.model).toHaveText("Model");
+    await expect(first.effort).toHaveText("Effort");
+    expect(await requests("model/list")).toHaveLength(0);
+    await app.page.screenshot({
+      path: info.outputPath("draft-model-unopened.png"),
+    });
+
+    await first.input.fill("Summarize the invented report");
+    await pasteFixtureImage(app);
+    await expect(first.images).toHaveCount(1);
+    const text = await first.input.inputValue();
+    const original = () => draftSelections().then((drafts) => drafts?.[paneId]);
+    await expect.poll(original).toMatchObject({
+      text,
+      images: [expect.objectContaining({ mimeType: "image/png" })],
+    });
+
+    await first.model.click();
+    await expect(
+      app.page
+        .getByRole("status")
+        .filter({ hasText: "Could not load Codex choices" }),
+    ).toBeVisible();
+    await expect(first.model).toBeFocused();
+    await expect(first.input).toHaveValue(text);
+    await expect(first.images).toHaveCount(1);
+    expect(await requests("thread/start")).toHaveLength(0);
+    expect(await app.prompts()).toHaveLength(0);
+
+    await app.configure({ codex: catalog });
+    await first.model.press("Enter");
+    await expect(pick("Fixture model")).toBeVisible();
+    await expect(pick("Use provider default")).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("draft-model-picker.png"),
+    });
+    await pick("Use provider default").press("Escape");
+    await expect(first.model).toBeFocused();
+    await expect(menu()).toHaveCount(0);
+    expect(await requests("thread/start")).toHaveLength(0);
+    expect(await app.prompts()).toHaveLength(0);
+
+    await first.model.click();
+    await pick("Alternate fixture").click();
+    await expect(first.model).toHaveText("Alternate fixture");
+    await expect(first.model).toBeFocused();
+    await first.effort.click();
+    await expect(pick("Extra high")).toBeVisible();
+    await expect(pick("Low")).toHaveCount(0);
+    await pick("Extra high").click();
+    await expect(first.effort).toHaveText("Extra high");
+    await expect(first.effort).toBeFocused();
+
+    const child = await app.cli<{ paneId: string }>(
+      "pane",
+      "new",
+      "--workspace",
+      workspace,
+      "--same-as",
+      paneId,
+      "--focus",
+      "true",
+    );
+    let second = findDraft(child.paneId);
+    await expect(second.input).toHaveValue("");
+    await expect(second.images).toHaveCount(0);
+    expect((await draftSelections())?.[child.paneId].initialSelection).toEqual({
+      model: "fixture-alternate",
+      reasoning: "xhigh",
+    });
+    await second.model.click();
+    await expect(pick("Alternate fixture")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await pick("Alternate fixture").press("Escape");
+    await second.provider.click();
+    await pick("Kimi").click();
+    await expect(second.model).toHaveCount(0);
+    await second.provider.click();
+    await pick("Codex").click();
+    await expect(second.model).toHaveText("Model");
+    expect(
+      (await draftSelections())?.[child.paneId]?.initialSelection,
+    ).toBeUndefined();
+    expect((await saved()).conversations).toHaveLength(0);
+    expect(await requests("thread/start")).toHaveLength(0);
+    expect(await app.prompts()).toHaveLength(0);
+
+    await app.cli("pane", "focus", "--workspace", workspace, "--id", paneId);
+    expect(await original()).toMatchObject({ text, images: expect.any(Array) });
+    await app.stop();
+    await app.start();
+    first = findDraft(paneId);
+    second = findDraft(child.paneId);
+    expect(await original()).toMatchObject({ text, images: expect.any(Array) });
+    await expect(first.input).toHaveValue(text);
+    await expect(first.images).toHaveCount(1);
+    await expect(first.effort).toHaveText("Extra high");
+    expect(await requests("thread/start")).toHaveLength(0);
+
+    // Render a full, narrow window with the draft beside another tab group.
+    await app.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 680),
+    );
+    await app.cli(
+      "group",
+      "ensure",
+      "--workspace",
+      workspace,
+      "--side",
+      "right",
+    );
+    await app.cli("pane", "focus", "--workspace", workspace, "--id", paneId);
+    await first.effort.click();
+    await expect(pick("Extra high")).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("draft-effort-picker-narrow.png"),
+    });
+    await pick("Extra high").press("Escape");
+
+    await first.input.press(`${modifier}+Enter`);
+    await expect.poll(async () => (await app.prompts()).length).toBe(1);
+    const submitted = (await app.prompts())[0].message?.params;
+    expect(submitted).toMatchObject({
+      model: "fixture-alternate",
+      effort: "xhigh",
+      input: expect.arrayContaining([
+        expect.objectContaining({ type: "image" }),
+      ]),
+    });
+    expect(await requests("thread/start")).toHaveLength(1);
+    await expect(
+      app.page.getByText(/DONE Summarize the invented report/),
+    ).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("existing-chat-model-reference.png"),
+    });
+
+    await app.cli(
+      "pane",
+      "focus",
+      "--workspace",
+      workspace,
+      "--id",
+      child.paneId,
+    );
+    await second.model.click();
+    await expect(pick("Use provider default")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await pick("Use provider default").press("Escape");
+    await second.input.fill("Send with native defaults");
+    await second.input.press(`${modifier}+Enter`);
+    await expect.poll(async () => (await app.prompts()).length).toBe(2);
+    const defaults = (await app.prompts())[1].message?.params;
+    expect(defaults).not.toHaveProperty("model");
+    expect(defaults).not.toHaveProperty("effort");
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("An agent moves its existing conversation during a turn without losing the user's draft or review", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();

@@ -92,6 +92,10 @@ export interface ProviderSelection {
   option: "model" | "reasoning";
   value: string;
 }
+export interface DraftOptionChange {
+  option: ProviderSelection["option"];
+  value?: string;
+}
 export interface ProviderOptions {
   models: NativeChoice[];
   reasoning: NativeChoice[];
@@ -143,6 +147,10 @@ export interface ProviderAdapter {
     startsAtTail: boolean;
   }>;
   getOptions(): Promise<ProviderOptions>;
+  getDraftOptions(
+    selection: ProviderOptions["current"],
+    change?: DraftOptionChange,
+  ): Promise<ProviderOptions>;
   getSelection(): ProviderOptions["current"];
   setOption(selection: ProviderSelection): Promise<ProviderOptions>;
   /** Resolves after the native turn finishes, not merely after prompt acceptance. */

@@ -73,6 +73,8 @@ export const commands = {
   ],
   "conversation.acknowledge": ["id"],
   "conversation.report-status": ["id", "status", "context?", "source?"],
+  "conversation.draft-options": ["workspace", "pane-id"],
+  "conversation.draft-option": ["workspace", "pane-id", "option", "value?"],
   "conversation.options": ["id"],
   "conversation.option": ["id", "option", "value"],
   "workspace.close": ["id", "force?"],
