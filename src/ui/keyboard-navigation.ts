@@ -33,7 +33,12 @@ export function createKeyboardNavigation(
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key === "Tab" || event.key === "Escape") cancelFocus();
+      const traversesTabOrder =
+        event.key === "Tab" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey;
+      if (traversesTabOrder || event.key === "Escape") cancelFocus();
     },
     { capture: true, signal: events.signal },
   );
