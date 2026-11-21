@@ -345,6 +345,8 @@ export interface CodBridge {
     options?: { forward?: boolean; findNext?: boolean },
   ): Promise<number>;
   browserStopFind(id: string): void;
+  browserFindVisibility(id: string, visible: boolean): void;
+  onBrowserFindDismiss(callback: (id: string) => void): void;
   onBrowserFind(
     callback: (event: {
       browserId: string;

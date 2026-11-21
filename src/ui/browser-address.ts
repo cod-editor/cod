@@ -1,3 +1,4 @@
+import { isPlainEscape } from "../keyboard";
 import type { Invoke } from "./contracts";
 export function addressSuggestions(
   input: HTMLInputElement,
@@ -18,11 +19,13 @@ export function addressSuggestions(
   input.setAttribute("aria-controls", list.id);
   let revision = 0,
     selected = -1,
-    composing = false;
+    composing = false,
+    pending = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   function close() {
     revision++;
     clearTimeout(timer);
+    pending = false;
     list.hidden = true;
     list.replaceChildren();
     input.setAttribute("aria-expanded", "false");
@@ -50,6 +53,7 @@ export function addressSuggestions(
       return;
     }
     const generation = ++revision;
+    pending = true;
     try {
       const results = await invoke<Array<{ url: string; title: string }>>(
         "browser.suggest",
@@ -92,12 +96,16 @@ export function addressSuggestions(
       layout();
     } catch {
       if (generation === revision) close();
+    } finally {
+      if (generation === revision) pending = false;
     }
   }
   function edited() {
     close();
-    if (!composing && input.value.trim() !== currentUrl())
+    if (!composing && input.value.trim() !== currentUrl()) {
+      pending = true;
       timer = setTimeout(() => void refresh(), 80);
+    }
   }
   input.addEventListener("input", edited);
   input.addEventListener("compositionstart", () => {
@@ -134,9 +142,9 @@ export function addressSuggestions(
     } else if (event.key === "Enter" && selected >= 0 && !list.hidden) {
       event.preventDefault();
       rows[selected]?.click();
-    } else if (event.key === "Escape") {
+    } else if (isPlainEscape(event) && (pending || !list.hidden)) {
       event.preventDefault();
-      close();
+      if (!event.repeat) close();
     }
   });
   return { element: list, close };

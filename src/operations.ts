@@ -111,6 +111,9 @@ export class ApplicationOperations {
   ): Promise<number> {
     return this.browsers.browserFind(id, text, options);
   }
+  browserFindVisibility(id: string, visible: boolean): void {
+    this.browsers.browserFindVisibility(id, visible);
+  }
   browserStopFind(id: string): void {
     this.browsers.browserStopFind(id);
   }

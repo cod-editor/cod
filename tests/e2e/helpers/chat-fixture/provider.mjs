@@ -263,7 +263,7 @@ function receive(message, external = false) {
       data: [
         {
           model: "fixture-model",
-          displayName: "Fixture model",
+          displayName: configuration().modelDisplayName ?? "Fixture model",
           isDefault: true,
           defaultReasoningEffort: "medium",
           supportedReasoningEfforts: configuration().reasoningOptions

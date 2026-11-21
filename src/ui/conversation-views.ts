@@ -1,4 +1,10 @@
-import { backgroundActivity } from "./background-activity";
+import {
+  backgroundActivity,
+  dismissBackgroundActivity,
+} from "./background-activity";
+import { canStopResponse } from "../conversation-actions";
+import { isPlainEscape } from "../keyboard";
+import { shortcutTitle } from "./keyboard-ui";
 import { webLinkMenu } from "./web-links";
 import { actionRow, uiButton } from "./primitives";
 import { showActionError } from "./action-feedback";
@@ -40,6 +46,7 @@ function setChoiceCaption(button: HTMLButtonElement, text: string): void {
     button.append(label, arrow);
   }
   label.textContent = text;
+  button.title = text;
 }
 function optionLabel(
   option: DraftOptionChange["option"],
@@ -69,7 +76,7 @@ function optionButton(
 ) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "composer-choice";
+  button.classList.add("composer-choice", `composer-choice-${option}`);
   button.dataset.focusKey = `option:${key}`;
   button.setAttribute(
     "aria-label",
@@ -289,7 +296,8 @@ export function createConversationViews({
       button.onkeydown = (event) => {
         const loading = draftModels.get(pane.id)?.loading;
         if (
-          event.key === "Escape" &&
+          isPlainEscape(event) &&
+          !event.repeat &&
           loading?.trigger === event.currentTarget
         ) {
           loading.canceled = true;
@@ -951,6 +959,16 @@ export function createConversationViews({
     { workspace: string; contents: ReadonlyMap<string, MessageContent> }
   >();
 
+  let expandedBackground:
+    { conversationId: string; kind: "agent" | "command" } | undefined;
+
+  async function stopResponse(id: string) {
+    if (
+      canStopResponse(getState().conversations.find((item) => item.id === id))
+    )
+      await invoke("conversation.interrupt", { id });
+  }
+
   function renderConversation(
     conversation: import("../types").ConversationState,
     previous?: HTMLElement,
@@ -1370,22 +1388,51 @@ export function createConversationViews({
             queueEdits.delete(message.id);
             invalidate();
           });
+          let escapeOrigin: EventTarget | null = null;
           const cancel = paneButton("Cancel", async () => {
+            const origin = escapeOrigin ?? document.activeElement;
+            const focusedRow =
+              origin instanceof Element &&
+              origin.closest<HTMLElement>(".queued-message")?.dataset
+                .focusKey === `queued:${message.id}`;
             await invoke("conversation.queue-edit", {
               id: conversation.id,
               messageId: message.id,
             });
             queueEdits.delete(message.id);
+            const returnFocus =
+              focusedRow &&
+              (document.activeElement === origin ||
+                document.activeElement === document.body);
             invalidate();
+            if (returnFocus)
+              requestAnimationFrame(() => {
+                if (
+                  !document.hasFocus() ||
+                  document.activeElement !== document.body
+                )
+                  return;
+                panes
+                  .querySelector<HTMLButtonElement>(
+                    `[data-focus-key="queued:${message.id}"] button[aria-label="Edit queued message"]`,
+                  )
+                  ?.focus();
+              });
           });
+          cancel.dataset.focusKey = `queue-edit-cancel:${message.id}`;
           cancel.classList.add("quiet");
-          field.onkeydown = (event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              cancel.click();
-            }
+          const cancelOnEscape = (event: KeyboardEvent) => {
+            if (!isPlainEscape(event)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.repeat) return;
+            escapeOrigin = event.currentTarget;
+            cancel.click();
+            escapeOrigin = null;
           };
+          field.onkeydown = cancelOnEscape;
+          save.onkeydown = cancelOnEscape;
+          cancel.onkeydown = cancelOnEscape;
           row.append(field, actionRow(cancel, save));
         } else {
           const preview = document.createElement("div");
@@ -1454,29 +1501,33 @@ export function createConversationViews({
     actions.append(provider);
     if (!conversation.handoffTerminalId)
       actions.append(modelChoices(conversation));
+    const end = document.createElement("span");
+    end.className = "composer-end";
     if (conversation.backgroundActivities?.length)
-      actions.append(
+      end.append(
         backgroundActivity(
+          conversation.id,
           conversation.backgroundActivities,
-          views
-            .get("chat:" + conversation.id)
-            ?.querySelector<HTMLDetailsElement>(".composer-background")?.open ??
-            false,
-          invalidate,
+          expandedBackground?.conversationId === conversation.id
+            ? expandedBackground.kind
+            : undefined,
+          (kind) => {
+            expandedBackground = kind
+              ? { conversationId: conversation.id, kind }
+              : undefined;
+            invalidate();
+          },
         ),
       );
-    if (
-      !conversation.handoffTerminalId &&
-      ["working", "waiting"].includes(conversation.status)
-    ) {
-      const stop = iconButton(
-        "stop",
-        "Stop",
-        () => void invoke("conversation.interrupt", { id: conversation.id }),
-      );
-      stop.style.marginLeft = "auto";
-      actions.append(stop);
+    if (canStopResponse(conversation)) {
+      const stop = iconButton("stop", "Stop", () => {
+        void stopResponse(conversation.id).catch(() => undefined);
+      });
+      stop.classList.add("embedded");
+      stop.title = shortcutTitle("chat.stop");
+      end.append(stop);
     }
+    if (end.childElementCount) actions.append(end);
     composer.oncontextmenu = (e) => {
       if (e.target === input) return;
       e.preventDefault();
@@ -1797,8 +1848,21 @@ export function createConversationViews({
     },
     integration: integration.open,
     send: sendMessage,
+    stop: stopResponse,
+    dismissBackground: dismissBackgroundActivity,
     reconcile() {
       reconcile();
+      if (
+        expandedBackground &&
+        !getState().conversations.some(
+          (item) =>
+            item.id === expandedBackground?.conversationId &&
+            item.backgroundActivities?.some(
+              (activity) => activity.kind === expandedBackground?.kind,
+            ),
+        )
+      )
+        expandedBackground = undefined;
       for (const paneId of draftModels.keys())
         if (
           !getState().workspaces.some((workspace) =>

@@ -15,7 +15,7 @@ import {
   captureFindFocus,
   restoreFindFocus,
 } from "../browser/find-focus";
-import { nativeKeyInput, resolveKeybinding } from "../keyboard";
+import { isPlainEscape, nativeKeyInput, resolveKeybinding } from "../keyboard";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
@@ -44,6 +44,7 @@ export class BrowserApplicationService {
   private browserAddons?: BrowserAddons;
   private selectedBrowserContents?: number;
   private synchronizingBrowserSelection = false;
+  private activeFindBrowserId?: string;
   private findRevisions = new Map<string, number>();
   private browserLoads = new Map<string, number>();
   private browserAdmissions = new Map<string, AbortController>();
@@ -489,8 +490,19 @@ export class BrowserApplicationService {
       });
     });
     contents.on("before-input-event", (event, input) => {
+      const key = nativeKeyInput(input);
+      if (
+        input.type === "keyDown" &&
+        this.activeFindBrowserId === id &&
+        isPlainEscape(key)
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat)
+          this.browserWindow?.webContents.send("cod:browser-find-dismiss", id);
+        return;
+      }
       const match = resolveKeybinding(
-        nativeKeyInput(input),
+        key,
         process.platform === "darwin" ? "darwin" : "linux",
         surface,
       );
@@ -552,6 +564,21 @@ export class BrowserApplicationService {
       forward: options.forward ?? true,
       findNext: options.findNext ?? false,
     });
+  }
+  browserFindVisibility(id: string, visible: boolean): void {
+    if (!visible) {
+      if (this.activeFindBrowserId === id) this.activeFindBrowserId = undefined;
+      return;
+    }
+    if (
+      this.store.data.browsers.some(
+        (browser) =>
+          browser.id === id &&
+          browser.workspaceId === this.store.data.activeWorkspaceId,
+      )
+    ) {
+      this.activeFindBrowserId = id;
+    }
   }
   browserStopFind(id: string): void {
     // Renderer teardown may arrive after native resources were disposed. Clearing
@@ -1064,6 +1091,8 @@ export class BrowserApplicationService {
     return closed && !this.store.closing;
   }
   removeBrowser(record: BrowserState): void {
+    if (this.activeFindBrowserId === record.id)
+      this.activeFindBrowserId = undefined;
     this.store.data.browsers = this.store.data.browsers.filter(
       (item) => item !== record,
     );
