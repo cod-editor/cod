@@ -1,5 +1,5 @@
 import { focusReadyEditor } from "./document-views";
-import type { AppState, PaneState } from "../types";
+import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke, WhenRendered } from "./contracts";
 import { orderedGroups } from "../workspace-layout";
 
@@ -131,23 +131,19 @@ export function createKeyboardNavigation(
     if (workspace()?.id !== w.id) return;
     await focusActiveContent(id, intent);
   }
-  async function cyclePane(
-    delta: number,
-    workspaceId?: string,
-    paneId?: string,
-  ): Promise<void> {
-    const w = workspaceId
-      ? getState().workspaces.find((w) => w.id === workspaceId)
-      : workspace();
-    if (!w) return;
-    const groups = orderedGroups(w).filter((group) => !group.hidden);
-    if (!groups.length) return;
-    const index = groups.findIndex((g) =>
-      g.paneIds.includes(paneId ?? w.activePaneId),
+  function adjacentPane(
+    w: WorkspaceState,
+    delta: 1 | -1,
+    paneId = w.activePaneId,
+  ): string | undefined {
+    const groups = orderedGroups(w);
+    if (groups.length < 2) return;
+    const from = groups.find((group) => group.paneIds.includes(paneId));
+    const index = groups.findIndex(
+      (group) => group.id === (from?.id ?? w.activeGroupId),
     );
-    await focusPane(
-      groups[(index + delta + groups.length) % groups.length].activePaneId,
-    );
+    if (index < 0) return;
+    return groups[(index + delta + groups.length) % groups.length].activePaneId;
   }
   async function selectTab(
     index: number,
@@ -255,7 +251,7 @@ export function createKeyboardNavigation(
     },
     focusPane,
     focusActiveContent,
-    cyclePane,
+    adjacentPane,
     selectTab,
     cycleTab,
     cycleRegion,

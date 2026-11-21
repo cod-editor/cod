@@ -513,6 +513,15 @@ export class BrowserApplicationService {
         toggleDevTools(contents);
         return;
       }
+      if (
+        (match.command === "pane.next" || match.command === "pane.previous") &&
+        !this.store.data.workspaces.some(
+          (workspace) =>
+            workspace.id === this.store.data.activeWorkspaceId &&
+            workspace.groups.length > 1,
+        )
+      )
+        return;
       // Hiding a pane chooses its replacement after layout is committed. Moving
       // native focus first can revive a stale editor and echo pane.focus back,
       // racing the hide and reopening the pane that was just hidden.

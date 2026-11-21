@@ -58,24 +58,14 @@ export function createPaneLayout(
   function applyWorkspaceSettings(workspace?: WorkspaceState): void {
     const [left, right] = workspace ? orderedGroups(workspace) : [];
     const bothVisible = !!right && !left.hidden && !right.hidden;
-    const active = workspace?.activeGroupId;
-    for (const [half, group] of [
-      [splitLeft, left],
-      [splitRight, right],
-    ] as const) {
-      half.dataset.state =
-        !right || !group || group.hidden
-          ? "outline"
-          : bothVisible && group.id === active
-            ? "focused"
-            : "visible";
-    }
+    splitLeft.dataset.state = right && !left.hidden ? "visible" : "outline";
+    splitRight.dataset.state = right && !right.hidden ? "visible" : "outline";
     const layout = !workspace
       ? "Open a workspace first"
       : !right
         ? "No split"
         : bothVisible
-          ? `Both panes visible, ${right.id === active ? "right" : "left"} pane active`
+          ? "Both panes visible"
           : `Only ${right.hidden ? "left" : "right"} pane visible`;
     splitButton.disabled = !workspace;
     splitButton.title = `${shortcutTitle("pane.zoom", "Toggle split view")} · ${layout}`;
@@ -321,7 +311,13 @@ export function createPaneLayout(
     groupViews.set(group.id, section);
     section.className = "tab-group";
     section.dataset.groupId = group.id;
+    const focused = workspace.activeGroupId === group.id;
+    section.dataset.focused = String(focused);
     section.setAttribute("aria-label", "Pane");
+    section.setAttribute(
+      "aria-description",
+      focused ? "Active pane" : "Other pane",
+    );
     const bar =
       section.querySelector<HTMLDivElement>(":scope > .tab-bar") ??
       document.createElement("div");
