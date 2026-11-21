@@ -1,6 +1,7 @@
 import {
   backgroundActivity,
   dismissBackgroundActivity,
+  showsActivityTrigger,
 } from "./background-activity";
 import { canStopResponse } from "../conversation-actions";
 import { isPlainEscape } from "../keyboard";
@@ -1507,22 +1508,20 @@ export function createConversationViews({
       actions.append(modelChoices(conversation));
     const end = document.createElement("span");
     end.className = "composer-end";
-    if (conversation.backgroundActivities?.length)
-      end.append(
-        backgroundActivity(
-          conversation.id,
-          conversation.backgroundActivities,
-          expandedBackground?.conversationId === conversation.id
-            ? expandedBackground.kind
-            : undefined,
-          (kind) => {
-            expandedBackground = kind
-              ? { conversationId: conversation.id, kind }
-              : undefined;
-            invalidate();
-          },
-        ),
-      );
+    const activity = backgroundActivity(
+      conversation.id,
+      conversation.backgroundActivities,
+      expandedBackground?.conversationId === conversation.id
+        ? expandedBackground.kind
+        : undefined,
+      (kind) => {
+        expandedBackground = kind
+          ? { conversationId: conversation.id, kind }
+          : undefined;
+        invalidate();
+      },
+    );
+    if (activity) end.append(activity);
     if (canStopResponse(conversation)) {
       const stop = iconButton("stop", "Stop", () => {
         void stopResponse(conversation.id).catch(() => undefined);
@@ -1839,11 +1838,26 @@ export function createConversationViews({
       stable("draft:" + pane.id, renderDraftChat(workspace, pane)),
     conversation: (conversation: import("../types").ConversationState) => {
       const id = "chat:" + conversation.id;
+      const previous = views.get(id);
+      const active = document.activeElement;
+      const shell = '[data-activity-kind="command"]';
+      const shellHadFocus =
+        document.hasFocus() &&
+        previous?.contains(active) &&
+        active?.closest(shell);
       const { body, contents, retained } = renderConversation(
         conversation,
-        views.get(id),
+        previous,
       );
       const view = stable(id, body, retained);
+      if (
+        shellHadFocus &&
+        !view.querySelector(shell) &&
+        document.activeElement === document.body
+      )
+        view.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus({
+          preventScroll: true,
+        });
       renderedMessages.set(view, {
         workspace: conversation.workspaceId,
         contents,
@@ -1862,7 +1876,9 @@ export function createConversationViews({
           (item) =>
             item.id === expandedBackground?.conversationId &&
             item.backgroundActivities?.some(
-              (activity) => activity.kind === expandedBackground?.kind,
+              (activity) =>
+                activity.kind === expandedBackground?.kind &&
+                showsActivityTrigger(activity),
             ),
         )
       )

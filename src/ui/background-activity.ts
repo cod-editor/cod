@@ -9,12 +9,17 @@ const stateLabels: Record<BackgroundActivity["state"], string> = {
   unknown: "State unknown",
 };
 
+export function showsActivityTrigger(activity: BackgroundActivity): boolean {
+  return activity.kind === "agent" || activity.state === "running";
+}
+
 export function backgroundActivity(
   conversationId: string,
-  activities: BackgroundActivity[],
+  activities: BackgroundActivity[] | undefined,
   expanded: BackgroundActivity["kind"] | undefined,
   choose: (kind: BackgroundActivity["kind"] | undefined) => void,
-): HTMLElement {
+): HTMLElement | undefined {
+  if (!activities?.length) return;
   const host = document.createElement("span");
   host.className = "composer-background";
   for (const [kind, label, singular] of [
@@ -22,7 +27,7 @@ export function backgroundActivity(
     ["command", "Shells", "shell"],
   ] as const) {
     const items = activities.filter((item) => item.kind === kind);
-    if (!items.length) continue;
+    if (!items.some(showsActivityTrigger)) continue;
     const running = items.filter((item) => item.state === "running");
     const count = running.length;
     const id = `background-${conversationId}-${kind}`;
@@ -33,6 +38,7 @@ export function backgroundActivity(
       "quiet",
     );
     trigger.classList.add("composer-background-trigger", "embedded");
+    trigger.dataset.activityKind = kind;
     trigger.dataset.focusKey = `background:${kind}`;
     trigger.dataset.running = String(count > 0);
     trigger.setAttribute(
@@ -50,12 +56,18 @@ export function backgroundActivity(
           : kind,
       );
     host.append(trigger);
-    if (expanded === kind)
-      host.append(
-        activityList(id, `Background ${label.toLowerCase()}`, items, running),
+    if (expanded === kind) {
+      const list = activityList(
+        id,
+        `Background ${label.toLowerCase()}`,
+        items,
+        running,
       );
+      list.dataset.activityKind = kind;
+      host.append(list);
+    }
   }
-  return host;
+  return host.childElementCount ? host : undefined;
 }
 
 export function dismissBackgroundActivity(target: Element): boolean {
