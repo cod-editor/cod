@@ -12,6 +12,7 @@ export const buildOutputs = [
   "preload.cjs",
   "agent-page-preload.cjs",
   "cli.cjs",
+  "provider-owner.cjs",
   ...(process.platform === "linux" ? ["workspace-host.cjs"] : []),
   "renderer.js",
   "preview.js",

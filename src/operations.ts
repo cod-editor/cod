@@ -14,6 +14,7 @@ import { ApplicationStateStore } from "./application/state";
 import type { BrowserWindow, Session } from "electron";
 import { operations } from "./command-catalog";
 import type { BuildInfo } from "./build-info";
+import { LocalProviderOwner } from "./providers/local-owner-client";
 import type {
   AppState,
   BrowserRectangle,
@@ -63,6 +64,13 @@ export class ApplicationOperations {
         finishPage: (request, id, status) =>
           this.browserHost?.finishPage(request, id, status),
       },
+      this.browserHost &&
+        (process.platform === "darwin" || process.platform === "linux")
+        ? {
+            owner: new LocalProviderOwner(dataDirectory),
+            enabled: () => this.settings.state.values["chat.detachedSessions"],
+          }
+        : undefined,
     );
     this.reviews = new ReviewApplicationService(this.store, this.conversations);
     this.workspaces = new WorkspaceApplicationService(
@@ -140,7 +148,7 @@ export class ApplicationOperations {
       await this.store.change(() =>
         this.workspaces.createWorkspace("Untitled"),
       );
-    this.conversations.restoreInterrupted();
+    await this.conversations.restoreInterrupted();
     await this.files.restoreIdentity();
     this.browserHost?.restoreSubmissions();
     this.terminals.restoreAll();
@@ -368,9 +376,13 @@ export class ApplicationOperations {
     }
   }
 
-  async shutdown(): Promise<void> {
+  quitStatus() {
+    return this.conversations.quitStatus();
+  }
+
+  async shutdown(leaveRunning = false): Promise<void> {
     this.store.beginShutdown();
-    await this.conversations.shutdown();
+    await this.conversations.shutdown(leaveRunning);
     await this.reviews.shutdown();
     await this.browserHost?.shutdown();
     await this.terminals.shutdown();

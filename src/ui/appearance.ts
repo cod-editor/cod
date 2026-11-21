@@ -355,7 +355,11 @@ export function appearanceDialog(
               : input.value,
         );
       };
-    const { row, reset, control } = settingEntry(spec.label, input);
+    const { row, reset, control } = settingEntry(
+      spec.label,
+      input,
+      "description" in spec ? spec.description : undefined,
+    );
     row.dataset.settingKey = key;
     reset.setAttribute("aria-label", `Reset ${spec.group} ${spec.label}`);
     let refreshControl: (() => void) | undefined;

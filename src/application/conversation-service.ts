@@ -3,6 +3,7 @@ import {
   acknowledgeConversation,
   backgroundWithUnknownState,
   conversationHandoffReason,
+  hasRunningBackground,
 } from "../conversation-actions";
 import { parseProviderCommand } from "../provider-commands";
 import { randomUUID } from "node:crypto";
@@ -10,6 +11,11 @@ import path from "node:path";
 import { stat } from "node:fs/promises";
 import { resolveProviderExecutable } from "../provider-executables";
 import { defaultSocketPath } from "../paths";
+import {
+  DetachedProviderAdapter,
+  LocalOwnerUnavailable,
+  type LocalProviderOwner,
+} from "../providers/local-owner-client";
 import {
   createCodexAdapter,
   createKimiAdapter,
@@ -150,6 +156,10 @@ export class ConversationApplicationService {
       "createProcess" | "attachTerminal"
     >,
     private readonly views: ConversationViewPort,
+    private readonly detached?: {
+      owner: LocalProviderOwner;
+      enabled: () => boolean;
+    },
   ) {}
   selection(
     id: string,
@@ -184,13 +194,13 @@ export class ConversationApplicationService {
   }
   private finishTurn(
     conversation: ConversationState,
-    outcome: "completed" | "cancelled" | "failed",
+    outcome: "completed" | "cancelled" | "failed" | undefined,
+    at = Date.now(),
   ): void {
     const clock = this.turnClocks.get(conversation.id);
     const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
     if (!turn || !clock || turn.finishedAt) return;
-    turn.finishedAt = new Date().toISOString();
-    const now = performance.now();
+    const now = performance.now() - Math.max(0, Date.now() - at);
     turn.elapsedMs = Math.max(0, Math.round(now - clock.start));
     turn.durationMs = Math.max(
       0,
@@ -199,7 +209,10 @@ export class ConversationApplicationService {
           (clock.workingStart === undefined ? 0 : now - clock.workingStart),
       ),
     );
-    turn.outcome = outcome;
+    if (outcome) {
+      turn.finishedAt = new Date(at).toISOString();
+      turn.outcome = outcome;
+    }
   }
   private currentTurn(conversation: ConversationState): string | undefined {
     return this.activeTurns.has(conversation.id)
@@ -242,10 +255,14 @@ export class ConversationApplicationService {
     this.store.notify();
     try {
       const outcome = await adapter.send(text);
+      if (this.store.closing) return;
       if (this.turnClocks.get(conversation.id)?.id === turnId)
         this.finishTurn(conversation, outcome.status);
     } catch (error) {
-      if (this.turnClocks.get(conversation.id)?.id === turnId)
+      if (
+        !this.store.closing &&
+        this.turnClocks.get(conversation.id)?.id === turnId
+      )
         this.finishTurn(conversation, "failed");
       throw error;
     } finally {
@@ -258,6 +275,7 @@ export class ConversationApplicationService {
     if (existing) {
       this.controllers.delete(conversation.id);
       await existing.dispose();
+      delete conversation.detachedOwner;
       this.assertCurrent(conversation);
       conversation.status = previousStatus;
     }
@@ -282,27 +300,62 @@ export class ConversationApplicationService {
       await replay.dispose();
     }
   }
-  async shutdown(): Promise<void> {
+  quitStatus(): { active: number; canLeaveRunning: boolean } {
+    const active = this.store.data.conversations.filter(
+      (conversation) =>
+        this.isActive(conversation.id) ||
+        ["starting", "working", "waiting"].includes(conversation.status) ||
+        hasRunningBackground(conversation),
+    );
+    return {
+      active: active.length,
+      canLeaveRunning:
+        active.length > 0 &&
+        active.every(
+          (conversation) =>
+            this.controllers.get(conversation.id) instanceof
+            DetachedProviderAdapter,
+        ),
+    };
+  }
+
+  async shutdown(leaveRunning = false): Promise<void> {
     for (const id of this.activeTurns) {
       const conversation = this.store.data.conversations.find(
         (item) => item.id === id,
       );
-      if (conversation) {
+      if (
+        conversation &&
+        !(
+          leaveRunning &&
+          this.controllers.get(id) instanceof DetachedProviderAdapter
+        )
+      ) {
         this.finishTurn(conversation, "cancelled");
         conversation.status = "failed";
         conversation.pendingPermissions = [];
         conversation.error =
           "Turn interrupted by app shutdown; send explicitly to resume.";
         this.addApplicationMessage(conversation, conversation.error);
-      }
+      } else if (conversation) this.finishTurn(conversation, undefined);
     }
     this.activeTurns.clear();
     this.externalTurns.clear();
-    await Promise.all(
-      [...this.controllers.values(), ...this.replays].map((adapter) =>
-        adapter.dispose(),
-      ),
+    const disposals = [...this.controllers.values(), ...this.replays].map(
+      (adapter) => {
+        if (adapter instanceof DetachedProviderAdapter) {
+          adapter.detach();
+          return;
+        }
+        return adapter.dispose();
+      },
     );
+    if (!leaveRunning) {
+      for (const conversation of this.store.data.conversations)
+        delete conversation.detachedOwner;
+      disposals.push(this.detached?.owner.stop());
+    }
+    await Promise.all(disposals);
     this.controllers.clear();
   }
   private draftCwd(workspace: WorkspaceState, paneId: string): string {
@@ -575,6 +628,33 @@ export class ConversationApplicationService {
     onEvent?: (event: ProviderEvent) => void,
   ): Promise<ProviderAdapter> {
     const resolved = await resolveProviderExecutable(conversation.provider);
+    if (this.store.closing) throw new Error("Cod is shutting down");
+    if (!onEvent) {
+      if (conversation.detachedOwner)
+        throw new Error(
+          "Quit Cod to stop the disconnected owner before resuming this chat",
+        );
+      if (this.detached?.enabled()) {
+        const adapter = await this.detached.owner.open(
+          {
+            id: conversation.id,
+            workspace: conversation.workspaceId,
+            provider: conversation.provider,
+            cwd: conversation.cwd,
+            executable: resolved.executable,
+            args: resolved.args,
+            commandSocket: defaultSocketPath(),
+          },
+          (event, cursor, at) => {
+            if (this.store.closing) return;
+            conversation.detachedOwner = cursor;
+            this.providerEvent(conversation.id, event, at);
+          },
+        );
+        conversation.detachedOwner = { ...adapter.cursor };
+        return adapter;
+      }
+    }
     const options = {
       cwd: conversation.cwd,
       executable: resolved.executable,
@@ -764,6 +844,7 @@ export class ConversationApplicationService {
     if (existing) {
       this.controllers.delete(conversation.id);
       await existing.dispose();
+      delete conversation.detachedOwner;
       this.assertCurrent(conversation);
     }
     const adapter = await this.adapterFor(conversation);
@@ -800,6 +881,7 @@ export class ConversationApplicationService {
         this.store.schedulePersist(true);
       }
       await adapter.dispose();
+      delete conversation.detachedOwner;
       throw error;
     } finally {
       this.resumeContexts.delete(conversation.id);
@@ -1038,6 +1120,7 @@ export class ConversationApplicationService {
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
         (outcome) => {
+          if (this.store.closing) return;
           if (this.turnClocks.get(conversation.id)?.id === turnId) {
             this.finishTurn(conversation, outcome.status);
             this.activeTurns.delete(conversation.id);
@@ -1052,6 +1135,7 @@ export class ConversationApplicationService {
           this.store.schedulePersist(true);
         },
         (error) => {
+          if (this.store.closing) return;
           finishPage("uncertain");
           if (this.turnClocks.get(conversation.id)?.id !== turnId) return;
           this.finishTurn(conversation, "failed");
@@ -1326,7 +1410,7 @@ export class ConversationApplicationService {
     return { id: conversation.id };
   }
 
-  providerEvent(id: string, event: ProviderEvent): void {
+  providerEvent(id: string, event: ProviderEvent, at = Date.now()): void {
     if (this.store.closing || event.type === "diagnostic") return;
     const conversation = this.store.data.conversations.find(
       (item) => item.id === id,
@@ -1371,7 +1455,7 @@ export class ConversationApplicationService {
         const clock = this.turnClocks.get(id);
         const turn = conversation.turns?.find((turn) => turn.id === clock?.id);
         if (clock && turn && !turn.finishedAt) {
-          const now = performance.now();
+          const now = performance.now() - Math.max(0, Date.now() - at);
           if (event.state === "working" && clock.workingStart === undefined)
             clock.workingStart = now;
           else if (
@@ -1474,7 +1558,7 @@ export class ConversationApplicationService {
         break;
       case "completed":
         this.markSteerUncertain(conversation);
-        this.finishTurn(conversation, event.outcome.status);
+        this.finishTurn(conversation, event.outcome.status, at);
         if (event.outcome.status === "cancelled")
           conversation.queuePaused = true;
         this.scheduleQueue(id);
@@ -1489,7 +1573,7 @@ export class ConversationApplicationService {
         break;
       case "error":
         this.markSteerUncertain(conversation);
-        this.finishTurn(conversation, "failed");
+        this.finishTurn(conversation, "failed", at);
         conversation.queuePaused = true;
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         conversation.status = "failed";
@@ -1574,14 +1658,23 @@ export class ConversationApplicationService {
       throw new Error("Conversation was closed");
   }
 
-  async disposeController(id: string): Promise<void> {
+  async disposeController(
+    id: string,
+    removedOwner?: ConversationState["detachedOwner"],
+  ): Promise<void> {
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     const adapter = this.controllers.get(id);
     this.controllers.delete(id);
     this.activeTurns.delete(id);
     this.externalTurns.delete(id);
     this.resumeContexts.delete(id);
-    await adapter?.dispose();
+    const conversation = this.store.data.conversations.find(
+      (item) => item.id === id,
+    );
+    const cursor = conversation?.detachedOwner ?? removedOwner;
+    if (adapter) await adapter.dispose();
+    else if (cursor) await this.detached?.owner.release(id, cursor);
+    if (conversation) delete conversation.detachedOwner;
   }
 
   async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {
@@ -1909,22 +2002,71 @@ export class ConversationApplicationService {
     }
   }
 
-  restoreInterrupted(): void {
-    for (const conversation of this.store.data.conversations) {
-      conversation.backgroundActivities =
-        backgroundWithUnknownState(conversation);
-      if (conversation.queuedMessages?.length) {
-        conversation.queuePaused = true;
-        for (const message of conversation.queuedMessages)
-          if (message.status === "sending") message.status = "uncertain";
-      }
-      if (["starting", "working", "waiting"].includes(conversation.status)) {
-        conversation.status = "failed";
-        conversation.pendingPermissions = [];
-        conversation.error =
-          "Turn interrupted by app shutdown; send explicitly to resume.";
-        this.addApplicationMessage(conversation, conversation.error);
-      }
-    }
+  async restoreInterrupted(): Promise<void> {
+    await Promise.all(
+      this.store.data.conversations.map(async (conversation) => {
+        const active =
+          ["starting", "working", "waiting"].includes(conversation.status) ||
+          hasRunningBackground(conversation);
+        if (conversation.queuedMessages?.length) {
+          conversation.queuePaused = true;
+          for (const message of conversation.queuedMessages)
+            if (message.status === "sending") message.status = "uncertain";
+        }
+        const cursor = conversation.detachedOwner;
+        if (cursor && this.detached) {
+          const turn = conversation.turns?.at(-1);
+          if (active && turn && !turn.finishedAt) {
+            this.activeTurns.add(conversation.id);
+            this.externalTurns.add(conversation.id);
+            const start =
+              performance.now() -
+              Math.max(0, Date.now() - Date.parse(turn.startedAt));
+            this.turnClocks.set(conversation.id, {
+              id: turn.id,
+              start,
+              worked: turn.durationMs ?? 0,
+              workingStart:
+                conversation.status === "working"
+                  ? start + (turn.elapsedMs ?? 0)
+                  : undefined,
+            });
+          }
+          try {
+            const adapter = await this.detached.owner.reconnect(
+              conversation.id,
+              conversation.provider,
+              conversation.nativeId,
+              cursor,
+              (event, recovered, at) => {
+                if (this.store.closing) return;
+                conversation.detachedOwner = recovered;
+                this.providerEvent(conversation.id, event, at);
+              },
+            );
+            this.controllers.set(conversation.id, adapter);
+            return;
+          } catch (error) {
+            if (error instanceof LocalOwnerUnavailable)
+              delete conversation.detachedOwner;
+            this.finishTurn(conversation, "failed");
+            this.externalTurns.delete(conversation.id);
+            this.activeTurns.delete(conversation.id);
+          }
+        }
+        conversation.backgroundActivities =
+          backgroundWithUnknownState(conversation);
+        if (active) {
+          conversation.status = "failed";
+          conversation.pendingPermissions = [];
+          conversation.error = conversation.detachedOwner
+            ? "The detached chat could not reconnect. Quit Cod to stop its owner before resuming."
+            : cursor
+              ? "Detached session owner stopped; send explicitly to resume the saved conversation."
+              : "Turn interrupted by app shutdown; send explicitly to resume.";
+          this.addApplicationMessage(conversation, conversation.error);
+        }
+      }),
+    );
   }
 }

@@ -125,6 +125,27 @@ export class WorkspaceApp {
       env: this.environment,
       chromiumSandbox: true,
     });
+    await this.app.evaluate(({ dialog }) => {
+      const show = dialog.showMessageBox.bind(dialog);
+      dialog.showMessageBox = (...arguments_: any[]) => {
+        const options = arguments_.at(-1);
+        if (options.title !== "Quit Cod") return (show as any)(...arguments_);
+        const decisions = globalThis as typeof globalThis & {
+          quitChoice?: string;
+          quitOptions?: string[];
+          quitDefault?: string;
+          showNativeQuit?: boolean;
+        };
+        decisions.quitOptions = options.buttons;
+        decisions.quitDefault = options.buttons[options.defaultId];
+        if (decisions.showNativeQuit) return (show as any)(...arguments_);
+        const choice = decisions.quitChoice ?? "Stop";
+        return Promise.resolve({
+          response: options.buttons.indexOf(choice),
+          checkboxChecked: false,
+        });
+      };
+    });
     // Restored native browser views can appear before the trusted app renderer.
     const rendererUrl = pathToFileURL(
       path.join(this.root, "dist/index.html"),
@@ -149,6 +170,17 @@ export class WorkspaceApp {
     await expect
       .poll(async () => (await this.raw("capabilities")).code)
       .toBe(0);
+  }
+
+  async quitWithChoice(choice: "Leave Running" | "Stop") {
+    const app = this.app!;
+    const process = app.process();
+    await app.evaluate(({ app }, decision) => {
+      (globalThis as any).quitChoice = decision;
+      app.quit();
+    }, choice);
+    await expect.poll(() => process.exitCode).toBe(0);
+    this.app = undefined;
   }
 
   async stop() {

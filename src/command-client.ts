@@ -13,7 +13,9 @@ export class CommandSocketError extends Error {
 export async function invokeCommand(
   socketPath: string,
   request: OperationRequest,
+  options: { timeoutMs?: number | null; signal?: AbortSignal } = {},
 ): Promise<unknown> {
+  options.signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const connection = connect(socketPath);
     let sent = false;
@@ -24,15 +26,23 @@ export async function invokeCommand(
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
+      options.signal?.removeEventListener("abort", aborted);
       input = [];
       connection.destroy();
       if (error) reject(error);
       else resolve(result);
     };
-    const deadline = setTimeout(
-      () => finish(new CommandSocketError("Cod operation timed out", sent)),
-      30_000,
-    );
+    const aborted = () =>
+      finish(new CommandSocketError("Cod connection was closed", sent));
+    const deadline =
+      options.timeoutMs === null
+        ? undefined
+        : setTimeout(
+            () =>
+              finish(new CommandSocketError("Cod operation timed out", sent)),
+            options.timeoutMs ?? 30_000,
+          );
+    options.signal?.addEventListener("abort", aborted, { once: true });
     connection.setEncoding("utf8");
     connection.on("connect", () => {
       sent = true;

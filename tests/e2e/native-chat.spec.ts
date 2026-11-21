@@ -1,5 +1,8 @@
 import { test, expect, type Locator } from "@playwright/test";
 import type { AppState, ConversationState } from "../../src/types";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { LocalProviderOwner } from "../../src/providers/local-owner-client";
 import { createServer } from "node:http";
 import path from "node:path";
 import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
@@ -407,6 +410,226 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
     await expect(transcript(chat)).toContainText("DONE explicit-recovery");
   });
 }
+
+test("Detached local chat finishes while Cod is closed and restores the same native session", async ({}, info) => {
+  const owner = new LocalProviderOwner(shell.data);
+  try {
+    await shell.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 560),
+    );
+    await shell.page.keyboard.press(`${modifier}+,`);
+    const settings = shell.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    const search = settings.getByRole("searchbox", {
+      name: "Search settings",
+      exact: true,
+    });
+    await search.fill("Chat font");
+    await expect(
+      settings.getByText(/Applies when a local agent controller starts/),
+    ).toBeHidden();
+    await search.fill("detached");
+    const detached = settings.getByRole("checkbox", {
+      name: "Chat Run new sessions detached",
+      exact: true,
+    });
+    await expect(detached).not.toBeChecked();
+    await expect(detached).toHaveAccessibleDescription(/controller starts/);
+    await detached.check();
+    await detached.focus();
+    await shell.page.screenshot({
+      path: info.outputPath("detached-chat-settings.png"),
+    });
+    await shell.page.keyboard.press("Escape");
+    await expect(settings).toHaveCount(0);
+    await expect
+      .poll(
+        async () =>
+          (
+            await shell.cli<{ values: Record<string, unknown> }>(
+              "settings",
+              "get",
+            )
+          ).values["chat.detachedSessions"],
+      )
+      .toBe(true);
+    await shell.configure({
+      codex: { latencyChunks: 4, pauseLatencyAfter: 1 },
+    });
+    const workspace = await shell.create("Detached run fixture");
+    const chat = await shell.newChat(workspace, "codex");
+    const prompt = "[latency-fixture] continue while Cod is closed";
+    await shell.send(chat.id, prompt);
+    await expect(transcript(chat)).toContainText(/inventedstream-1/);
+    await expect(transcript(chat)).not.toContainText(/inventedstream-2/);
+    const prompts = await shell.prompts();
+    await shell.quitWithChoice("Leave Running");
+
+    await shell.configure({ codex: { latencyChunks: 4 } });
+    const nativeHistory = path.join(
+      shell.recording + ".sessions",
+      chat.nativeId + ".json",
+    );
+    await expect
+      .poll(async () =>
+        (await readFile(nativeHistory, "utf8")).includes(
+          '"status":"completed"',
+        ),
+      )
+      .toBe(true);
+
+    await shell.start();
+    const restored = await shell.inspect(chat.id);
+    expect(restored.nativeId).toBe(chat.nativeId);
+    expect(restored.status).toBe("ready");
+    expect(text(restored).match(/inventedstream-[1-4]-/g)).toHaveLength(4);
+    expect(await shell.prompts()).toEqual(prompts);
+    await expect(transcript(chat)).toContainText(/inventedstream-4/);
+    await shell.send(chat.id, "continue after detached completion");
+    await expect(transcript(chat)).toContainText(
+      "DONE continue after detached completion",
+    );
+  } finally {
+    await owner.stop();
+  }
+});
+
+test("Detached local chat keeps an approval through restart, with Cancel and Stop at Quit", async ({}, info) => {
+  const owner = new LocalProviderOwner(shell.data);
+  try {
+    const workspace = await shell.create("Detached approval fixture");
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      '{"chat.detachedSessions":true}',
+    );
+    const chat = await shell.newChat(workspace, "codex");
+    await shell.send(chat.id, "[approve] retained approval");
+    await expect.poll(() => status(chat.id)).toBe("waiting");
+    const original = (await shell.inspect(chat.id)).pendingPermissions[0];
+    await shell.app!.evaluate(({ app }, performNative) => {
+      (globalThis as any).quitChoice = "Cancel";
+      (globalThis as any).showNativeQuit = performNative;
+      app.quit();
+    }, process.platform === "linux");
+    await expect
+      .poll(() => shell.app!.evaluate(() => (globalThis as any).quitOptions))
+      .toEqual(["Leave Running", "Stop", "Cancel"]);
+    expect(
+      await shell.app!.evaluate(() => (globalThis as any).quitDefault),
+    ).toBe("Cancel");
+    if (process.platform === "linux") {
+      const execute = promisify(execFile);
+      let nativeWindow = "";
+      try {
+        await expect
+          .poll(async () => {
+            nativeWindow = (
+              await execute("xdotool", [
+                "search",
+                "--onlyvisible",
+                "--name",
+                "Quit Cod",
+              ]).catch(() => ({ stdout: "" }))
+            ).stdout
+              .trim()
+              .split("\n")
+              .at(-1)!;
+            return nativeWindow;
+          })
+          .not.toBe("");
+        const image = await shell.app!.evaluate(async ({ desktopCapturer }) => {
+          const sources = await desktopCapturer.getSources({
+            types: ["screen"],
+            thumbnailSize: { width: 1280, height: 1024 },
+          });
+          return sources[0]?.thumbnail.toPNG().toString("base64");
+        });
+        if (image)
+          await writeFile(
+            info.outputPath("detached-chat-quit.png"),
+            Buffer.from(image, "base64"),
+          );
+      } finally {
+        await execute(
+          "xdotool",
+          nativeWindow
+            ? ["key", "--window", nativeWindow, "Escape"]
+            : ["key", "Escape"],
+        ).catch(() => undefined);
+        await shell.app!.evaluate(() => {
+          (globalThis as any).showNativeQuit = false;
+        });
+      }
+    }
+    await expect.poll(() => status(chat.id)).toBe("waiting");
+    await shell.quitWithChoice("Leave Running");
+
+    await shell.start();
+    expect((await shell.inspect(chat.id)).pendingPermissions[0]).toEqual(
+      original,
+    );
+    const allow = shell
+      .pane(chat.paneId)
+      .getByRole("button", { name: "Allow once", exact: true });
+    await allow.click();
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    await expect(transcript(chat)).toContainText(
+      "ALLOWED [approve] retained approval",
+    );
+    await shell.send(chat.id, "[hold] stop detached work");
+    await expect(transcript(chat)).toContainText(
+      "STREAM [hold] stop detached work",
+    );
+    await shell.quitWithChoice("Stop");
+
+    await shell.start();
+    const stopped = await shell.inspect(chat.id);
+    expect(stopped.nativeId).toBe(chat.nativeId);
+    expect(stopped.status).toBe("failed");
+    expect(text(stopped)).not.toContain("DONE [hold] stop detached work");
+  } finally {
+    await owner.stop();
+  }
+});
+
+test("Detached local chat falls back to explicit native resume if its owner is gone", async () => {
+  const owner = new LocalProviderOwner(shell.data);
+  try {
+    const workspace = await shell.create("Detached owner loss fixture");
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      '{"chat.detachedSessions":true}',
+    );
+    const chat = await shell.newChat(workspace, "kimi");
+    await shell.send(chat.id, "[hold] owner can be lost");
+    await expect(transcript(chat)).toContainText(
+      "STREAM [hold] owner can be lost",
+    );
+    const prompts = await shell.prompts();
+    await shell.quitWithChoice("Leave Running");
+    await owner.stop();
+
+    await shell.start();
+    const recovered = await shell.inspect(chat.id);
+    expect(recovered.status).toBe("failed");
+    expect(recovered.nativeId).toBe(chat.nativeId);
+    expect(text(recovered)).toContain("Detached session owner stopped");
+    expect(await shell.prompts()).toEqual(prompts);
+    await shell.send(chat.id, "resume saved detached session");
+    await expect(transcript(chat)).toContainText(
+      "DONE resume saved detached session",
+    );
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+  } finally {
+    await owner.stop();
+  }
+});
 
 for (const provider of ["codex", "kimi"] as Provider[]) {
   test(`Chat AC4 ${provider}: restart preserves native identity without replaying inference`, async () => {
@@ -2551,12 +2774,47 @@ for (const provider of ["codex", "kimi"] as const) {
     const field = queue.getByRole("textbox", { name: "Edit queued message" });
     await edit.click();
     await field.fill("Discard this unsaved revision");
-    await queue
-      .getByRole("button", {
-        name: provider === "codex" ? "Save" : "Cancel",
-        exact: true,
-      })
-      .press("Escape");
+    const cancelOrigin = queue.getByRole("button", {
+      name: provider === "codex" ? "Save" : "Cancel",
+      exact: true,
+    });
+    await shell.app!.evaluate(({ ipcMain }, id) => {
+      const handler = (ipcMain as any)._invokeHandlers.get("cod:invoke");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (request.op === "conversation.queue-edit" && request.id === id) {
+          (globalThis as any).queueCancelHeld = true;
+          await gate;
+        }
+        return handler(event, request);
+      });
+      (globalThis as any).releaseQueueCancel = () => {
+        ipcMain.removeHandler("cod:invoke");
+        ipcMain.handle("cod:invoke", handler);
+        release();
+      };
+    }, chat.id);
+    await cancelOrigin.press("Escape");
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(() => (globalThis as any).queueCancelHeld),
+      )
+      .toBe(true);
+    expect(
+      await cancelOrigin.evaluate((button) => {
+        // A redraw can restore focus to a replacement control while IPC is pending.
+        const replacement = button.cloneNode(true) as HTMLButtonElement;
+        replacement.disabled = false;
+        button.replaceWith(replacement);
+        replacement.focus();
+        return replacement === document.activeElement;
+      }),
+    ).toBe(true);
+    await shell.app!.evaluate(() => (globalThis as any).releaseQueueCancel());
     await expect(field).toBeHidden();
     await expect(edit).toBeFocused();
     await expect(queue).toContainText("Original queued text");

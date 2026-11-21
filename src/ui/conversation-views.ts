@@ -1391,10 +1391,11 @@ export function createConversationViews({
           let escapeOrigin: EventTarget | null = null;
           const cancel = paneButton("Cancel", async () => {
             const origin = escapeOrigin ?? document.activeElement;
-            const focusedRow =
-              origin instanceof Element &&
-              origin.closest<HTMLElement>(".queued-message")?.dataset
-                .focusKey === `queued:${message.id}`;
+            const inEditedRow = (element: EventTarget | null) =>
+              element instanceof Element &&
+              element.closest<HTMLElement>(".queued-message")?.dataset
+                .focusKey === row.dataset.focusKey;
+            const focusedRow = inEditedRow(origin);
             await invoke("conversation.queue-edit", {
               id: conversation.id,
               messageId: message.id,
@@ -1402,7 +1403,7 @@ export function createConversationViews({
             queueEdits.delete(message.id);
             const returnFocus =
               focusedRow &&
-              (document.activeElement === origin ||
+              (inEditedRow(document.activeElement) ||
                 document.activeElement === document.body);
             invalidate();
             if (returnFocus)

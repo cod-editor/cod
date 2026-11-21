@@ -634,6 +634,10 @@ function receive(message, external = false) {
     };
     let step = 0;
     const tick = () => {
+      if (configuration().pauseLatencyAfter === step) {
+        later(tick, 30);
+        return;
+      }
       const delta = `inventedstream-${++step}-${Date.now()}; `;
       item.text += delta;
       notify("item/agentMessage/delta", {
