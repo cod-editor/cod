@@ -395,7 +395,7 @@ export class ApplicationStateStore {
   }
   change<T>(
     mutation: () => T | Promise<T>,
-    options: { notify?: boolean } = {},
+    options: { notify?: boolean; publishBeforePersist?: boolean } = {},
   ): Promise<T> {
     return this.serialize(() => this.commitChange(mutation, options));
   }
@@ -420,7 +420,7 @@ export class ApplicationStateStore {
   }
   private async commitChange<T>(
     mutation: () => T | Promise<T>,
-    options: { notify?: boolean },
+    options: { notify?: boolean; publishBeforePersist?: boolean },
   ): Promise<T> {
     this.data.workspaces.forEach(normalizeGroups);
     // rollbackState deliberately preserves live provider fields. Copying those
@@ -444,16 +444,20 @@ export class ApplicationStateStore {
       browsers: [...this.data.browsers],
       terminals: [...this.data.terminals],
     };
+    const notify = options.notify !== false;
     try {
       const result = await mutation();
+      // Display layout selections while the existing checkpoint is saved.
+      // The operation and subsequent mutations still wait for that checkpoint.
+      if (notify && options.publishBeforePersist) this.notify();
       await this.persist();
-      if (options.notify !== false) this.notify();
+      if (notify && !options.publishBeforePersist) this.notify();
       return result;
     } catch (error) {
       rollbackState(this.data, before, original);
       // Native events can expose an in-flight mutation while persistence waits.
       // Publish the restored model too, so observers cannot keep a phantom tab/path.
-      if (options.notify !== false) this.notify();
+      if (notify) this.notify();
       throw error;
     }
   }

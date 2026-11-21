@@ -866,11 +866,16 @@ export class WorkspaceApplicationService {
         });
 
       case "workspace.focus":
-        return this.store.change(() => {
-          const workspace = this.store.workspace(requiredString(request, "id"));
-          this.store.data.activeWorkspaceId = workspace.id;
-          return { id: workspace.id };
-        });
+        return this.store.change(
+          () => {
+            const workspace = this.store.workspace(
+              requiredString(request, "id"),
+            );
+            this.store.data.activeWorkspaceId = workspace.id;
+            return { id: workspace.id };
+          },
+          { publishBeforePersist: true },
+        );
 
       case "workspace.add-folder":
         return this.store.change(async () => {
@@ -930,16 +935,15 @@ export class WorkspaceApplicationService {
           return workspace.settings;
         });
 
-      case "group.split":
-
       case "group.focus":
-
       case "group.visibility":
-
       case "group.toggle-split":
+        return this.store.change(() => this.groupOperation(request), {
+          publishBeforePersist: true,
+        });
 
+      case "group.split":
       case "group.resize":
-
       case "pane.move":
         return this.store.change(() => this.groupOperation(request));
 
@@ -1132,20 +1136,23 @@ export class WorkspaceApplicationService {
         return this.store.change(() => this.splitPane(request));
 
       case "pane.focus":
-        return this.store.change(() => {
-          const workspace = this.store.workspace(
-            requiredString(request, "workspace"),
-          );
-          const pane = this.store.pane(
-            workspace,
-            requiredString(request, "id"),
-          );
-          workspace.activePaneId = pane.id;
-          normalizeGroups(workspace);
-          if (pane.kind === "conversation")
-            workspace.lastConversationId = pane.conversationId;
-          return { paneId: pane.id };
-        });
+        return this.store.change(
+          () => {
+            const workspace = this.store.workspace(
+              requiredString(request, "workspace"),
+            );
+            const pane = this.store.pane(
+              workspace,
+              requiredString(request, "id"),
+            );
+            workspace.activePaneId = pane.id;
+            normalizeGroups(workspace);
+            if (pane.kind === "conversation")
+              workspace.lastConversationId = pane.conversationId;
+            return { paneId: pane.id };
+          },
+          { publishBeforePersist: true },
+        );
 
       case "pane.reopen":
         return this.reopenPane(request);
