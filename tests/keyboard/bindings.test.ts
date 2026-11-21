@@ -401,6 +401,64 @@ test("Shift+Escape toggles the split without permitting plain typing shortcuts",
   }
 });
 
+test("Escape stops responses only in Cod chat surfaces", () => {
+  try {
+    for (const platform of ["darwin", "linux"] as const) {
+      configureKeymap({ "chat.stop": ["Escape"] }, platform);
+      for (const surface of ["composer", "shell"] as const) {
+        assert.equal(
+          resolveKeybinding(input("Escape"), platform, surface)?.command,
+          "chat.stop",
+        );
+        assert.equal(
+          resolveKeybinding(
+            input("Escape", { repeat: true }),
+            platform,
+            surface,
+          )?.dispatch,
+          false,
+        );
+        assert.equal(
+          resolveKeybinding(
+            input("Escape", { isComposing: true }),
+            platform,
+            surface,
+          ),
+          undefined,
+        );
+      }
+      for (const surface of [
+        "browser",
+        "browser-controls",
+        "agent-page",
+        "terminal",
+        "review",
+        "editor",
+      ] as const) {
+        assert.equal(
+          resolveKeybinding(input("Escape"), platform, surface),
+          undefined,
+        );
+      }
+      configureKeymap({ "chat.stop": ["F8"] }, platform);
+      assert.equal(
+        resolveKeybinding(input("Escape"), platform, "composer"),
+        undefined,
+      );
+      assert.equal(
+        resolveKeybinding(input("F8"), platform, "composer")?.command,
+        "chat.stop",
+      );
+      assert.equal(
+        resolveKeybinding(input("F8"), platform, "terminal"),
+        undefined,
+      );
+    }
+  } finally {
+    configureKeymap({}, "darwin");
+  }
+});
+
 test("Enter sends only in the composer; Shift Enter and IME retain text editing", () => {
   configureKeymap({}, "darwin");
   for (const platform of ["darwin", "linux"] as const) {

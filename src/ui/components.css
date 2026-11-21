@@ -6,6 +6,7 @@
   --text-placeholder: #878a98;
   --text-disabled: #878a98;
   --text-accent: #74ade8;
+  --status-working: #85b7ff;
   --editor-foreground: #acb2be;
   --terminal-foreground: #abb2bf;
   --surface-base: #282c34;
@@ -143,12 +144,6 @@ select:focus-visible {
 }
 .icon-button:not(:disabled):active {
   background: var(--control-pressed);
-}
-.icon-button.embedded:not(:disabled):hover {
-  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
-}
-.icon-button.embedded:not(:disabled):active {
-  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
 }
 
 dialog {
@@ -296,12 +291,6 @@ button:is(.selected, :focus-visible) .ui-button-description {
 }
 .command-list .icon-button:not(:disabled):active {
   background: var(--control-pressed);
-}
-.icon-button.embedded:not(:disabled):hover {
-  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
-}
-.icon-button.embedded:not(:disabled):active {
-  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
 }
 
 /* Compound picker rows have one surface, including disclosure and actions.
@@ -702,4 +691,11 @@ hr {
 /* Pointer movement selects picker rows; a stationary cursor must not create a second selection. */
 .searchable-list button:hover:not(.selected) {
   background: transparent;
+}
+
+button.ui-button.embedded:not(:disabled):hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+button.ui-button.embedded:not(:disabled):active {
+  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
 }

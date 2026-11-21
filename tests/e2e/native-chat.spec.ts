@@ -1488,40 +1488,61 @@ async function backgroundFixture(
 }
 
 test("Codex late background results preserve the parent reply, composer and native continuation", async () => {
-  await shell.configure({ codex: { backgroundActivity: true, options: true } });
+  const modelLabel = "Fixture model with a deliberately long readable name";
+  await shell.configure({
+    codex: {
+      backgroundActivity: true,
+      options: true,
+      reasoningOptions: true,
+      modelDisplayName: modelLabel,
+    },
+  });
   const workspace = await shell.create("Background checks");
   const chat = await shell.newChat(workspace, "codex");
   const pane = shell.pane(chat.paneId);
-  const summary = pane.locator(
-    ".composer-actions .composer-background-summary",
-  );
-  await expect(summary).toHaveCount(0);
+  const agents = pane.locator('[data-focus-key="background:agent"]');
+  const shells = pane.locator('[data-focus-key="background:command"]');
+  const agentList = pane.getByRole("list", { name: "Background agents" });
+  const shellList = pane.getByRole("list", { name: "Background shells" });
+  await expect(agents).toHaveCount(0);
+  await expect(shells).toHaveCount(0);
   await shell.send(chat.id, "Check the fixture in a child");
   await expect.poll(() => status(chat.id)).toBe("ready");
   await expect(transcript(chat)).toContainText(
     "Tests are running in the background.",
   );
-  await expect(summary).toHaveAccessibleName(
-    "Background activity: 1 agent, 1 shell",
-  );
-  await expect(summary.locator(":scope > span")).toHaveText([
-    "1 agent",
-    "1 shell",
-  ]);
-  await expect(summary.locator("svg")).toHaveCount(0);
+  await expect(agents).toHaveAccessibleName("Agents, 1 running");
+  await expect(shells).toHaveAccessibleName("Shells, 1 running");
+  await expect(agents).toHaveText("1 agent");
+  await expect(shells).toHaveText("1 shell");
+  await expect(pane.locator(".composer-background svg")).toHaveCount(0);
+  await expect(agents).toHaveCSS("color", "rgb(133, 183, 255)");
   const model = pane.getByRole("button", { name: "Model", exact: true });
-  await expect(model).toBeEnabled();
+  await expect(model).toHaveText(modelLabel);
   const modelBounds = await model.boundingBox();
-  const summaryBounds = await summary.boundingBox();
-  expect(Math.abs(modelBounds!.y - summaryBounds!.y)).toBeLessThanOrEqual(1);
-  await pane.locator(".composer-actions").screenshot({
+  const agentsBounds = await agents.boundingBox();
+  expect(Math.abs(modelBounds!.y - agentsBounds!.y)).toBeLessThanOrEqual(1);
+  await expect(agentList).toBeHidden();
+  await agents.focus();
+  await agents.press("Enter");
+  await expect(agentList).toBeVisible();
+  await expect(agents).toHaveAttribute("aria-expanded", "true");
+  await expect(shells).toHaveAttribute("aria-expanded", "false");
+  await expect(agentList).toContainText("/root/checker");
+  await expect(agentList).not.toContainText("echo test checks");
+  await expect(agentList).not.toContainText("unrelated work");
+  await shells.click();
+  await expect(agentList).toBeHidden();
+  await expect(shellList).toBeVisible();
+  await expect(agents).toHaveAttribute("aria-expanded", "false");
+  await expect(shells).toHaveAttribute("aria-expanded", "true");
+  await expect(shells).toHaveCSS("color", "rgb(133, 183, 255)");
+  await expect(shellList).toContainText("echo test checks");
+  await expect(shellList.getByRole("listitem")).toHaveCount(1);
+  const list = shellList;
+  await shell.page.screenshot({
     path: test.info().outputPath("background-counts.png"),
   });
-  const list = pane.getByRole("list", { name: "Background activity" });
-  await expect(list).toBeHidden();
-  await summary.focus();
-  await summary.press("Enter");
-  await expect(list).toBeVisible();
   await expect
     .poll(() =>
       list.evaluate((element) => {
@@ -1540,7 +1561,7 @@ test("Codex late background results preserve the parent reply, composer and nati
   expect(close.stderr).toContain("Workspace has running agents or terminals");
   await shell.page.setViewportSize({ width: 390, height: 650 });
   const composer = await pane.locator(".composer").boundingBox();
-  const counts = await summary.boundingBox();
+  const counts = await shells.boundingBox();
   expect(counts!.x + counts!.width).toBeLessThanOrEqual(
     composer!.x + composer!.width,
   );
@@ -1549,13 +1570,10 @@ test("Codex late background results preserve the parent reply, composer and nati
     path: test.info().outputPath("background-activity-narrow.png"),
   });
   await shell.page.setViewportSize({ width: 1280, height: 800 });
-  await expect(list).toContainText("/root/checker");
-  await expect(list).toContainText("echo test checks");
-  await expect(list).not.toContainText("unrelated work");
-  await summary.press("Escape");
-  await expect(summary).toBeFocused();
-  await expect(list).toBeHidden();
-  await summary.click();
+  await shells.press("Escape");
+  await expect(shells).toBeFocused();
+  await expect(shellList).toBeHidden();
+  await agents.click();
   const input = pane.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("Keep this unrelated draft");
 
@@ -1591,9 +1609,11 @@ test("Codex late background results preserve the parent reply, composer and nati
     childDone,
     childDone,
   ]);
-  await expect(summary).toHaveAccessibleName("Background activity: 1 shell");
-  await expect(summary).toHaveText("1 shell");
-  await expect(list).toContainText("Invented child result");
+  await expect(agents).toHaveAccessibleName("Recent agents");
+  await expect(agents).toHaveText("Agents");
+  await expect(agents).not.toHaveCSS("color", "rgb(133, 183, 255)");
+  await expect(shells).toHaveText("1 shell");
+  await expect(agentList).toContainText("Invented child result");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this unrelated draft");
 
@@ -1612,7 +1632,10 @@ test("Codex late background results preserve the parent reply, composer and nati
     },
   };
   await backgroundFixture(chat, "shell-done", [commandDone, commandDone]);
-  await expect(summary).toHaveText("Background activity");
+  await expect(shells).toHaveText("Shells");
+  await expect(agentList).toBeVisible();
+  await expect(input).toBeFocused();
+  await shells.click();
   await expect(list).toContainText("Invented checked output");
   await expect(
     list.getByText("Invented checked output", { exact: true }),
@@ -1620,7 +1643,7 @@ test("Codex late background results preserve the parent reply, composer and nati
   await expect
     .poll(async () => (await inspectQueuedChat(chat.id)).turns?.length)
     .toBe(1);
-  await expect(input).toBeFocused();
+  await input.focus();
 
   const turn = { id: "native-continuation", status: "inProgress" };
   await backgroundFixture(chat, "native-continuation", [
@@ -1661,6 +1684,146 @@ test("Codex late background results preserve the parent reply, composer and nati
   });
 });
 
+test("Escape dismisses chat controls before stopping only the focused response", async ({}, info) => {
+  const codex = {
+    options: true,
+    reasoningOptions: true,
+    modelDisplayName: "Fixture model with a deliberately long readable name",
+  };
+  await shell.configure({ codex });
+  const workspace = await shell.create("Scoped Escape");
+  const other = await shell.newChat(workspace, "codex");
+  await shell.send(other.id, "[hold] companion turn");
+  await expect.poll(() => status(other.id)).toBe("working");
+  await shell.configure({ codex: { ...codex, backgroundActivity: true } });
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await shell.send(chat.id, "Prepare the activity fixture");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const agent = pane.getByRole("button", { name: "Agents, 1 running" });
+  const input = pane.getByRole("textbox", { name: "Message", exact: true });
+  await expect(agent).toBeVisible();
+  const group = (await shell.workspace(workspace)).groups[0].id;
+  await shell.page.evaluate((request) => window.cod.invoke(request), {
+    op: "group.split",
+    workspace,
+    id: group,
+    paneId: chat.paneId,
+    direction: "right",
+  });
+  await expect(shell.pane(other.paneId)).toBeVisible();
+  await expect(pane).toBeVisible();
+  await shell.configure({ codex });
+  await shell.send(chat.id, "[hold] focused turn");
+  await expect(transcript(chat)).toContainText("STREAM [hold] focused turn");
+  await expect.poll(() => status(other.id)).toBe("working");
+  const interrupts = async () =>
+    (await shell.records()).filter(
+      (record) => record.message?.method === "turn/interrupt",
+    );
+
+  await input.fill("Invented unsent draft");
+  await shell.page.keyboard.press(`${modifier}+Shift+P`);
+  const commands = shell.page.getByRole("dialog", { name: "Command palette" });
+  await expect(commands).toBeVisible();
+  await shell.page.keyboard.press("Escape");
+  await expect(commands).toBeHidden();
+  await expect(input).toBeFocused();
+  await shell.overview();
+  await expect(
+    shell.page.getByRole("dialog", { name: "Overview" }),
+  ).toBeVisible();
+  await shell.page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+
+  await shell.page.keyboard.press(`${modifier}+F`);
+  const find = shell.page.getByRole("textbox", {
+    name: "Find in current content",
+  });
+  await expect(find).toBeFocused();
+  await input.focus();
+  await shell.page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await expect(input).toBeFocused();
+  await agent.click();
+  const agents = pane.getByRole("list", { name: "Background agents" });
+  await expect(agents).toBeVisible();
+  await agents.focus();
+  await shell.page.screenshot({
+    path: info.outputPath("background-mixed-working.png"),
+  });
+  await shell.page.setViewportSize({ width: 760, height: 680 });
+  const model = pane.getByRole("button", { name: "Model", exact: true });
+  const stop = pane.getByRole("button", { name: "Stop", exact: true });
+  const effort = pane.getByRole("button", {
+    name: "Reasoning effort",
+    exact: true,
+  });
+  const effortCaption = effort.locator(".choice-caption");
+  await expect(effortCaption).toHaveText("Medium");
+  expect(
+    await effortCaption.evaluate((element) => element.scrollWidth),
+  ).toBeLessThanOrEqual((await effortCaption.boundingBox())!.width + 1);
+  const composer = await input.boundingBox();
+  const popover = await agents.boundingBox();
+  expect(popover!.y + popover!.height).toBeLessThan(composer!.y);
+  const controls = await Promise.all([
+    model.boundingBox(),
+    agent.boundingBox(),
+    stop.boundingBox(),
+  ]);
+  for (const control of controls) {
+    expect(control!.x).toBeGreaterThanOrEqual(composer!.x);
+    expect(control!.x + control!.width).toBeLessThanOrEqual(
+      composer!.x + composer!.width,
+    );
+  }
+  expect(Math.abs(controls[0]!.y - controls[2]!.y)).toBeLessThanOrEqual(1);
+  await shell.page.screenshot({
+    path: info.outputPath("background-mixed-working-narrow.png"),
+  });
+  await shell.page.setViewportSize({ width: 1280, height: 800 });
+  await shell.page.keyboard.press("Escape");
+  await expect(agents).toBeHidden();
+  await expect(agent).toBeFocused();
+
+  await input.focus();
+  await input.evaluate((element) =>
+    element.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        isComposing: true,
+      }),
+    ),
+  );
+  await input.evaluate((element) =>
+    element.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        repeat: true,
+      }),
+    ),
+  );
+  expect(await interrupts()).toHaveLength(0);
+  await expect.poll(() => status(chat.id)).toBe("working");
+
+  await shell.page.keyboard.press("Escape");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect
+    .poll(async () =>
+      (await interrupts()).map((record) => record.message?.params?.threadId),
+    )
+    .toEqual([chat.nativeId]);
+  await expect.poll(() => status(other.id)).toBe("working");
+  await expect(input).toHaveValue("Invented unsent draft");
+  await expect(input).toBeFocused();
+});
+
 test("Codex running background state becomes unknown on restart", async () => {
   await shell.configure({ codex: { backgroundActivity: "legacy" } });
   const workspace = await shell.create("Interrupted checks");
@@ -1674,8 +1837,11 @@ test("Codex running background state becomes unknown on restart", async () => {
     )
     .toBe(3);
   await expect(
-    shell.pane(chat.paneId).locator(".composer-background summary"),
-  ).toHaveAccessibleName("Background activity: 1 agent, 2 shells");
+    shell.pane(chat.paneId).getByRole("button", { name: "Agents, 1 running" }),
+  ).toBeVisible();
+  await expect(
+    shell.pane(chat.paneId).getByRole("button", { name: "Shells, 2 running" }),
+  ).toBeVisible();
   await backgroundFixture(chat, "legacy-child-done", [
     {
       method: "turn/completed",
@@ -1686,18 +1852,17 @@ test("Codex running background state becomes unknown on restart", async () => {
     },
   ]);
   await expect(
-    shell.pane(chat.paneId).locator(".composer-background summary"),
-  ).toHaveText("2 shells");
+    shell.pane(chat.paneId).getByRole("button", { name: "Recent agents" }),
+  ).toHaveText("Agents");
   await shell.stop();
   await shell.start();
   await shell.cli("conversation", "show", "--id", chat.id);
   const pane = shell.pane(chat.paneId);
-  await expect(pane.locator(".composer-background summary")).toHaveText(
-    "Background activity",
-  );
-  await pane.locator(".composer-background summary").click();
+  const shells = pane.getByRole("button", { name: "Recent shells" });
+  await expect(shells).toHaveText("Shells");
+  await shells.click();
   await expect(
-    pane.getByRole("list", { name: "Background activity" }),
+    pane.getByRole("list", { name: "Background shells" }),
   ).toContainText("State unknown");
   expect(
     (await inspectQueuedChat(chat.id)).backgroundActivities?.map(
@@ -2379,12 +2544,25 @@ for (const provider of ["codex", "kimi"] as const) {
       .getByRole("button", { name: "Cancel queued message", exact: true })
       .click();
     await expect(queue).not.toContainText("Cancel this queued text");
+    const edit = queue.getByRole("button", {
+      name: "Edit queued message",
+      exact: true,
+    });
+    const field = queue.getByRole("textbox", { name: "Edit queued message" });
+    await edit.click();
+    await field.fill("Discard this unsaved revision");
     await queue
-      .getByRole("button", { name: "Edit queued message", exact: true })
-      .click();
-    await queue
-      .getByRole("textbox", { name: "Edit queued message" })
-      .fill("Revised queued text");
+      .getByRole("button", {
+        name: provider === "codex" ? "Save" : "Cancel",
+        exact: true,
+      })
+      .press("Escape");
+    await expect(field).toBeHidden();
+    await expect(edit).toBeFocused();
+    await expect(queue).toContainText("Original queued text");
+    await expect.poll(() => status(chat.id)).toBe("waiting");
+    await edit.click();
+    await field.fill("Revised queued text");
     const permission = (await shell.inspect(chat.id)).pendingPermissions[0];
     await shell.cli(
       "conversation",

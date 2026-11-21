@@ -62,6 +62,12 @@ const bridge: CodBridge = {
   browserStopFind(id) {
     ipcRenderer.send("cod:browser-stop-find", id);
   },
+  browserFindVisibility(id, visible) {
+    ipcRenderer.send("cod:browser-find-visibility", id, visible);
+  },
+  onBrowserFindDismiss(callback) {
+    ipcRenderer.on("cod:browser-find-dismiss", (_event, id) => callback(id));
+  },
   onBrowserFind(callback) {
     ipcRenderer.on("cod:browser-find", (_event, value) => callback(value));
   },

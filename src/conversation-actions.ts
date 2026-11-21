@@ -7,6 +7,16 @@ export function acknowledgeConversation(conversation: ConversationState): void {
     conversation.completionRevision ?? 0;
 }
 
+export function canStopResponse(
+  conversation?: ConversationState | null,
+): boolean {
+  return (
+    !!conversation &&
+    !conversation.handoffTerminalId &&
+    (conversation.status === "working" || conversation.status === "waiting")
+  );
+}
+
 export function hasRunningBackground(conversation: ConversationState): boolean {
   return (
     conversation.backgroundActivities?.some(

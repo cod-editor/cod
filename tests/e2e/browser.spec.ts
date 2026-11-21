@@ -2833,4 +2833,18 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
   await address.focus();
   await shell.page.waitForTimeout(120);
   await expect(results).toBeHidden();
+  await address.press(`${modifier}+F`);
+  const find = shell.page.getByRole("textbox", {
+    name: "Find in current content",
+    exact: true,
+  });
+  await expect(find).toBeFocused();
+  await address.fill("delayed-alternative");
+  await expect(results).toBeVisible();
+  await address.press("Escape");
+  await expect(results).toBeHidden();
+  await expect(find).toBeVisible();
+  await address.press("Escape");
+  await expect(find).toBeHidden();
+  await expect(address).toBeFocused();
 });

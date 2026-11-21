@@ -18,8 +18,22 @@ export interface KeyInput {
   repeat?: boolean;
   isComposing?: boolean;
   altGraph?: boolean;
+  getModifierState?(key: string): boolean;
   type?: string;
   keyCode?: number;
+}
+export function isPlainEscape(input: KeyInput): boolean {
+  return (
+    input.key === "Escape" &&
+    !input.ctrlKey &&
+    !input.metaKey &&
+    !input.shiftKey &&
+    !input.altKey &&
+    !input.isComposing &&
+    !input.altGraph &&
+    !input.getModifierState?.("AltGraph") &&
+    input.keyCode !== 229
+  );
 }
 export interface KeyBinding {
   code: string;
@@ -248,7 +262,9 @@ export const commands = [
   entry("folders.add", "Add folder", "Workspace"),
   entry("files.preview", "Toggle Markdown preview", "Files"),
   entry("review.document", "Review active document", "Review"),
-  entry("chat.stop", "Stop response", "Conversation"),
+  entry("chat.stop", "Stop response", "Conversation", [
+    key("Escape", {}, ["shell", "composer"]),
+  ]),
   entry("review.addComment", "Add review comment", "Review", [
     key("KeyM", { mod: true, shift: true }, ["review"]),
   ]),
@@ -536,6 +552,7 @@ const defaultBindings = new Map(
 function parseShortcut(
   shortcut: string,
   platform: KeyboardPlatform,
+  allowPlainEscape = false,
 ): KeyBinding {
   const parts = shortcut.split("+").map((part) => part.trim());
   const value = parts.pop() ?? "";
@@ -591,13 +608,14 @@ function parseShortcut(
       altKey: false,
     }) ??
     (/^(Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-2]))$/.test(value) ? value : "");
-  const shiftedEscape = binding.shift && binding.code === "Escape";
+  const escape =
+    binding.code === "Escape" && (binding.shift || allowPlainEscape);
   if (
     !binding.code ||
     (!binding.mod &&
       !binding.ctrl &&
       !binding.alt &&
-      !shiftedEscape &&
+      !escape &&
       !/^F(?:[1-9]|1[0-2])$/.test(binding.code))
   )
     throw new Error(`Invalid shortcut: ${shortcut}`);
@@ -636,7 +654,11 @@ export function configureKeymap(
     const scope =
       command.overrideSurfaces ?? (surfaces.length ? surfaces : cod);
     const bindings = (shortcuts ?? []).map((shortcut: string) => {
-      const parsed = parseShortcut(shortcut, platform);
+      const parsed = parseShortcut(
+        shortcut,
+        platform,
+        command.id === "chat.stop",
+      );
       const terminalConflict =
         platform === "linux" &&
         (parsed.ctrl || parsed.mod) &&

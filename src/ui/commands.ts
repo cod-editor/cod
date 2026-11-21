@@ -16,12 +16,14 @@ import { sitePermissions } from "./browser-permissions";
 import { browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
 import {
+  canStopResponse,
   conversationRemovalReason,
   conversationHandoffReason,
 } from "../conversation-actions";
 import { createFocusTargets } from "./focus-targets";
 import {
   commands as commandDefinitions,
+  isPlainEscape,
   resolveKeybinding,
   formatShortcut,
   type CommandId,
@@ -89,11 +91,19 @@ interface CommandFeatures {
     ) => string | undefined;
     paneToggleReason: (side: "left" | "right") => string | undefined;
   };
-  chat: { send: (id: string) => Promise<void>; integration: () => void };
+  chat: {
+    send: (id: string) => Promise<void>;
+    stop: (id: string) => Promise<void>;
+    dismissBackground: (target: Element) => boolean;
+    integration: () => void;
+  };
   navigation: ReturnType<typeof createWorkspaceNavigation>;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
-  find: { open: (pane: import("../types").PaneState) => void };
+  find: {
+    open: (pane: PaneState) => void;
+    dismissFrom: (target: Element) => boolean;
+  };
 }
 export function createCommands(
   getState: () => AppState,
@@ -1022,13 +1032,7 @@ export function createCommands(
       )
     )
       return "Select a chat first";
-    if (
-      id === "chat.stop" &&
-      !getState().conversations.some(
-        (c) =>
-          c.paneId === pane?.id && ["working", "waiting"].includes(c.status),
-      )
-    )
+    if (id === "chat.stop" && !canStopResponse(conversation))
       return "No response is running";
     if (
       (id === "files.save" &&
@@ -1303,7 +1307,7 @@ export function createCommands(
           break;
         case "chat.stop":
           if (pane?.kind === "conversation")
-            await invoke("conversation.interrupt", { id: pane.conversationId });
+            await chats.stop(pane.conversationId);
           break;
         case "terminal.new":
           terminalDialog();
@@ -1805,6 +1809,60 @@ export function createCommands(
   workspaceSelector.addEventListener("click", () => overview.toggle(), {
     signal: events.signal,
   });
+  function stopShortcut(event: KeyboardEvent, dispatch: boolean): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const paneId = target
+      .closest(".chat-body")
+      ?.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId;
+    const workspace = activeWorkspace();
+    if (
+      !paneId ||
+      !workspace?.groups.some(
+        (group) => !group.hidden && group.activePaneId === paneId,
+      )
+    )
+      return;
+    const pane = workspace.panes.find((item) => item.id === paneId);
+    const chat = conversationTarget(pane);
+    if (!chat || !canStopResponse(chat)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (dispatch)
+      void execute("chat.stop", undefined, {
+        workspaceId: workspace.id,
+        paneId,
+        conversationId: chat.id,
+      });
+  }
+
+  // Plain Escape reaches local controls first. Native dialogs keep their cancel
+  // behavior; only an unclaimed key can interrupt the chat that owns focus.
+  listen("keydown", (event) => {
+    if (
+      event.defaultPrevented ||
+      !isPlainEscape(event) ||
+      event.repeat ||
+      document.querySelector("dialog[open]") ||
+      !(event.target instanceof Element)
+    )
+      return;
+    if (
+      chats.dismissBackground(event.target) ||
+      features.find.dismissFrom(event.target)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    const match = resolveKeybinding(
+      event,
+      keyboardPlatform,
+      shortcutSurface(event.target),
+    );
+    if (match?.command === "chat.stop") stopShortcut(event, match.dispatch);
+  });
+
   listen(
     "keydown",
     (event) => {
@@ -1815,6 +1873,23 @@ export function createCommands(
         event.getModifierState("AltGraph")
       )
         return;
+      if (isPlainEscape(event)) {
+        const dialog = document.querySelector("dialog[open]");
+        if (dialog && event.repeat) event.preventDefault();
+        // xterm consumes Escape at its input; Cod find takes priority only
+        // while its bar is open for that terminal's group.
+        if (
+          !dialog &&
+          event.target instanceof Element &&
+          event.target.closest(".terminal-body") &&
+          !event.repeat &&
+          features.find.dismissFrom(event.target)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
       if (
         event.key === "ContextMenu" ||
         (event.shiftKey &&
@@ -1863,6 +1938,10 @@ export function createCommands(
       );
       if (!match || (openDialog && match.command !== "workspace.overview"))
         return;
+      if (match.command === "chat.stop") {
+        stopShortcut(event, match.dispatch);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (match.dispatch) void execute(match.command);

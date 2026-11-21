@@ -79,6 +79,70 @@ async function desktopScreenshot(app: WorkspaceApp, filename: string) {
   await writeFile(filename, Buffer.from(png, "base64"));
 }
 
+test("Escape closes Cod PDF find after focus returns to the PDF", async () => {
+  const app = new WorkspaceApp();
+  try {
+    await app.prepare();
+    const filename = path.join(app.folders[0], "find-fixture.pdf");
+    await writeFile(filename, fixturePdf());
+    await app.start();
+    const workspace = (await app.state()).workspaces[0].id;
+    const tab = await app.cli<PdfTab>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      pathToFileURL(filename).href,
+    );
+    await rendered(app, tab.id);
+    const key = async (keyCode: string, find = false) => {
+      await app.app!.evaluate(
+        ({ webContents }, args) => {
+          const contents = webContents.fromId(args.id)!;
+          contents.focus();
+          const modifiers = args.find
+            ? ([process.platform === "darwin" ? "meta" : "control"] as const)
+            : [];
+          contents.sendInputEvent({
+            type: "keyDown",
+            keyCode: args.keyCode,
+            modifiers: [...modifiers],
+          });
+          contents.sendInputEvent({
+            type: "keyUp",
+            keyCode: args.keyCode,
+            modifiers: [...modifiers],
+          });
+        },
+        { id: tab.nativeTabId, keyCode, find },
+      );
+    };
+    await key("F", true);
+    const input = app.page.getByRole("textbox", {
+      name: "Find in current content",
+      exact: true,
+    });
+    await expect(input).toBeFocused();
+    await input.fill("Invented");
+    await expect(
+      app.page.getByRole("status", { name: "Find results" }),
+    ).toHaveText("1 of 1");
+    await key("Escape");
+    await expect(input).toBeHidden();
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          ({ webContents }, id) => webContents.fromId(id)?.isFocused(),
+          tab.nativeTabId,
+        ),
+      )
+      .toBe(true);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("PDF pages render over HTTP and local Unicode paths, reload and restart", async ({}, info) => {
   test.setTimeout(90000);
   const app = new WorkspaceApp();

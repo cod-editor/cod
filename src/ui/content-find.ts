@@ -1,3 +1,4 @@
+import { isPlainEscape } from "../keyboard";
 import { reviewTextPoint } from "./review-source";
 import type { AppState, PaneState } from "../types";
 import type { createFocusManager } from "./focus";
@@ -75,8 +76,10 @@ export function createContentFind(
     cancelNativeWaiters();
     clearHighlight();
     revision++;
-    if (previous.pane.kind === "browser")
+    if (previous.pane.kind === "browser") {
+      window.cod.browserFindVisibility(previous.pane.browserId, false);
       window.cod.browserStopFind(previous.pane.browserId);
+    }
     if (previous.pane.kind === "terminal")
       terminalFind(previous.pane.terminalId, "");
     previous.bar.remove();
@@ -295,6 +298,8 @@ export function createContentFind(
     bar.append(input, status, previous, next, done);
     group.querySelector(".tab-bar")?.after(bar);
     opened = { pane, bar, input, status, origin, query: "", index: 0 };
+    if (pane.kind === "browser")
+      window.cod.browserFindVisibility(pane.browserId, true);
     bar.onsubmit = (event) => {
       event.preventDefault();
       void search(true, true);
@@ -302,10 +307,10 @@ export function createContentFind(
     input.oninput = () => void search();
     bar.onkeydown = (event) => {
       if (event.isComposing || event.keyCode === 229) return;
-      if (event.key === "Escape") {
+      if (isPlainEscape(event)) {
         event.preventDefault();
         event.stopPropagation();
-        close();
+        if (!event.repeat) close();
       } else if (event.key === "Enter") {
         event.preventDefault();
         if (!event.repeat) void search(!event.shiftKey, true);
@@ -314,6 +319,10 @@ export function createContentFind(
     input.focus();
     layout();
   }
+  window.cod.onBrowserFindDismiss((id) => {
+    if (opened?.pane.kind === "browser" && opened.pane.browserId === id)
+      close();
+  });
   window.cod.onBrowserFind((event) => {
     if (
       opened?.pane.kind !== "browser" ||
@@ -338,6 +347,11 @@ export function createContentFind(
   return {
     open,
     close,
+    dismissFrom(target: Element) {
+      if (!opened?.bar.closest(".tab-group")?.contains(target)) return false;
+      close();
+      return true;
+    },
     reconcile() {
       if (opened) {
         const workspace = getState().workspaces.find(

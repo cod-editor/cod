@@ -691,6 +691,19 @@ async function start(): Promise<void> {
         );
       },
     );
+    ipcMain.on(
+      "cod:browser-find-visibility",
+      (event, id: unknown, visible: unknown) => {
+        if (
+          event.sender === mainWindow?.webContents &&
+          event.senderFrame === event.sender.mainFrame &&
+          event.senderFrame.url === rendererUrl &&
+          typeof id === "string" &&
+          typeof visible === "boolean"
+        )
+          operations.browserFindVisibility(id, visible);
+      },
+    );
     ipcMain.on("cod:browser-stop-find", (event, id: unknown) => {
       if (
         event.sender !== mainWindow?.webContents ||

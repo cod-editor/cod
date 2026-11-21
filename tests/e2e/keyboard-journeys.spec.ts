@@ -475,6 +475,32 @@ test("Native website keys stay on the page and palette cancellation restores its
       1,
       2,
     ]);
+    await key("Escape");
+    await expect
+      .poll(
+        async () =>
+          (await inspect())?.keys.filter(
+            (item: { key: string }) => item.key === "Escape",
+          ).length,
+      )
+      .toBe(1);
+    await key("F", [mod]);
+    await expect(nativeFind).toBeFocused();
+    await app.app!.evaluate(({ webContents }, url) => {
+      webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === url)!
+        .focus();
+    }, url);
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    await key("Escape");
+    await expect(nativeFind).toBeHidden();
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    expect(
+      (await inspect())?.keys.filter(
+        (item: { key: string }) => item.key === "Escape",
+      ),
+    ).toHaveLength(1);
     await key("J", ["alt"]);
     await expect(
       app.page.getByRole("textbox", { name: "Message", exact: true }),
@@ -782,6 +808,13 @@ test("Terminal readline and interruption survive global keyboard navigation with
     await app.page.keyboard.type("printf '\\nINTERRUPT_OK\\n'");
     await app.page.keyboard.press("Enter");
     await expect.poll(output).toContain("INTERRUPT_OK");
+    await app.page.keyboard.type(
+      "stty raw -echo; printf '\nRAW_ESCAPE_READY\n'; od -An -tu1 -N1; stty sane; stty -echo",
+    );
+    await app.page.keyboard.press("Enter");
+    await expect.poll(output).toContain("RAW_ESCAPE_READY");
+    await app.page.keyboard.press("Escape");
+    await expect.poll(output).toMatch(/RAW_ESCAPE_READY[\s\S]*?\s27\r?\n/);
     const wrapGrid = await app.cli<{ cols: number }>(
       "terminal",
       "inspect",
@@ -814,7 +847,14 @@ test("Terminal readline and interruption survive global keyboard navigation with
     await app.page.screenshot({
       path: info.outputPath("terminal-cleared-find.png"),
     });
+    await input.focus();
     await app.page.keyboard.press("Escape");
+    await expect(
+      app.page.getByRole("textbox", {
+        name: "Find in current content",
+        exact: true,
+      }),
+    ).toBeHidden();
     await expect(input).toBeFocused();
     await app.page.keyboard.press(`${modifier}+Shift+P`);
     await expect(
@@ -1392,6 +1432,9 @@ test("A long review supports keyboard range comments and submission without tabb
       .getByRole("textbox", { name: "Comment", exact: true });
     await expect(comment).toBeFocused();
     await app.page.keyboard.type("Clarify these first two lines.");
+    await app.page.keyboard.press("Escape");
+    await expect(first).toBeFocused();
+    await expect(comment).toHaveValue("Clarify these first two lines.");
     await reach(
       app.page,
       app
