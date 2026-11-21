@@ -956,10 +956,19 @@ async function removalMenu(id: string) {
   );
   const search = overview.getByRole("combobox");
   await search.focus();
-  for (let step = 0; step < 20; step++) {
-    if ((await row.getAttribute("aria-current")) === "true") break;
-    await search.press("ArrowDown");
-  }
+  const offset = await row.evaluate((target) => {
+    const rows = [
+      ...target
+        .closest(".overview-list")!
+        .querySelectorAll(".overview-item:not([hidden])"),
+    ];
+    return (
+      rows.indexOf(target) -
+      rows.findIndex((item) => item.getAttribute("aria-current") === "true")
+    );
+  });
+  for (let step = 0; step < Math.abs(offset); step++)
+    await search.press(offset < 0 ? "ArrowUp" : "ArrowDown");
   await expect(row).toHaveAttribute("aria-current", "true");
   await search.press("Shift+F10");
   const menu = shell.page.getByRole("dialog", { name: "Actions", exact: true });
