@@ -133,9 +133,11 @@ export class WorkspaceApp {
         const decisions = globalThis as typeof globalThis & {
           quitChoice?: string;
           quitOptions?: string[];
+          quitDefault?: string;
           showNativeQuit?: boolean;
         };
         decisions.quitOptions = options.buttons;
+        decisions.quitDefault = options.buttons[options.defaultId];
         if (decisions.showNativeQuit) return (show as any)(...arguments_);
         const choice = decisions.quitChoice ?? "Stop";
         return Promise.resolve({

@@ -424,6 +424,9 @@ async function quitDetachedFixture(decision: "Leave Running" | "Stop") {
 test("Detached local chat finishes while Cod is closed and restores the same native session", async ({}, info) => {
   const owner = new LocalProviderOwner(shell.data);
   try {
+    await shell.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 560),
+    );
     await shell.page.keyboard.press(`${modifier}+,`);
     const settings = shell.page.getByRole("dialog", {
       name: "Settings",
@@ -525,6 +528,9 @@ test("Detached local chat keeps an approval through restart, with Cancel and Sto
     await expect
       .poll(() => shell.app!.evaluate(() => (globalThis as any).quitOptions))
       .toEqual(["Leave Running", "Stop", "Cancel"]);
+    expect(
+      await shell.app!.evaluate(() => (globalThis as any).quitDefault),
+    ).toBe("Cancel");
     if (process.platform === "linux") {
       const execute = promisify(execFile);
       let nativeWindow = "";
