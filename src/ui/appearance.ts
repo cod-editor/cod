@@ -323,8 +323,11 @@ export function appearanceDialog(
         ? document.createElement("select")
         : document.createElement("input"));
     input.setAttribute("aria-label", label);
-    if (input instanceof HTMLSelectElement && "choices" in spec)
-      for (const choice of spec.choices) input.add(new Option(choice, choice));
+    if (input instanceof HTMLSelectElement && "choices" in spec) {
+      const labels = "choiceLabels" in spec ? spec.choiceLabels : undefined;
+      for (const choice of spec.choices)
+        input.add(new Option(labels?.[choice] ?? choice, choice));
+    }
     if (input instanceof HTMLInputElement) {
       input.type =
         typeof spec.default === "boolean"
@@ -433,7 +436,11 @@ export function appearanceDialog(
       const value = current.values[key];
       if (input instanceof HTMLInputElement && input.type === "checkbox")
         input.checked = value === true;
-      else if (input !== document.activeElement) input.value = String(value);
+      else if (
+        input instanceof HTMLSelectElement ||
+        input !== document.activeElement
+      )
+        input.value = String(value);
       input.disabled = !!current.error;
       font?.refresh(String(value), !!current.error);
       refreshControl?.();

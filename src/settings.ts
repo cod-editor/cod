@@ -63,6 +63,13 @@ export const settingsSchema = {
     100,
     50000,
   ),
+  "workspace.defaultHost": {
+    label: "Default task host",
+    group: "Workspaces",
+    default: "local",
+    choices: ["local", "linux"],
+    choiceLabels: { local: "Local", linux: "Linux" } as Record<string, string>,
+  },
 } as const;
 export type SettingKey = keyof typeof settingsSchema;
 export type Settings = {
@@ -70,7 +77,11 @@ export type Settings = {
     ? number
     : (typeof settingsSchema)[K]["default"] extends boolean
       ? boolean
-      : string;
+      : (typeof settingsSchema)[K] extends {
+            readonly choices: readonly (infer Choice)[];
+          }
+        ? Choice
+        : string;
 };
 export interface SettingsState {
   values: Settings;

@@ -84,6 +84,10 @@ From the connected workspace, you can open and edit existing text files, use ter
 
 Browser tabs, cookies and device permissions stay on the desktop. Use the Linux host's CLI to add folders and save a new file to a Linux path. File previews remain local in this checkpoint.
 
+### Default task host
+
+Open **Settings**, search for **Default task host**, and choose **Local** or **Linux**. New setups start with **Local**. This setting applies to `codctl workspace prepare --name NAME` from the desktop, even when a workspace on the other host is selected. Choose **Linux** to use the existing connection or the last successfully connected Linux profile. If the target is unreachable or missing, the command reports the problem. Pass `--location local` or `--location linux` to choose a host for one desktop request. Direct preparation on the Linux host always stays there. Ctrl+N opens a chat in the current workspace.
+
 ### Pair review and approvals
 
 On the Linux host, add your chosen existing SSH public key to the private profile's `desktop-signers` file with an entry in the OpenSSH allowed-signers format:

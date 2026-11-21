@@ -349,6 +349,252 @@ test("agents prepare a task on the explicit host and follow the existing Linux c
   }
 });
 
+test("Default task host applies from either selected workspace and fails without local fallback", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "The production workspace host runs on Linux",
+  );
+  test.setTimeout(60_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+
+  let host: ChildProcess | undefined;
+  let exited: Promise<unknown> | undefined;
+  const startHost = async () => {
+    host = spawn(process.execPath, ["dist/workspace-host.cjs", linux.data], {
+      env: linux.environment,
+      stdio: "ignore",
+    });
+    exited = once(host, "exit");
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+  };
+  const stopHost = async () => {
+    host?.kill("SIGTERM");
+    await exited;
+    host = undefined;
+  };
+  const prepare = (name: string) => ["workspace", "prepare", "--name", name];
+  const header = () =>
+    desktop.page.getByRole("button", { name: "Overview", exact: true });
+  const desktopState = () =>
+    desktop.page.evaluate(() => window.cod.invoke<AppState>({ op: "state" }));
+  const openSetting = async () => {
+    await desktop.page.keyboard.press(`${modifier}+,`);
+    const dialog = desktop.page.getByRole("dialog", {
+      name: "Settings",
+      exact: true,
+    });
+    const search = dialog.getByRole("searchbox", {
+      name: "Search settings",
+      exact: true,
+    });
+    await search.fill("default task host");
+    const group = dialog.getByRole("region", {
+      name: "Workspaces settings",
+      exact: true,
+    });
+    const choice = group.getByRole("combobox", {
+      name: "Workspaces Default task host",
+      exact: true,
+    });
+    const reset = group.getByRole("button", {
+      name: "Reset Workspaces Default task host",
+      exact: true,
+    });
+    await search.press("Tab");
+    await expect(choice).toBeFocused();
+    return { dialog, choice, reset };
+  };
+  const expectHost = (value: string) =>
+    expect
+      .poll(
+        async () =>
+          (
+            await desktop.cli<{ values: Record<string, string> }>(
+              "settings",
+              "get",
+            )
+          ).values["workspace.defaultHost"],
+      )
+      .toBe(value);
+
+  try {
+    await desktop.start();
+    const intake = await desktop.cli<{ id: string; location: string }>(
+      ...prepare("Desktop intake"),
+    );
+    expect(intake.location).toBe("local");
+    await expect(header()).toHaveText("Desktop intake");
+    const setting = await openSetting();
+    await expect(setting.choice.locator("option:checked")).toHaveText("Local");
+    await expect(setting.reset).toBeHidden();
+    await desktop.page.setViewportSize({ width: 1280, height: 800 });
+    await desktop.page.screenshot({
+      path: info.outputPath("default-task-host-local.png"),
+    });
+    await setting.choice.selectOption("linux");
+    await expectHost("linux");
+    await expect(setting.choice.locator("option:checked")).toHaveText("Linux");
+    await expect(setting.reset).toBeEnabled();
+    await desktop.page.setViewportSize({ width: 390, height: 650 });
+    const controlBounds = await setting.choice.boundingBox();
+    const dialogBounds = await setting.dialog.boundingBox();
+    expect(controlBounds!.x + controlBounds!.width).toBeLessThanOrEqual(
+      dialogBounds!.x + dialogBounds!.width,
+    );
+    await desktop.page.screenshot({
+      path: info.outputPath("default-task-host-linux-narrow.png"),
+    });
+    await setting.dialog
+      .getByRole("button", { name: "Done", exact: true })
+      .click();
+    await desktop.page.setViewportSize({ width: 1280, height: 800 });
+
+    const missing = await desktop.raw(...prepare("Missing host task"));
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain(
+      "Connect to a Linux workspace from Commands",
+    );
+    const invalid = await desktop.raw(
+      ...prepare("Invalid host task"),
+      "--location",
+      "remote",
+    );
+    expect(invalid.code).toBe(1);
+    expect(invalid.stderr).toContain("location must be local or linux");
+    expect(
+      (await desktop.state()).workspaces.map(({ name }) => name),
+    ).not.toContain("Missing host task");
+    const localPane = (await desktop.workspace(intake.id)).activePaneId;
+    const composer = desktop
+      .pane(localPane)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("Invented unsent local draft");
+    await expect
+      .poll(
+        async () =>
+          (await desktopState()).workspaces.find(
+            (workspace) => workspace.id === intake.id,
+          )?.chatDrafts?.[localPane]?.text,
+      )
+      .toBe("Invented unsent local draft");
+    await composer.press(`${modifier}+n`);
+    await expect
+      .poll(async () => (await desktop.workspace(intake.id)).activePaneId)
+      .not.toBe(localPane);
+    await expect(header()).toHaveText("Desktop intake");
+
+    await startHost();
+    await installWorkspaceRelay(desktop);
+    await connectWorkspace(desktop, linux.socket);
+    await desktop.stop();
+    await desktop.start();
+    await expectHost("linux");
+    expect((await desktopState()).remoteWorkspace).toBeUndefined();
+    await expect(header()).toHaveText("Desktop intake");
+    await installWorkspaceRelay(desktop);
+
+    const first = await desktop.cli<{
+      id: string;
+      location: string;
+      folders: string[];
+    }>(
+      ...prepare("Linux from desktop"),
+      "--folders",
+      JSON.stringify([linux.folders[0]]),
+    );
+    expect(first).toMatchObject({
+      location: "linux",
+      folders: [linux.folders[0]],
+    });
+    await expect(header()).toHaveText("Linux from desktop (invented-linux)");
+    expect((await linux.workspace(first.id)).name).toBe("Linux from desktop");
+    const linuxPane = (await linux.workspace(first.id)).activePaneId;
+    await desktop.page.keyboard.press(`${modifier}+n`);
+    await expect
+      .poll(async () => (await linux.workspace(first.id)).activePaneId)
+      .not.toBe(linuxPane);
+    await expect(header()).toHaveText("Linux from desktop (invented-linux)");
+
+    const second = await desktop.cli<{ id: string; location: string }>(
+      ...prepare("Linux from Linux view"),
+    );
+    expect(second.location).toBe("linux");
+    await expect(header()).toHaveText("Linux from Linux view (invented-linux)");
+    expect((await linux.workspace(second.id)).name).toBe(
+      "Linux from Linux view",
+    );
+    const direct = await linux.cli<{ id: string; location: string }>(
+      ...prepare("Direct Linux"),
+    );
+    expect(direct.location).toBe("linux");
+    expect((await linux.workspace(direct.id)).name).toBe("Direct Linux");
+
+    const local = await desktop.cli<{ id: string; location: string }>(
+      ...prepare("Explicit local task"),
+      "--location",
+      "local",
+    );
+    expect(local.location).toBe("local");
+    await expect(header()).toHaveText("Explicit local task");
+    await expectHost("linux");
+    await stopHost();
+    await expect
+      .poll(async () => (await desktopState()).remoteWorkspace?.connected)
+      .toBe(false);
+
+    const unavailable = await desktop.raw(...prepare("Recover on Linux"));
+    expect(unavailable.code).toBe(1);
+    const error = JSON.parse(unavailable.stderr) as { error: string };
+    expect(error.error).toContain(
+      'Could not connect to the Linux workspace host "invented-linux"',
+    );
+    await expect(header()).toHaveText("Explicit local task");
+    const localNames = (await desktop.state()).workspaces.map(
+      ({ name }) => name,
+    );
+    expect(localNames).not.toContain("Linux from desktop");
+    expect(localNames).not.toContain("Linux from Linux view");
+    expect(localNames).not.toContain("Recover on Linux");
+
+    await startHost();
+    const recovered = await desktop.cli<{ id: string; location: string }>(
+      ...prepare("Recover on Linux"),
+    );
+    expect(recovered.location).toBe("linux");
+    await expect(header()).toHaveText("Recover on Linux (invented-linux)");
+    expect((await linux.workspace(recovered.id)).name).toBe("Recover on Linux");
+    const reopened = await openSetting();
+    await expect(reopened.choice).toHaveValue("linux");
+    await reopened.reset.click();
+    await expectHost("local");
+    await expect(reopened.choice).toHaveValue("local");
+    await expect(reopened.reset).toBeHidden();
+    await expect(header()).toHaveText("Recover on Linux (invented-linux)");
+    await reopened.dialog
+      .getByRole("button", { name: "Done", exact: true })
+      .click();
+    const reset = await desktop.cli<{ location: string }>(
+      ...prepare("Local after reset"),
+    );
+    expect(reset.location).toBe("local");
+    await expect(header()).toHaveText("Local after reset");
+  } finally {
+    try {
+      await desktop.cleanup();
+    } finally {
+      await stopHost();
+      await linux.cleanup();
+    }
+  }
+});
+
 test("Linux workspace reconnect preserves host files, Codex chat and a running terminal", async ({}) => {
   test.skip(
     process.platform !== "linux",
