@@ -126,6 +126,7 @@ export function createWorkspaceOverview(
     let edit: { key: string; value: string; saving: boolean } | undefined;
     const selection = createSearchList(input, list, {
       selector: "button.overview-item:not([hidden])",
+      wrapNavigation: false,
       onSelect: (row) => {
         highlighted?.setAttribute("aria-selected", "false");
         highlighted?.parentElement?.setAttribute("aria-selected", "false");
@@ -318,35 +319,12 @@ export function createWorkspaceOverview(
       const item = find();
       const action = closeAction(item);
       if (!item || !action || closing) return;
-      const version = queryVersion;
-      const index = visible.findIndex((row) => row.key === item.key);
-      const neighbors = [
-        ...visible.slice(index + 1),
-        ...visible.slice(0, index).reverse(),
-      ];
       closing = true;
       dialog.querySelector(".action-error")?.remove();
       try {
-        const changed =
-          action === "Remove from workspace"
-            ? !!(await invoke("conversation.remove", { id: item.id }))
-            : await navigation.close(item);
-        if (
-          changed &&
-          dialog.open &&
-          queryVersion === version &&
-          item.key === selectedKey
-        ) {
-          const remaining = new Set(
-            visibleNavigation(navigationItems(), input.value, retainedKey).map(
-              (row) => row.key,
-            ),
-          );
-          if (!remaining.has(item.key)) {
-            const neighbor = neighbors.find((row) => remaining.has(row.key));
-            if (neighbor) highlight(neighbor.key);
-          }
-        }
+        if (action === "Remove from workspace")
+          await invoke("conversation.remove", { id: item.id });
+        else await navigation.close(item);
         refresh();
       } catch (error) {
         showActionError(error, dialog);
@@ -396,6 +374,29 @@ export function createWorkspaceOverview(
         { showCommands: false },
       );
     }
+    function fallbackSelection(
+      previous: NavigationItem[],
+      next: NavigationItem[],
+      key: string | undefined,
+    ): string | undefined {
+      const index = previous.findIndex((row) => row.key === key);
+      if (index < 0) return next[0]?.key;
+      const removed = previous[index];
+      const keys = new Set(next.map((row) => row.key));
+      const neighbors = [
+        ...previous.slice(index + 1),
+        ...previous.slice(0, index).reverse(),
+      ].filter((row) => keys.has(row.key));
+      return (
+        neighbors.find((row) => row.parent && row.parent === removed.parent) ??
+        next.find(
+          (row) =>
+            row.kind === "workspace" && row.workspaceId === removed.workspaceId,
+        ) ??
+        neighbors[0] ??
+        next[0]
+      )?.key;
+    }
     function refresh() {
       if (!dialog.open) return;
       items = navigationItems();
@@ -431,15 +432,8 @@ export function createWorkspaceOverview(
         return;
       }
       signature = nextSignature;
-      if (!visible.some((row) => row.key === selectedKey)) {
-        const index = previous.findIndex((row) => row.key === selectedKey);
-        selectedKey =
-          [
-            ...previous.slice(index + 1),
-            ...previous.slice(0, index).reverse(),
-          ].find((row) => visible.some((next) => next.key === row.key))?.key ??
-          visible[0]?.key;
-      }
+      if (!visible.some((row) => row.key === selectedKey))
+        selectedKey = fallbackSelection(previous, visible, selectedKey);
       const top = list.scrollTop;
       const editing =
         edit && list.querySelector<HTMLInputElement>(".overview-name");

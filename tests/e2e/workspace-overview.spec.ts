@@ -142,6 +142,126 @@ test("Overview keeps selection separate from activation, preserves workspace gro
   await expect(overview()).toHaveCount(0);
 });
 
+test("Overview arrow key repeat stops at both visible ends with and without search", async ({}, info) => {
+  const first = await app.create("Shared sample Alpha");
+  await app.newChat(first, "codex");
+  const last = await app.create("Shared sample Beta");
+  await app.newChat(last, "codex");
+  await app.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 550),
+  );
+  await show();
+  const results = overview().locator("button.overview-item");
+  const total = await results.count();
+  expect(total).toBeGreaterThan(4);
+  for (const query of ["", "Shared sample"]) {
+    await search().fill(query);
+    await expect(results).toHaveCount(query ? 4 : total);
+    for (const key of ["ArrowUp", "ArrowDown"]) {
+      const isFirst = key === "ArrowUp";
+      const boundary = isFirst ? results.first() : results.last();
+      await results.nth(isFirst ? 1 : (await results.count()) - 2).hover();
+      await app.page.keyboard.down(key);
+      try {
+        await expect(boundary).toHaveAttribute("aria-current", "true");
+        for (let repeat = 0; repeat < 3; repeat++) {
+          await app.page.keyboard.down(key);
+          await expect(boundary).toHaveAttribute("aria-current", "true");
+        }
+      } finally {
+        await app.page.keyboard.up(key);
+      }
+      await expect(boundary).toHaveAttribute("aria-current", "true");
+      await expect(boundary).toHaveAttribute("aria-selected", "true");
+      await expect(search()).toHaveAttribute(
+        "aria-activedescendant",
+        (await boundary.getAttribute("id"))!,
+      );
+      await expect(search()).toBeFocused();
+      await expect(boundary).toBeInViewport();
+      if (query) {
+        await app.page.screenshot({
+          path: info.outputPath(
+            isFirst
+              ? "overview-first-visible.png"
+              : "overview-last-visible.png",
+          ),
+        });
+      }
+    }
+  }
+});
+
+test("Overview prefers siblings and the current workspace heading when a selected tab disappears", async ({}, info) => {
+  const source = await app.create("Shared route Alpha");
+  const openBrowser = (workspace: string) =>
+    app.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      "about:blank",
+    );
+  const first = await openBrowser(source);
+  const second = await openBrowser(source);
+  const terminal = await app.cli<{ id: string; paneId: string }>(
+    "terminal",
+    "open",
+    "--workspace",
+    source,
+    "--cwd",
+    app.folders[0],
+  );
+  const destination = await app.create("Shared route Beta");
+  const other = await openBrowser(destination);
+  await show();
+  await search().fill("Shared route");
+  const footer = overview().locator(".picker-footer");
+  await row("browser", second.id).hover();
+  const close = async (kind: string, id: string) => {
+    await expect(row(kind, id)).toHaveAttribute("aria-current", "true");
+    await expect(footer).toContainText("Close tab");
+    await search().press(`${modifier}+w`);
+    await expect(row(kind, id)).toHaveCount(0);
+    await expect(search()).toBeFocused();
+    expect((await app.state()).activeWorkspaceId).toBe(destination);
+  };
+
+  await close("browser", second.id);
+  await close("terminal", terminal.id);
+  await close("browser", first.id);
+  await expect(row("workspace", source)).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(footer).toContainText("Close workspace");
+  await expect(search()).toHaveValue("Shared route");
+  await search().dispatchEvent("keydown", {
+    key: "w",
+    code: "KeyW",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+    repeat: true,
+  });
+  await expect(row("workspace", source)).toBeVisible();
+  await expect(row("browser", other.id)).toBeVisible();
+  await app.page.screenshot({
+    path: info.outputPath("overview-workspace-after-close.png"),
+  });
+
+  const filtered = await openBrowser(source);
+  await search().fill("about:blank");
+  await row("browser", filtered.id).hover();
+  await close("browser", filtered.id);
+  await expect(row("workspace", source)).toHaveCount(0);
+  await expect(row("workspace", destination)).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(search()).toHaveValue("about:blank");
+});
+
 test("Overview uses one compact selection surface with first-line controls at normal and narrow sizes", async ({}, info) => {
   const first = await app.create("Release planning");
   const chat = await app.newChat(first, "codex");
@@ -1374,13 +1494,20 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
   expect(metrics.p95Ms).toBeLessThan(100);
   expect(metrics.maxMs!).toBeLessThan(200);
   await search().fill("Invented");
-  const last = overview().locator("button.overview-item").last();
+  const results = overview().locator("button.overview-item");
+  const last = results.last();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toBeInViewport();
   await last.hover();
   await expect(last).toHaveAttribute("aria-selected", "true");
   await search().press("ArrowDown");
+  await expect(last).toHaveAttribute("aria-selected", "true");
   await search().press("ArrowUp");
+  await expect(results.nth((await results.count()) - 2)).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await search().press("ArrowDown");
   await expect(last).toHaveAttribute("aria-selected", "true");
   await expect(last).toBeInViewport();
   await search().press("Shift+F10");

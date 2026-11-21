@@ -6,6 +6,7 @@ export function createSearchList(
   list: HTMLElement,
   options: {
     selector?: string;
+    wrapNavigation?: boolean;
     onSelect?: (row: HTMLButtonElement | undefined) => void;
   } = {},
 ) {
@@ -65,14 +66,14 @@ export function createSearchList(
       event.preventDefault();
       if (!visible.length) return;
       const index = selected ? visible.indexOf(selected) : -1;
+      const down = event.key === "ArrowDown";
       const next =
-        index < 0
-          ? event.key === "ArrowDown"
-            ? 0
-            : visible.length - 1
-          : (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) %
-            visible.length;
-      select(visible[next], true);
+        index < 0 ? (down ? 0 : visible.length - 1) : index + (down ? 1 : -1);
+      const withinList =
+        options.wrapNavigation === false
+          ? Math.max(0, Math.min(next, visible.length - 1))
+          : (next + visible.length) % visible.length;
+      select(visible[withinList], true);
     } else if (event.key === "Enter") {
       event.preventDefault();
       if (selected && visible.includes(selected)) selected.click();
