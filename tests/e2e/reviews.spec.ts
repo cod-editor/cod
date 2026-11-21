@@ -1932,7 +1932,9 @@ test("Cancel review leaves history and resolves waiters without delivering to a 
   }
   const overview = await shell.overview();
   const result = (review: Opened) =>
-    overview.locator(`[data-navigation-key="review:${review.reviewId}"]`);
+    overview.locator(
+      `.overview-item[data-navigation-key="review:${review.reviewId}"]`,
+    );
   await expect(result(document)).toHaveCount(0);
   await expect(result(diff)).toBeVisible();
   const showClosed = overview.getByRole("button", {

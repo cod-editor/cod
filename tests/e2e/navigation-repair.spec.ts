@@ -159,6 +159,7 @@ test("Overview closes the selected workspace through the existing guard and rout
   const cancel = guard.getByRole("button", { name: "Cancel", exact: true });
   await search.fill("Workshop rehearsal");
   const targetRow = overviewRow("workspace", target);
+  await targetRow.hover();
   await expect(targetRow).toHaveAttribute("aria-current", "true");
   const footer = picker.locator(".picker-footer");
   await expect(footer).toContainText(
@@ -190,8 +191,8 @@ test("Overview closes the selected workspace through the existing guard and rout
   expect((await shell.state()).activeWorkspaceId).toBe(current);
 
   await search.fill("Saved checklist");
-  await search.press("ArrowDown");
   const savedRow = overviewRow("conversation", saved.id);
+  await savedRow.hover();
   await expect(savedRow).toHaveAttribute("aria-current", "true");
   await expect(footer).toContainText("Remove from workspace");
   const filter = picker.getByRole("button", {

@@ -1642,8 +1642,15 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     "aria-current",
     "true",
   );
-  await expect(footer()).not.toContainText("Close tab");
-  await search().press(`${modifier}+Shift+Y`);
+  await expect(footer()).toContainText("Close workspace");
+  await search().dispatchEvent("keydown", {
+    key: "Y",
+    code: "KeyY",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+    shiftKey: true,
+    repeat: true,
+  });
   const afterClose = await snapshots();
   expect(afterClose.activeWorkspaceId).toBe(first);
   expect(afterClose.workspaces.some((item) => item.id === second)).toBe(true);

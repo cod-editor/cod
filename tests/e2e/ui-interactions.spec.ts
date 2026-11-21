@@ -305,17 +305,8 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
   try {
     await app.start();
     const workspace = (await app.state()).activeWorkspaceId!;
-    const pinned = await app.newChat(workspace, "codex");
-    await app.cli(
-      "pane",
-      "pin",
-      "--workspace",
-      workspace,
-      "--id",
-      pinned.paneId,
-      "--pinned",
-      "true",
-    );
+    await app.newChat(workspace, "codex");
+    const activeChat = await app.newChat(workspace, "codex");
     const tabs = app.page.locator(".tabs").first();
     const selected = tabs.locator(".tab:has(> [aria-selected=true])");
     const inactive = tabs
@@ -361,6 +352,22 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
       await app.page.mouse.up();
       await expect(selected).toHaveCount(1);
     }
+    await app.cli(
+      "pane",
+      "pin",
+      "--workspace",
+      workspace,
+      "--id",
+      activeChat.paneId,
+      "--pinned",
+      "true",
+    );
+    const unpin = selected.locator(".tab-pin");
+    await unpin.hover();
+    await expect(unpin).toHaveAccessibleName(/^Unpin/);
+    await app.page.screenshot({
+      path: info.outputPath("tab-active-unpin-hover.png"),
+    });
     for (const name of [
       "Choose new tab type",
       "Toggle split view",
