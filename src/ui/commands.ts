@@ -1508,12 +1508,15 @@ export function createCommands(
           await focusTargets.toggle("terminal", focusIntent);
           break;
         case "pane.focusLeft":
-        case "pane.focusRight": {
-          const target = layout.sidePane(
-            id === "pane.focusLeft" ? "left" : "right",
-            w,
-          );
-          if (!target || !w) break;
+        case "pane.focusRight":
+        case "pane.next":
+        case "pane.previous": {
+          if (!w) break;
+          const target =
+            id === "pane.next" || id === "pane.previous"
+              ? keys.adjacentPane(w, id === "pane.next" ? 1 : -1, pane?.id)
+              : layout.sidePane(id === "pane.focusLeft" ? "left" : "right", w);
+          if (!target) break;
           const switching = {
             workspaceId: w.id,
             paneId: target,
@@ -1539,12 +1542,6 @@ export function createCommands(
             await keys.focusActiveContent(active.activePaneId, focusIntent);
           break;
         }
-        case "pane.next":
-          await keys.cyclePane(1, w?.id, pane?.id);
-          break;
-        case "pane.previous":
-          await keys.cyclePane(-1, w?.id, pane?.id);
-          break;
         case "tab.last":
           await keys.selectTab(-1, w?.id, pane?.id);
           break;

@@ -2088,3 +2088,290 @@ for (const replacement of ["none", "keyboard", "native"] as const) {
     }
   });
 }
+
+test("Pane cycling keeps the visibility icon stable and reaches a parked editor, terminal and native page", async ({}, info) => {
+  const app = new ChatApp();
+  await prepareKeyboardProfile(app);
+  Object.assign(app.environment, {
+    COD_TERMINAL_SHELL: "/bin/bash",
+    COD_TERMINAL_ARGS: JSON.stringify(["--noprofile", "--norc", "-i"]),
+    HISTFILE: "/dev/null",
+  });
+  try {
+    await app.start();
+    const workspace = await app.create("Release notes");
+    const leftGroup = (await app.workspace(workspace)).groups[0];
+    const left = leftGroup.id;
+    const openFile = async (name: string, body: string) => {
+      const file = path.join(app.folders[0], name);
+      await writeFile(file, body);
+      return app.cli<{ paneId: string }>(
+        "file",
+        "open",
+        "--workspace",
+        workspace,
+        "--group",
+        left,
+        "--source-pane",
+        leftGroup.activePaneId,
+        "--focus",
+        "true",
+        "--path",
+        file,
+      );
+    };
+    await openFile("notes.txt", "Test the tab controls.");
+    const file = await openFile(
+      "release-notes.txt",
+      "Verify the export examples.",
+    );
+    const editor = app
+      .pane(file.paneId)
+      .getByRole("textbox", { name: "File contents", exact: true });
+    const split = app.page.getByRole("button", {
+      name: "Toggle split view",
+      exact: true,
+    });
+    const tab = (paneId: string) =>
+      app.page.locator(`.tab-select[data-tab-id="${paneId}"]`);
+    const caption = (paneId: string) => tab(paneId).locator(".tab-label");
+    const bright = "rgb(220, 224, 229)";
+    const muted = "rgb(169, 175, 188)";
+    await editor.fill("Keep the unsaved release notes.");
+    await editor.press("End");
+    await editor.press("Alt+Tab");
+    await expect(editor).toBeFocused();
+    await expect(split).toHaveAccessibleDescription("No split");
+    expect((await app.workspace(workspace)).groups).toHaveLength(1);
+
+    await split.click();
+    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    const rightGroup = (await app.workspace(workspace)).groups.find(
+      (group) => group.id !== left,
+    )!;
+    const right = rightGroup.id;
+    const html = path.join(app.folders[0], "export-preview.html");
+    await writeFile(
+      html,
+      '<!doctype html><title>Export preview</title><input id="entry" value="Keep native selection" autofocus>',
+    );
+    const url = pathToFileURL(html).href;
+    const browser = await app.cli<{ paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--group",
+      right,
+      "--source-pane",
+      rightGroup.activePaneId,
+      "--focus",
+      "true",
+      "--url",
+      url,
+    );
+    const shell = await app.cli<{ id: string; paneId: string }>(
+      "terminal",
+      "open",
+      "--workspace",
+      workspace,
+      "--group",
+      right,
+      "--source-pane",
+      browser.paneId,
+      "--focus",
+      "true",
+      "--cwd",
+      app.folders[0],
+    );
+    const terminal = app
+      .pane(shell.paneId)
+      .getByRole("textbox", { name: "Terminal input", exact: true });
+    const region = (id: string) =>
+      app.page.locator(`.tab-group[data-group-id="${id}"]`);
+    const svg = split.locator("svg");
+    const glyph = await svg.evaluate((element) => element.outerHTML);
+    // A mouse selection changes the caption, not the layout drawing or either selected tab.
+    await tab(file.paneId).click();
+    await expect(caption(file.paneId)).toHaveCSS("color", bright);
+    await expect(caption(shell.paneId)).toHaveCSS("color", muted);
+    await expect(region(left)).toHaveAccessibleDescription("Active pane");
+    await expect(region(right)).toHaveAccessibleDescription("Other pane");
+    await expect(tab(file.paneId)).toHaveAttribute("aria-selected", "true");
+    await expect(tab(shell.paneId)).toHaveAttribute("aria-selected", "true");
+    const tabChrome = (paneId: string) =>
+      tab(paneId).evaluate((button) => {
+        const tab = getComputedStyle(button.parentElement!);
+        const body = getComputedStyle(button.closest(".tab-group")!);
+        return {
+          background: tab.backgroundColor,
+          edge: tab.borderBottomColor,
+          opacity: body.opacity,
+          filter: body.filter,
+        };
+      });
+    const leftChrome = await tabChrome(file.paneId);
+    const rightChrome = await tabChrome(shell.paneId);
+    await app.page.screenshot({
+      path: info.outputPath("split-visibility-left-focused.png"),
+    });
+
+    await editor.press("Alt+Tab");
+    await expect(terminal).toBeFocused();
+    await expect(caption(file.paneId)).toHaveCSS("color", muted);
+    await expect(caption(shell.paneId)).toHaveCSS("color", bright);
+    await expect(region(right)).toHaveAccessibleDescription("Active pane");
+    await expect(region(left)).toHaveAccessibleDescription("Other pane");
+    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    expect(await svg.evaluate((element) => element.outerHTML)).toBe(glyph);
+    expect(await tabChrome(file.paneId)).toEqual(leftChrome);
+    expect(await tabChrome(shell.paneId)).toEqual(rightChrome);
+    await app.page.keyboard.type("printf 'Invented terminal result\\n'");
+    await app.page.keyboard.press("Enter");
+    await expect
+      .poll(
+        async () =>
+          (
+            await app.cli<{ output: string }>(
+              "terminal",
+              "inspect",
+              "--id",
+              shell.id,
+            )
+          ).output,
+      )
+      .toContain("Invented terminal result");
+    await app.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 680),
+    );
+    await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(760);
+    await app.page.screenshot({
+      path: info.outputPath("split-visibility-right-focused-narrow.png"),
+    });
+    await app.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(1280, 800),
+    );
+    await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(1280);
+
+    await terminal.press("Alt+Enter");
+    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await terminal.press("Alt+Shift+Tab");
+    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(terminal).toBeHidden();
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Keep the unsaved release notes.");
+    await editor.press("Alt+Tab");
+    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect(terminal).toBeFocused();
+    await expect(editor).toBeHidden();
+
+    await tab(browser.paneId).click();
+    await app.page.keyboard.press("Alt+2");
+    const inspectBrowser = (targetUrl = url) =>
+      app.app!.evaluate(async ({ webContents }, url) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((candidate) => candidate.getURL() === url);
+        if (!contents) return null;
+        return {
+          focused: contents.isFocused(),
+          ...(await contents.executeJavaScript(
+            "({id:document.activeElement.id,start:document.activeElement.selectionStart,end:document.activeElement.selectionEnd})",
+          )),
+        };
+      }, targetUrl);
+    await expect.poll(async () => (await inspectBrowser())?.focused).toBe(true);
+    await app.app!.evaluate(async ({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) => candidate.getURL() === url)!;
+      await contents.executeJavaScript(
+        'document.querySelector("input").focus(); document.activeElement.setSelectionRange(5, 11)',
+      );
+    }, url);
+    const nativePress = async (
+      keyCode: string,
+      modifiers: Array<"alt" | "shift">,
+      targetUrl = url,
+    ) =>
+      app.app!.evaluate(
+        ({ webContents }, values) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((candidate) => candidate.getURL() === values.url)!;
+          contents.sendInputEvent({
+            type: "keyDown",
+            keyCode: values.keyCode,
+            modifiers: values.modifiers,
+          });
+          contents.sendInputEvent({
+            type: "keyUp",
+            keyCode: values.keyCode,
+            modifiers: values.modifiers,
+          });
+        },
+        { url: targetUrl, keyCode, modifiers },
+      );
+    await nativePress("Enter", ["alt"]);
+    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    await nativePress("Tab", ["alt"]);
+    await expect(editor).toBeFocused();
+    await expect
+      .poll(() => app.page.evaluate(() => document.hasFocus()))
+      .toBe(true);
+    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    await editor.press("Alt+Shift+Tab");
+    await expect
+      .poll(inspectBrowser)
+      .toMatchObject({ focused: true, id: "entry", start: 5, end: 11 });
+    expect(await svg.evaluate((element) => element.outerHTML)).toBe(glyph);
+
+    await nativePress("Enter", ["alt"]);
+    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await nativePress("Tab", ["alt", "shift"]);
+    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(editor).toBeFocused();
+    await expect
+      .poll(() => app.page.evaluate(() => document.hasFocus()))
+      .toBe(true);
+    await editor.press("Alt+Tab");
+    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect
+      .poll(inspectBrowser)
+      .toMatchObject({ focused: true, id: "entry", start: 5, end: 11 });
+    expect(
+      (await app.workspace(workspace)).groups.find(
+        (group) => group.id === right,
+      )?.paneIds,
+    ).toEqual([browser.paneId, shell.paneId]);
+
+    const standalone = await app.create("Standalone preview");
+    const origin = await app.workspace(standalone);
+    const standaloneUrl = url + "#standalone";
+    await app.cli(
+      "browser",
+      "open",
+      "--workspace",
+      standalone,
+      "--source-pane",
+      origin.activePaneId,
+      "--focus",
+      "true",
+      "--url",
+      standaloneUrl,
+    );
+    await expect(split).toHaveAccessibleDescription("No split");
+    await app.page.keyboard.press("Alt+1");
+    const inspectStandalone = () => inspectBrowser(standaloneUrl);
+    await expect
+      .poll(inspectStandalone)
+      .toMatchObject({ focused: true, id: "entry" });
+    const beforeCycle = await inspectStandalone();
+    await nativePress("Tab", ["alt"], standaloneUrl);
+    await nativePress("Tab", ["alt", "shift"], standaloneUrl);
+    expect(await inspectStandalone()).toEqual(beforeCycle);
+    expect((await app.workspace(standalone)).groups).toHaveLength(1);
+  } finally {
+    await app.cleanup();
+  }
+});

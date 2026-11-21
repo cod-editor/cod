@@ -273,6 +273,11 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tab-group[data-focused="false"]
+  .tab-select[aria-selected="true"]
+  > .tab-label {
+  color: var(--text-muted);
+}
 .tab-kind {
   flex: none;
   color: var(--text-muted);
@@ -1158,10 +1163,9 @@ button[aria-busy="true"] {
 }
 .split-view-button [data-state="visible"] {
   fill: var(--text-muted);
-  opacity: 0.55;
 }
-.split-view-button [data-state="focused"] {
-  fill: var(--control-accent);
+.split-view-button[aria-pressed="true"] .split-divider {
+  display: none;
 }
 .settings-note {
   color: var(--muted);

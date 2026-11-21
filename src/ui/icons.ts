@@ -24,7 +24,7 @@ export const icons: Record<string, string> = {
   maximize: '<path d="M14 3h7v7M21 3l-7 7M3 14v7h7M3 21l7-7"/>',
   restore: '<path d="M14 3v7h7M14 10l7-7M3 14h7v7M10 14l-7 7"/>',
   split:
-    '<path class="split-left" stroke="none" d="M12 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7z"/><path class="split-right" stroke="none" d="M12 4h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7z"/><g class="split-outline"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></g>',
+    '<path class="split-left" stroke="none" d="M11 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6z"/><path class="split-right" stroke="none" d="M13 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6z"/><g class="split-outline"><rect x="3" y="4" width="18" height="16" rx="2"/><path class="split-divider" d="M12 4v16"/></g>',
   left: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
   right:
     '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
