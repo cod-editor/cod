@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
 import { tabTo, modifier } from "./helpers/workspace-app";
-import type { AppState } from "../../src/types";
+import type { AppState, ConversationState } from "../../src/types";
+import { LocalProviderOwner } from "../../src/providers/local-owner-client";
 interface Opened {
   reviewId: string;
   roundId: string;
@@ -175,6 +176,50 @@ const feedbackPrompts = async (id: string) =>
   (await shell.prompts()).filter((record) =>
     JSON.stringify(record.message?.params).includes(id),
   );
+test("Detached review delivery leaves the live native turn open on desktop quit", async () => {
+  const owner = new LocalProviderOwner(shell.data);
+  try {
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      '{"chat.detachedSessions":true}',
+    );
+    const workspace = await shell.create("Detached review fixture");
+    const chat = await shell.newChat(workspace, "codex");
+    const review = await open(workspace);
+    await comment(review, "[hold] invented detached review");
+    const submission = await submit(review, chat.id);
+    await expect
+      .poll(async () => (await shell.inspect(chat.id)).status)
+      .toBe("working");
+    await expect
+      .poll(async () => (await feedbackPrompts(submission.id)).length)
+      .toBe(1);
+    const chatState = () =>
+      shell.cli<ConversationState>("conversation", "inspect", "--id", chat.id);
+    const turn = (await chatState()).turns!.at(-1)!;
+    await shell.quitWithChoice("Leave Running");
+    await shell.start();
+
+    const resumed = await chatState();
+    expect(resumed.nativeId).toBe(chat.nativeId);
+    expect(resumed.status).toBe("working");
+    expect(resumed.turns!.at(-1)!.id).toBe(turn.id);
+    expect(resumed.turns!.at(-1)!.finishedAt).toBeUndefined();
+    expect((await inspect(review)).rounds[0].submission?.delivery.status).toBe(
+      "uncertain",
+    );
+    expect(await feedbackPrompts(submission.id)).toHaveLength(1);
+    await shell.cli("conversation", "interrupt", "--id", chat.id);
+    await expect
+      .poll(async () => (await chatState()).turns!.at(-1)!.outcome)
+      .toBe("cancelled");
+  } finally {
+    await owner.stop();
+  }
+});
+
 function waitProcess(review: Opened, roundId: string, timeoutMs = 4000) {
   const child = spawn(
     process.execPath,

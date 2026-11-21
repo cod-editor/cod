@@ -172,6 +172,17 @@ export class WorkspaceApp {
       .toBe(0);
   }
 
+  async quitWithChoice(choice: "Leave Running" | "Stop") {
+    const app = this.app!;
+    const process = app.process();
+    await app.evaluate(({ app }, decision) => {
+      (globalThis as any).quitChoice = decision;
+      app.quit();
+    }, choice);
+    await expect.poll(() => process.exitCode).toBe(0);
+    this.app = undefined;
+  }
+
   async stop() {
     if (this.app) {
       await this.app.close();

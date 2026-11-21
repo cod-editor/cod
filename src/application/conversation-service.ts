@@ -259,7 +259,10 @@ export class ConversationApplicationService {
       if (this.turnClocks.get(conversation.id)?.id === turnId)
         this.finishTurn(conversation, outcome.status);
     } catch (error) {
-      if (this.turnClocks.get(conversation.id)?.id === turnId)
+      if (
+        !this.store.closing &&
+        this.turnClocks.get(conversation.id)?.id === turnId
+      )
         this.finishTurn(conversation, "failed");
       throw error;
     } finally {

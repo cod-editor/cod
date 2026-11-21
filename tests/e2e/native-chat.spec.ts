@@ -411,16 +411,6 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
   });
 }
 
-async function quitDetachedFixture(decision: "Leave Running" | "Stop") {
-  const process = shell.app!.process();
-  await shell.app!.evaluate(({ app }, choice) => {
-    (globalThis as any).quitChoice = choice;
-    app.quit();
-  }, decision);
-  await expect.poll(() => process.exitCode).toBe(0);
-  shell.app = undefined;
-}
-
 test("Detached local chat finishes while Cod is closed and restores the same native session", async ({}, info) => {
   const owner = new LocalProviderOwner(shell.data);
   try {
@@ -475,7 +465,7 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
     await expect(transcript(chat)).toContainText(/inventedstream-1/);
     await expect(transcript(chat)).not.toContainText(/inventedstream-2/);
     const prompts = await shell.prompts();
-    await quitDetachedFixture("Leave Running");
+    await shell.quitWithChoice("Leave Running");
 
     await shell.configure({ codex: { latencyChunks: 4 } });
     const nativeHistory = path.join(
@@ -576,7 +566,7 @@ test("Detached local chat keeps an approval through restart, with Cancel and Sto
       }
     }
     await expect.poll(() => status(chat.id)).toBe("waiting");
-    await quitDetachedFixture("Leave Running");
+    await shell.quitWithChoice("Leave Running");
 
     await shell.start();
     expect((await shell.inspect(chat.id)).pendingPermissions[0]).toEqual(
@@ -594,7 +584,7 @@ test("Detached local chat keeps an approval through restart, with Cancel and Sto
     await expect(transcript(chat)).toContainText(
       "STREAM [hold] stop detached work",
     );
-    await quitDetachedFixture("Stop");
+    await shell.quitWithChoice("Stop");
 
     await shell.start();
     const stopped = await shell.inspect(chat.id);
@@ -622,7 +612,7 @@ test("Detached local chat falls back to explicit native resume if its owner is g
       "STREAM [hold] owner can be lost",
     );
     const prompts = await shell.prompts();
-    await quitDetachedFixture("Leave Running");
+    await shell.quitWithChoice("Leave Running");
     await owner.stop();
 
     await shell.start();
