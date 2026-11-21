@@ -13,7 +13,7 @@ If required feasibility gates have not passed, use cod-feasibility for dependent
 3. Write or adapt behavioral tests for the checkpoint, then implement the smallest vertical slice that satisfies them. Tests drive the real Electron app for user-visible outcomes; use fakes for repeatable provider behavior, not proof of native compatibility.
 4. Route UI and CLI through shared application operations. Explicitly target background resources, preserve native provider identity and expose unsupported capabilities honestly.
 5. Keep external browser pages isolated from privileged app APIs. Preserve unsaved documents and draft review comments across relevant failure paths.
-6. Run focused checks while implementing, format changed files and inspect the diff. Invoke cod-verify for the checkpoint's verification procedure.
+6. Run focused checks while implementing, format changed files and inspect the diff. Invoke cod-verify for the checkpoint's verification procedure. For visible UI changes, run its [Visual review](../cod-verify/SKILL.md#visual-review) on the candidate before publication.
 7. Finalize relevant documentation and commit the coherent source. Run the [pre-push checks](../../../tests/README.md#pre-push-checks) on that revision, choosing focused scenarios for the affected behavior and using full preflight when the scope warrants it. Report any blocker. Publish through the authorized PR and merge only with all required GitHub checks green. Keep raw evidence in ignored artifacts.
 8. After verified delivery, complete [delivery cleanup](#delivery-cleanup) before marking the checkpoint done. Cleanup does not end an authorized backlog; continue to the next agreed item.
 
