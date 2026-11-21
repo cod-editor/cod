@@ -55,6 +55,8 @@ const chatOperations = new Set([
   "conversation.create",
   "conversation.resume",
   "conversation.show",
+  "conversation.draft-options",
+  "conversation.draft-option",
   "conversation.options",
   "conversation.option",
   "conversation.send",

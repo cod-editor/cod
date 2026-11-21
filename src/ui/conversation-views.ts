@@ -24,6 +24,12 @@ import { readPreference, writePreference } from "./preferences";
 import { confirmAction } from "./dialogs";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
+import type {
+  DraftOptionChange,
+  NativeChoice,
+  ProviderOptions,
+} from "../providers/types";
+
 function setChoiceCaption(button: HTMLButtonElement, text: string): void {
   let label = button.querySelector<HTMLSpanElement>(".choice-caption");
   if (!label) {
@@ -35,6 +41,45 @@ function setChoiceCaption(button: HTMLButtonElement, text: string): void {
   }
   label.textContent = text;
 }
+function optionLabel(
+  option: DraftOptionChange["option"],
+  choice: NativeChoice,
+) {
+  if (option === "model") return choice.label.split(/\n| — /)[0];
+  return (
+    (
+      {
+        xhigh: "Extra high",
+        minimal: "Minimal",
+        low: "Low",
+        medium: "Medium",
+        high: "High",
+        none: "None",
+        max: "Max",
+      } as Record<string, string>
+    )[choice.value] ??
+    choice.value.replace(/[_-]/g, " ").replace(/^./, (c) => c.toUpperCase())
+  );
+}
+
+function optionButton(
+  option: DraftOptionChange["option"],
+  key: string,
+  caption: string,
+) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "composer-choice";
+  button.dataset.focusKey = `option:${key}`;
+  button.setAttribute(
+    "aria-label",
+    option === "model" ? "Model" : "Reasoning effort",
+  );
+  button.setAttribute("aria-haspopup", "dialog");
+  setChoiceCaption(button, caption);
+  return button;
+}
+
 interface ChatDependencies {
   getState: () => AppState;
   invoke: Invoke;
@@ -201,6 +246,147 @@ export function createConversationViews({
   }
 
   const draftProviders = new Map<string, string>();
+  interface DraftModelState {
+    options?: ProviderOptions;
+    loading?: { trigger: HTMLButtonElement; canceled: boolean };
+    saving?: Promise<boolean>;
+    error?: string;
+  }
+  const draftModels = new Map<string, DraftModelState>();
+  function draftModelChoices(workspace: WorkspaceState, pane: PaneState) {
+    const current = draftModels.get(pane.id);
+    const saved = workspace.chatDrafts?.[pane.id]?.initialSelection;
+    const host = document.createElement("span");
+    host.className = "model-choices";
+
+    for (const option of ["model", "reasoning"] as const) {
+      const options = current?.options;
+      const choices = option === "model" ? options?.models : options?.reasoning;
+      const stored = saved?.[option];
+      const value = stored ?? options?.current[option];
+      const choice = choices?.find((entry) => entry.value === value);
+      const button = optionButton(
+        option,
+        `draft:${pane.id}:${option}`,
+        choice
+          ? optionLabel(option, choice)
+          : stored
+            ? optionLabel(option, { value: stored, label: stored })
+            : option === "model"
+              ? "Model"
+              : "Effort",
+      );
+      button.disabled = pendingStarts.has(pane.id);
+      button.setAttribute(
+        "aria-busy",
+        String(
+          (current?.loading?.trigger.dataset.focusKey ===
+            button.dataset.focusKey &&
+            !current?.loading?.canceled) ||
+            !!current?.saving,
+        ),
+      );
+      button.onkeydown = (event) => {
+        const loading = draftModels.get(pane.id)?.loading;
+        if (
+          event.key === "Escape" &&
+          loading?.trigger === event.currentTarget
+        ) {
+          loading.canceled = true;
+          loading.trigger.setAttribute("aria-busy", "false");
+          event.preventDefault();
+        }
+      };
+      button.onclick = async (event) => {
+        const trigger = event.currentTarget as HTMLButtonElement;
+        const state = draftModels.get(pane.id) ?? {};
+        if (state.loading || state.saving || pendingStarts.has(pane.id)) return;
+        draftModels.set(pane.id, state);
+        trigger.focus({ preventScroll: true });
+        trigger.setAttribute("aria-busy", "true");
+        const loading = { trigger, canceled: false };
+        state.loading = loading;
+        state.error = undefined;
+        const active = () =>
+          trigger.isConnected &&
+          !!trigger.getClientRects().length &&
+          draftModels.get(pane.id) === state;
+        const target = { workspace: workspace.id, paneId: pane.id };
+        let opened = false;
+        try {
+          const loaded = await invoke<ProviderOptions>(
+            "conversation.draft-options",
+            target,
+            { reportError: false },
+          );
+          if (
+            !active() ||
+            loading.canceled ||
+            pendingStarts.has(pane.id) ||
+            document.activeElement !== trigger
+          )
+            return;
+          state.options = loaded;
+          const currentValue = loaded.pending?.[option];
+          const available =
+            option === "model" ? loaded.models : loaded.reasoning;
+          const apply = (value?: string) => {
+            trigger.focus({ preventScroll: true });
+            if (value === currentValue || state.saving || !active()) return;
+            state.error = undefined;
+            state.saving = invoke<ProviderOptions>(
+              "conversation.draft-option",
+              { ...target, option, value },
+              { reportError: false },
+            )
+              .then((result) => {
+                state.options = result;
+                return true;
+              })
+              .catch((error: unknown) => {
+                state.error =
+                  error instanceof Error ? error.message : String(error);
+                return false;
+              })
+              .finally(() => {
+                state.saving = undefined;
+                invalidate();
+              });
+            invalidate();
+          };
+          if (!available.length && !currentValue) {
+            state.error = "Choose a Codex model that offers reasoning effort.";
+            return;
+          }
+          invalidate();
+          if (!active()) return;
+          menu(trigger, [
+            {
+              label: "Use provider default",
+              selected: currentValue === undefined,
+              run: () => apply(),
+            },
+            ...available.map((entry) => ({
+              label: optionLabel(option, entry),
+              selected: currentValue === entry.value,
+              run: () => apply(entry.value),
+            })),
+          ]);
+          opened = true;
+        } catch {
+          if (active() && !loading.canceled)
+            state.error =
+              "Could not load Codex choices. Reopen the menu to retry, or send with your saved selection.";
+        } finally {
+          state.loading = undefined;
+          trigger.setAttribute("aria-busy", "false");
+          if (!opened) invalidate();
+        }
+      };
+      host.append(button);
+    }
+    return host;
+  }
   function renderDraftChat(
     workspace: WorkspaceState,
     pane: PaneState,
@@ -232,6 +418,7 @@ export function createConversationViews({
     feedback.setAttribute("role", "status");
     feedback.textContent =
       sendErrors.get(pane.id) ??
+      draftModels.get(pane.id)?.error ??
       (pendingStarts.has(pane.id)
         ? `Starting ${providerLabel(selected)}...`
         : "");
@@ -242,6 +429,8 @@ export function createConversationViews({
         setStatus("Wait for the image to finish loading");
         return;
       }
+      const choiceSave = draftModels.get(pane.id)?.saving;
+      if (choiceSave && !(await choiceSave)) return;
       await saves.get(pane.id)?.promise;
       if (composerConflicts.has(pane.id) || dirtyComposers.has(pane.id)) {
         setStatus("Resolve or save this unsent message before sending.");
@@ -303,7 +492,7 @@ export function createConversationViews({
     provider.className = "composer-choice";
     provider.setAttribute("aria-haspopup", "dialog");
     setChoiceCaption(provider, providerLabel(selected));
-    provider.disabled = remote === true;
+    provider.disabled = remote === true || !!draftModels.get(pane.id)?.saving;
     provider.onclick = () =>
       menu(
         provider,
@@ -312,6 +501,8 @@ export function createConversationViews({
           disabled: id === "claude",
           selected: id === (draftProviders.get(pane.id) ?? "codex"),
           run: () => {
+            if (id !== (draftProviders.get(pane.id) ?? "codex"))
+              draftModels.delete(pane.id);
             draftProviders.set(pane.id, id);
             void persistComposer(pane.id);
             setChoiceCaption(provider, providerLabel(id));
@@ -321,6 +512,8 @@ export function createConversationViews({
         })),
       );
     actions.append(provider);
+    if (selected === "codex")
+      actions.append(draftModelChoices(workspace, pane));
     composer.append(input, actions);
     bindImages(composer, input, pane.id);
     const conflict = draftConflict(pane.id, pane.id);
@@ -653,40 +846,17 @@ export function createConversationViews({
         ["reasoning", options.reasoning],
       ] as const) {
         if (!choices.length) continue;
-        const choiceLabel = (choice: { value: string; label: string }) =>
-          option === "reasoning"
-            ? ((
-                {
-                  xhigh: "Extra high",
-                  minimal: "Minimal",
-                  low: "Low",
-                  medium: "Medium",
-                  high: "High",
-                  none: "None",
-                  max: "Max",
-                } as Record<string, string>
-              )[choice.value] ??
-              choice.value
-                .replace(/[_-]/g, " ")
-                .replace(/^./, (c) => c.toUpperCase()))
-            : choice.label.split(/\n| — /)[0];
+        const choiceLabel = (choice: NativeChoice) =>
+          optionLabel(option, choice);
         const optionKey = `${conversation.id}:${option}`;
         const value =
           pendingOptions.get(optionKey) ??
           options.pending?.[option] ??
           options.current[option] ??
           choices[0].value;
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "composer-choice";
-        button.dataset.focusKey = `option:${optionKey}`;
-        button.setAttribute(
-          "aria-label",
-          option === "model" ? "Model" : "Reasoning effort",
-        );
-        button.setAttribute("aria-haspopup", "dialog");
-        setChoiceCaption(
-          button,
+        const button = optionButton(
+          option,
+          optionKey,
           choiceLabel(
             choices.find((choice) => choice.value === value) ?? choices[0],
           ),
@@ -1579,6 +1749,18 @@ export function createConversationViews({
     send: sendMessage,
     reconcile() {
       reconcile();
+      for (const paneId of draftModels.keys())
+        if (
+          !getState().workspaces.some((workspace) =>
+            workspace.panes.some(
+              (pane) =>
+                pane.id === paneId &&
+                pane.kind === "document" &&
+                !pane.filePath,
+            ),
+          )
+        )
+          draftModels.delete(paneId);
       for (const id of views.keys())
         if (
           id.startsWith("chat:")

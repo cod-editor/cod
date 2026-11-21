@@ -33,6 +33,7 @@ import type {
   OperationRequest,
 } from "../types";
 import { ApplicationStateStore } from "./state";
+import type { DraftOptionChange, ProviderOptions } from "../providers/types";
 import type { TerminalApplicationService } from "./terminal-service";
 import { requiredString, providerId, object } from "./request";
 export interface ConversationViewPort {
@@ -304,6 +305,87 @@ export class ConversationApplicationService {
     );
     this.controllers.clear();
   }
+  private draftCwd(workspace: WorkspaceState, paneId: string): string {
+    return path.resolve(
+      workspace.chatDrafts?.[paneId]?.cwd ??
+        workspace.folders[0] ??
+        process.env.HOME ??
+        process.cwd(),
+    );
+  }
+
+  private async draftOptions(request: OperationRequest, selecting: boolean) {
+    const workspaceId = requiredString(request, "workspace");
+    const paneId = requiredString(request, "paneId");
+    const target = () => {
+      const workspace = this.store.workspace(workspaceId);
+      const pane = this.store.pane(workspace, paneId);
+      const draft = workspace.chatDrafts?.[paneId];
+      if (
+        pane.kind !== "document" ||
+        !!pane.filePath ||
+        (draft?.provider ?? "codex") !== "codex"
+      )
+        throw new Error("This pane no longer has an unsent Codex chat");
+      return { workspace, draft, cwd: this.draftCwd(workspace, paneId) };
+    };
+    const original = target();
+    const selection = { ...original.draft?.initialSelection };
+    let change: DraftOptionChange | undefined;
+    if (selecting) {
+      if (request.option !== "model" && request.option !== "reasoning")
+        throw new Error("Unknown provider option");
+      change = {
+        option: request.option,
+        value:
+          request.value === undefined
+            ? undefined
+            : requiredString(request, "value"),
+      };
+    }
+    const resolved = await resolveProviderExecutable("codex");
+    const adapter = createCodexAdapter({
+      cwd: original.cwd,
+      executable: resolved.executable,
+      args: resolved.args,
+    });
+    this.replays.add(adapter);
+    let options: ProviderOptions;
+    try {
+      options = await adapter.getDraftOptions(selection, change);
+    } finally {
+      this.replays.delete(adapter);
+      await adapter.dispose();
+    }
+
+    const latest = () => {
+      const current = target();
+      if (
+        original.workspace !== current.workspace ||
+        original.cwd !== current.cwd ||
+        selection.model !== current.draft?.initialSelection?.model ||
+        selection.reasoning !== current.draft?.initialSelection?.reasoning
+      )
+        throw new Error("This draft setup changed. Open model choices again.");
+      return current;
+    };
+    if (!change) {
+      latest();
+      return options;
+    }
+    return this.store.change(() => {
+      const { workspace, draft } = latest();
+      const updated = {
+        text: "",
+        ...draft,
+        provider: "codex" as const,
+        initialSelection: options.pending,
+      };
+      (workspace.chatDrafts ??= {})[paneId] = updated;
+      return options;
+    });
+  }
+
   async createConversation(
     request: OperationRequest,
     resume: boolean,
@@ -312,16 +394,15 @@ export class ConversationApplicationService {
       requiredString(request, "workspace"),
     );
     const provider = providerId(request);
-    const cwd = path.resolve(
+    const cwd =
       typeof request.cwd === "string"
-        ? request.cwd
-        : ((typeof request.paneId === "string"
-            ? workspace.chatDrafts?.[request.paneId]?.cwd
-            : workspace.chatDrafts?.[workspace.activePaneId]?.cwd) ??
-            workspace.folders[0] ??
-            process.env.HOME ??
-            process.cwd()),
-    );
+        ? path.resolve(request.cwd)
+        : this.draftCwd(
+            workspace,
+            typeof request.paneId === "string"
+              ? request.paneId
+              : workspace.activePaneId,
+          );
     const nativeId = resume ? requiredString(request, "nativeId") : "";
     const attached = () =>
       resume
@@ -1682,6 +1763,13 @@ export class ConversationApplicationService {
           conversation.taskStatusUpdatedAt = new Date().toISOString();
           return { id: conversation.id, taskStatus: conversation.taskStatus };
         });
+
+      case "conversation.draft-options":
+      case "conversation.draft-option":
+        return this.draftOptions(
+          request,
+          request.op === "conversation.draft-option",
+        );
 
       case "conversation.options": {
         const conversation = this.store.conversation(

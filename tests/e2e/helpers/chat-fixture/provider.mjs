@@ -264,6 +264,8 @@ function receive(message, external = false) {
         {
           model: "fixture-model",
           displayName: "Fixture model",
+          isDefault: true,
+          defaultReasoningEffort: "medium",
           supportedReasoningEfforts: configuration().reasoningOptions
             ? [
                 {
@@ -287,7 +289,18 @@ function receive(message, external = false) {
               {
                 model: "fixture-alternate",
                 displayName: "Alternate fixture",
-                supportedReasoningEfforts: [],
+                ...(configuration().alternateReasoning
+                  ? {
+                      defaultReasoningEffort: "high",
+                      supportedReasoningEfforts: [
+                        { reasoningEffort: "high", description: "Thorough" },
+                        {
+                          reasoningEffort: "xhigh",
+                          description: "Most thorough",
+                        },
+                      ],
+                    }
+                  : { supportedReasoningEfforts: [] }),
               },
             ]
           : []),

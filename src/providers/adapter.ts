@@ -1,7 +1,7 @@
 import { CodexBackground } from "./codex-background.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
-import { NativeSelection } from "./selection.ts";
+import { NativeSelection, readCodexDraftOptions } from "./selection.ts";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -25,6 +25,7 @@ import type {
   ProviderState,
   ProviderOptions,
   ProviderSelection,
+  DraftOptionChange,
   ToolResult,
   SteeringInput,
   TurnOutcome,
@@ -359,6 +360,21 @@ export class NativeAdapter implements ProviderAdapter {
       this.cwd,
       section,
       (method, params) => this.rpc!.request(method, params),
+    );
+  }
+  async getDraftOptions(
+    selection: ProviderOptions["current"],
+    change?: DraftOptionChange,
+  ): Promise<ProviderOptions> {
+    if (this.provider !== "codex" || this.id || this.binding)
+      throw new Error("Draft model discovery requires an unbound Codex client");
+    await this.initialize();
+    return readCodexDraftOptions(
+      (method, params) =>
+        this.rpc!.request(method, params, undefined, "read-only"),
+      this.cwd,
+      selection,
+      change,
     );
   }
   getOptions() {

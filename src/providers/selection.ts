@@ -4,6 +4,7 @@ import type {
   ProviderId,
   ProviderOptions,
   ProviderSelection,
+  DraftOptionChange,
   NativeChoice,
 } from "./types.ts";
 const identifier = (v: unknown): string => {
@@ -23,6 +24,145 @@ function choices(value: unknown): NativeChoice[] {
     return { value: id, label: identifier(row.name) };
   });
 }
+type OptionRequest = (method: string, params: unknown) => Promise<unknown>;
+type SelectedOptions = ProviderOptions["current"];
+interface CodexModel {
+  choice: NativeChoice;
+  efforts: NativeChoice[];
+  isDefault: boolean;
+  defaultEffort?: string;
+}
+
+async function readCodexCatalog(request: OptionRequest): Promise<CodexModel[]> {
+  const rows: CodexModel[] = [],
+    cursors = new Set<string>(),
+    values = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const data = object(
+      await request("model/list", {
+        limit: 100,
+        includeHidden: false,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
+    if (!Array.isArray(data.data))
+      throw new Error("Invalid native model catalog");
+    for (const value of data.data) {
+      const m = object(value),
+        id = identifier(m.model);
+      if (values.has(id) || rows.length >= 10000)
+        throw new Error("Repeated or excessive native model catalog");
+      values.add(id);
+      if (!Array.isArray(m.supportedReasoningEfforts))
+        throw new Error("Invalid native reasoning catalog");
+      const efforts = choices(
+        m.supportedReasoningEfforts.map((e) => {
+          const o = object(e);
+          return { value: o.reasoningEffort, name: o.description };
+        }),
+      );
+      rows.push({
+        choice: { value: id, label: identifier(m.displayName) },
+        efforts,
+        isDefault: m.isDefault === true,
+        defaultEffort:
+          typeof m.defaultReasoningEffort === "string"
+            ? m.defaultReasoningEffort
+            : undefined,
+      });
+    }
+    if (data.nextCursor === null || data.nextCursor === undefined) return rows;
+    cursor = identifier(data.nextCursor);
+    if (cursors.has(cursor)) throw new Error("Repeated native model cursor");
+    cursors.add(cursor);
+  }
+  throw new Error("Native model pagination exceeded limit");
+}
+
+function codexOptions(
+  models: CodexModel[],
+  current: SelectedOptions,
+  pending: SelectedOptions,
+  selected?: string,
+): ProviderOptions {
+  return {
+    models: models.map((model) => model.choice),
+    reasoning:
+      models.find((model) => model.choice.value === selected)?.efforts ?? [],
+    current: { ...current },
+    ...(Object.keys(pending).length ? { pending: { ...pending } } : {}),
+    selectionEffect: "next-turn",
+  };
+}
+
+export async function readCodexDraftOptions(
+  request: OptionRequest,
+  cwd: string,
+  selection: SelectedOptions,
+  change?: DraftOptionChange,
+): Promise<ProviderOptions> {
+  const [models, config] = await Promise.all([
+    readCodexCatalog(request),
+    // A catalog still works on native versions without effective config reads.
+    request("config/read", { cwd, includeLayers: false })
+      .then((response) => object(object(response).config))
+      .catch(() => ({}) as Record<string, unknown>),
+  ]);
+  if (!models.length) throw new Error("Codex returned no available models");
+
+  const defaultModel =
+    models.find((model) => model.choice.value === config.model) ??
+    (typeof config.model === "string"
+      ? undefined
+      : models.find((model) => model.isDefault));
+  const pending = { ...selection };
+  if (change?.option === "model") {
+    if (
+      change.value &&
+      !models.some((model) => model.choice.value === change.value)
+    )
+      throw new ProviderOptionError(
+        "invalid-selection",
+        "Choose an available Codex model",
+      );
+    if (change.value) pending.model = change.value;
+    else delete pending.model;
+  }
+  const selected = pending.model
+    ? models.find((model) => model.choice.value === pending.model)
+    : defaultModel;
+  const supports = (value: unknown): value is string =>
+    typeof value === "string" &&
+    !!selected?.efforts.some((effort) => effort.value === value);
+  if (change?.option === "reasoning") {
+    if (change.value && !supports(change.value))
+      throw new ProviderOptionError(
+        "invalid-selection",
+        "Choose an effort supported by this Codex model",
+      );
+    if (change.value) pending.reasoning = change.value;
+    else delete pending.reasoning;
+  } else if (change?.option === "model" && !supports(pending.reasoning)) {
+    delete pending.reasoning;
+  }
+  const defaultEffort =
+    selected === defaultModel && supports(config.model_reasoning_effort)
+      ? config.model_reasoning_effort
+      : supports(selected?.defaultEffort)
+        ? selected.defaultEffort
+        : undefined;
+  return codexOptions(
+    models,
+    {
+      ...(defaultModel ? { model: defaultModel.choice.value } : {}),
+      ...(defaultEffort ? { reasoning: defaultEffort } : {}),
+    },
+    pending,
+    selected?.choice.value,
+  );
+}
+
 export class NativeSelection {
   private current: ProviderOptions["current"] = {};
   private pending: NonNullable<ProviderOptions["pending"]> = {};
@@ -102,57 +242,9 @@ export class NativeSelection {
     request: (method: string, params: unknown) => Promise<unknown>,
   ): Promise<ProviderOptions> {
     if (this.provider === "kimi") return structuredClone(this.kimiOptions());
-    const rows: Array<{ choice: NativeChoice; efforts: NativeChoice[] }> = [],
-      cursors = new Set<string>(),
-      values = new Set<string>();
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page++) {
-      const data = object(
-        await request("model/list", {
-          limit: 100,
-          includeHidden: false,
-          ...(cursor ? { cursor } : {}),
-        }),
-      );
-      if (!Array.isArray(data.data))
-        throw new Error("Invalid native model catalog");
-      for (const value of data.data) {
-        const m = object(value),
-          id = identifier(m.model);
-        if (values.has(id) || rows.length >= 10000)
-          throw new Error("Repeated or excessive native model catalog");
-        values.add(id);
-        if (!Array.isArray(m.supportedReasoningEfforts))
-          throw new Error("Invalid native reasoning catalog");
-        const efforts = choices(
-          m.supportedReasoningEfforts.map((e) => {
-            const o = object(e);
-            return { value: o.reasoningEffort, name: o.description };
-          }),
-        );
-        rows.push({
-          choice: { value: id, label: identifier(m.displayName) },
-          efforts,
-        });
-      }
-      if (data.nextCursor === null || data.nextCursor === undefined) {
-        const selected = this.pending.model ?? this.current.model;
-        return {
-          models: rows.map((r) => r.choice),
-          reasoning:
-            rows.find((r) => r.choice.value === selected)?.efforts ?? [],
-          current: { ...this.current },
-          ...(Object.keys(this.pending).length
-            ? { pending: { ...this.pending } }
-            : {}),
-          selectionEffect: "next-turn",
-        };
-      }
-      cursor = identifier(data.nextCursor);
-      if (cursors.has(cursor)) throw new Error("Repeated native model cursor");
-      cursors.add(cursor);
-    }
-    throw new Error("Native model pagination exceeded limit");
+    const rows = await readCodexCatalog(request);
+    const selected = this.pending.model ?? this.current.model;
+    return codexOptions(rows, this.current, this.pending, selected);
   }
   async set(
     selection: ProviderSelection,
