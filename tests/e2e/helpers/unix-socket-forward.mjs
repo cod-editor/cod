@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 
 const [local, remote] = process.argv[2].split(":");
 const dropReply = process.argv[3];
+const holdRequest = dropReply && dropReply + ".hold";
 let withholding = false;
 createServer((client) => {
   const host = connect(remote);
@@ -13,6 +14,20 @@ createServer((client) => {
       const frame = JSON.parse(line);
       watch ||= frame.op === "workspace.watch";
       const operation = frame.op ?? frame.request?.op;
+      if (
+        holdRequest &&
+        existsSync(holdRequest) &&
+        operation === readFileSync(holdRequest, "utf8")
+      ) {
+        writeFileSync(holdRequest + ".seen", "");
+        const release = setInterval(() => {
+          if (existsSync(holdRequest)) return;
+          clearInterval(release);
+          host.write(line + "\n");
+        }, 25);
+        host.once("close", () => clearInterval(release));
+        return false;
+      }
       if (
         existsSync(dropReply) &&
         operation === readFileSync(dropReply, "utf8")

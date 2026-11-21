@@ -4,6 +4,10 @@ import path from "node:path";
 import { ApplicationOperations } from "./operations";
 import type { AppState } from "./types";
 import { startCommandSocket } from "./application/command-socket";
+import {
+  workspacePreparation,
+  type PreparedWorkspace,
+} from "./application/workspace-preparation";
 import { serveWorkspaceReview } from "./remote-workspace/review-session";
 import {
   maximumWorkspaceFrameBytes,
@@ -78,7 +82,43 @@ async function main(): Promise<void> {
     socketPath,
     async (request) => {
       await requireReady();
-      return runtime.dispatch(request);
+      if (request?.op !== "workspace.prepare") return runtime.dispatch(request);
+      const task = workspacePreparation(request);
+      if (task.location !== "linux")
+        throw new Error("This command runs on the Linux workspace host");
+
+      const origin = task.conversation
+        ? (
+            (await runtime.dispatch({
+              op: "context",
+              conversation: task.conversation,
+            })) as { workspace: { id: string } }
+          ).workspace.id
+        : undefined;
+      const prepared = (await runtime.dispatch({
+        op: "workspace.prepare",
+        ...task,
+      })) as PreparedWorkspace;
+      if (origin && task.conversation) {
+        await runtime.dispatch({
+          op: "conversation.move",
+          id: task.conversation,
+          workspace: prepared.id,
+          follow: true,
+        });
+        broadcast({
+          type: "state",
+          value: watchState(runtime.snapshot(true)),
+          follow: {
+            fromWorkspace: origin,
+            workspace: prepared.id,
+            conversation: task.conversation,
+          },
+        });
+      } else {
+        await runtime.dispatch({ op: "workspace.focus", id: prepared.id });
+      }
+      return { ...prepared, location: task.location };
     },
     async (connection, request) => {
       await requireReady();

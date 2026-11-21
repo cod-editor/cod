@@ -22,6 +22,7 @@ import {
 import { ApplicationStateStore } from "./state";
 import { documentKey } from "../text-document";
 import { requiredString, requiredName, object } from "./request";
+import { workspacePreparation } from "./workspace-preparation";
 import type { ConversationApplicationService } from "./conversation-service";
 import type { BrowserApplicationService } from "./browser-service";
 import type { TerminalApplicationService } from "./terminal-service";
@@ -36,6 +37,13 @@ type BrowserHost = Pick<
   | "restoreBrowser"
   | "withReopenedBrowser"
 >;
+
+async function directory(folder: string): Promise<string> {
+  const resolved = path.resolve(folder);
+  if (!(await stat(resolved)).isDirectory())
+    throw new Error("Folder path is not a directory");
+  return resolved;
+}
 
 export class WorkspaceApplicationService {
   constructor(
@@ -817,6 +825,36 @@ export class WorkspaceApplicationService {
           return result;
         });
 
+      case "workspace.prepare": {
+        const { name, folders } = workspacePreparation(request);
+        return this.store.change(async () => {
+          const matches = this.store.data.workspaces.filter(
+            (workspace) => workspace.name === name,
+          );
+          const archived =
+            this.store.data.closedWorkspaces?.filter(
+              ({ workspace }) => workspace.name === name,
+            ) ?? [];
+          if (matches.length + archived.length > 1)
+            throw new Error(
+              "More than one workspace has that name on the selected host",
+            );
+          if (archived.length)
+            throw new Error(
+              "A closed workspace has that name on the selected host. Reopen it before preparing it.",
+            );
+          const requested = await Promise.all(folders.map(directory));
+          const prior = this.store.data.activeWorkspaceId;
+          const workspace =
+            matches[0] ?? this.store.workspace(this.createWorkspace(name).id);
+          this.store.data.activeWorkspaceId = prior;
+          workspace.folders = [
+            ...new Set([...workspace.folders, ...requested]),
+          ];
+          return { id: workspace.id, folders: workspace.folders };
+        });
+      }
+
       case "workspace.reopen":
         return this.reopenWorkspace(request, trustedUi);
 
@@ -837,10 +875,7 @@ export class WorkspaceApplicationService {
       case "workspace.add-folder":
         return this.store.change(async () => {
           const workspace = this.store.workspace(requiredString(request, "id"));
-          const folder = path.resolve(requiredString(request, "path"));
-          if (!(await stat(folder)).isDirectory()) {
-            throw new Error("Folder path is not a directory");
-          }
+          const folder = await directory(requiredString(request, "path"));
           if (!workspace.folders.includes(folder))
             workspace.folders.push(folder);
           return { id: workspace.id, folders: [...workspace.folders] };

@@ -14,17 +14,7 @@ import {
   type WorkspaceHostTarget,
 } from "./protocol";
 import { signWorkspaceReview } from "./review-signature";
-
-function validTarget(target: WorkspaceHostTarget): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(target.alias))
-    throw new Error("Enter an OpenSSH host alias");
-  if (
-    !path.posix.isAbsolute(target.socketPath) ||
-    /[:\u0000-\u001f\u007f]/.test(target.socketPath) ||
-    Buffer.byteLength(target.socketPath) > 107
-  )
-    throw new Error("Enter a valid absolute Linux workspace socket path");
-}
+import { workspaceHostTarget } from "./target";
 
 export interface HostLink {
   target: WorkspaceHostTarget;
@@ -40,7 +30,7 @@ export async function attachWorkspaceHost(
   update: (link: HostLink, frame?: WorkspaceHostFrame) => void,
   signal?: AbortSignal,
 ): Promise<HostLink> {
-  validTarget(target);
+  target = workspaceHostTarget(target);
   signal?.throwIfAborted();
   // A short private directory also leaves room in the Unix socket path limit.
   const directory = await mkdtemp(path.join(os.tmpdir(), "cod-ssh-"));

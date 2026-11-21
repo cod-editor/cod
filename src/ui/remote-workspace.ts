@@ -1,7 +1,7 @@
 import { actionButton, showActionError } from "./action-feedback";
 import type { Invoke } from "./contracts";
 import { formField } from "./form-field";
-import { readPreference, writePreference } from "./preferences";
+import type { WorkspaceHostTarget } from "../remote-workspace/protocol";
 import {
   dialogRegions,
   dialogSurface,
@@ -9,20 +9,20 @@ import {
   uiButton,
 } from "./primitives";
 
-export function remoteWorkspaceDialog(
+export async function remoteWorkspaceDialog(
   invoke: Invoke,
   afterConnect: (reviewAccess: boolean, selectedKey: boolean) => void,
-): void {
+): Promise<void> {
   const previous = document.activeElement;
+  const remembered = await invoke<WorkspaceHostTarget | null>(
+    "remote.target",
+    {},
+    { reportError: false },
+  ).catch(() => null);
   const dialog = dialogSurface("Connect to Linux workspace");
   const { body, actions } = dialogRegions(dialog, "Connect to Linux workspace");
   const form = document.createElement("form");
   form.id = "connect-linux-workspace";
-  const remembered = readPreference<{
-    alias?: string;
-    socketPath?: string;
-    publicKey?: string;
-  } | null>("remote-workspace", null);
   const alias = document.createElement("input");
   alias.required = true;
   alias.autocomplete = "off";
@@ -80,7 +80,6 @@ export function remoteWorkspaceDialog(
         reportError: false,
       });
       if (dialog.open) {
-        writePreference("remote-workspace", target);
         dialog.close();
         afterConnect(reviewAccess, target.publicKey !== "");
       }
