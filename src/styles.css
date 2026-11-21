@@ -565,6 +565,15 @@ body {
   min-height: 1px;
   background: var(--panel);
 }
+.browser-reveal-previous {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+body:has(dialog[open]) .browser-reveal-previous {
+  visibility: hidden;
+}
 .browser-overview-backdrop {
   position: absolute;
   inset: 0;

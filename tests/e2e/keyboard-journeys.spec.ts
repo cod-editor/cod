@@ -2089,6 +2089,110 @@ for (const replacement of ["none", "keyboard", "native"] as const) {
   });
 }
 
+test("Revealing a parked native page keeps the outgoing chat visible until the page presents", async () => {
+  const app = new ChatApp();
+  await prepareKeyboardProfile(app);
+  try {
+    await app.start();
+    const workspace = await app.create("Export notes");
+    const chat = await app.newChat(workspace, "codex");
+    const { groupId: right, paneId: placeholder } = await app.cli<{
+      groupId: string;
+      paneId: string;
+    }>("group", "ensure", "--workspace", workspace, "--side", "right");
+    const file = path.join(app.folders[0], "export-preview.html");
+    await writeFile(file, "<!doctype html><title>Export preview</title>");
+    const url = pathToFileURL(file).href;
+    const browser = await app.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--group",
+      right,
+      "--source-pane",
+      placeholder,
+      "--focus",
+      "true",
+      "--url",
+      url,
+    );
+    await expect
+      .poll(async () => {
+        const state = await app.cli<AppState>("state");
+        const record = state.browsers.find((item) => item.id === browser.id);
+        return (
+          record && !record.loading && record.visible && record.url === url
+        );
+      })
+      .toBe(true);
+    await app.cli(
+      "pane",
+      "focus",
+      "--workspace",
+      workspace,
+      "--id",
+      chat.paneId,
+    );
+    await app.cli("group", "toggle-split", "--workspace", workspace);
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<AppState>("state")).browsers.find(
+            (item) => item.id === browser.id,
+          )?.visible,
+      )
+      .toBe(false);
+    await app.app!.evaluate(({ BrowserWindow }, pageUrl) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          "webContents" in child &&
+          (child.webContents as Electron.WebContents).getURL() === pageUrl,
+      ) as Electron.WebContentsView;
+      const setVisible = view.setVisible.bind(view);
+      // Hold the native layer after shell navigation, as an asynchronous
+      // presentation would, until the fixture lets the window compose it.
+      view.setVisible = (visible) => {
+        if (!visible) setVisible(false);
+      };
+      Object.assign(globalThis, {
+        releaseNativePresentation: () => {
+          view.setVisible = setVisible;
+          setVisible(true);
+        },
+      });
+    }, url);
+    const composer = app.pane(chat.paneId).getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill("Keep the export notes draft.");
+    await composer.press("Alt+Tab");
+    const selectedBrowser = app.page.locator(
+      `.tab-select[data-tab-id="${browser.paneId}"]`,
+    );
+    const fallback = app
+      .pane(browser.paneId)
+      .locator(".browser-reveal-previous");
+    await expect(selectedBrowser).toHaveAttribute("aria-selected", "true");
+    await expect(fallback.locator("textarea")).toHaveValue(
+      "Keep the export notes draft.",
+    );
+    await expect(fallback).toHaveAttribute("aria-hidden", "true");
+    await expect(fallback).toHaveJSProperty("inert", true);
+    await app.app!.evaluate(() =>
+      (globalThis as { releaseNativePresentation?: () => void })
+        .releaseNativePresentation!(),
+    );
+    await expect(fallback).toHaveCount(0);
+    await app.page.keyboard.press("Alt+Tab");
+    await expect(composer).toHaveValue("Keep the export notes draft.");
+    await expect(composer).toBeFocused();
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Pane cycling keeps the visibility icon stable and reaches a parked editor, terminal and native page", async ({}, info) => {
   const app = new ChatApp();
   await prepareKeyboardProfile(app);

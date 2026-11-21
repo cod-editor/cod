@@ -43,6 +43,61 @@ export function createWorkspaceView(
     string,
     { start: number; end: number; top: number; left: number }
   >();
+  let outgoingChat:
+    { workspace: string; pane: string; view: HTMLElement } | undefined;
+  let browserReveal:
+    | {
+        pane: string;
+        source: string;
+        url: string;
+        element: HTMLElement;
+        timer: number;
+      }
+    | undefined;
+  function clearBrowserReveal() {
+    if (!browserReveal) return;
+    window.clearTimeout(browserReveal.timer);
+    browserReveal.element.remove();
+    browserReveal = undefined;
+  }
+  function showBrowserReveal(
+    pane: string,
+    url: string,
+    chat: NonNullable<typeof outgoingChat>,
+    previous: DOMRect,
+  ) {
+    const slot = resourcePanes
+      .get(pane)
+      ?.querySelector<HTMLElement>(".browser-content");
+    if (!slot?.getClientRects().length) return;
+    clearBrowserReveal();
+    const reserved = slot.getBoundingClientRect();
+    const cover = document.createElement("div");
+    cover.className = "browser-reveal-previous";
+    cover.inert = true;
+    cover.setAttribute("aria-hidden", "true");
+    const surface = document.createElement("div");
+    Object.assign(surface.style, {
+      position: "absolute",
+      display: "flex",
+      top: `${previous.top - reserved.top}px`,
+      left: `${previous.left - reserved.left}px`,
+      width: `${previous.width}px`,
+      height: `${previous.height}px`,
+    });
+    surface.append(chat.view);
+    cover.append(surface);
+    slot.append(cover);
+    // The native view covers this surface when its layer presents. Bound
+    // the handoff in case the view cannot produce a frame.
+    browserReveal = {
+      pane,
+      source: chat.pane,
+      url,
+      element: cover,
+      timer: window.setTimeout(clearBrowserReveal, 750),
+    };
+  }
   let rendering = false;
   function render(): void {
     rendering = true;
@@ -81,6 +136,44 @@ export function createWorkspaceView(
       layout.reconcile();
       terminals.reconcile();
       const workspace = activeWorkspace();
+      const selected = workspace?.panes.find(
+        (pane) => pane.id === workspace.activePaneId,
+      );
+      const solo =
+        workspace?.groups.filter((group) => !group.hidden).length === 1;
+      const record =
+        selected?.kind === "browser" && solo
+          ? getState().browsers.find(
+              (browser) => browser.id === selected.browserId,
+            )
+          : undefined;
+      const modalOpen = record && document.querySelector("dialog[open]");
+      const reveal =
+        record &&
+        record.visible === false &&
+        record.nativeTabId !== undefined &&
+        !record.loading &&
+        !record.error &&
+        !record.agentPage &&
+        record.url !== "about:blank" &&
+        outgoingChat?.view.isConnected &&
+        workspace?.id === outgoingChat.workspace &&
+        workspace.panes.some((pane) => pane.id === outgoingChat?.pane) &&
+        !modalOpen
+          ? outgoingChat
+          : undefined;
+      const previous = reveal?.view.getBoundingClientRect();
+      if (
+        browserReveal &&
+        (!record ||
+          browserReveal.pane !== selected?.id ||
+          browserReveal.url !== record.url ||
+          !workspace?.panes.some((pane) => pane.id === browserReveal?.source) ||
+          record.loading ||
+          record.error ||
+          modalOpen)
+      )
+        clearBrowserReveal();
       projects.update(workspace);
       for (const [id, view] of resourcePanes)
         if (
@@ -116,6 +209,16 @@ export function createWorkspaceView(
         const content = layout.render(workspace);
         if (panes.firstElementChild !== content) panes.replaceChildren(content);
       }
+      if (reveal && previous && selected && record)
+        showBrowserReveal(selected.id, record.url, reveal, previous);
+      const chat =
+        selected?.kind === "conversation" && solo
+          ? resourcePanes.get(selected.id)
+          : undefined;
+      outgoingChat =
+        workspace && selected && chat
+          ? { workspace: workspace.id, pane: selected.id, view: chat }
+          : undefined;
       for (const element of panes.querySelectorAll<HTMLElement>(
         ".transcript",
       )) {
