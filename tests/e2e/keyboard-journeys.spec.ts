@@ -1384,6 +1384,194 @@ test("Close immediately after a pane shortcut follows the new tab even during se
   }
 });
 
+test("Held and rapid pane cycling preserves the latest target while selection is pending", async () => {
+  const app = new ChatApp();
+  await prepareKeyboardProfile(app);
+  try {
+    await app.start();
+    const workspace = await app.create("Rapid pane cycling");
+    const right = await app.newChat(workspace, "codex");
+    const left = await app.cli<{ paneId: string }>(
+      "file",
+      "open",
+      "--workspace",
+      workspace,
+      "--path",
+      app.file,
+    );
+    const editor = app
+      .pane(left.paneId)
+      .getByRole("textbox", { name: "File contents", exact: true });
+    const composer = app
+      .pane(right.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+    await app.page.keyboard.press("Alt+1");
+    await expect(editor).toBeFocused();
+    await editor.fill("Keep the unsaved file during a burst.");
+
+    await app.app!.evaluate(({ ipcMain }, target) => {
+      const state = {
+        targets: [] as string[],
+        closed: undefined as string | undefined,
+        release: undefined as (() => void) | undefined,
+      };
+      (globalThis as any).paneBurst = state;
+      const handlers = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+        }
+      )._invokeHandlers;
+      const original = handlers.get("cod:invoke")!;
+      ipcMain.removeHandler("cod:invoke");
+      ipcMain.handle("cod:invoke", async (event, request) => {
+        if (request.op === "pane.focus") {
+          state.targets.push(request.id);
+          if (request.id === target && !state.release)
+            await new Promise<void>((resolve) => {
+              state.release = resolve;
+            });
+        }
+        if (request.op === "pane.close") state.closed = request.id;
+        return original(event, request);
+      });
+    }, right.paneId);
+    const burstState = () =>
+      app.app!.evaluate(() => {
+        const { targets, closed, release } = (globalThis as any).paneBurst;
+        return { targets, closed, paused: typeof release === "function" };
+      });
+    const release = () =>
+      app.app!.evaluate(() => (globalThis as any).paneBurst.release());
+    const keys = app.page.keyboard;
+    await keys.down("Alt");
+    await keys.down("Tab");
+    await expect
+      .poll(burstState)
+      .toMatchObject({ targets: [right.paneId], paused: true });
+    for (let repeat = 0; repeat < 3; repeat++) await keys.down("Tab");
+    await keys.up("Tab");
+    await keys.up("Alt");
+    await expect(editor).toBeFocused();
+    await release();
+    await expect
+      .poll(burstState)
+      .toMatchObject({ targets: [right.paneId, left.paneId] });
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Keep the unsaved file during a burst.");
+    await expect(composer).toBeVisible();
+
+    // Inject a realistic OS cadence without waiting for each focus operation.
+    await app.page.evaluate(() => {
+      const presses: Array<{ at: number; repeat: boolean }> = [];
+      const focus: Array<{ at: number; control: string }> = [];
+      const recording = new AbortController();
+      window.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key === "Tab" && event.altKey)
+            presses.push({ at: performance.now(), repeat: event.repeat });
+        },
+        { capture: true, signal: recording.signal },
+      );
+      document.addEventListener(
+        "focusin",
+        (event) => {
+          if (!(event.target instanceof HTMLTextAreaElement)) return;
+          const control = event.target.getAttribute("aria-label")!;
+          focus.push({ at: performance.now(), control });
+        },
+        { signal: recording.signal },
+      );
+      (globalThis as any).paneCadence = { presses, focus, recording };
+    });
+    const cadence = () =>
+      app.page.evaluate(() => {
+        const { presses, focus } = (globalThis as any).paneCadence;
+        return { presses, focus } as {
+          presses: Array<{ at: number; repeat: boolean }>;
+          focus: Array<{ at: number; control: string }>;
+        };
+      });
+    await keys.down("Alt");
+    for (let index = 0; index < 8; index++) {
+      if (index) await new Promise((resolve) => setTimeout(resolve, 100));
+      await keys.down("Tab");
+    }
+    await keys.up("Tab");
+    await keys.up("Alt");
+    await expect
+      .poll(async () => (await cadence()).focus.map((entry) => entry.control))
+      .toEqual(
+        Array.from({ length: 8 }, (_, index) =>
+          index % 2 ? "File contents" : "Message",
+        ),
+      );
+    await app.page.evaluate(() =>
+      (globalThis as any).paneCadence.recording.abort(),
+    );
+    const { presses, focus } = await cadence();
+    expect(presses.map((entry) => entry.repeat)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    await writeFile(
+      test.info().outputPath("pane-repeat-cadence.json"),
+      JSON.stringify({
+        intervalsMs: presses
+          .slice(1)
+          .map((entry, index) => entry.at - presses[index].at),
+        focusDelayMs: focus.map((entry, index) => entry.at - presses[index].at),
+      }),
+    );
+
+    const split = app.page.getByRole("button", { name: "Toggle split view" });
+    await keys.press("Alt+Enter");
+    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    const arm = () =>
+      app.app!.evaluate(() => {
+        const state = (globalThis as any).paneBurst;
+        state.targets = [];
+        state.release = undefined;
+      });
+    await arm();
+    await keys.press("Alt+Tab");
+    await expect
+      .poll(burstState)
+      .toMatchObject({ targets: [right.paneId], paused: true });
+    await keys.press("Alt+Tab");
+    await release();
+    await expect
+      .poll(burstState)
+      .toMatchObject({ targets: [right.paneId, left.paneId] });
+    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(editor).toBeFocused();
+
+    await arm();
+    await keys.press("Alt+Shift+Tab");
+    await expect
+      .poll(burstState)
+      .toMatchObject({ targets: [right.paneId], paused: true });
+    await keys.press("Alt+Shift+Tab");
+    await keys.press("Alt+Shift+Tab");
+    await keys.press(`${modifier}+W`);
+    await release();
+    await expect.poll(burstState).toMatchObject({ closed: right.paneId });
+    await expect(composer).toHaveCount(0);
+    await keys.press("Alt+1");
+    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Keep the unsaved file during a burst.");
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("A long review supports keyboard range comments and submission without tabbing through source lines", async ({}, info) => {
   const app = new ChatApp();
   await prepareKeyboardProfile(app);
@@ -2395,7 +2583,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
     }, url);
     const nativePress = async (
       keyCode: string,
-      modifiers: Array<"alt" | "shift">,
+      modifiers: Array<"alt" | "shift" | "isautorepeat">,
       targetUrl = url,
     ) =>
       app.app!.evaluate(
@@ -2418,7 +2606,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
       );
     await nativePress("Enter", ["alt"]);
     await expect(split).toHaveAccessibleDescription("Both panes visible");
-    await nativePress("Tab", ["alt"]);
+    await nativePress("Tab", ["alt", "isautorepeat"]);
     await expect(editor).toBeFocused();
     await expect
       .poll(() => app.page.evaluate(() => document.hasFocus()))
@@ -2432,7 +2620,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
 
     await nativePress("Enter", ["alt"]);
     await expect(split).toHaveAccessibleDescription("Only right pane visible");
-    await nativePress("Tab", ["alt", "shift"]);
+    await nativePress("Tab", ["alt", "shift", "isautorepeat"]);
     await expect(split).toHaveAccessibleDescription("Only left pane visible");
     await expect(editor).toBeFocused();
     await expect

@@ -1146,14 +1146,43 @@ export function createCommands(
     )
       return "Select a review first";
   }
-  let pendingPaneSwitch:
-    | {
-        workspaceId: string;
-        paneId: string;
-        intent: AbortController;
-        applied: Promise<void>;
-      }
-    | undefined;
+  interface PaneSwitch {
+    workspaceId: string;
+    paneId: string;
+    intent: AbortController;
+    applied: Promise<void>;
+  }
+  let pendingPaneSwitch: PaneSwitch | undefined;
+  let committingPaneSwitch: Promise<unknown> | undefined;
+
+  async function applyPaneSwitch(
+    switching: PaneSwitch,
+    focusIntent: AbortController,
+  ): Promise<void> {
+    // A slow selection must settle before the latest destination is committed.
+    // Intermediate keypresses still advance the destination, with one request
+    // in flight and only the newest selection waiting to be applied.
+    if (committingPaneSwitch) await committingPaneSwitch.catch(() => undefined);
+    if (
+      pendingPaneSwitch !== switching ||
+      switching.intent.signal.aborted ||
+      activeWorkspace()?.id !== switching.workspaceId
+    )
+      return;
+    const request = invoke("pane.focus", {
+      workspace: switching.workspaceId,
+      id: switching.paneId,
+    });
+    committingPaneSwitch = request;
+    try {
+      await request;
+    } finally {
+      committingPaneSwitch = undefined;
+    }
+    if (!focusIntent.signal.aborted)
+      await keys.focusActiveContent(switching.paneId, focusIntent);
+  }
+
   async function execute(
     id: CommandId,
     browserId?: string,
@@ -1161,12 +1190,11 @@ export function createCommands(
   ): Promise<void> {
     // macOS forwards Close tab from Electron before the DOM key handler runs.
     if (id === "tab.close" && overview.handleCloseShortcut()) return;
-    const switching =
-      id === "tab.close" &&
-      !context &&
-      !pendingPaneSwitch?.intent.signal.aborted
+    const pending =
+      !context && !pendingPaneSwitch?.intent.signal.aborted
         ? pendingPaneSwitch
         : undefined;
+    const switching = id === "tab.close" ? pending : undefined;
     const focusIntent = keys.beginFocus();
     if (switching) {
       // Close follows the requested pane even while the old pane still has focus.
@@ -1514,16 +1542,21 @@ export function createCommands(
           if (!w) break;
           const target =
             id === "pane.next" || id === "pane.previous"
-              ? keys.adjacentPane(w, id === "pane.next" ? 1 : -1, pane?.id)
+              ? keys.adjacentPane(
+                  w,
+                  id === "pane.next" ? 1 : -1,
+                  pending?.workspaceId === w.id ? pending.paneId : pane?.id,
+                )
               : layout.sidePane(id === "pane.focusLeft" ? "left" : "right", w);
           if (!target) break;
-          const switching = {
+          const switching: PaneSwitch = {
             workspaceId: w.id,
             paneId: target,
             intent: focusIntent,
-            applied: keys.focusPane(target, focusIntent),
+            applied: Promise.resolve(),
           };
           pendingPaneSwitch = switching;
+          switching.applied = applyPaneSwitch(switching, focusIntent);
           try {
             await switching.applied;
           } finally {

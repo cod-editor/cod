@@ -157,6 +157,35 @@ const personal = {
   "pane.next": ["Alt+Tab"],
   "pane.previous": ["Alt+Shift+Tab"],
 };
+test("Pane cycling allows held keys with default and overridden bindings", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const mod = platform === "darwin" ? { metaKey: true } : { ctrlKey: true };
+    const altRepeat = { altKey: true, repeat: true };
+    for (const [arrow, command, shiftKey] of [
+      ["ArrowRight", "pane.next", false],
+      ["ArrowLeft", "pane.previous", true],
+    ] as const) {
+      configureKeymap({}, platform);
+      assert.deepEqual(
+        resolveKeybinding(
+          input(arrow, { ...mod, ...altRepeat }),
+          platform,
+          "editor",
+        ),
+        { command, dispatch: true },
+      );
+      const tab = input("Tab", { ...altRepeat, shiftKey });
+      assert.equal(resolveKeybinding(tab, platform, "browser"), undefined);
+      configureKeymap(personal, platform);
+      for (const surface of ["terminal", "browser"] as const)
+        assert.deepEqual(resolveKeybinding(tab, platform, surface), {
+          command,
+          dispatch: true,
+        });
+    }
+  }
+  configureKeymap({}, "darwin");
+});
 test("Option symbols and explicit dead-key chords use physical keys without taking ordinary composition", () => {
   configureKeymap(personal, "darwin");
   for (const [key, code, command] of [

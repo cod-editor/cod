@@ -171,10 +171,10 @@ export const commands = [
     key("Escape", { shift: true }, all),
   ]),
   entry("pane.next", "Focus next pane", "Navigation", [
-    key("ArrowRight", { mod: true, alt: true }),
+    key("ArrowRight", { mod: true, alt: true, repeat: true }),
   ]),
   entry("pane.previous", "Focus previous pane", "Navigation", [
-    key("ArrowLeft", { mod: true, alt: true }),
+    key("ArrowLeft", { mod: true, alt: true, repeat: true }),
   ]),
   entry("pane.nextRegion", "Focus next area", "Navigation"),
   entry("pane.previousRegion", "Focus previous area", "Navigation"),
