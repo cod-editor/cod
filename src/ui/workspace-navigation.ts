@@ -17,7 +17,7 @@ export function createWorkspaceNavigation(
   actions: NavigationActions,
 ) {
   const { folderDialog, conversationActions } = actions;
-  function closeWorkspace(workspace: WorkspaceState): void {
+  async function closeWorkspace(workspace: WorkspaceState): Promise<boolean> {
     workspace =
       getState().workspaces.find((w) => w.id === workspace.id) ?? workspace;
     const agents = getState().conversations.filter(
@@ -30,22 +30,29 @@ export function createWorkspaceNavigation(
         t.workspaceId === workspace.id &&
         ["running", "starting"].includes(t.status),
     );
-    const close = (force = false) =>
-      invoke("workspace.close", {
-        id: workspace.id,
-        ...(force ? { force: true } : {}),
+    const close = async (force = false) =>
+      (
+        await invoke<{ closed?: boolean }>("workspace.close", {
+          id: workspace.id,
+          ...(force ? { force: true } : {}),
+        })
+      ).closed !== false;
+    if (!agents.length && !terminals.length) return close();
+    return new Promise((resolve) => {
+      let closed = false;
+      const confirmation = confirmAction(
+        `Close ${workspace.name}?`,
+        `${agents.length} active agent${agents.length === 1 ? "" : "s"} and ${terminals.length} running terminal${terminals.length === 1 ? "" : "s"} will stop.`,
+        "Stop and close",
+        async () => {
+          closed = await close(true);
+        },
+        "Close workspace",
+      );
+      confirmation.addEventListener("close", () => resolve(closed), {
+        once: true,
       });
-    if (!agents.length && !terminals.length) {
-      void close().catch(() => undefined);
-      return;
-    }
-    confirmAction(
-      `Close ${workspace.name}?`,
-      `${agents.length} active agent${agents.length === 1 ? "" : "s"} and ${terminals.length} running terminal${terminals.length === 1 ? "" : "s"} will stop.`,
-      "Stop and close",
-      () => close(true),
-      "Close workspace",
-    );
+    });
   }
   async function openItem(
     item: NavigationItem,
@@ -57,7 +64,7 @@ export function createWorkspaceNavigation(
       await invoke("workspace.reopen", { id: item.id, newShell });
       return;
     }
-    const current = projectNavigation(getState()).find(
+    const current = projectNavigation(getState(), true).find(
       (row) => row.key === item.key,
     );
     if (!current || signal?.aborted) return;
@@ -77,6 +84,12 @@ export function createWorkspaceNavigation(
       });
   }
   async function closeItem(item: NavigationItem, includePinned = false) {
+    if (item.kind === "workspace") {
+      const workspace = item.closed
+        ? undefined
+        : getState().workspaces.find((w) => w.id === item.workspaceId);
+      return workspace ? closeWorkspace(workspace) : false;
+    }
     if (!item.paneId) return false;
     const result = await invoke<{ closed?: boolean }>("pane.close", {
       workspace: item.workspaceId,
@@ -96,7 +109,7 @@ export function createWorkspaceNavigation(
     },
   ): Array<NavigationAction | null> {
     const state = getState();
-    const current = projectNavigation(state, item.closed).find(
+    const current = projectNavigation(state, true).find(
       (row) => row.key === item.key,
     );
     if (!current) return [];
@@ -130,7 +143,7 @@ export function createWorkspaceNavigation(
         {
           label: "Close workspace",
           command: "workspace.close",
-          run: () => closeWorkspace(workspace),
+          run: () => void closeItem(item).catch(() => undefined),
         },
       ];
     const pane = workspace.panes.find((p) => p.id === item.paneId);

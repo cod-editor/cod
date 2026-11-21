@@ -423,7 +423,7 @@ export function createPaneLayout(
         "aria-label",
         `${pane.pinned ? "Unpin" : "Close"} ${accessibleName}`,
       );
-      close.classList.add("compact", "tab-close");
+      close.classList.add("compact", "embedded", "tab-close");
       close.classList.toggle("tab-pin", !!pane.pinned);
       const endIcon = pane.pinned ? "pin" : "close";
       if (close.dataset.icon !== endIcon) {

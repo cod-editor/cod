@@ -55,6 +55,16 @@ button.quiet {
   border-color: transparent;
   background: transparent;
 }
+.ui-button.toggle {
+  color: var(--text-muted);
+}
+.ui-button.toggle[aria-pressed="true"] {
+  background: var(--element-selected);
+  color: var(--text-primary);
+}
+.ui-button.toggle[aria-pressed="true"] .icon {
+  color: var(--text-accent);
+}
 button,
 input,
 textarea,
@@ -133,6 +143,12 @@ select:focus-visible {
 }
 .icon-button:not(:disabled):active {
   background: var(--control-pressed);
+}
+.icon-button.embedded:not(:disabled):hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.icon-button.embedded:not(:disabled):active {
+  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
 }
 
 dialog {
@@ -281,6 +297,12 @@ button:is(.selected, :focus-visible) .ui-button-description {
 .command-list .icon-button:not(:disabled):active {
   background: var(--control-pressed);
 }
+.icon-button.embedded:not(:disabled):hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.icon-button.embedded:not(:disabled):active {
+  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
+}
 
 /* Compound picker rows have one surface, including disclosure and actions.
    Controls stay on the first text line when a readable label wraps. */
@@ -318,7 +340,6 @@ button:is(.selected, :focus-visible) .ui-button-description {
     )
   );
 }
-
 .command-list .ui-picker-row > button:focus-visible {
   outline: 1px solid var(--focus);
   outline-offset: -1px;
@@ -454,13 +475,33 @@ option {
 }
 .picker > input {
   flex: none;
-  min-height: calc(var(--control-height) + var(--space-2));
-  border: 0;
-  border-radius: 0;
   border-bottom: 1px solid var(--border-subtle);
+}
+.picker > input,
+.picker-search > input {
+  min-height: calc(var(--control-height) + var(--space-2));
+  border-width: 0 0 1px;
+  border-radius: 0;
   background: transparent;
   outline: none;
   padding: var(--space-2);
+}
+.picker-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-inline-end: var(--space-1);
+}
+.picker-search > input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+}
+.picker-search > button {
+  flex: none;
+  white-space: nowrap;
 }
 .command-list {
   display: flex;

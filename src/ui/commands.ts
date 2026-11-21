@@ -1102,6 +1102,8 @@ export function createCommands(
     browserId?: string,
     context?: CommandContext,
   ): Promise<void> {
+    // macOS forwards Close tab from Electron before the DOM key handler runs.
+    if (id === "tab.close" && overview.handleCloseShortcut()) return;
     const switching =
       id === "tab.close" &&
       !context &&
@@ -1255,7 +1257,7 @@ export function createCommands(
           break;
         }
         case "workspace.close": {
-          if (w) navigation.closeWorkspace(w);
+          if (w) await navigation.closeWorkspace(w);
           break;
         }
         case "workspace.reopen":

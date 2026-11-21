@@ -32,8 +32,10 @@ async function reopenPicker() {
   });
   await expect(picker).toBeVisible();
   await expect(
-    picker.getByRole("checkbox", { name: "Show closed workspaces" }),
-  ).toBeChecked();
+    picker.getByRole("button", {
+      name: "Show closed workspaces and cancelled reviews",
+    }),
+  ).toHaveAttribute("aria-pressed", "true");
   return picker;
 }
 
@@ -112,6 +114,111 @@ test("Closing workspace results selects a surviving neighbor and supports reopen
     .toHaveLength(1);
 });
 
+test("Overview closes the selected workspace through the existing guard and routes native close to a saved chat", async () => {
+  const target = await shell.create("Workshop rehearsal");
+  const busy = await shell.newChat(target, "codex");
+  await shell.send(busy.id, "Hold workshop fixture [hold]");
+  await expect
+    .poll(async () => (await shell.inspect(busy.id)).status)
+    .toBe("working");
+
+  const current = await shell.create("Separate work");
+  const saved = await shell.newChat(current, "codex");
+  await shell.send(saved.id, "Make a short checklist");
+  await expect
+    .poll(async () => (await shell.inspect(saved.id)).status)
+    .toBe("ready");
+  await shell.cli(
+    "conversation",
+    "rename",
+    "--id",
+    saved.id,
+    "--name",
+    "Saved checklist",
+  );
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    current,
+    "--id",
+    saved.paneId,
+  );
+  const picker = await shell.overview();
+  const search = picker.getByRole("combobox");
+  const nativeClose = () =>
+    shell.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send("cod:command", {
+        command: "tab.close",
+      }),
+    );
+  const guard = shell.page.getByRole("dialog", {
+    name: "Close workspace",
+    exact: true,
+  });
+  const cancel = guard.getByRole("button", { name: "Cancel", exact: true });
+  await search.fill("Workshop rehearsal");
+  const targetRow = overviewRow("workspace", target);
+  await expect(targetRow).toHaveAttribute("aria-current", "true");
+  const footer = picker.locator(".picker-footer");
+  await expect(footer).toContainText(
+    process.platform === "darwin"
+      ? /Close workspace\s*⌘W/
+      : /Close workspace\s*Ctrl\+W/,
+  );
+  await search.press(`${modifier}+w`);
+  await expect(cancel).toBeFocused();
+  await nativeClose();
+  await expect(cancel).toBeFocused();
+  await cancel.press("Escape");
+  await expect(search).toHaveValue("Workshop rehearsal");
+  await expect(search).toBeFocused();
+  expect(
+    (await shell.state()).workspaces.some(
+      (workspace) => workspace.id === target,
+    ),
+  ).toBe(true);
+
+  await nativeClose();
+  await expect(guard).toBeVisible();
+  await guard
+    .getByRole("button", { name: "Stop and close", exact: true })
+    .click();
+  await expect(targetRow).toHaveCount(0);
+  await expect(search).toHaveValue("Workshop rehearsal");
+  await expect(search).toBeFocused();
+  expect((await shell.state()).activeWorkspaceId).toBe(current);
+
+  await search.fill("Saved checklist");
+  await search.press("ArrowDown");
+  const savedRow = overviewRow("conversation", saved.id);
+  await expect(savedRow).toHaveAttribute("aria-current", "true");
+  await expect(footer).toContainText("Remove from workspace");
+  const filter = picker.getByRole("button", {
+    name: "Show closed workspaces and cancelled reviews",
+  });
+  await search.press("Tab");
+  await expect(filter).toBeFocused();
+  await nativeClose();
+  await expect(savedRow).toBeVisible();
+  await expect(filter).toBeFocused();
+  await filter.press("Shift+Tab");
+  await search.press(`${modifier}+Enter`);
+  const rename = picker.getByRole("textbox", {
+    name: "Conversation name",
+    exact: true,
+  });
+  await expect(rename).toBeFocused();
+  await nativeClose();
+  await expect(rename).toBeFocused();
+  await rename.press("Escape");
+  await expect(search).toBeFocused();
+  await nativeClose();
+  await expect(savedRow).toHaveCount(0);
+  await expect(search).toHaveValue("Saved checklist");
+  expect((await shell.state()).activeWorkspaceId).toBe(current);
+});
+
 test("Filter closed workspaces in Overview and reopen the selected older workspace", async ({}, info) => {
   const earlier = await shell.create("Northstar Planning");
   const earlierPane = (await shell.workspace(earlier)).activePaneId;
@@ -132,25 +239,26 @@ test("Filter closed workspaces in Overview and reopen the selected older workspa
   );
   const picker = await shell.overview();
   const search = picker.getByRole("combobox");
-  const filter = picker.getByRole("checkbox", {
-    name: "Show closed workspaces",
+  const filter = picker.getByRole("button", {
+    name: "Show closed workspaces and cancelled reviews",
   });
   const results = picker.locator("[data-closed] button.overview-item");
   await expect(search).toBeFocused();
-  await expect(filter).not.toBeChecked();
+  await expect(filter).toHaveAttribute("aria-pressed", "false");
   await search.fill("NORTHSTAR");
   await expect(results).toHaveCount(0);
   await search.press("Tab");
   await expect(filter).toBeFocused();
   await filter.press("Space");
-  await expect(filter).toBeChecked();
+  await expect(filter).toHaveAttribute("aria-pressed", "true");
+  await expect(filter).toHaveCSS("outline-style", "solid");
   await expect(search).toHaveValue("NORTHSTAR");
   await expect(results).toHaveText([
     "Northstar Follow-up",
     "Northstar Planning",
   ]);
   await filter.click();
-  await expect(filter).not.toBeChecked();
+  await expect(filter).toHaveAttribute("aria-pressed", "false");
   await expect(search).toHaveValue("NORTHSTAR");
   await expect(results).toHaveCount(0);
   await filter.press("Space");
@@ -162,6 +270,30 @@ test("Filter closed workspaces in Overview and reopen the selected older workspa
     "Release 2042",
     "Northstar Planning",
   ]);
+  for (const narrow of [false, true]) {
+    if (narrow) {
+      await shell.app!.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].setContentSize(660, 530),
+      );
+    }
+    const fits = await picker.evaluate((node) => {
+      const header = node.querySelector(".picker-search")!;
+      const input = header.querySelector("input")!.getBoundingClientRect();
+      const toggle = header.querySelector("button")!.getBoundingClientRect();
+      return (
+        input.width > 0 &&
+        toggle.width > 0 &&
+        input.right <= toggle.left &&
+        toggle.right <= header.getBoundingClientRect().right
+      );
+    });
+    expect(fits).toBe(true);
+    await shell.page.screenshot({
+      path: info.outputPath(
+        narrow ? "overview-closed-narrow.png" : "overview-closed-normal.png",
+      ),
+    });
+  }
   await search.fill("missing");
   await expect(picker.getByRole("status")).toHaveText("No matching items");
   await search.press("Enter");
