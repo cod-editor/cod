@@ -355,7 +355,11 @@ export function appearanceDialog(
               : input.value,
         );
       };
-    const { row, reset, control } = settingEntry(spec.label, input);
+    const { row, reset, control } = settingEntry(
+      spec.label,
+      input,
+      "description" in spec ? spec.description : undefined,
+    );
     row.dataset.settingKey = key;
     reset.setAttribute("aria-label", `Reset ${spec.group} ${spec.label}`);
     let refreshControl: (() => void) | undefined;
@@ -369,16 +373,7 @@ export function appearanceDialog(
       control.append(font.custom);
     }
     reset.onclick = () => save(spec.default);
-    const group = section(spec.group);
-    group.append(row);
-    if ("description" in spec) {
-      const description = document.createElement("p");
-      description.id = `setting-${key.replaceAll(".", "-")}-description`;
-      description.className = "settings-note";
-      description.textContent = spec.description;
-      input.setAttribute("aria-describedby", description.id);
-      group.append(description);
-    }
+    section(spec.group).append(row);
     rows.set(key, { row, input, reset, refreshControl, font });
   }
   const engine = document.createElement("select");

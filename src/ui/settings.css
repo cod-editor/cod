@@ -21,3 +21,8 @@
   flex-direction: column;
   gap: var(--space-1);
 }
+
+.setting-row > label > .settings-note {
+  display: block;
+  margin-top: var(--space-1);
+}

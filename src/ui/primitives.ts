@@ -68,6 +68,7 @@ export function toolbar(...children: Array<Node | string>) {
 export function settingEntry(
   title: string,
   input: HTMLInputElement | HTMLSelectElement,
+  description?: string,
 ) {
   const row = document.createElement("div");
   row.className = "settings-entry";
@@ -77,6 +78,14 @@ export function settingEntry(
   label.textContent = title;
   input.id ||= `setting-field-${++fieldSequence}`;
   label.htmlFor = input.id;
+  if (description) {
+    const detail = document.createElement("small");
+    detail.className = "settings-note";
+    detail.id = `${input.id}-description`;
+    detail.textContent = description;
+    label.append(detail);
+    input.setAttribute("aria-describedby", detail.id);
+  }
   const control = document.createElement("div");
   control.className = "setting-control";
   control.append(input);
