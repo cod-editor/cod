@@ -1850,8 +1850,15 @@ test("Cancel review leaves history and resolves waiters without delivering to a 
     (
       await shell.cli<Pick<AppState, "conversations">>("state")
     ).conversations.find((c) => c.id === chat.id)!;
-  const show = (review: Opened) =>
-    shell.cli("review", "show", "--id", review.reviewId);
+  const show = async (review: Opened) => {
+    const opened = await shell.cli<Opened>(
+      "review",
+      "show",
+      "--id",
+      review.reviewId,
+    );
+    review.paneId = opened.paneId;
+  };
   const actions = (review: Opened) =>
     pane(review).getByRole("button", { name: "Review actions", exact: true });
   const cancelItem = () =>
@@ -1938,6 +1945,17 @@ test("Cancel review leaves history and resolves waiters without delivering to a 
   await shell.page
     .getByRole("button", { name: "Open review", exact: true })
     .click();
+  await expect
+    .poll(async () => {
+      const reopened = (await shell.workspace(workspace)).panes.find(
+        (candidate) =>
+          candidate.kind === "review" &&
+          candidate.reviewId === document.reviewId,
+      );
+      if (reopened) document.paneId = reopened.id;
+      return reopened?.id;
+    })
+    .toBeTruthy();
   await expect(round(document).locator("option:checked")).toHaveText(
     "Round 1 (cancelled)",
   );
