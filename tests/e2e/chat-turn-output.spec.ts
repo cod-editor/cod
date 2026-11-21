@@ -167,3 +167,160 @@ test("Streaming reuses unchanged Markdown and keeps the final answer when its ac
   await shell.page.keyboard.press("Escape");
   await expect(image).toBeFocused();
 });
+
+test("An accepted in-flight follow-up keeps the next streamed reply between its tool blocks", async ({}, info) => {
+  await shell.configure({
+    codex: { steeringReply: true, holdSteeringReply: true },
+  });
+  const workspace = await shell.create("Invented export");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  const transcript = pane.getByRole("region", {
+    name: "Conversation transcript",
+    exact: true,
+  });
+  const input = pane.getByRole("textbox", { name: "Message", exact: true });
+  const progress = transcript.getByRole("status", { name: "Turn activity" });
+  const user = "Please confirm the export format.";
+  const partial = "I'll check the export format";
+  const full = partial + " while the export continues.";
+  const final = "Export verified. The file is ready.";
+  const rows = transcript.locator(":scope > .chat-message");
+  const reply = rows.filter({ hasText: partial }).locator(".message-text");
+  const activity = transcript.locator(":scope > details.turn-activity");
+  const original = activity.filter({ hasText: "STREAM Run the demo export" });
+  const before = activity.filter({
+    has: shell.page.locator('[title="echo before-follow-up-reply"]'),
+  });
+  const after = activity.filter({
+    has: shell.page.locator('[title="node examples/export.mjs"]'),
+  });
+  const inspectOrder = (view = transcript) =>
+    view.evaluate((element) =>
+      [...element.children].map((node) =>
+        [
+          node.textContent,
+          ...Array.from(
+            node.querySelectorAll<HTMLElement>("summary[title]"),
+            (summary) => summary.title,
+          ),
+        ].join(" "),
+      ),
+    );
+  const expectOrder = async (texts: string[], view = transcript) => {
+    const actual = await inspectOrder(view);
+    let previous = -1;
+    for (const text of texts) {
+      const index = actual.findIndex((value) => value.includes(text));
+      expect(index, `transcript order for ${text}`).toBeGreaterThan(previous);
+      previous = index;
+    }
+  };
+
+  await shell.send(chat.id, "Run the demo export [hold]");
+  await expect(original).toBeAttached();
+  await expect(original).not.toHaveAttribute("open", "");
+  await expect(progress).toHaveText(/^Working/);
+  await input.fill(user);
+  await input.press("Enter");
+
+  await expect(rows.filter({ hasText: user })).toBeVisible();
+  await expect(reply).toHaveText(partial);
+  await expect(reply).toBeVisible();
+  await expect(progress).toHaveCount(1);
+  await expect(original).not.toHaveAttribute("open", "");
+  await expect(before).not.toHaveAttribute("open", "");
+  await expectOrder([
+    "STREAM Run the demo export",
+    user,
+    "echo before-follow-up-reply",
+    partial,
+    "Working",
+  ]);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("");
+  await shell.page.screenshot({
+    path: info.outputPath("accepted-follow-up.png"),
+  });
+
+  const originalSummary = original.locator(":scope > summary");
+  await originalSummary.press("Enter");
+  await expect(original).toHaveAttribute("open", "");
+  await expect(originalSummary).toBeFocused();
+  await input.fill("Invented unsent draft");
+  await input.press("End");
+  await shell.configure({ codex: { steeringReply: true } });
+  await expect(reply).toHaveText(full);
+  await expect(after).toContainText("Inspecting the generated sample.");
+  await expect(after).not.toHaveAttribute("open", "");
+  await expect(original).toHaveAttribute("open", "");
+  await expectOrder([user, partial, "Inspecting the generated sample."]);
+  await expect(progress).toHaveCount(1);
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("working");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Invented unsent draft");
+  await expect
+    .poll(() =>
+      input.evaluate((field: HTMLTextAreaElement) => field.selectionStart),
+    )
+    .toBe("Invented unsent draft".length);
+  await reply.evaluate((node) =>
+    Object.assign(window, { fixtureFollowUp: node }),
+  );
+  await originalSummary.press("Enter");
+  await expect(original).not.toHaveAttribute("open", "");
+  await input.focus();
+
+  await shell.page.setViewportSize({ width: 420, height: 650 });
+  await expect(reply).toBeVisible();
+  await shell.page.screenshot({
+    path: info.outputPath("accepted-follow-up-working-narrow.png"),
+  });
+  await shell.configure({
+    codex: { steeringReply: true, finishSteeringReply: true },
+  });
+  await expect(rows.filter({ hasText: final })).toBeVisible();
+  await expect(reply).toHaveText(full);
+  expect(
+    await reply.evaluate(
+      (node) =>
+        node ===
+        (window as Window & { fixtureFollowUp?: Element }).fixtureFollowUp,
+    ),
+  ).toBe(true);
+  await expect(progress).toHaveCount(0);
+  await expectOrder([user, partial, "Inspecting the generated sample.", final]);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Invented unsent draft");
+  expect((await shell.prompts()).length).toBe(1);
+  const requests = (await shell.records()).map(
+    (record) => record.message?.method,
+  );
+  expect(requests.filter((method) => method === "turn/steer")).toHaveLength(1);
+  expect(requests).not.toContain("turn/interrupt");
+
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  const reopened = shell.pane(chat.paneId);
+  const reopenedTranscript = reopened.getByRole("region", {
+    name: "Conversation transcript",
+    exact: true,
+  });
+  const reopenedRows = reopenedTranscript.locator(":scope > .chat-message");
+  const reopenedReply = reopenedRows
+    .filter({ hasText: partial })
+    .locator(".message-text");
+  await expect(reopenedReply).toHaveText(full);
+  await expect(reopenedReply).toBeVisible();
+  await expect(reopenedRows.filter({ hasText: final })).toBeVisible();
+  await expect(
+    reopened.getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue("Invented unsent draft");
+  await expectOrder([user, partial, "Worked for", final], reopenedTranscript);
+  await shell.page.screenshot({
+    path: info.outputPath("accepted-follow-up-reopened.png"),
+  });
+});

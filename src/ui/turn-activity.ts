@@ -14,128 +14,282 @@ function workedDuration(ms: number, outcome?: string): string {
     : `${prefix} ${Math.floor(seconds / 60)}m${seconds % 60 ? ` ${seconds % 60}s` : ""}`;
 }
 
-/** Keep routine activity in one expandable row without hiding answers or decisions. */
+type Conversation = import("../types").ConversationState;
+type RecordedTurn = NonNullable<Conversation["turns"]>[number];
+
+interface TurnSection {
+  key: string;
+  user?: HTMLElement;
+  followUp: boolean;
+  nodes: HTMLElement[];
+}
+
+function turnSections(
+  transcript: HTMLElement,
+  messages: Conversation["messages"],
+) {
+  const rows = [...transcript.children] as HTMLElement[];
+  const visibleUserTurns = new Set(
+    rows
+      .filter((node) => node.classList.contains("user"))
+      .map((node) => node.dataset.turnId),
+  );
+  const firstUsers = new Map<string, { id: string; order: number }>();
+  for (const message of messages) {
+    if (
+      message.role !== "user" ||
+      !message.turnId ||
+      !visibleUserTurns.has(message.turnId)
+    )
+      continue;
+    const first = firstUsers.get(message.turnId);
+    if (!first || message.order < first.order)
+      firstUsers.set(message.turnId, message);
+  }
+
+  const turns = new Map<string, TurnSection[]>();
+  let fallback = "initial";
+  let current: { id: string; section: TurnSection } | undefined;
+  for (const node of rows) {
+    const user = node.classList.contains("user");
+    if (user)
+      fallback = node.dataset.turnId ?? node.dataset.messageId ?? fallback;
+    if (!node.matches(".chat-message, .tool-activity")) continue;
+    const id = node.dataset.turnId ?? fallback;
+    if (user || current?.id !== id) {
+      const sections = turns.get(id) ?? [];
+      const first = firstUsers.get(id);
+      const section: TurnSection = {
+        key: sections.length
+          ? `${id}:${node.dataset.messageId ?? node.dataset.toolId}`
+          : id,
+        user: user ? node : undefined,
+        followUp: user && !!first && first.id !== node.dataset.messageId,
+        nodes: [],
+      };
+      sections.push(section);
+      turns.set(id, sections);
+      current = { id, section };
+    }
+    if (!user) current!.section.nodes.push(node);
+  }
+  return turns;
+}
+
+function hasAssistantText(node: HTMLElement): boolean {
+  return node.classList.contains("assistant") && !!node.textContent?.trim();
+}
+
+/** Fold activity in consecutive runs so no collapsed block crosses a visible message. */
+function orderedRuns(
+  nodes: HTMLElement[],
+  isActivity: (node: HTMLElement, index: number) => boolean,
+): HTMLElement[][] {
+  const runs: HTMLElement[][] = [];
+  let current: HTMLElement[] | undefined;
+  nodes.forEach((node, index) => {
+    if (!isActivity(node, index)) {
+      current = undefined;
+      return;
+    }
+    if (!current) {
+      current = [];
+      runs.push(current);
+    }
+    current.push(node);
+  });
+  return runs;
+}
+
+function activityProgress(
+  transcript: HTMLElement,
+  before: Node | null,
+  conversation: Conversation,
+  recorded: RecordedTurn | undefined,
+  key: string,
+): void {
+  const progress = document.createElement("div");
+  progress.className = "turn-progress";
+  progress.dataset.focusKey = `turn-progress:${key}`;
+  const label = document.createElement("span");
+  label.textContent =
+    conversation.status === "waiting" ? "Waiting for your response" : "Working";
+  label.setAttribute("role", "status");
+  label.setAttribute("aria-label", "Turn activity");
+  if (conversation.status === "working" && recorded?.startedAt)
+    label.dataset.activityStarted = recorded.startedAt;
+  progress.append(label);
+  transcript.insertBefore(progress, before);
+  updateLiveActivity(progress);
+}
+
+function activityDetails(
+  transcript: HTMLElement,
+  before: Node | null,
+  activity: HTMLElement[],
+  key: string,
+  text: string,
+  live: boolean,
+): void {
+  const details = document.createElement("details");
+  details.className = "turn-activity";
+  details.dataset.focusKey = `turn-activity:${key}`;
+  const summary = document.createElement("summary");
+  summary.dataset.focusKey = `turn-summary:${key}`;
+  const label = document.createElement("span");
+  if (live) {
+    const tool = [...activity]
+      .reverse()
+      .find((node) => node.classList.contains("tool-activity"));
+    label.className = "current-tool";
+    label.textContent = tool?.dataset.compactCaption ?? "Preparing response";
+    summary.append(label, icon("chevron"));
+    details.classList.add("live-activity");
+  } else {
+    summary.setAttribute("aria-label", text);
+    label.textContent = text;
+    summary.append(icon("chevron"), label);
+  }
+  details.append(summary);
+  transcript.insertBefore(details, before);
+  details.append(...activity);
+}
+
+/** Keep routine activity expandable and keep the native turn chronology around new input. */
 export function groupTurnActivity(
   transcript: HTMLElement,
-  conversation: import("../types").ConversationState,
+  conversation: Conversation,
 ): void {
-  let key = "initial";
-  const turns = new Map<string, HTMLElement[]>();
-  for (const node of [...transcript.children] as HTMLElement[]) {
-    if (node.classList.contains("user")) {
-      key = node.dataset.turnId ?? node.dataset.messageId ?? key;
-      if (!turns.has(key)) turns.set(key, []);
-      continue;
-    }
-    const turnKey = node.dataset.turnId ?? key;
-    const nodes = turns.get(turnKey) ?? [];
-    nodes.push(node);
-    turns.set(turnKey, nodes);
-  }
-  if (!turns.size && ["working", "waiting"].includes(conversation.status))
-    turns.set("initial", []);
+  const running = ["working", "waiting"].includes(conversation.status);
+  const turns = turnSections(transcript, conversation.messages);
+  if (!turns.size && running)
+    turns.set("initial", [{ key: "initial", followUp: false, nodes: [] }]);
   const last = [...turns.keys()].at(-1);
-  for (const [id, nodes] of turns) {
-    const recorded = conversation.turns?.find((turn) => turn.id === id);
+  const recordedTurns = new Map(
+    conversation.turns?.map((turn) => [turn.id, turn]),
+  );
+  for (const [id, sections] of turns) {
+    const recorded = recordedTurns.get(id);
     const completed =
       !!recorded?.outcome ||
       (!recorded && (id !== last || conversation.status === "ready"));
-    const live =
-      !completed &&
-      id === last &&
-      ["working", "waiting"].includes(conversation.status);
+    const live = !completed && id === last && running;
     if (!completed && !live) continue;
-    let lastTool = -1;
-    nodes.forEach((node, index) => {
-      if (node.classList.contains("tool-activity")) lastTool = index;
-    });
-    const lastAssistant = [...nodes]
+    const lastSection = sections.at(-1)!;
+    const lastAssistant = sections
+      .flatMap((section) => section.nodes)
       .reverse()
-      .find(
-        (node) =>
-          node.classList.contains("assistant") && node.textContent?.trim(),
-      );
-    const activity = nodes.filter((node, index) => {
-      if (node.hasAttribute("data-action-required")) return false;
-      if (node.classList.contains("tool-activity")) return true;
-      if (!node.classList.contains("assistant")) return false;
-      if (node.dataset.phase === "commentary") return true;
-      if (live && node.dataset.phase !== "final") return true;
-      // Unknown imported history: preserve the complete final assistant block
-      // after the last tool; never classify a sole answer by its wording.
-      return (
-        !node.dataset.phase &&
-        node !== lastAssistant &&
-        lastTool >= 0 &&
-        index < lastTool
-      );
-    });
-    if (completed && recorded?.outcome === "completed" && !lastAssistant) {
+      .find(hasAssistantText);
+    const segmented = sections.some((section) => section.followUp);
+    if (recorded?.outcome === "completed" && !lastAssistant) {
       const warning = document.createElement("div");
       warning.className = "turn-reply-missing";
       warning.textContent = "Agent finished without a text reply.";
-      const preceding =
-        nodes.at(-1) ??
-        [...transcript.children].find(
-          (node) => (node as HTMLElement).dataset.turnId === id,
-        );
+      const preceding = lastSection.nodes.at(-1) ?? lastSection.user;
       transcript.insertBefore(warning, preceding?.nextSibling ?? null);
     }
-    const duration = recorded?.durationMs;
-    const text = live
-      ? conversation.status === "waiting"
-        ? "Waiting for your response"
-        : "Working"
-      : duration !== undefined && Number.isFinite(duration)
-        ? workedDuration(duration, recorded?.outcome)
-        : "Activity";
-    if (!activity.length && !live) {
-      if (text !== "Activity" && nodes.length) {
+    for (const section of sections) {
+      const { nodes } = section;
+      const sectionLive = live && section === lastSection;
+      const firstResponse = section.followUp
+        ? nodes.find(hasAssistantText)
+        : undefined;
+      const lastTool = nodes.reduce(
+        (last, node, index) =>
+          node.classList.contains("tool-activity") ? index : last,
+        -1,
+      );
+      const isActivity = (node: HTMLElement, index: number) => {
+        if (node.hasAttribute("data-action-required") || node === firstResponse)
+          return false;
+        if (node.classList.contains("tool-activity")) return true;
+        if (!node.classList.contains("assistant")) return false;
+        if (node.dataset.phase === "commentary") return true;
+        if (live && node.dataset.phase !== "final") return true;
+        // Preserve the last assistant block of unknown imported history.
+        return (
+          !node.dataset.phase && node !== lastAssistant && index < lastTool
+        );
+      };
+      const duration = recorded?.durationMs;
+      const caption =
+        completed &&
+        section === lastSection &&
+        duration !== undefined &&
+        Number.isFinite(duration)
+          ? workedDuration(duration, recorded?.outcome)
+          : "Activity";
+      if (!segmented) {
+        const activity = nodes.filter(isActivity);
+        if (activity.length || sectionLive) {
+          const before = nodes[0] ?? section.user?.nextSibling ?? null;
+          if (sectionLive)
+            activityProgress(
+              transcript,
+              before,
+              conversation,
+              recorded,
+              section.key,
+            );
+          activityDetails(
+            transcript,
+            before,
+            activity,
+            section.key,
+            caption,
+            sectionLive,
+          );
+          continue;
+        }
+      } else {
+        const runs = orderedRuns(nodes, isActivity);
+        const trailing = runs.at(-1);
+        const liveRun =
+          sectionLive && trailing?.at(-1) === nodes.at(-1)
+            ? trailing
+            : undefined;
+        runs.forEach((run, index) => {
+          const key =
+            index === 0
+              ? section.key
+              : `${section.key}:${run[0].dataset.messageId ?? run[0].dataset.toolId}`;
+          if (run === liveRun)
+            activityProgress(
+              transcript,
+              run[0],
+              conversation,
+              recorded,
+              section.key,
+            );
+          activityDetails(
+            transcript,
+            run[0],
+            run,
+            key,
+            run === trailing ? caption : "Activity",
+            run === liveRun,
+          );
+        });
+        if (sectionLive && !liveRun) {
+          const preceding = nodes.at(-1) ?? section.user;
+          activityProgress(
+            transcript,
+            preceding?.nextSibling ?? null,
+            conversation,
+            recorded,
+            section.key,
+          );
+        }
+        if (runs.length) continue;
+      }
+      if (caption !== "Activity" && nodes.length) {
         const header = document.createElement("div");
         header.className = "turn-activity";
-        header.dataset.focusKey = `turn-duration:${id}`;
-        header.textContent = text;
+        header.dataset.focusKey = `turn-duration:${section.key}`;
+        header.textContent = caption;
         transcript.insertBefore(header, nodes[0]);
       }
-      continue;
     }
-    const details = document.createElement("details");
-    details.className = "turn-activity";
-    details.dataset.focusKey = `turn-activity:${id}`;
-    const summary = document.createElement("summary");
-    summary.dataset.focusKey = `turn-summary:${id}`;
-    if (!live) summary.setAttribute("aria-label", text);
-    const label = document.createElement("span");
-    label.textContent = text;
-    if (live) {
-      label.setAttribute("role", "status");
-      label.setAttribute("aria-label", "Turn activity");
-      if (conversation.status === "working" && recorded?.startedAt)
-        label.dataset.activityStarted = recorded.startedAt;
-    }
-    if (live) {
-      const progress = document.createElement("div");
-      progress.className = "turn-progress";
-      progress.dataset.focusKey = `turn-progress:${id}`;
-      progress.append(label);
-      transcript.insertBefore(progress, nodes[0] ?? null);
-      updateLiveActivity(progress);
-      const current = [...activity]
-        .reverse()
-        .find((node) => node.classList.contains("tool-activity"));
-      const action = document.createElement("span");
-      action.className = "current-tool";
-      action.textContent =
-        current?.dataset.compactCaption ?? "Preparing response";
-      summary.append(action, icon("chevron"));
-      details.classList.add("live-activity");
-    } else {
-      summary.append(icon("chevron"), label);
-    }
-    details.append(summary);
-    transcript.insertBefore(details, nodes[0] ?? null);
-    details.append(...activity);
-    updateLiveActivity(details);
   }
 }
 
