@@ -46,6 +46,11 @@ await Promise.all([
     outfile: "dist/agent-page-preload.cjs",
   }),
   build({ ...shared, entryPoints: ["src/cli.ts"], outfile: "dist/cli.cjs" }),
+  build({
+    ...shared,
+    entryPoints: ["src/provider-owner.ts"],
+    outfile: "dist/provider-owner.cjs",
+  }),
   ...(process.platform === "linux"
     ? [
         build({

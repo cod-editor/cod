@@ -1030,18 +1030,62 @@ if (ownsInstance) void start();
 else app.quit();
 app.on("window-all-closed", () => app.quit());
 let quitting = false;
+let choosingQuit = false;
 let shutdown: Promise<void> | undefined;
+
+async function confirmQuit(): Promise<"leave" | "stop" | "cancel"> {
+  const status = operations.quitStatus();
+  if (!status.active) return "stop";
+  const choices = status.canLeaveRunning
+    ? ["Leave Running", "Stop", "Cancel"]
+    : ["Stop", "Cancel"];
+  const options: Electron.MessageBoxOptions = {
+    type: "question",
+    title: "Quit Cod",
+    message:
+      status.active === 1
+        ? "One local agent is active"
+        : `${status.active} local agents are active`,
+    detail: status.canLeaveRunning
+      ? "Detached agents can continue after Cod closes. Desktop-only actions and local terminal tabs require Cod to be open."
+      : "The active work includes agents started in Cod. Stop them before quitting, or cancel and let them finish.",
+    buttons: choices,
+    defaultId: choices.length - 1,
+    cancelId: choices.length - 1,
+    noLink: true,
+  };
+  const { response } = await (mainWindow
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options));
+  const selected = choices[response];
+  if (selected === "Leave Running")
+    return operations.quitStatus().canLeaveRunning ? "leave" : confirmQuit();
+  return selected === "Stop" ? "stop" : "cancel";
+}
+
 app.on("before-quit", (event) => {
-  commandServer?.close();
-  commandServer = null;
-  attachingWorkspace?.abort();
-  remoteWorkspace?.close();
-  remoteWorkspace = undefined;
-  if (initialized && !quitting) {
-    event.preventDefault();
-    shutdown ??= operations.shutdown().finally(() => {
-      quitting = true;
-      app.quit();
-    });
-  }
+  if (!initialized || quitting) return;
+  event.preventDefault();
+  if (choosingQuit || shutdown) return;
+  choosingQuit = true;
+  void confirmQuit().then(
+    (decision) => {
+      choosingQuit = false;
+      if (decision === "cancel") return;
+      commandServer?.close();
+      commandServer = null;
+      attachingWorkspace?.abort();
+      remoteWorkspace?.close();
+      remoteWorkspace = undefined;
+      shutdown = operations.shutdown(decision === "leave").finally(() => {
+        quitting = true;
+        app.quit();
+      });
+      void shutdown.catch((error) => console.error(error));
+    },
+    (error) => {
+      choosingQuit = false;
+      console.error(error);
+    },
+  );
 });

@@ -369,7 +369,16 @@ export function appearanceDialog(
       control.append(font.custom);
     }
     reset.onclick = () => save(spec.default);
-    section(spec.group).append(row);
+    const group = section(spec.group);
+    group.append(row);
+    if ("description" in spec) {
+      const description = document.createElement("p");
+      description.id = `setting-${key.replaceAll(".", "-")}-description`;
+      description.className = "settings-note";
+      description.textContent = spec.description;
+      input.setAttribute("aria-describedby", description.id);
+      group.append(description);
+    }
     rows.set(key, { row, input, reset, refreshControl, font });
   }
   const engine = document.createElement("select");

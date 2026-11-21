@@ -178,7 +178,7 @@ The agent-page bridge is intentionally limited to origin-bound response submissi
 - General extension support, extension marketplace and Apple Passwords integration.
 - Cookie import and separate browser profiles.
 - A separate workspace overview, attention switcher or live dashboard.
-- Agent and terminal process survival after quitting Cod. Restore saved conversations and layouts, not running processes. Resume support is distinct from process survival.
+- Local terminal process survival after quitting Cod. Agent work started with detached mode can continue on the same machine and reconnect with its native session identity. Desktop-owned agent work stops on quit.
 - Live simultaneous sharing of a conversation between Cod and its provider CLI.
 - Chat replies, threads and forks beyond providers' ordinary native conversation behavior.
 - Combined cross-repository reviews.

@@ -180,6 +180,7 @@ export interface ConversationState {
   completionRevision?: number;
   acknowledgedCompletionRevision?: number;
   id: string;
+  detachedOwner?: import("./providers/local-owner-protocol").LocalOwnerCursor;
   paneId: string;
   workspaceId: string;
   provider: ProviderId;

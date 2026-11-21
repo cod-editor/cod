@@ -125,6 +125,25 @@ export class WorkspaceApp {
       env: this.environment,
       chromiumSandbox: true,
     });
+    await this.app.evaluate(({ dialog }) => {
+      const show = dialog.showMessageBox.bind(dialog);
+      dialog.showMessageBox = (...arguments_: any[]) => {
+        const options = arguments_.at(-1);
+        if (options.title !== "Quit Cod") return (show as any)(...arguments_);
+        const decisions = globalThis as typeof globalThis & {
+          quitChoice?: string;
+          quitOptions?: string[];
+          showNativeQuit?: boolean;
+        };
+        decisions.quitOptions = options.buttons;
+        if (decisions.showNativeQuit) return (show as any)(...arguments_);
+        const choice = decisions.quitChoice ?? "Stop";
+        return Promise.resolve({
+          response: options.buttons.indexOf(choice),
+          checkboxChecked: false,
+        });
+      };
+    });
     // Restored native browser views can appear before the trusted app renderer.
     const rendererUrl = pathToFileURL(
       path.join(this.root, "dist/index.html"),

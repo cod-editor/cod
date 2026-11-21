@@ -38,6 +38,13 @@ export const settingsSchema = {
   "chat.fontSize": number("Font size", "Chat", 15, 10, 40),
   "chat.lineHeight": number("Line height", "Chat", 1.65, 1, 2.5),
   "chat.maxWidth": number("Maximum width", "Chat", 1100, 480, 4000),
+  "chat.detachedSessions": {
+    label: "Run new sessions detached",
+    group: "Chat",
+    default: false,
+    description:
+      "Applies when a local agent controller starts. Detached work can continue after quitting Cod.",
+  },
   "terminal.fontFamily": font(
     "Font family",
     "Terminal",

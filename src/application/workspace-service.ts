@@ -124,6 +124,8 @@ export class WorkspaceApplicationService {
       );
       if (result.closed === false) return { id, closed: false };
     }
+    for (const conversation of archived.conversations)
+      delete conversation.detachedOwner;
     this.store.data.closedWorkspaces ??= [];
     this.store.data.closedWorkspaces.push(archived);
     for (const conversation of this.store.data.conversations.filter(
@@ -457,6 +459,7 @@ export class WorkspaceApplicationService {
       try {
         const workspace = this.store.workspace(conversation.workspaceId);
         const saved = structuredClone(conversation);
+        delete saved.detachedOwner;
         workspace.closedTabs = workspace.closedTabs?.filter(
           (record) =>
             record.pane.kind !== "conversation" ||
@@ -503,7 +506,10 @@ export class WorkspaceApplicationService {
             .reverse()
             .find((item) => item.workspaceId === workspace.id)?.id;
         normalizeGroups(workspace);
-        await this.conversations.disposeController(id);
+        await this.conversations.disposeController(
+          id,
+          conversation.detachedOwner,
+        );
         return { id, nativeId: saved.nativeId };
       } finally {
         this.conversations.release(id);
