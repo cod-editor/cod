@@ -100,7 +100,11 @@ class OwnedChat {
     try {
       if (!action)
         throw new Error("This provider does not support the operation");
-      const value = await action.apply(this.adapter, args);
+      // JSON encodes omitted optional arguments as null inside an array.
+      const value = await action.apply(
+        this.adapter,
+        args.map((argument) => (argument === null ? undefined : argument)),
+      );
       return { ok: true, value, state: this.state, through: this.sequence };
     } catch (error) {
       return {
