@@ -432,7 +432,7 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
       name: "Settings",
       exact: true,
     });
-    const search = settings.getByRole("textbox", {
+    const search = settings.getByRole("searchbox", {
       name: "Search settings",
       exact: true,
     });
