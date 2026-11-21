@@ -2,8 +2,12 @@ import path from "node:path";
 import type { OperationRequest } from "../types";
 import { requiredName, requiredString } from "./request";
 
-export function workspacePreparation(request: OperationRequest) {
-  const { location } = request;
+export function workspacePreparation(
+  request: OperationRequest,
+  defaultLocation?: "local" | "linux",
+) {
+  const location =
+    request.location === undefined ? defaultLocation : request.location;
   if (location !== "local" && location !== "linux")
     throw new Error("location must be local or linux");
   const name = requiredName(request);

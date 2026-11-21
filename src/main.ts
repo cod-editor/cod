@@ -263,7 +263,10 @@ async function connectRemoteWorkspace(
 }
 
 async function prepareDesktopWorkspace(request: OperationRequest) {
-  const task = workspacePreparation(request);
+  const task = workspacePreparation(
+    request,
+    operations.settings.state.values["workspace.defaultHost"],
+  );
   const navigation = ++workspaceNavigation;
   if (task.location === "linux") {
     if (task.conversation)
@@ -276,9 +279,17 @@ async function prepareDesktopWorkspace(request: OperationRequest) {
         link?.target ?? (await readWorkspaceHostTarget(dataDirectory));
       if (!target)
         throw new Error(
-          "Connect to a Linux workspace from Commands before choosing location linux",
+          "Connect to a Linux workspace from Commands before preparing a task on Linux",
         );
-      link = await connectRemoteWorkspace(target, { select: false });
+      try {
+        link = await connectRemoteWorkspace(target, { select: false });
+      } catch (cause) {
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        throw new Error(
+          `Could not connect to the Linux workspace host "${target.alias}": ${reason}`,
+          { cause },
+        );
+      }
     }
     const prepared = (await link.invoke({
       op: "workspace.prepare",

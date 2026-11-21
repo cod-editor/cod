@@ -83,7 +83,7 @@ async function main(): Promise<void> {
     async (request) => {
       await requireReady();
       if (request?.op !== "workspace.prepare") return runtime.dispatch(request);
-      const task = workspacePreparation(request);
+      const task = workspacePreparation(request, "linux");
       if (task.location !== "linux")
         throw new Error("This command runs on the Linux workspace host");
 

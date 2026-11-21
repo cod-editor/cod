@@ -11,6 +11,7 @@ test("settings reject unknown, unsafe and invalid values", () => {
     null,
     { other: 1 },
     { "terminal.cursorStyle": "bad" },
+    { "workspace.defaultHost": "remote" },
     { "terminal.scrollback": -1 },
     { "ui.fontFamily": "x; color:red" },
     { "editor.tabSize": 2.5 },
@@ -29,16 +30,20 @@ test("settings preserve last good values, reject overwrite of broken JSON, seria
   try {
     const settings = new SettingsService(directory);
     await settings.load();
+    assert.equal(settings.state.values["workspace.defaultHost"], "local");
     await Promise.all([
+      settings.update({ "workspace.defaultHost": "linux" }),
       settings.update({ "ui.fontSize": 20 }),
       settings.update({ "terminal.cursorStyle": "bar" }),
     ]);
     assert.equal(settings.state.values["ui.fontSize"], 20);
     assert.equal(settings.state.values["terminal.cursorStyle"], "bar");
+    assert.equal(settings.state.values["workspace.defaultHost"], "linux");
     await writeFile(settings.state.path, "invalid");
     await settings.load();
     assert.ok(settings.state.error);
     assert.equal(settings.state.values["ui.fontSize"], 20);
+    assert.equal(settings.state.values["workspace.defaultHost"], "linux");
     await assert.rejects(settings.update({ "ui.fontSize": 14 }));
     assert.equal(await readFile(settings.state.path, "utf8"), "invalid");
     await writeFile(
