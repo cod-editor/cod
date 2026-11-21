@@ -1827,19 +1827,6 @@ test("Codex late background results preserve the parent reply, composer and nati
       },
     },
   };
-  await backgroundFixture(chat, "child-done", [
-    childResult,
-    childDone,
-    childDone,
-  ]);
-  await expect(agents).toHaveAccessibleName("Recent agents");
-  await expect(agents).toHaveText("Agents");
-  await expect(agents).not.toHaveCSS("color", "rgb(133, 183, 255)");
-  await expect(shells).toHaveText("1 shell");
-  await expect(agentList).toContainText("Invented child result");
-  await expect(input).toBeFocused();
-  await expect(input).toHaveValue("Keep this unrelated draft");
-
   const commandDone = {
     method: "item/completed",
     params: {
@@ -1855,14 +1842,74 @@ test("Codex late background results preserve the parent reply, composer and nati
     },
   };
   await backgroundFixture(chat, "shell-done", [commandDone, commandDone]);
-  await expect(shells).toHaveText("Shells");
+  await expect(shells).toHaveCount(0);
+  await expect(shellList).toHaveCount(0);
   await expect(agentList).toBeVisible();
   await expect(input).toBeFocused();
+
+  const secondCommandId = "second-shell";
+  await backgroundFixture(chat, "second-shell-started", [
+    {
+      method: "item/started",
+      params: {
+        threadId: child,
+        turnId: "child-turn",
+        item: {
+          type: "commandExecution",
+          id: secondCommandId,
+          command: "echo additional checks",
+          status: "inProgress",
+        },
+      },
+    },
+  ]);
+  await expect(shells).toHaveText("1 shell");
+  await expect(shells).toHaveAttribute("aria-expanded", "false");
+  await expect(agentList).toBeVisible();
   await shells.click();
-  await expect(list).toContainText("Invented checked output");
+  await expect(shellList.getByRole("listitem")).toHaveCount(2);
+  await expect(shellList.getByRole("listitem").first()).toContainText(
+    "echo additional checks",
+  );
   await expect(
-    list.getByText("Invented checked output", { exact: true }),
+    shellList.getByText("Invented checked output", { exact: true }),
   ).toHaveCount(1);
+  await shellList.focus();
+  await expect(shellList).toBeFocused();
+  await backgroundFixture(chat, "second-shell-done", [
+    {
+      ...commandDone,
+      params: {
+        ...commandDone.params,
+        item: { ...commandDone.params.item, id: secondCommandId },
+      },
+    },
+  ]);
+  await expect(shells).toHaveCount(0);
+  await expect(shellList).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this unrelated draft");
+  await shell.page.setViewportSize({ width: 390, height: 650 });
+  await shell.page.screenshot({
+    path: test.info().outputPath("background-no-live-shell-narrow.png"),
+  });
+  await shell.page.setViewportSize({ width: 1280, height: 800 });
+  await agents.click();
+  await input.focus();
+
+  await backgroundFixture(chat, "child-done", [
+    childResult,
+    childDone,
+    childDone,
+  ]);
+  await expect(agents).toHaveAccessibleName("Recent agents");
+  await expect(agents).toHaveText("Agents");
+  await expect(agents).not.toHaveCSS("color", "rgb(133, 183, 255)");
+  await expect(shells).toHaveCount(0);
+  await expect(agentList).toContainText("Invented child result");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this unrelated draft");
+
   await expect
     .poll(async () => (await inspectQueuedChat(chat.id)).turns?.length)
     .toBe(1);
@@ -1900,7 +1947,7 @@ test("Codex late background results preserve the parent reply, composer and nati
   expect(
     state.messages.filter((message) => message.role === "user"),
   ).toHaveLength(1);
-  expect(state.backgroundActivities).toHaveLength(2);
+  expect(state.backgroundActivities).toHaveLength(3);
   await expect(input).toBeFocused();
   await shell.page.screenshot({
     path: test.info().outputPath("background-activity.png"),
@@ -2081,12 +2128,15 @@ test("Codex running background state becomes unknown on restart", async () => {
   await shell.start();
   await shell.cli("conversation", "show", "--id", chat.id);
   const pane = shell.pane(chat.paneId);
-  const shells = pane.getByRole("button", { name: "Recent shells" });
-  await expect(shells).toHaveText("Shells");
-  await shells.click();
+  await expect(
+    pane.locator('[data-focus-key="background:command"]'),
+  ).toHaveCount(0);
   await expect(
     pane.getByRole("list", { name: "Background shells" }),
-  ).toContainText("State unknown");
+  ).toHaveCount(0);
+  await expect(
+    pane.getByRole("button", { name: "Recent agents" }),
+  ).toBeVisible();
   expect(
     (await inspectQueuedChat(chat.id)).backgroundActivities?.map(
       (item) => item.state,
