@@ -97,7 +97,7 @@ export function projectNavigation(
       (review) =>
         review.workspaceId === workspace.id &&
         (review.status === "draft" ||
-          review.status === "cancelled" ||
+          (includeClosed && review.status === "cancelled") ||
           workspace.panes.some(
             (pane) => pane.kind === "review" && pane.reviewId === review.id,
           ) ||

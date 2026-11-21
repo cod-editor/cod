@@ -217,3 +217,41 @@ test("Overview groups terminal metadata and pending reviews without requiring an
   state.terminals = [];
   assert.equal(projectNavigation(state)[0].active, true);
 });
+
+test("Overview hides only cancelled reviews without an open tab or pending delivery", () => {
+  const state = fixture();
+  const target = { kind: "document", path: "/invented/review.md" };
+  state.reviews = [
+    { id: "past", status: "cancelled", rounds: [] },
+    { id: "open", status: "cancelled", rounds: [] },
+    {
+      id: "pending",
+      status: "cancelled",
+      rounds: [{ submission: { delivery: { status: "queued" } } }],
+    },
+    { id: "draft", status: "draft", rounds: [] },
+  ].map((review) => ({
+    ...review,
+    workspaceId: "alpha",
+    target,
+  })) as AppState["reviews"];
+  state.workspaces[0].panes.push({
+    kind: "review",
+    id: "open-pane",
+    reviewId: "open",
+  });
+
+  const reviews = (includeClosed: boolean) =>
+    projectNavigation(state, includeClosed).filter(
+      (item) => item.kind === "review",
+    );
+  assert.deepEqual(
+    reviews(false).map((item) => item.id),
+    ["open", "pending", "draft"],
+  );
+  assert.deepEqual(
+    reviews(true).map((item) => item.id),
+    ["past", "open", "pending", "draft"],
+  );
+  assert.equal(reviews(true)[0].closed, undefined);
+});

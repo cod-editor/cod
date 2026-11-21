@@ -50,6 +50,7 @@ export function createWorkspaceOverview(
         refresh: () => void;
         cancel: () => void;
         rename: (key: string) => void;
+        closeFromSearch: () => void;
       }
     | undefined;
   function toggle(renameKey?: string, showClosed = false): void {
@@ -73,18 +74,23 @@ export function createWorkspaceOverview(
     const dialog = dialogSurface("Overview");
     dialog.className = "picker search-picker picker-wide workspace-overview";
     const input = document.createElement("input");
-    input.placeholder = "Search workspaces, chats, tabs and reviews...";
+    input.placeholder = "Search Overview…";
     input.setAttribute("aria-label", "Search Overview");
     input.setAttribute("role", "combobox");
     input.setAttribute("aria-expanded", "true");
     input.setAttribute("aria-haspopup", "grid");
     input.setAttribute("aria-autocomplete", "list");
-    const filterLabel = document.createElement("label");
-    filterLabel.className = "overview-filter";
-    const includeClosed = document.createElement("input");
-    includeClosed.type = "checkbox";
-    includeClosed.checked = showClosed;
-    filterLabel.append(includeClosed, "Show closed workspaces");
+    const header = document.createElement("header");
+    header.className = "picker-search";
+    const includeClosed = uiButton("Show closed", "quiet", icon("archive"));
+    includeClosed.classList.add("toggle");
+    includeClosed.title = "Show closed workspaces and cancelled reviews";
+    includeClosed.setAttribute(
+      "aria-label",
+      "Show closed workspaces and cancelled reviews",
+    );
+    includeClosed.setAttribute("aria-pressed", String(showClosed));
+    header.append(input, includeClosed);
     const list = document.createElement("div");
     list.className = "command-list overview-list";
     list.setAttribute("role", "grid");
@@ -94,12 +100,12 @@ export function createWorkspaceOverview(
     empty.setAttribute("role", "status");
     const footer = document.createElement("footer");
     footer.className = "picker-footer";
-    dialog.append(input, filterLabel, list, empty, footer);
+    dialog.append(header, list, empty, footer);
     const renameBinding = formatBinding(
       { code: "Enter", mod: true, surfaces: ["shell"] },
       keyboardPlatform,
     );
-    const navigationItems = () => navigation.items(includeClosed.checked);
+    const navigationItems = () => navigation.items(showClosed);
     let items = navigationItems();
     const active = items.find((item) => item.active);
     let selectedKey = active?.key;
@@ -178,7 +184,13 @@ export function createWorkspaceOverview(
         performed = false;
         if (document.querySelector("dialog[open]")) return;
         document.body.append(dialog);
-        current = { dialog, refresh, cancel, rename: renameSelected };
+        current = {
+          dialog,
+          refresh,
+          cancel,
+          rename: renameSelected,
+          closeFromSearch,
+        };
         dialog.showModal();
         document
           .querySelector("#workspace-selector")
@@ -288,7 +300,8 @@ export function createWorkspaceOverview(
       );
     }
     function closeAction(item: NavigationItem | undefined) {
-      if (!item) return;
+      if (!item || item.closed) return;
+      if (item.kind === "workspace") return "Close workspace";
       const state = getState();
       const pane = state.workspaces
         .find((workspace) => workspace.id === item.workspaceId)
@@ -324,9 +337,15 @@ export function createWorkspaceOverview(
           queryVersion === version &&
           item.key === selectedKey
         ) {
-          const remaining = new Set(navigationItems().map((row) => row.key));
-          const neighbor = neighbors.find((row) => remaining.has(row.key));
-          if (neighbor) highlight(neighbor.key);
+          const remaining = new Set(
+            visibleNavigation(navigationItems(), input.value, retainedKey).map(
+              (row) => row.key,
+            ),
+          );
+          if (!remaining.has(item.key)) {
+            const neighbor = neighbors.find((row) => remaining.has(row.key));
+            if (neighbor) highlight(neighbor.key);
+          }
         }
         refresh();
       } catch (error) {
@@ -334,6 +353,9 @@ export function createWorkspaceOverview(
       } finally {
         closing = false;
       }
+    }
+    function closeFromSearch() {
+      if (document.activeElement === input && !edit) void closeSelected();
     }
     function actions(
       item: NavigationItem,
@@ -541,7 +563,7 @@ export function createWorkspaceOverview(
         const more = iconButton("more", `Actions for ${item.label}`, () =>
           actions(item, more),
         );
-        more.classList.add("overview-actions");
+        more.classList.add("embedded", "overview-actions");
         more.setAttribute("role", "gridcell");
         more.setAttribute("aria-haspopup", "menu");
         more.tabIndex = -1;
@@ -578,7 +600,11 @@ export function createWorkspaceOverview(
       updateHints();
     }
     dialog.addEventListener("focusin", updateHints);
-    includeClosed.addEventListener("change", refresh);
+    includeClosed.addEventListener("click", () => {
+      showClosed = !showClosed;
+      includeClosed.setAttribute("aria-pressed", String(showClosed));
+      refresh();
+    });
     input.addEventListener("input", () => {
       queryVersion++;
       retainedKey = undefined;
@@ -619,7 +645,7 @@ export function createWorkspaceOverview(
         if (!searchFocused || event.repeat) return;
         if (renameChord && selectedKey) renameSelected(selectedKey);
         else if (match?.command === "tab.close" && match.dispatch)
-          void closeSelected();
+          closeFromSearch();
       },
       true,
     );
@@ -689,7 +715,13 @@ export function createWorkspaceOverview(
         restoreOrigin();
     });
     document.body.append(dialog);
-    current = { dialog, refresh, cancel, rename: renameSelected };
+    current = {
+      dialog,
+      refresh,
+      cancel,
+      rename: renameSelected,
+      closeFromSearch,
+    };
     dialog.showModal();
     document
       .querySelector("#workspace-selector")
@@ -704,6 +736,15 @@ export function createWorkspaceOverview(
     openClosed: () => toggle(undefined, true),
     rename: (key: string) => toggle(key),
     refresh: () => current?.refresh(),
+    handleCloseShortcut: () => {
+      if (
+        !current?.dialog.open ||
+        [...document.querySelectorAll("dialog[open]")].at(-1) !== current.dialog
+      )
+        return false;
+      current.closeFromSearch();
+      return true;
+    },
     isOpen: () => !!current,
     dispose: () => {
       current?.dialog.remove();

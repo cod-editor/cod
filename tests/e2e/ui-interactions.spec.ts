@@ -304,39 +304,72 @@ test("Compact tab actions have visible mouse feedback without disturbing the sel
   await app.prepare();
   try {
     await app.start();
+    const originalWorkspace = (await app.state()).activeWorkspaceId!;
+    const workspace = await app.create("Tabbed content");
+    await app.newChat(workspace, "codex");
+    const activeChat = await app.newChat(workspace, "codex");
     const tabs = app.page.locator(".tabs").first();
-    const close = tabs.locator(".tab-close").first();
-    const selected = tabs.getByRole("tab", { selected: true });
-    await selected.hover();
-    const idle = await close.evaluate(
-      (node) => getComputedStyle(node).backgroundColor,
+    const selected = tabs.locator(".tab:has(> [aria-selected=true])");
+    const inactive = tabs
+      .locator(".tab:not(:has(> [aria-selected=true]))")
+      .first();
+    for (const [state, tab] of [
+      ["active", selected],
+      ["inactive", inactive],
+    ] as const) {
+      const close = tab.locator(".tab-close");
+      await tab.locator(".tab-select").hover();
+      const background = () =>
+        close.evaluate((node) => getComputedStyle(node).backgroundColor);
+      expect(await background()).toBe("rgba(0, 0, 0, 0)");
+      const parentBackground = await tab.evaluate(
+        (node) => getComputedStyle(node).backgroundColor,
+      );
+      const centers = await close.evaluate((node) => {
+        const button = node.getBoundingClientRect();
+        const icon = node.querySelector("svg")!.getBoundingClientRect();
+        return {
+          x: Math.abs(button.x + button.width / 2 - icon.x - icon.width / 2),
+          y: Math.abs(button.y + button.height / 2 - icon.y - icon.height / 2),
+        };
+      });
+      expect(centers.x).toBeLessThanOrEqual(0.5);
+      expect(centers.y).toBeLessThanOrEqual(0.5);
+      await close.hover();
+      const hover = await background();
+      expect(hover).toMatch(/(?:color\(srgb .* \/ 0\.08\)|rgba\(.*0\.08\))/);
+      expect(
+        await tab.evaluate((node) => getComputedStyle(node).backgroundColor),
+      ).toBe(parentBackground);
+      await app.page.screenshot({
+        path: info.outputPath(`tab-${state}-action-hover.png`),
+      });
+      await app.page.mouse.down();
+      expect(await background()).not.toBe(hover);
+      await app.page.screenshot({
+        path: info.outputPath(`tab-${state}-action-pressed.png`),
+      });
+      await app.page.mouse.move(800, 400);
+      await app.page.mouse.up();
+      await expect(selected).toHaveCount(1);
+    }
+    await app.cli(
+      "pane",
+      "pin",
+      "--workspace",
+      workspace,
+      "--id",
+      activeChat.paneId,
+      "--pinned",
+      "true",
     );
-    const centers = await close.evaluate((node) => {
-      const button = node.getBoundingClientRect();
-      const icon = node.querySelector("svg")!.getBoundingClientRect();
-      return {
-        x: Math.abs(button.x + button.width / 2 - icon.x - icon.width / 2),
-        y: Math.abs(button.y + button.height / 2 - icon.y - icon.height / 2),
-      };
-    });
-    expect(centers.x).toBeLessThanOrEqual(0.5);
-    expect(centers.y).toBeLessThanOrEqual(0.5);
-    await close.hover();
-    const hover = await close.evaluate(
-      (node) => getComputedStyle(node).backgroundColor,
-    );
-    expect(
-      hover,
-      "Close needs its own hover feedback inside a hovered tab",
-    ).not.toBe(idle);
-    await app.page.screenshot({ path: info.outputPath("tab-close-hover.png") });
-    await app.page.mouse.down();
+    const unpin = selected.locator(".tab-pin");
+    await unpin.hover();
+    await expect(unpin).toHaveAccessibleName(/^Unpin/);
     await app.page.screenshot({
-      path: info.outputPath("tab-close-pressed.png"),
+      path: info.outputPath("tab-active-unpin-hover.png"),
     });
-    await app.page.mouse.move(800, 400);
-    await app.page.mouse.up();
-    await expect(selected).toHaveCount(1);
+    await app.cli("workspace", "focus", "--id", originalWorkspace);
     for (const name of [
       "Choose new tab type",
       "Toggle split view",

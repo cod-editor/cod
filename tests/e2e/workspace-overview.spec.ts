@@ -234,21 +234,31 @@ test("Overview uses one compact selection surface with first-line controls at no
       ),
     });
   }
-  await search().press("Tab");
-  const filter = overview().getByRole("checkbox", {
-    name: "Show closed workspaces",
-  });
-  await expect(filter).toBeFocused();
-  await filter.press("Tab");
   const actions = overview().getByRole("gridcell", {
     name: `Actions for ${label}`,
     exact: true,
   });
+  await actions.hover();
+  const actionBackground = await actions.evaluate(
+    (node) => getComputedStyle(node).backgroundColor,
+  );
+  expect(actionBackground).toMatch(
+    /(?:color\(srgb .* \/ 0\.08\)|rgba\(.*0\.08\))/,
+  );
+  await app.page.screenshot({
+    path: info.outputPath("overview-actions-hover.png"),
+  });
+  await search().press("Tab");
+  const filter = overview().getByRole("button", {
+    name: "Show closed workspaces and cancelled reviews",
+  });
+  await expect(filter).toBeFocused();
+  await filter.press("Tab");
   await expect(actions).toBeFocused();
   expect(
     await actions.evaluate((node) => getComputedStyle(node).outlineStyle),
   ).toBe("solid");
-  await overview().screenshot({
+  await app.page.screenshot({
     path: info.outputPath("overview-actions-focus.png"),
   });
   await search().press("Escape");
@@ -323,8 +333,8 @@ test("Overview exposes valid workspace groups and independently reachable row ac
     (await row("conversation", chat.id).getAttribute("id")) as string,
   );
   await search().press("Tab");
-  const filter = overview().getByRole("checkbox", {
-    name: "Show closed workspaces",
+  const filter = overview().getByRole("button", {
+    name: "Show closed workspaces and cancelled reviews",
   });
   await expect(filter).toBeFocused();
   await filter.press("Tab");
@@ -1628,12 +1638,16 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     .toBe(false);
   await expect(search()).toHaveValue("Chosen chat");
   await expect(search()).toBeFocused();
-  await expect(row("workspace", second)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
-  await expect(footer()).not.toContainText("Close tab");
-  await search().press(`${modifier}+Shift+Y`);
+  await expect(selection()).toHaveAttribute("aria-current", "true");
+  await expect(footer()).toContainText("Remove from workspace");
+  await search().dispatchEvent("keydown", {
+    key: "Y",
+    code: "KeyY",
+    ctrlKey: process.platform !== "darwin",
+    metaKey: process.platform === "darwin",
+    shiftKey: true,
+    repeat: true,
+  });
   const afterClose = await snapshots();
   expect(afterClose.activeWorkspaceId).toBe(first);
   expect(afterClose.workspaces.some((item) => item.id === second)).toBe(true);
@@ -1641,7 +1655,6 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     true,
   );
   await search().fill("Taken aside fixture");
-  await search().press("ArrowDown");
   await expect(selection()).toHaveAttribute("aria-current", "true");
   await expect(footer()).toContainText("Remove from workspace");
   await expect(footer()).toContainText(

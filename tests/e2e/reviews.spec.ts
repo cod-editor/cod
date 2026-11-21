@@ -1850,8 +1850,15 @@ test("Cancel review leaves history and resolves waiters without delivering to a 
     (
       await shell.cli<Pick<AppState, "conversations">>("state")
     ).conversations.find((c) => c.id === chat.id)!;
-  const show = (review: Opened) =>
-    shell.cli("review", "show", "--id", review.reviewId);
+  const show = async (review: Opened) => {
+    const opened = await shell.cli<Opened>(
+      "review",
+      "show",
+      "--id",
+      review.reviewId,
+    );
+    review.paneId = opened.paneId;
+  };
   const actions = (review: Opened) =>
     pane(review).getByRole("button", { name: "Review actions", exact: true });
   const cancelItem = () =>
@@ -1912,6 +1919,57 @@ test("Cancel review leaves history and resolves waiters without delivering to a 
   expect((await inspect(diff)).rounds[0].status).toBe("draft");
   expect((await conversation()).taskStatus).toBe("review");
   expect((await conversation()).status).toBe("working");
+
+  for (const review of [document, diff]) {
+    await shell.cli(
+      "pane",
+      "close",
+      "--workspace",
+      workspace,
+      "--id",
+      review.paneId,
+    );
+  }
+  const overview = await shell.overview();
+  const result = (review: Opened) =>
+    overview.locator(
+      `.overview-item[data-navigation-key="review:${review.reviewId}"]`,
+    );
+  await expect(result(document)).toHaveCount(0);
+  await expect(result(diff)).toBeVisible();
+  const showClosed = overview.getByRole("button", {
+    name: "Show closed workspaces and cancelled reviews",
+    exact: true,
+  });
+  await showClosed.click();
+  await expect(result(document)).toHaveAccessibleName(/Cancelled/);
+  await result(document).click({ button: "right" });
+  await shell.page
+    .getByRole("button", { name: "Open review", exact: true })
+    .click();
+  await expect
+    .poll(async () => {
+      const reopened = (await shell.workspace(workspace)).panes.find(
+        (candidate) =>
+          candidate.kind === "review" &&
+          candidate.reviewId === document.reviewId,
+      );
+      if (reopened) document.paneId = reopened.id;
+      return reopened?.id;
+    })
+    .toBeTruthy();
+  await expect(round(document).locator("option:checked")).toHaveText(
+    "Round 1 (cancelled)",
+  );
+
+  await shell.overview();
+  await result(document).hover();
+  await expect(overview.locator(".picker-footer")).toContainText("Close tab");
+  await overview.getByRole("combobox").press(`${modifier}+w`);
+  await expect(result(document)).toHaveCount(0);
+  await expect(result(diff)).toBeVisible();
+  await shell.page.keyboard.press("Escape");
+  expect((await inspect(diff)).rounds[0].status).toBe("draft");
 
   await show(diff);
   await expect(
