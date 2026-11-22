@@ -417,6 +417,9 @@ export class DetachedProviderAdapter implements ProviderAdapter {
   earlierHistory(cursor: string) {
     return this.call("earlierHistory", cursor);
   }
+  historyOutput(turnId: string, itemId: string) {
+    return this.call("historyOutput", turnId, itemId);
+  }
   getOptions() {
     return this.call("getOptions");
   }

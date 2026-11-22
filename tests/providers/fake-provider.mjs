@@ -184,7 +184,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     return;
   }
-  if (m.method === "thread/items/list" && mode === "no-history-ack") return;
+  if (m.method === "thread/turns/list") {
+    if (mode === "no-history-ack" && m.params.cursor) return;
+    reply(m, { data: [{ id: "old-turn", items: [] }], nextCursor: null });
+    return;
+  }
   if (["thread/list", "session/list"].includes(m.method)) {
     reply(
       m,

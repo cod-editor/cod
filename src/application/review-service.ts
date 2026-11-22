@@ -12,7 +12,7 @@ type ReviewConversationPort = Pick<
   | "isActive"
   | "reserve"
   | "release"
-  | "freshHistory"
+  | "findFreshUserMessage"
   | "ensureReady"
   | "assertCurrent"
   | "sendReserved"
@@ -300,9 +300,9 @@ export class ReviewApplicationService {
     const target = { id, roundId, submissionId: submission.id };
     try {
       if (submission.delivery.status === "uncertain") {
-        const history = await this.conversations.freshHistory(conversation);
-        const found = history.messages.find(
-          (m) => m.role === "user" && m.text === submission.envelope,
+        const found = await this.conversations.findFreshUserMessage(
+          conversation,
+          submission.envelope,
         );
         if (found)
           await this.reviews.acknowledge({

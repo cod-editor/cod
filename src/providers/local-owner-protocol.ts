@@ -13,6 +13,7 @@ export const ownerMethods = [
   "discover",
   "inspect",
   "earlierHistory",
+  "historyOutput",
   "getOptions",
   "getDraftOptions",
   "setOption",

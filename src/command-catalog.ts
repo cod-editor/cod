@@ -152,6 +152,7 @@ export const commands = {
   "conversation.permission": ["id", "request-id", "option-id"],
   "conversation.inspect": ["id"],
   "conversation.earlier-history": ["id"],
+  "conversation.history-output": ["id", "tool-id"],
   "conversation.native-inspect": ["id", "section"],
   "conversation.move": ["id", "workspace", "follow?"],
   "browser.blocking-retry": ["id"],

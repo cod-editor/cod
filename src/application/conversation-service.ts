@@ -32,6 +32,7 @@ import {
   type StagedHistory,
 } from "../conversation-history";
 import type {
+  ConversationMessage,
   ConversationState,
   QueuedMessage,
   WorkspaceState,
@@ -269,7 +270,10 @@ export class ConversationApplicationService {
       this.store.schedulePersist(true);
     }
   }
-  async freshHistory(conversation: ConversationState): Promise<StagedHistory> {
+  async findFreshUserMessage(
+    conversation: ConversationState,
+    text: string,
+  ): Promise<ConversationMessage | undefined> {
     const existing = this.controllers.get(conversation.id);
     const previousStatus = conversation.status;
     if (existing) {
@@ -293,8 +297,26 @@ export class ConversationApplicationService {
     this.replays.add(replay);
     try {
       this.assertCurrent(conversation);
-      await replay.resume(conversation.nativeId);
-      return history;
+      const native = await replay.resume(conversation.nativeId);
+      const match = (message: ConversationMessage) =>
+        message.role === "user" && message.text === text;
+      let found = history.messages.find(match);
+      let cursor = codexItemsCursor(native.metadata);
+      // An older missing receipt remains uncertain. Search native pages without
+      // storing an unbounded replay or relying on cached conversation history.
+      for (
+        let pageCount = 0;
+        !found && cursor && replay.earlierHistory && pageCount < 20;
+        pageCount++
+      ) {
+        const page = await replay.earlierHistory(cursor);
+        const staged = emptyHistory();
+        stageCodexItemsPage(staged, page.items, conversation.nativeId);
+        found = staged.messages.find(match);
+        if (cursor === page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      return found;
     } finally {
       this.replays.delete(replay);
       await replay.dispose();
@@ -917,8 +939,7 @@ export class ConversationApplicationService {
     const cursor = codexItemsCursor(conversation.metadata);
     if (!cursor || !adapter.earlierHistory)
       throw new Error("Codex does not provide an earlier item cursor");
-    const { items, nextCursor, startsAtTail } =
-      await adapter.earlierHistory(cursor);
+    const { items, nextCursor } = await adapter.earlierHistory(cursor);
     const staged = emptyHistory();
     stageCodexItemsPage(staged, items, conversation.nativeId);
     return this.store.change(() => {
@@ -930,7 +951,7 @@ export class ConversationApplicationService {
       )
         return { added: 0 };
       const before = conversation.messages.length + conversation.tools.length;
-      commitHistory(conversation, staged, !startsAtTail);
+      commitHistory(conversation, staged, true);
       conversation.historyPartial = Boolean(nextCursor);
       conversation.metadata = {
         ...object(conversation.metadata),
@@ -940,6 +961,31 @@ export class ConversationApplicationService {
         added:
           conversation.messages.length + conversation.tools.length - before,
       };
+    });
+  }
+
+  private async historyOutput(id: string, toolId: string): Promise<void> {
+    const conversation = this.store.conversation(id);
+    const adapter = await this.ensureController(conversation);
+    this.assertCurrent(conversation);
+    const tool = conversation.tools.find((item) => item.id === toolId);
+    if (!tool || !object(tool.details).outputDeferred) return;
+    const prefix = `codex/${conversation.nativeId}/`;
+    if (!toolId.startsWith(prefix) || !adapter.historyOutput)
+      throw new Error("Codex does not provide the selected history output");
+    const [turnId, itemId] = toolId.slice(prefix.length).split("/");
+    if (!turnId || !itemId)
+      throw new Error("Codex does not provide the selected history output");
+    const details = await adapter.historyOutput(turnId, itemId);
+    await this.store.change(() => {
+      this.assertCurrent(conversation);
+      const current = conversation.tools.find((item) => item.id === toolId);
+      if (
+        this.controllers.get(id) === adapter &&
+        current &&
+        object(current.details).outputDeferred
+      )
+        current.details = details;
     });
   }
 
@@ -2121,6 +2167,11 @@ export class ConversationApplicationService {
       }
       case "conversation.earlier-history":
         return this.earlierHistory(requiredString(request, "id"));
+      case "conversation.history-output":
+        return this.historyOutput(
+          requiredString(request, "id"),
+          requiredString(request, "toolId"),
+        );
       case "conversation.inspect":
         return structuredClone(
           this.store.conversation(requiredString(request, "id")),

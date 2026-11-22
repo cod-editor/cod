@@ -25,10 +25,19 @@ export class ProviderRpcError extends Error {
   }
 }
 
+export class ProviderHistoryFrameTooLarge extends Error {
+  constructor() {
+    super(
+      "This saved Codex history item exceeds the provider response size limit",
+    );
+  }
+}
+
 interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+  history: boolean;
 }
 /** One JSON-lines protocol, owned by one child process. Never mixes stderr into JSON. */
 export class RpcTransport {
@@ -41,6 +50,8 @@ export class RpcTransport {
   private closePromise?: Promise<void>;
   private buffer: string[] = [];
   private bufferedLength = 0;
+  private oversizedHistoryId?: number;
+  private framePrefix = "";
   private decoder = new StringDecoder("utf8");
   private stderrBudget = 16_384;
   private readonly timeout: number;
@@ -87,16 +98,46 @@ export class RpcTransport {
         const end = decoded.indexOf("\n", start);
         const part = decoded.slice(start, end < 0 ? undefined : end);
         this.bufferedLength += part.length;
-        if (this.bufferedLength > 4 * 1024 * 1024) {
+        this.framePrefix += part.slice(0, 128 - this.framePrefix.length);
+        if (
+          this.bufferedLength > 4 * 1024 * 1024 &&
+          this.oversizedHistoryId === undefined
+        ) {
+          const id = Number(
+            /^\s*\{\s*(?:"jsonrpc"\s*:\s*"2.0"\s*,\s*)?"id"\s*:\s*(\d+)\s*,\s*"result"\s*:/.exec(
+              this.framePrefix,
+            )?.[1],
+          );
+          if (!this.pending.get(id)?.history) {
+            this.fail(new Error("Provider protocol line exceeded size limit"));
+            return;
+          }
+          this.oversizedHistoryId = id;
+          this.buffer = [];
+        }
+        if (this.bufferedLength > 32 * 1024 * 1024) {
           this.fail(new Error("Provider protocol line exceeded size limit"));
           return;
         }
-        if (part) this.buffer.push(part);
+        if (part && this.oversizedHistoryId === undefined)
+          this.buffer.push(part);
         if (end < 0) break;
-        const line = this.buffer.join("").trim();
-        this.buffer = [];
+        if (this.oversizedHistoryId !== undefined) {
+          const id = this.oversizedHistoryId;
+          const pending = this.pending.get(id);
+          if (pending) {
+            this.pending.delete(id);
+            clearTimeout(pending.timer);
+            pending.reject(new ProviderHistoryFrameTooLarge());
+          }
+          this.oversizedHistoryId = undefined;
+        } else {
+          const line = this.buffer.join("").trim();
+          this.buffer = [];
+          if (line) this.read(line);
+        }
         this.bufferedLength = 0;
-        if (line) this.read(line);
+        this.framePrefix = "";
         if (this.failure) return;
         start = end + 1;
       } while (start < decoded.length);
@@ -197,7 +238,7 @@ export class RpcTransport {
     method: string,
     params: unknown,
     timeout = this.timeout,
-    mode?: "read-only" | "reconcile",
+    mode?: "read-only" | "reconcile" | "history",
   ): Promise<unknown> {
     if (this.closing || this.closed || this.failure)
       return Promise.reject(
@@ -210,9 +251,14 @@ export class RpcTransport {
         const error = new Error(`Provider request timed out: ${method}`);
         reject(error);
         // Unreconcilable mutations retire the controller when acceptance is unknown.
-        if (!mode) this.fail(error);
+        if (!mode || this.oversizedHistoryId === id) this.fail(error);
       }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        history: mode === "history",
+      });
       try {
         this.write({ jsonrpc: "2.0", id, method, params });
       } catch (error) {
