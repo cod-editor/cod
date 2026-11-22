@@ -1578,6 +1578,103 @@ test("Site media permissions require a page-bound decision and retain only remem
   );
 });
 
+test("Site permission rejection restores the committed choice and ignores a superseded error", async ({}, info) => {
+  const workspace = await shell.create("Site permission recovery");
+  await open(workspace, "/permission-recovery");
+  await shell.command("Site permissions");
+  const dialog = shell.page.getByRole("dialog", { name: "Site permissions" });
+  const camera = dialog.getByLabel(`Camera for ${origin}`, { exact: true });
+  const set = (decision: string) =>
+    shell.cli(
+      "browser",
+      "permission-set",
+      "--origin",
+      origin,
+      "--permission",
+      "camera",
+      "--decision",
+      decision,
+    );
+  await expect(camera).toHaveValue("ask");
+  await set("allow");
+
+  await shell.app!.evaluate(({ ipcMain }) => {
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+      }
+    )._invokeHandlers;
+    const original = handlers.get("cod:invoke")!;
+    const fixture = {
+      attempts: 0,
+      release: undefined as (() => void) | undefined,
+    };
+    Object.assign(globalThis, { permissionFailure: fixture });
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      if (
+        request.op !== "browser.permission-set" ||
+        request.decision !== "block" ||
+        ++fixture.attempts > 2
+      )
+        return original(event, request);
+      if (fixture.attempts === 2)
+        await new Promise<void>((resolve) => (fixture.release = resolve));
+      throw new Error("Invented permissions write failed");
+    });
+  });
+  await camera.focus();
+  await camera.selectOption("block");
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Invented permissions write failed",
+  );
+  await expect(camera).toHaveValue("allow");
+  await expect(camera).toBeFocused();
+  await shell.page.screenshot({
+    path: info.outputPath("site-permission-rollback.png"),
+  });
+  await shell.page.setViewportSize({ width: 460, height: 700 });
+  await expect(camera).toBeInViewport();
+  await expect(dialog.getByRole("alert")).toBeInViewport();
+  await shell.page.screenshot({
+    path: info.outputPath("site-permission-rollback-narrow.png"),
+  });
+
+  await camera.selectOption("block");
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        () =>
+          typeof (
+            globalThis as unknown as {
+              permissionFailure: { release?: () => void };
+            }
+          ).permissionFailure.release,
+      ),
+    )
+    .toBe("function");
+  try {
+    await camera.selectOption("ask");
+    await expect.poll(() => shell.cli("browser", "permissions")).toEqual([]);
+  } finally {
+    await shell.app!.evaluate(() =>
+      (
+        globalThis as unknown as {
+          permissionFailure: { release?: () => void };
+        }
+      ).permissionFailure.release?.(),
+    );
+  }
+  await camera.selectOption("block");
+  await expect
+    .poll(() => shell.cli("browser", "permissions"))
+    .toEqual([
+      { origin, topOrigin: origin, permission: "camera", decision: "block" },
+    ]);
+  await expect(camera).toHaveValue("block");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+});
+
 test("Downloads survive tab closure and retain history across restart", async () => {
   const workspace = await shell.create("Downloads");
   const record = await open(workspace);
