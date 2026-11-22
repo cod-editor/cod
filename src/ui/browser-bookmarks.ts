@@ -5,6 +5,7 @@ import { actionButton, showActionError } from "./action-feedback";
 export function browserBookmarks(
   invoke: Invoke,
   open: (url: string) => Promise<void>,
+  restoreFocus: () => void,
 ) {
   const dialog = dialogSurface("Bookmarks");
   dialog.className = "picker browser-library";
@@ -31,9 +32,16 @@ export function browserBookmarks(
           await open(entry.url);
           dialog.close();
         });
+        link.classList.add("bookmark-link");
+        link.setAttribute("aria-label", entry.title);
         link.title = entry.url;
+        const title = document.createElement("span");
+        title.textContent = entry.title;
         const detail = document.createElement("small");
         detail.textContent = entry.url;
+        detail.id = `bookmark-address-${crypto.randomUUID()}`;
+        link.setAttribute("aria-describedby", detail.id);
+        link.replaceChildren(title, detail);
         const edit = actionButton("Edit", async () => {
           const form = document.createElement("form");
           const title = document.createElement("input"),
@@ -88,7 +96,9 @@ export function browserBookmarks(
           await refresh();
           input.focus();
         });
-        row.append(link, detail, edit, remove);
+        const actions = actionRow(edit, remove);
+        actions.classList.add("bookmark-actions");
+        row.append(link, actions);
         list.append(row);
       }
       if (!entries.length) {
@@ -113,10 +123,18 @@ export function browserBookmarks(
       list.querySelector("button")?.click();
     }
   };
+  const close = () => {
+    dialog.close();
+    restoreFocus();
+  };
+  dialog.oncancel = (event) => {
+    event.preventDefault();
+    close();
+  };
   dialog.append(
     input,
     list,
-    actionRow(actionButton("Done", async () => dialog.close())),
+    actionRow(actionButton("Done", async () => close())),
   );
   dialog.onclose = () => {
     revision++;

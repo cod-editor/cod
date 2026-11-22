@@ -1345,6 +1345,215 @@ test("Local address suggestions, searchable history and search engine settings s
   expect(await shell.cli("browser", "history")).toEqual([]);
 });
 
+test("Browser pickers keep long results readable and let the keyboard target row actions", async ({}, info) => {
+  const workspace = await shell.create("Browser picker review");
+  const routes = ["alpha", "beta"].map(
+    (name) => `/picker-fixture-${name}-${"notes".repeat(45)}`,
+  );
+  for (const route of routes) {
+    await open(workspace, route);
+    await expect
+      .poll(() =>
+        shell.cli<Array<{ url: string }>>(
+          "browser",
+          "history",
+          "--query",
+          route,
+        ),
+      )
+      .toEqual([expect.objectContaining({ url: origin + route })]);
+  }
+  await shell.cli(
+    "browser",
+    "bookmark",
+    "--url",
+    origin + routes[0],
+    "--title",
+    `Research notes ${"reference ".repeat(24)}`,
+  );
+  const home = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    "about:blank",
+  );
+  const address = shell
+    .pane(home.paneId)
+    .getByRole("combobox", { name: "Address", exact: true });
+  await address.fill("picker-fixture");
+  const option = shell.pane(home.paneId).getByRole("option");
+  await expect(option).toHaveCount(2);
+  await address.press("ArrowDown");
+  const activeOption = shell
+    .pane(home.paneId)
+    .locator('[role="option"][aria-selected="true"]');
+  await expect(activeOption.locator("small")).toHaveCSS(
+    "color",
+    "rgb(220, 224, 229)",
+  );
+  await address.press("Escape");
+  await address.fill("Keep this input");
+  await address.evaluate((element) =>
+    (element as HTMLInputElement).setSelectionRange(5, 9),
+  );
+
+  await shell.command("Browsing history");
+  const history = shell.page.getByRole("dialog", {
+    name: "Browsing history",
+    exact: true,
+  });
+  const query = history.getByRole("textbox", {
+    name: "Search history",
+    exact: true,
+  });
+  await query.fill("picker-fixtureX");
+  await query.press("End");
+  await query.press("ArrowLeft");
+  await query.press("Delete");
+  await expect(query).toHaveValue("picker-fixture");
+  const rows = history.locator(".browser-history-link");
+  await expect(rows).toHaveCount(2);
+  await query.press("ArrowDown");
+  await expect(query).toBeFocused();
+  const selected = history.locator(".browser-history-link.selected");
+  const target = (await selected.locator("small").textContent())!;
+  await expect(selected).toHaveAccessibleDescription(target);
+  const other = routes
+    .map((route) => origin + route)
+    .find((url) => url !== target)!;
+  const actionsButton = selected
+    .locator("..")
+    .getByRole("button", { name: /^Actions for / });
+  const popup = shell.page.getByRole("dialog", {
+    name: "Actions",
+    exact: true,
+  });
+  const remove = popup.getByRole("button", {
+    name: "Remove from history",
+    exact: true,
+  });
+  const checkHistory = async (state: string) => {
+    await expect(selected.locator("small")).toHaveCSS(
+      "color",
+      "rgb(220, 224, 229)",
+    );
+    await expect(actionsButton).toBeVisible();
+    const geometry = await selected.evaluate((element) => {
+      const row = element.parentElement!;
+      const action = row.querySelector<HTMLElement>(
+        ".browser-history-actions",
+      )!;
+      const detail = element.querySelector("small")!;
+      return {
+        clipped: detail.scrollWidth > detail.clientWidth,
+        actionFits:
+          action.getBoundingClientRect().right <=
+          row.getBoundingClientRect().right,
+        square: action.offsetWidth === action.offsetHeight,
+      };
+    });
+    expect(geometry).toEqual({ clipped: true, actionFits: true, square: true });
+    await shell.page.screenshot({
+      path: info.outputPath(`browser-history-${state}.png`),
+    });
+  };
+  await checkHistory("normal");
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 680),
+  );
+  await expect.poll(() => shell.page.evaluate(() => innerWidth)).toBe(760);
+  await checkHistory("narrow");
+  await query.press("Shift+F10");
+  await expect(remove).toBeFocused();
+  await expect(actionsButton).toHaveAttribute("aria-haspopup", "dialog");
+  await expect(actionsButton).toHaveAttribute("aria-expanded", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("browser-history-actions.png"),
+  });
+  await remove.press("Escape");
+  await expect(query).toBeFocused();
+  await query.press("Tab");
+  await expect(actionsButton).toBeFocused();
+  await actionsButton.press("Enter");
+  await expect(remove).toBeFocused();
+  await remove.press("Escape");
+  await expect(actionsButton).toBeFocused();
+  await actionsButton.press("Space");
+  await remove.press("Enter");
+  await expect(rows).toHaveCount(1);
+  await expect(selected.locator("small")).toHaveText(other);
+  await expect(query).toHaveValue("picker-fixture");
+  await expect(query).toBeFocused();
+  expect(
+    await shell.cli("browser", "history", "--query", "picker-fixture"),
+  ).toEqual([expect.objectContaining({ url: other })]);
+  await query.press("Escape");
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue("Keep this input");
+  expect(
+    await address.evaluate((element: HTMLInputElement) => [
+      element.selectionStart,
+      element.selectionEnd,
+    ]),
+  ).toEqual([5, 9]);
+
+  await shell.command("Bookmarks");
+  const bookmarks = shell.page.getByRole("dialog", {
+    name: "Bookmarks",
+    exact: true,
+  });
+  const bookmarkQuery = bookmarks.getByRole("textbox", {
+    name: "Search bookmarks",
+    exact: true,
+  });
+  await bookmarkQuery.fill("research notes");
+  const bookmark = bookmarks.getByRole("button", { name: /^Research notes/ });
+  await expect(bookmark).toBeVisible();
+  await bookmarkQuery.press("ArrowDown");
+  await expect(bookmark).toBeFocused();
+  await expect(bookmark).toHaveAccessibleDescription(origin + routes[0]);
+  await expect(bookmark.locator("small")).toHaveCSS(
+    "color",
+    "rgb(220, 224, 229)",
+  );
+  expect(
+    await bookmark.evaluate((button) => {
+      const row = button.parentElement!;
+      const actions = row.querySelector<HTMLElement>(".bookmark-actions")!;
+      const detail = button.querySelector("small")!;
+      return (
+        detail.scrollWidth > detail.clientWidth &&
+        actions.getBoundingClientRect().right <=
+          row.getBoundingClientRect().right
+      );
+    }),
+  ).toBe(true);
+  await shell.page.screenshot({
+    path: info.outputPath("browser-bookmarks-narrow.png"),
+  });
+  await bookmark.press("Tab");
+  const edit = bookmarks.getByRole("button", { name: "Edit", exact: true });
+  await expect(edit).toBeFocused();
+  await edit.press("Tab");
+  const removeBookmark = bookmarks.getByRole("button", {
+    name: "Remove",
+    exact: true,
+  });
+  await expect(removeBookmark).toBeFocused();
+  await removeBookmark.press("Enter");
+  await expect(bookmarks.getByText("No bookmarks")).toBeVisible();
+  await expect(bookmarkQuery).toHaveValue("research notes");
+  await expect(bookmarkQuery).toBeFocused();
+});
+
 test("Site clipboard write follows tab permissions and keeps clipboard reads separate", async () => {
   const route = "/clipboard-fixture?value=";
   const workspace = await shell.create("Clipboard permissions");

@@ -463,6 +463,29 @@ test("Overview exposes valid workspace groups and independently reachable row ac
     exact: true,
   });
   await expect(actions).toBeFocused();
+  const popup = app.page.getByRole("dialog", { name: "Actions", exact: true });
+  await expect(actions).toHaveAttribute("aria-haspopup", "dialog");
+  await actions.press("Enter");
+  await expect(popup).toBeVisible();
+  await expect(actions).toHaveAttribute("aria-expanded", "true");
+  await expect(actions).toHaveAttribute(
+    "aria-controls",
+    (await popup.getAttribute("id"))!,
+  );
+  const initial = popup.locator("button:focus");
+  await expect(initial).toHaveCount(1);
+  const focusedName = await initial.getAttribute("aria-label");
+  await app.page.keyboard.press("ArrowDown");
+  await expect(initial).not.toHaveAttribute("aria-label", focusedName!);
+  await app.page.keyboard.press("Escape");
+  await expect(popup).toHaveCount(0);
+  await expect(actions).not.toHaveAttribute("aria-expanded", "true");
+  await expect(actions).toBeFocused();
+  await search().press("Shift+F10");
+  await expect(popup).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await expect(search()).toBeFocused();
+  await actions.focus();
   await actions.press("Enter");
   await app.page
     .locator(".context-menu")

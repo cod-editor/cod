@@ -339,6 +339,10 @@ export function createWorkspaceOverview(
       item: NavigationItem,
       anchor: HTMLElement | { x: number; y: number },
     ) {
+      const invoker =
+        anchor instanceof HTMLElement && document.activeElement === anchor
+          ? anchor
+          : input;
       selectedKey = item.key;
       highlight(item.key);
       input.focus();
@@ -371,7 +375,18 @@ export function createWorkspaceOverview(
                 }
               : action,
           ),
-        { showCommands: false },
+        {
+          showCommands: false,
+          restoreFocus: () => {
+            if (
+              [...document.querySelectorAll("dialog[open]")].at(-1) !== dialog
+            )
+              return;
+            (invoker.isConnected ? invoker : input).focus({
+              preventScroll: true,
+            });
+          },
+        },
       );
     }
     function fallbackSelection(
@@ -559,7 +574,7 @@ export function createWorkspaceOverview(
         );
         more.classList.add("embedded", "overview-actions");
         more.setAttribute("role", "gridcell");
-        more.setAttribute("aria-haspopup", "menu");
+        more.setAttribute("aria-haspopup", "dialog");
         more.tabIndex = -1;
         row.append(more);
         row.oncontextmenu = (event) => {
