@@ -40,6 +40,16 @@ export function describeNavigationStatus(
   const text = label[status] ?? "Idle";
   return context ? `${text}: ${context}` : text;
 }
+function acknowledgedTaskCompletion(conversation: ConversationState): boolean {
+  const { taskStatus, taskStatusAcknowledgedAt, taskStatusUpdatedAt } =
+    conversation;
+  return (
+    taskStatus === "ready" &&
+    !!taskStatusAcknowledgedAt &&
+    (!taskStatusUpdatedAt || taskStatusAcknowledgedAt >= taskStatusUpdatedAt)
+  );
+}
+
 export function conversationAttention(
   state: AppState,
   conversation: ConversationState,
@@ -66,22 +76,16 @@ export function conversationAttention(
     conversation.taskStatus === "review"
   )
     return conversation.taskStatus;
-  if (hasRunningBackground(conversation))
-    return conversation.status === "working" ? "working" : "background";
-  if (
-    conversation.taskStatus === "ready" &&
-    conversation.taskStatusAcknowledgedAt &&
-    (!conversation.taskStatusUpdatedAt ||
-      conversation.taskStatusAcknowledgedAt >= conversation.taskStatusUpdatedAt)
-  )
-    return "";
-  if (conversation.taskStatus) return conversation.taskStatus;
+  if (conversation.status === "working") return "working";
+  if (hasRunningBackground(conversation)) return "background";
+  const acknowledged = acknowledgedTaskCompletion(conversation);
+  if (conversation.taskStatus && !acknowledged) return conversation.taskStatus;
   if (conversation.status === "ready")
     return (conversation.completionRevision ?? 0) >
       (conversation.acknowledgedCompletionRevision ?? 0)
       ? "ready"
       : "";
-  return conversation.status;
+  return acknowledged ? "" : conversation.status;
 }
 export function projectNavigation(
   state: AppState,
@@ -124,15 +128,23 @@ export function projectNavigation(
           pane.kind === "review" &&
           reviews.some((review) => review.id === pane.reviewId),
       );
-    const statuses = conversations.map((c) => conversationAttention(state, c));
+    const attention = conversations.map((conversation) => {
+      const status = conversationAttention(state, conversation);
+      const historicalContext =
+        conversation.taskStatus === "ready" &&
+        (status !== "ready" || acknowledgedTaskCompletion(conversation));
+      return {
+        status,
+        context: historicalContext ? undefined : conversation.taskStatusContext,
+      };
+    });
     const status =
       ["failed", "waiting", "review", "background", "ready", "working"].find(
-        (s) => statuses.includes(s),
+        (status) => attention.some((item) => item.status === status),
       ) ?? "";
-    const context = status
-      ? conversations.find((_, index) => statuses[index] === status)
-          ?.taskStatusContext
-      : undefined;
+    const context = attention.find(
+      (item) => status && item.status === status,
+    )?.context;
     const item = (
       kind: NavigationKind,
       id: string,
@@ -195,8 +207,8 @@ export function projectNavigation(
         conversationLabel(conversation, state),
         root,
         conversation.paneId,
-        statuses[index],
-        conversation.taskStatusContext,
+        attention[index].status,
+        attention[index].context,
       );
       result.push(row);
     });
