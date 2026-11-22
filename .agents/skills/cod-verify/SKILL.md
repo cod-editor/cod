@@ -22,8 +22,8 @@ Keep the stakeholder report short: result, evidence and remaining blocker. Prese
 
 ## Visual review
 
-Render the full affected Cod window in an isolated environment with invented fixture data. Open and inspect the captures at a realistic size. Exercise the relevant enabled, disabled, on, off and keyboard-focus states, including a narrow window or pane when layout can change. Follow AGENTS.md for interactive mocks when the decision depends on switching states.
+Start with the [visual review fixture index](../../../tests/README.md#visual-review-fixtures). Render the full affected Cod window in an isolated environment with invented fixture data. Open and inspect the captures at a realistic size. Exercise the relevant enabled, disabled, on, off and keyboard-focus states, including a narrow window or pane when layout can change. Follow AGENTS.md for interactive mocks when the decision depends on switching states.
 
 Compare the render with the nearest existing Cod surface and a relevant pattern from Zed or Agterm. State which references you observed in a running app and which you checked in source or documentation. Check visual hierarchy, spacing, visible focus and state, and whether the action is easy to find in the surrounding UI. If a teammate is available under the existing coordination workflow, ask them to inspect the same captures. Fix material issues with shared Cod primitives and render again.
 
-Keep screenshots and review notes in ignored local artifacts. If an isolated renderer is unavailable, record the concrete blocker and mark the visual review BLOCKED. Continue the functional checks that can run.
+Keep the images and the inspection record described in the fixture index in ignored local artifacts. If an isolated renderer is unavailable, record the concrete blocker and mark the visual review BLOCKED. Continue the functional checks that can run.
