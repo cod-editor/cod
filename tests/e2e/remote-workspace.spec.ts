@@ -909,6 +909,9 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
       multipleModels: true,
       reasoningOptions: true,
       alternateReasoning: true,
+      configuredDraftModel: "fixture-alternate",
+      configuredDraftReasoning: "xhigh",
+      draftOptionsCwd: linux.folders[0],
     },
   });
   try {
@@ -973,6 +976,14 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
       exact: true,
     });
     await draft.fill("Unsaved desktop draft");
+    const desktopCatalogs = async () =>
+      (await desktop.records()).filter(
+        ({ message }) => message?.method === "model/list",
+      );
+    await expect
+      .poll(async () => (await desktopCatalogs()).length)
+      .toBeGreaterThan(0);
+    const localCatalogs = await desktopCatalogs();
 
     const dropReply = path.join(desktop.temporary, "drop-reply");
     await installWorkspaceRelay(desktop, dropReply);
@@ -1017,23 +1028,30 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
       name: "Actions",
       exact: true,
     });
+    await expect(remoteModel).toHaveText("Alternate fixture");
+    await expect(remoteEffort).toHaveText("Extra high");
+    expect(
+      (await linux.records()).some(
+        ({ message }) =>
+          message?.method === "config/read" &&
+          message.params?.cwd === linux.folders[0],
+      ),
+    ).toBe(true);
     await remoteModel.click();
     await choices
       .getByRole("button", { name: "Alternate fixture", exact: true })
       .click();
     await expect(remoteModel).toHaveText("Alternate fixture");
+    await expect(remoteEffort).toHaveAttribute("aria-busy", "false");
     await remoteEffort.click();
     await choices
       .getByRole("button", { name: "Extra high", exact: true })
       .click();
     await expect(remoteEffort).toHaveText("Extra high");
+    await expect(remoteEffort).toHaveAttribute("aria-busy", "false");
     expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
     expect(await linux.prompts()).toHaveLength(0);
-    expect(
-      (await desktop.records()).filter(
-        ({ message }) => message?.method === "model/list",
-      ),
-    ).toHaveLength(0);
+    expect(await desktopCatalogs()).toEqual(localCatalogs);
     const message = "Invented remote chat input";
     await draft.fill(message);
     await draft.press("Enter");

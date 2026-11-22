@@ -280,6 +280,24 @@ function receive(message, external = false) {
     }, configuration().optionDelayMs ?? 0);
     return;
   }
+  if (
+    message.method === "config/read" &&
+    !nativeId &&
+    configuration().options
+  ) {
+    const options = configuration();
+    const configured =
+      !options.draftOptionsCwd || params.cwd === options.draftOptionsCwd;
+    reply(message, {
+      config: configured
+        ? {
+            model: options.configuredDraftModel,
+            model_reasoning_effort: options.configuredDraftReasoning,
+          }
+        : {},
+    });
+    return;
+  }
   if (message.method === "model/list" && configuration().options) {
     reply(message, {
       data: [

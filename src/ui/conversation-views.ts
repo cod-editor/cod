@@ -278,23 +278,87 @@ export function createConversationViews({
 
   const draftProviders = new Map<string, string>();
   interface DraftModelState {
+    location: string;
+    target: { workspace: string; paneId: string };
+    attempted?: string;
+    read?: Promise<ProviderOptions>;
     options?: ProviderOptions;
     loading?: { trigger: HTMLButtonElement; canceled: boolean };
     saving?: Promise<boolean>;
     error?: string;
   }
   const draftModels = new Map<string, DraftModelState>();
+  function readDraftOptions(state: DraftModelState) {
+    const target = state.target;
+    state.read ??= Promise.resolve()
+      .then(async () => {
+        await saves.get(target.paneId)?.promise;
+        if (
+          draftModels.get(target.paneId) !== state ||
+          pendingStarts.has(target.paneId)
+        )
+          throw new Error("This draft setup changed");
+        return invoke<ProviderOptions>("conversation.draft-options", target, {
+          reportError: false,
+        });
+      })
+      .finally(() => {
+        state.read = undefined;
+      });
+    return state.read;
+  }
   function draftModelChoices(workspace: WorkspaceState, pane: PaneState) {
-    const current = draftModels.get(pane.id);
-    const saved = workspace.chatDrafts?.[pane.id]?.initialSelection;
+    const draft = workspace.chatDrafts?.[pane.id];
+    const saved = draft?.initialSelection;
+    const target = { workspace: workspace.id, paneId: pane.id };
+    const remote = getState().remoteWorkspace;
+    const owner = remote?.ids.includes(workspace.id) ? remote : undefined;
+    const location = JSON.stringify([
+      workspace.id,
+      owner ? [owner.alias, owner.connected] : null,
+      draft?.cwd ?? workspace.folders[0],
+    ]);
+    let current = draftModels.get(pane.id);
+    if (current?.location !== location) {
+      current = { location, target };
+      draftModels.set(pane.id, current);
+    }
+    const state = current;
+    const options = state.options;
+    const matchesDraft =
+      options &&
+      options.pending?.model === saved?.model &&
+      options.pending?.reasoning === saved?.reasoning;
+    const selection = JSON.stringify([saved?.model, saved?.reasoning]);
+    if (
+      !matchesDraft &&
+      state.attempted !== selection &&
+      !state.loading &&
+      !state.saving &&
+      !state.read &&
+      !pendingStarts.has(pane.id) &&
+      (!owner || owner.connected)
+    ) {
+      state.attempted = selection;
+      void readDraftOptions(state)
+        .then((result) => {
+          state.options = result;
+        })
+        .catch(() => {
+          // Viewing a draft leaves its choices usable even without discovery.
+        })
+        .finally(() => {
+          if (draftModels.get(pane.id) === state) invalidate();
+        });
+    }
     const host = document.createElement("span");
     host.className = "model-choices";
 
     for (const option of ["model", "reasoning"] as const) {
-      const options = current?.options;
       const choices = option === "model" ? options?.models : options?.reasoning;
       const stored = saved?.[option];
-      const value = stored ?? options?.current[option];
+      const value =
+        stored ?? (matchesDraft ? options.current[option] : undefined);
       const choice = choices?.find((entry) => entry.value === value);
       const button = optionButton(
         option,
@@ -307,14 +371,15 @@ export function createConversationViews({
               ? "Model"
               : "Effort",
       );
+      if (value) button.setAttribute("aria-description", button.title);
       button.disabled = pendingStarts.has(pane.id);
       button.setAttribute(
         "aria-busy",
         String(
-          (current?.loading?.trigger.dataset.focusKey ===
+          (state.loading?.trigger.dataset.focusKey ===
             button.dataset.focusKey &&
-            !current?.loading?.canceled) ||
-            !!current?.saving,
+            !state.loading?.canceled) ||
+            !!state.saving,
         ),
       );
       button.onkeydown = (event) => {
@@ -331,9 +396,15 @@ export function createConversationViews({
       };
       button.onclick = async (event) => {
         const trigger = event.currentTarget as HTMLButtonElement;
-        const state = draftModels.get(pane.id) ?? {};
-        if (state.loading || state.saving || pendingStarts.has(pane.id)) return;
-        draftModels.set(pane.id, state);
+        const state = draftModels.get(pane.id);
+        if (
+          !state ||
+          state.loading ||
+          state.saving ||
+          pendingStarts.has(pane.id)
+        )
+          return;
+        const target = state.target;
         trigger.focus({ preventScroll: true });
         trigger.setAttribute("aria-busy", "true");
         const loading = { trigger, canceled: false };
@@ -343,14 +414,9 @@ export function createConversationViews({
           trigger.isConnected &&
           !!trigger.getClientRects().length &&
           draftModels.get(pane.id) === state;
-        const target = { workspace: workspace.id, paneId: pane.id };
         let opened = false;
         try {
-          const loaded = await invoke<ProviderOptions>(
-            "conversation.draft-options",
-            target,
-            { reportError: false },
-          );
+          const loaded = await readDraftOptions(state);
           if (
             !active() ||
             loading.canceled ||

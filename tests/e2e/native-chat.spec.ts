@@ -728,7 +728,15 @@ for (const provider of ["codex", "kimi"] as Provider[]) {
 }
 
 test("Chat AC5 denies untrusted web-content chat invocation without starting a provider", async () => {
-  const workspace = await shell.create("Untrusted chat boundary");
+  await shell.configure({ codex: { options: true } });
+  await shell.stop();
+  await shell.start();
+  const workspace = (await shell.state()).activeWorkspaceId!;
+  // Complete the trusted composer's own metadata read before measuring the
+  // effects of the untrusted invocation.
+  await expect(
+    shell.page.getByRole("button", { name: "Model", exact: true }),
+  ).toHaveText("Fixture model");
   const before = await shell.cli("state");
   const records = await shell.records();
   const server = createServer((_request, response) => {
@@ -3669,15 +3677,13 @@ for (const provider of ["codex", "kimi"] as const)
     expect(duplicate.id).toBe(attached.id);
     expect(duplicate.paneId).toBe(attached.paneId);
     const ownership = (items: typeof records) =>
-      items.filter(
-        (record) =>
-          record.event === "started" ||
-          [
-            "thread/start",
-            "thread/resume",
-            "session/new",
-            "session/load",
-          ].includes(record.message?.method ?? ""),
+      items.filter((record) =>
+        [
+          "thread/start",
+          "thread/resume",
+          "session/new",
+          "session/load",
+        ].includes(record.message?.method ?? ""),
       );
     expect(ownership(await shell.records())).toEqual(ownership(records));
     expect((await shell.cli<AppState>("state")).activeWorkspaceId).toBe(
