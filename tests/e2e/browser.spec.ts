@@ -1,9 +1,10 @@
 import { pathToFileURL } from "node:url";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import { mkdir, writeFile, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
+import type { BrowserDownload } from "../../src/browser/download-types";
 interface BrowserRecord {
   id: string;
   paneId: string;
@@ -80,6 +81,24 @@ async function nativeView(route: string) {
     },
     { url: origin + route },
   );
+}
+async function scrollManager(dialog: Locator, last: Locator) {
+  const heading = dialog.getByRole("heading", { level: 2 });
+  const done = dialog.getByRole("button", { name: "Done", exact: true });
+  const headingBounds = await heading.boundingBox();
+  const doneBounds = await done.boundingBox();
+  await expect(last).not.toBeInViewport();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toBeInViewport({ ratio: 1 });
+  await expect(heading).toBeInViewport({ ratio: 1 });
+  await expect(done).toBeInViewport({ ratio: 1 });
+  expect(await heading.boundingBox()).toEqual(headingBounds);
+  expect(await done.boundingBox()).toEqual(doneBounds);
+  for (const surface of [dialog, dialog.locator(".ui-dialog-body")]) {
+    expect(await surface.evaluate((node) => node.scrollWidth)).toBe(
+      await surface.evaluate((node) => node.clientWidth),
+    );
+  }
 }
 async function pageKey(
   route: string,
@@ -1789,8 +1808,16 @@ test("Site media permissions require a page-bound decision and retain only remem
 
 test("Site permission rejection restores the committed choice and ignores a superseded error", async ({}, info) => {
   const workspace = await shell.create("Site permission recovery");
-  await open(workspace, "/permission-recovery");
+  const browser = await open(workspace, "/permission-recovery");
+  const address = shell.pane(browser.paneId).getByRole("combobox", {
+    name: "Address",
+    exact: true,
+  });
+  await address.focus();
   await shell.command("Site permissions");
+  await expect
+    .poll(async () => (await nativeView("/permission-recovery"))?.visible)
+    .toBe(false);
   const dialog = shell.page.getByRole("dialog", { name: "Site permissions" });
   const camera = dialog.getByLabel(`Camera for ${origin}`, { exact: true });
   const set = (decision: string) =>
@@ -1805,6 +1832,7 @@ test("Site permission rejection restores the committed choice and ignores a supe
       decision,
     );
   await expect(camera).toHaveValue("ask");
+  await expect(camera).toBeFocused();
   await set("allow");
 
   await shell.app!.evaluate(({ ipcMain }) => {
@@ -1882,6 +1910,51 @@ test("Site permission rejection restores the committed choice and ignores a supe
     ]);
   await expect(camera).toHaveValue("block");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
+
+  const longOrigin = `https://${"long".repeat(14)}.example.test`;
+  await shell.cli(
+    "browser",
+    "permission-set",
+    "--origin",
+    longOrigin,
+    "--top-origin",
+    origin,
+    "--permission",
+    "camera",
+    "--decision",
+    "block",
+  );
+  await shell.page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(address).toBeFocused();
+  await expect
+    .poll(async () => (await nativeView("/permission-recovery"))?.visible)
+    .toBe(true);
+
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await shell.page.setViewportSize({ width: 420, height: 560 });
+  await expect(shell.page.locator("html")).toHaveCSS("font-size", "20px");
+  await shell.command("Site permissions");
+  const longSection = dialog.getByRole("heading", {
+    name: `${longOrigin} inside ${origin}`,
+    exact: true,
+  });
+  await expect(longSection).toBeVisible();
+  await scrollManager(
+    dialog,
+    dialog.getByText("Changes apply to new requests.", { exact: false }),
+  );
+  await shell.page.screenshot({
+    path: info.outputPath("site-permissions-scrolled-narrow.png"),
+  });
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(address).toBeFocused();
 });
 
 test("Downloads survive tab closure and retain history across restart", async () => {
@@ -1891,11 +1964,7 @@ test("Downloads survive tab closure and retain history across restart", async ()
     "/one",
     `const a = document.createElement('a'); a.href='/slow-download'; document.body.append(a); a.click();`,
   );
-  const entries = () =>
-    shell.cli<Array<{ id: string; status: string; receivedBytes: number }>>(
-      "browser",
-      "downloads",
-    );
+  const entries = () => shell.cli<BrowserDownload[]>("browser", "downloads");
   await expect.poll(async () => (await entries()).length).toBe(1);
   const id = (await entries())[0]!.id;
   await shell.cli(
@@ -1920,9 +1989,32 @@ test("Downloads survive tab closure and retain history across restart", async ()
   expect((await readFile(path.join(downloads, "large.bin"))).length).toBe(
     1024 * 1024,
   );
+  const completed = (await entries())[0]!;
   await shell.stop();
+  const stateFile = path.join(shell.data, "state.json");
+  const state = JSON.parse(await readFile(stateFile, "utf8"));
+  state.browserDownloads = [
+    ...Array.from({ length: 14 }, (_, index) => ({
+      ...completed,
+      id: `fixture-download-${index}`,
+      basename:
+        index === 13
+          ? `invented-${"long".repeat(20)}.txt`
+          : `fixture-archive-${index}.zip`,
+      path: undefined,
+      receivedBytes: 0,
+      status: "cancelled",
+    })),
+    completed,
+  ];
+  await writeFile(stateFile, JSON.stringify(state));
   await shell.start();
-  await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
+  await expect
+    .poll(
+      async () =>
+        (await entries()).find(({ id }) => id === completed.id)?.status,
+    )
+    .toBe("completed");
   const overview = await shell.overview();
   await shell.row("Downloads").click();
   await expect(overview).toBeHidden();
@@ -1931,14 +2023,85 @@ test("Downloads survive tab closure and retain history across restart", async ()
     name: "Downloads",
     exact: true,
   });
-  await expect(
-    dialog.getByRole("button", { name: "Show in folder" }),
-  ).toBeVisible();
-  await shell.page!.screenshot({
+  const done = dialog.getByRole("button", { name: "Done", exact: true });
+  await expect(done).toBeFocused();
+  const row = dialog.getByRole("region", { name: "large.bin", exact: true });
+  const lastAction = row.getByRole("button", { name: "Show in folder" });
+  await expect(lastAction).toBeVisible();
+  await shell.page.screenshot({
     path: test.info().outputPath("downloads.png"),
   });
-  await dialog.getByRole("button", { name: "Remove from list" }).click();
-  await expect.poll(async () => (await entries()).length).toBe(0);
+  await shell.page.setViewportSize({ width: 420, height: 560 });
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await expect(shell.page.locator("html")).toHaveCSS("font-size", "20px");
+  await scrollManager(dialog, lastAction);
+  await shell.page.screenshot({
+    path: test.info().outputPath("downloads-scrolled-narrow.png"),
+  });
+  await shell.app!.evaluate(({ ipcMain }, id) => {
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+      }
+    )._invokeHandlers;
+    const original = handlers.get("cod:invoke")!;
+    const fixture = { reject: undefined as (() => void) | undefined };
+    Object.assign(globalThis, { downloadFailure: fixture });
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      if (
+        request.op !== "browser.download-action" ||
+        request.action !== "remove" ||
+        request.id !== id ||
+        fixture.reject
+      )
+        return original(event, request);
+      await new Promise<void>((resolve) => (fixture.reject = resolve));
+      throw new Error("Invented download action failed");
+    });
+  }, completed.id);
+  const remove = row.getByRole("button", { name: "Remove from list" });
+  await remove.click();
+  await expect(remove).toBeDisabled();
+  await expect(remove).toHaveAttribute("aria-busy", "true");
+  await expect(done).toBeInViewport({ ratio: 1 });
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(
+        () =>
+          typeof (
+            globalThis as unknown as {
+              downloadFailure: { reject?: () => void };
+            }
+          ).downloadFailure.reject,
+      ),
+    )
+    .toBe("function");
+  await shell.app!.evaluate(() => {
+    const fixture = globalThis as unknown as {
+      downloadFailure: { reject: () => void };
+    };
+    fixture.downloadFailure.reject();
+  });
+  const error = dialog.getByRole("alert");
+  await expect(error).toHaveText("Invented download action failed");
+  await expect(error).toBeInViewport({ ratio: 1 });
+  await expect(remove).toBeEnabled();
+  await shell.page.screenshot({
+    path: test.info().outputPath("downloads-action-error-narrow.png"),
+  });
+  await remove.click();
+  await expect(error).toHaveCount(0);
+  await expect
+    .poll(async () => (await entries()).some(({ id }) => id === completed.id))
+    .toBe(false);
+  await shell.page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
   expect((await readFile(path.join(downloads, "large.bin"))).length).toBe(
     1024 * 1024,
   );

@@ -580,7 +580,11 @@ body:has(dialog[open]) .browser-reveal-previous {
   pointer-events: none;
   visibility: hidden;
 }
-body:has(.workspace-overview[open]) .browser-overview-backdrop {
+body:has(
+    dialog[data-browser-backdrop="overview"][open],
+    dialog[data-browser-backdrop="connection"][open]
+  )
+  .browser-overview-backdrop {
   visibility: visible;
 }
 .browser-status {
@@ -1769,23 +1773,26 @@ browser-action-list::part(action):focus-visible {
   margin: 4px 0 8px;
   overflow-wrap: anywhere;
 }
-.site-permissions {
-  max-height: 80vh;
-  overflow: auto;
-}
-.site-permissions h3 {
+.site-permissions h3,
+.download-row > strong {
   overflow-wrap: anywhere;
 }
-.download-row {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+.site-permissions h3 {
+  font-size: var(--ui-font-size);
+  font-weight: 500;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.site-permissions h3:first-child {
+  margin-block-start: 0;
+}
+.download-row + .download-row {
+  border-top: 1px solid var(--border-subtle);
+  margin-block-start: var(--space-2);
+  padding-block-start: var(--space-2);
 }
 .download-row p {
-  margin: 4px 0;
-  color: var(--muted);
-}
-.download-row button {
-  margin-right: 6px;
+  margin: var(--space-1) 0;
+  color: var(--text-muted);
 }
 .bookmark-row {
   padding: 8px 0;

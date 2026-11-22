@@ -1,15 +1,13 @@
-import { dialogSurface, actionRow } from "./primitives";
+import { dialogSurface, dialogRegions, actionRow } from "./primitives";
 import type { Invoke } from "./contracts";
 import type { BrowserDownload } from "../browser/download-types";
 import { actionButton, showActionError } from "./action-feedback";
 export function browserDownloads(invoke: Invoke) {
   const dialog = dialogSurface("Downloads");
-  dialog.className = "picker browser-library";
-  dialog.setAttribute("aria-label", "Downloads");
-  const heading = document.createElement("h2");
-  heading.textContent = "Downloads";
+  const { header, body, actions } = dialogRegions(dialog, "Downloads");
   const list = document.createElement("div");
   const empty = document.createElement("p");
+  empty.className = "picker-empty";
   empty.textContent = "No downloads";
   const rows = new Map<
     string,
@@ -63,11 +61,16 @@ export function browserDownloads(invoke: Invoke) {
         view.actions.replaceChildren(
           ...actions.map(([label, action]) =>
             actionButton(label, async () => {
-              await invoke(
-                "browser.download-action",
-                { id: item.id, action },
-                { reportError: false },
-              );
+              try {
+                await invoke(
+                  "browser.download-action",
+                  { id: item.id, action },
+                  { reportError: false },
+                );
+              } catch (error) {
+                if (dialog.open) showActionError(error, header);
+                return;
+              }
               clearTimeout(timer);
               await refresh();
             }),
@@ -80,19 +83,17 @@ export function browserDownloads(invoke: Invoke) {
         entries.length ? "Downloaded files" : "No downloads",
       );
     } catch (error) {
-      if (dialog.isConnected) showActionError(error, dialog);
+      if (dialog.open) showActionError(error, header);
     }
     if (dialog.isConnected) {
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 750);
     }
   }
-  dialog.append(
-    heading,
-    empty,
-    list,
-    actionRow(actionButton("Done", async () => dialog.close())),
-  );
+  body.append(empty, list);
+  const done = actionButton("Done", async () => dialog.close());
+  done.autofocus = true;
+  actions.append(done);
   dialog.onclose = () => {
     clearTimeout(timer);
     dialog.remove();

@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { connect } from "node:net";
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
@@ -889,6 +890,369 @@ test("Default task host applies from either selected workspace and fails without
       await stopHost();
       await linux.cleanup();
     }
+  }
+});
+
+test("Linux connection keeps the native browser context and aligns dialog actions", async ({}, info) => {
+  const desktop = new ChatApp();
+  await desktop.prepare();
+  try {
+    await desktop.start();
+    await writeFile(
+      path.join(desktop.data, "workspace-host.json"),
+      JSON.stringify({ alias: "saved-linux", socketPath: "/tmp/saved.sock" }),
+    );
+    await desktop.app!.evaluate(({ ipcMain }) => {
+      const channel = "cod:invoke";
+      const handlers = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<
+            string,
+            (
+              event: Electron.IpcMainInvokeEvent,
+              request: { op: string },
+            ) => unknown
+          >;
+        }
+      )._invokeHandlers;
+      const original = handlers.get(channel)!;
+      ipcMain.removeHandler(channel);
+      const gate = new Promise<void>((resolve) => {
+        process.once("cod-test-release-remote-target", resolve);
+      });
+      ipcMain.handle(channel, async (event, request) => {
+        const result = await original(event, request);
+        if (request.op === "remote.target") await gate;
+        return result;
+      });
+    });
+    const workspace = await desktop.create("Invented browser workspace");
+    const fixture = path.join(desktop.folders[0], "connection-context.html");
+    await writeFile(
+      fixture,
+      `<!doctype html><title>Invented connection page</title>
+       <style>body {background:#147dc1;height:250vh}
+       input {position:fixed;left:12px;top:12px}</style>
+       <input value="Invented native draft">
+       <script>
+         window.clicks = 0;
+         addEventListener("click", () => window.clicks++);
+       </script>`,
+    );
+    const url = pathToFileURL(fixture).href;
+    const browser = await desktop.cli<{ id: string; paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
+    const nativePage = () =>
+      desktop
+        .app!.context()
+        .pages()
+        .find((page) => page.url() === url);
+    await expect.poll(() => !!nativePage()).toBe(true);
+    const site = nativePage()!;
+    await site.evaluate(() => window.scrollTo(0, 240));
+    await site.locator("input").focus();
+    await site.locator("input").evaluate((input: HTMLInputElement) => {
+      input.setSelectionRange(3, 11);
+    });
+
+    const palette = desktop.page.getByRole("dialog", {
+      name: "Command palette",
+    });
+    const dialog = desktop.page.getByRole("dialog", {
+      name: "Connect to Linux workspace",
+    });
+    const backdrop = desktop
+      .pane(browser.paneId)
+      .locator(".browser-overview-backdrop");
+    const openNativeCommands = () =>
+      desktop.app!.evaluate(({ webContents }, fixtureUrl) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((wc) => wc.getURL() === fixtureUrl)!;
+        contents.focus();
+        const modifiers: ("meta" | "control" | "shift")[] = [
+          process.platform === "darwin" ? "meta" : "control",
+          "shift",
+        ];
+        contents.sendInputEvent({ type: "keyDown", keyCode: "P", modifiers });
+        contents.sendInputEvent({ type: "keyUp", keyCode: "P", modifiers });
+      }, url);
+    const filter = palette.getByRole("textbox", { name: "Filter commands" });
+    const openConnection = palette.getByRole("button", {
+      name: "Connect to Linux workspace",
+      exact: true,
+    });
+    for (const width of [1280, 760]) {
+      await desktop.app!.evaluate(({ BrowserWindow }, size) => {
+        BrowserWindow.getAllWindows()[0].setContentSize(size, 700);
+      }, width);
+      await expect
+        .poll(() => desktop.page.evaluate(() => innerWidth))
+        .toBe(width);
+      if (width === 760) {
+        await desktop.cli(
+          "settings",
+          "update",
+          "--values",
+          JSON.stringify({ "ui.fontSize": 20 }),
+        );
+        await expect(desktop.page.locator("html")).toHaveCSS(
+          "font-size",
+          "20px",
+        );
+      }
+      await openNativeCommands();
+      await expect(filter).toBeFocused();
+      await expect(backdrop).not.toBeVisible();
+      await filter.fill("Connect to Linux workspace");
+      if (width === 1280) await filter.press("Enter");
+      else await openConnection.click();
+      const alias = dialog.getByRole("textbox", { name: "SSH host alias" });
+      const cancel = dialog.getByRole("button", { name: "Cancel" });
+      const connect = dialog.getByRole("button", {
+        name: "Connect",
+        exact: true,
+      });
+      await expect(alias).toBeFocused();
+      const socket = dialog.getByRole("textbox", { name: "Linux socket path" });
+      if (width === 1280) {
+        await expect(backdrop).toBeVisible();
+        await expect(socket).toHaveValue("");
+        await alias.fill("typed-linux");
+        await desktop.app!.evaluate(() =>
+          process.emit("cod-test-release-remote-target"),
+        );
+        await expect(socket).toHaveValue("/tmp/saved.sock");
+        await expect(alias).toHaveValue("typed-linux");
+        await alias.fill("saved-linux");
+      } else {
+        await expect(alias).toHaveValue("saved-linux");
+        await expect(socket).toHaveValue("/tmp/saved.sock");
+      }
+      await expect(cancel.locator("kbd")).toHaveText("Esc");
+      await expect(connect.locator("kbd")).toHaveText("Enter");
+      const geometry = await dialog.evaluate((element) => ({
+        fits: element.scrollWidth === element.clientWidth,
+        actions: [...element.querySelectorAll(".ui-dialog-actions button")].map(
+          (button) => {
+            const label = document.createRange();
+            label.selectNode(button.firstChild!);
+            const buttonRect = button.getBoundingClientRect();
+            const labelRect = label.getBoundingClientRect();
+            const hintRect = button
+              .querySelector("kbd")!
+              .getBoundingClientRect();
+            return {
+              top: buttonRect.top,
+              height: buttonRect.height,
+              labelCenter:
+                labelRect.top - buttonRect.top + labelRect.height / 2,
+              hintCenter: hintRect.top - buttonRect.top + hintRect.height / 2,
+              outlined:
+                getComputedStyle(button).borderTopColor !== "rgba(0, 0, 0, 0)",
+            };
+          },
+        ),
+      }));
+      await info.attach(`dialog-geometry-${width}.json`, {
+        body: JSON.stringify(geometry),
+        contentType: "application/json",
+      });
+      expect(geometry.fits).toBe(true);
+      const [cancelBox, connectBox] = geometry.actions;
+      expect(cancelBox.top).toBe(connectBox.top);
+      expect(cancelBox.height).toBe(connectBox.height);
+      expect(cancelBox.outlined).toBe(false);
+      for (const button of geometry.actions) {
+        expect(Math.abs(button.labelCenter - button.height / 2)).toBeLessThan(
+          2,
+        );
+        expect(Math.abs(button.hintCenter - button.height / 2)).toBeLessThan(2);
+      }
+      await expect(backdrop).toBeVisible();
+      const imageUrl = await backdrop.evaluate(
+        (image: HTMLImageElement) => image.src,
+      );
+      await expect
+        .poll(() =>
+          backdrop.evaluate((image: HTMLImageElement) => image.naturalWidth),
+        )
+        .toBeGreaterThan(0);
+      const box = (await backdrop.boundingBox())!;
+      const sample = {
+        x: Math.floor(box.x + 20),
+        y: Math.floor(box.y + box.height - 20),
+      };
+      await expect
+        .poll(() =>
+          desktop.app!.evaluate(
+            async (
+              { BrowserWindow, WebContentsView },
+              { point, fixtureUrl },
+            ) => {
+              const window = BrowserWindow.getAllWindows()[0];
+              const view = window.contentView.children.find(
+                (child) =>
+                  child instanceof WebContentsView &&
+                  child.webContents.getURL() === fixtureUrl,
+              );
+              const image = await window.webContents.capturePage({
+                ...point,
+                width: 1,
+                height: 1,
+              });
+              const [blue, green, red] = image.toBitmap();
+              return {
+                nativeVisible: view?.getVisible(),
+                bluePage: blue > green + 20 && green > red + 40,
+              };
+            },
+            { point: sample, fixtureUrl: url },
+          ),
+        )
+        .toEqual({ nativeVisible: false, bluePage: true });
+      await desktop.page.screenshot({
+        path: info.outputPath(`linux-connect-${width}.png`),
+      });
+      await desktop.page.mouse.click(sample.x, sample.y);
+      await expect(dialog).toBeVisible();
+      expect(
+        await site.evaluate(
+          () => (window as Window & { clicks?: number }).clicks,
+        ),
+      ).toBe(0);
+      if (width === 1280) await alias.press("Escape");
+      else await cancel.click();
+      await expect(dialog).toHaveCount(0);
+      await expect(backdrop).toHaveCount(0);
+      expect(
+        await desktop.page.evaluate(
+          async (objectUrl) =>
+            fetch(objectUrl).then(
+              () => false,
+              () => true,
+            ),
+          imageUrl,
+        ),
+      ).toBe(true);
+      await expect
+        .poll(() =>
+          desktop.app!.evaluate(({ webContents }) =>
+            webContents.getFocusedWebContents()?.getURL(),
+          ),
+        )
+        .toBe(url);
+      expect(
+        await site.locator("input").evaluate((input: HTMLInputElement) => ({
+          scroll: window.scrollY,
+          start: input.selectionStart,
+          end: input.selectionEnd,
+        })),
+      ).toEqual({ scroll: 240, start: 3, end: 11 });
+    }
+
+    // Delay a real native frame past cancellation and the next dialog opening.
+    // A retired Commands session must never paint its frame in that dialog.
+    await desktop.app!.evaluate(({ webContents }, fixtureUrl) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((wc) => wc.getURL() === fixtureUrl)!;
+      const capture = contents.capturePage.bind(contents);
+      let release: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const control = { captured: false, release: release! };
+      Object.assign(globalThis, { connectionBackdropTest: control });
+      contents.capturePage = async (...args) => {
+        contents.capturePage = capture;
+        const frame = await capture(...args);
+        control.captured = true;
+        await gate;
+        return frame;
+      };
+    }, url);
+    await openNativeCommands();
+    await expect(filter).toBeFocused();
+    await expect
+      .poll(() =>
+        desktop.app!.evaluate(
+          () =>
+            (
+              globalThis as unknown as {
+                connectionBackdropTest: { captured: boolean };
+              }
+            ).connectionBackdropTest.captured,
+        ),
+      )
+      .toBe(true);
+    await filter.press("Escape");
+    await expect(palette).toHaveCount(0);
+    await desktop.command("Connect to Linux workspace");
+    await expect(dialog).toBeVisible();
+    await desktop.app!.evaluate(() =>
+      (
+        globalThis as unknown as {
+          connectionBackdropTest: { release: () => void };
+        }
+      ).connectionBackdropTest.release(),
+    );
+    await desktop.page.evaluate(
+      () =>
+        new Promise<void>((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => done())),
+        ),
+    );
+    await expect(backdrop).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+
+    // A new connection may capture again, but navigation invalidates the old page.
+    await openNativeCommands();
+    await expect(filter).toBeFocused();
+    await filter.fill("Connect to Linux workspace");
+    await filter.press("Enter");
+    await expect(backdrop).toBeVisible();
+    const nextPage = path.join(desktop.folders[0], "connection-next.html");
+    await writeFile(nextPage, "<title>Another invented page</title>");
+    const nextUrl = pathToFileURL(nextPage).href;
+    await desktop.cli(
+      "browser",
+      "navigate",
+      "--id",
+      browser.id,
+      "--url",
+      nextUrl,
+    );
+    await expect(backdrop).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+
+    const emptyWorkspace = await desktop.create("Invented empty workspace");
+    await desktop.cli(
+      "browser",
+      "open",
+      "--workspace",
+      emptyWorkspace,
+      "--url",
+      "about:blank",
+    );
+    const address = desktop.page.getByRole("combobox", { name: "Address" });
+    await address.focus();
+    await desktop.command("Connect to Linux workspace");
+    await expect(dialog).toBeVisible();
+    await expect(
+      desktop.page.locator(".browser-overview-backdrop"),
+    ).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(address).toBeFocused();
+  } finally {
+    await desktop.cleanup();
   }
 });
 

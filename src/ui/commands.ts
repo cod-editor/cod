@@ -1274,25 +1274,31 @@ export function createCommands(
         return;
       }
       switch (id) {
-        case "workspace.remoteConnect":
-          await remoteWorkspaceDialog(invoke, (reviewAccess, selectedKey) => {
-            if (selectedKey && !reviewAccess)
-              setStatus(
-                "Connected. Private review is unavailable with this key.",
-              );
-            const intent = keys.beginFocus();
-            void features
-              .whenRendered(
-                () =>
-                  getState().remoteWorkspace?.connected === true || undefined,
-                intent.signal,
-              )
-              .then((ready) => {
-                const pane = activeWorkspace()?.activePaneId;
-                if (ready && pane) void keys.focusPane(pane, intent);
-              });
-          });
+        case "workspace.remoteConnect": {
+          const origin = focus.capture();
+          remoteWorkspaceDialog(
+            invoke,
+            () => focus.restore(origin),
+            (reviewAccess, selectedKey) => {
+              if (selectedKey && !reviewAccess)
+                setStatus(
+                  "Connected. Private review is unavailable with this key.",
+                );
+              const intent = keys.beginFocus();
+              void features
+                .whenRendered(
+                  () =>
+                    getState().remoteWorkspace?.connected === true || undefined,
+                  intent.signal,
+                )
+                .then((ready) => {
+                  const pane = activeWorkspace()?.activePaneId;
+                  if (ready && pane) void keys.focusPane(pane, intent);
+                });
+            },
+          );
           break;
+        }
         case "workspace.remoteReconnect":
           await invoke("remote.reconnect");
           break;
@@ -1718,6 +1724,7 @@ export function createCommands(
     let performed = false;
     const dialog = document.createElement("dialog");
     dialog.setAttribute("aria-label", "Command palette");
+    dialog.dataset.browserBackdrop = "prepare";
     const input = document.createElement("input");
     input.setAttribute("aria-label", "Filter commands");
     input.placeholder = "Search commands...";
@@ -1771,6 +1778,7 @@ export function createCommands(
             "browser.history",
             "shortcuts",
             "workspace.reopen",
+            "workspace.remoteConnect",
           ].includes(definition.id)
         )
           prepareDialogOrigin(returnFocus);
