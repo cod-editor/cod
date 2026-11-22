@@ -1004,6 +1004,13 @@ test("Settings groups readable font choices and adjusts values without losing li
     await dialog.screenshot({ path: info.outputPath("settings-sections.png") });
     const search = dialog.getByRole("searchbox", { name: "Search settings" });
     const before = await search.boundingBox();
+    const heading = (await dialog
+      .getByRole("heading", {
+        name: "Settings",
+        exact: true,
+      })
+      .boundingBox())!;
+    expect(before!.y - heading.y - heading.height).toBeGreaterThanOrEqual(8);
     await search.fill("terminal cursor");
     await expect(
       dialog.getByRole("heading", { name: "Terminal", exact: true }),
@@ -1065,6 +1072,22 @@ test("Settings groups readable font choices and adjusts values without losing li
     ).toBeInViewport();
     await dialog.screenshot({
       path: info.outputPath("settings-narrow-enlarged.png"),
+    });
+    const done = dialog.getByRole("button", { name: "Done", exact: true });
+    const narrowSearch = await search.boundingBox();
+    const narrowDone = await done.boundingBox();
+    const browserSection = dialog.getByRole("heading", {
+      name: "Browser",
+      exact: true,
+    });
+    await expect(browserSection).not.toBeInViewport();
+    await browserSection.scrollIntoViewIfNeeded();
+    await expect(browserSection).toBeInViewport({ ratio: 1 });
+    expect(await search.boundingBox()).toEqual(narrowSearch);
+    expect(await done.boundingBox()).toEqual(narrowDone);
+    expect((await dialog.boundingBox())!.width).toBeLessThan(460);
+    await app.page.screenshot({
+      path: info.outputPath("settings-scrolled-narrow.png"),
     });
     await search.fill("editor");
     await family.scrollIntoViewIfNeeded();

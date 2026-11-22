@@ -578,6 +578,9 @@ option {
 .ui-dialog-header h2 {
   margin: 0;
 }
+.ui-dialog-header > h2 + input {
+  margin-block-start: var(--space-2);
+}
 .ui-dialog-body {
   flex: 1;
   min-height: 0;

@@ -1,4 +1,4 @@
-import { actionRow, dialogSurface, selectField } from "./primitives";
+import { dialogRegions, dialogSurface, selectField } from "./primitives";
 import {
   sitePermissionNames,
   type SitePolicy,
@@ -52,11 +52,8 @@ export function updateSiteRequests(
 export async function sitePermissions(invoke: Invoke, url?: string) {
   const policies = await invoke<SitePolicy[]>("browser.permissions", {});
   const dialog = dialogSurface("Site permissions");
-  dialog.className = "picker site-permissions";
-  dialog.setAttribute("aria-label", "Site permissions");
-  const title = document.createElement("h2");
-  title.textContent = "Site permissions";
-  dialog.append(title);
+  dialog.classList.add("site-permissions");
+  const { body, actions } = dialogRegions(dialog, "Site permissions");
   let currentOrigin: string | undefined;
   try {
     const parsed = new URL(url ?? "");
@@ -75,7 +72,7 @@ export async function sitePermissions(invoke: Invoke, url?: string) {
     const heading = document.createElement("h3");
     heading.textContent =
       origin === topOrigin ? origin : `${origin} inside ${topOrigin}`;
-    dialog.append(heading);
+    body.append(heading);
     for (const [permission, name] of Object.entries(sitePermissionNames)) {
       const label = document.createElement("label");
       label.className = "setting-row";
@@ -129,17 +126,18 @@ export async function sitePermissions(invoke: Invoke, url?: string) {
       };
       label.append(selectField(select));
       row.append(label);
-      dialog.append(row);
+      body.append(row);
     }
   }
   const note = document.createElement("p");
   note.textContent = pairs.size
     ? "Changes apply to new requests. Reload the page to apply them to an active session."
     : "No saved site permissions.";
-  dialog.append(
-    note,
-    actionRow(actionButton("Done", async () => dialog.close())),
-  );
+  note.className = "picker-empty";
+  body.append(note);
+  const done = actionButton("Done", async () => dialog.close());
+  actions.append(done);
+  (body.querySelector("select") ?? done).autofocus = true;
   dialog.onclose = () => dialog.remove();
   document.body.append(dialog);
   dialog.showModal();
