@@ -412,17 +412,22 @@ test("Add-ons failed initial filters can be retried without restarting the brows
     name: "Site protection",
     exact: true,
   });
-  const checkbox = protection.getByRole("switch", {
+  const control = protection.getByRole("switch", {
     name: "Block ads on this site",
     exact: true,
   });
-  const geometry = await checkbox.evaluate((node) => {
-    const box = node.getBoundingClientRect();
-    const label = node.parentElement!.getBoundingClientRect();
-    return { width: box.width, offset: box.left - label.left };
-  });
-  expect(geometry.width).toBeLessThanOrEqual(20);
-  expect(geometry.offset).toBeLessThanOrEqual(2);
+  const geometry = () =>
+    control.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const label = node.parentElement!.getBoundingClientRect();
+      return {
+        width: box.width,
+        height: box.height,
+        inset: label.right - box.right,
+      };
+    });
+  const disabledGeometry = await geometry();
+  expect(disabledGeometry).toEqual({ width: 32, height: 20, inset: 0 });
   await expect(protection).not.toContainText(
     "Blocking unavailable: Blocking unavailable",
   );
@@ -442,8 +447,9 @@ test("Add-ons failed initial filters can be retried without restarting the brows
       exact: true,
     }),
   ).toBeHidden();
-  await expect(checkbox).toBeEnabled();
-  await expect(checkbox).toBeChecked();
+  await expect(control).toBeEnabled();
+  await expect(control).toBeChecked();
+  expect(await geometry()).toEqual(disabledGeometry);
   await shell.page.screenshot({
     path: info.outputPath("filter-update-recovered.png"),
   });
