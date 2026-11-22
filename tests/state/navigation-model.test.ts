@@ -103,6 +103,38 @@ test("Navigation shares full labels, attention and pin identities without retain
   assert.equal(projectNavigation(state)[0].status, "waiting");
 });
 
+test("Working overrides older completion while approvals, reviews and failures retain priority", () => {
+  const state = fixture();
+  const chat = state.conversations[0];
+  const statuses = () =>
+    projectNavigation(state)
+      .slice(0, 2)
+      .map((item) => item.status);
+  chat.taskStatus = "ready";
+  chat.taskStatusUpdatedAt = "2026-01-01T10:00:00Z";
+  chat.taskStatusContext = "The previous export completed";
+  assert.deepEqual(statuses(), ["ready", "ready"]);
+
+  chat.status = "working";
+  assert.deepEqual(statuses(), ["working", "working"]);
+  assert.equal(projectNavigation(state)[1].context, undefined);
+  chat.taskStatusAcknowledgedAt = chat.taskStatusUpdatedAt;
+  chat.acknowledgedCompletionRevision = chat.completionRevision;
+  assert.deepEqual(statuses(), ["working", "working"]);
+
+  for (const taskStatus of ["failed", "waiting", "review"] as const) {
+    chat.taskStatus = taskStatus;
+    assert.deepEqual(statuses(), [taskStatus, taskStatus]);
+  }
+
+  chat.taskStatus = "ready";
+  chat.status = "ready";
+  assert.deepEqual(statuses(), ["", ""]);
+  chat.completionRevision = 3;
+  assert.deepEqual(statuses(), ["ready", "ready"]);
+  assert.equal(projectNavigation(state)[1].context, undefined);
+});
+
 test("Search includes ownership and URL context while preserving unfiltered grouping", () => {
   const items = projectNavigation(fixture());
   assert.deepEqual(

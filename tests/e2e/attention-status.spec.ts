@@ -150,6 +150,77 @@ for (const provider of ["codex", "kimi"] as const) {
   });
 }
 
+test("A new Codex turn shows Working through an older completed marker", async ({}, info) => {
+  const workspace = await shell.create("Export status fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const overview = await shell.overview();
+  const rows = [`conversation:${chat.id}`, `workspace:${workspace}`].map(
+    (key) => overview.locator(`.overview-row[data-navigation-key="${key}"]`),
+  );
+  const statuses = async (status: string, label?: RegExp) => {
+    for (const row of rows) {
+      await expect(row).toHaveAttribute("data-status", status);
+      if (label)
+        await expect(row.locator(".overview-item")).toHaveAccessibleName(label);
+    }
+  };
+  await shell.send(chat.id, "First export complete");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("ready");
+  await shell.cli(
+    "conversation",
+    "report-status",
+    "--id",
+    chat.id,
+    "--status",
+    "ready",
+    "--source",
+    "hook",
+    "--context",
+    "The first export completed",
+  );
+  await statuses("ready", /Completed: The first export completed/);
+
+  await shell.configure({
+    codex: { options: true, steeringReply: true, finishSteeringReply: true },
+  });
+  await shell.send(chat.id, "[hold] Verify the next export");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("working");
+  await statuses("working", /Working/);
+  await shell.cli("conversation", "acknowledge", "--id", chat.id);
+  await statuses("working", /Working/);
+  for (const row of rows) {
+    await expect(row.locator(".overview-item")).not.toHaveAccessibleName(
+      /The first export completed/,
+    );
+    await expect(row.locator(".navigation-item-icon")).toHaveCSS(
+      "color",
+      "rgb(133, 183, 255)",
+    );
+  }
+  await shell.page.screenshot({
+    path: info.outputPath("overview-working-after-completion.png"),
+  });
+
+  await shell.page.keyboard.press("Escape");
+  const composer = shell
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message", exact: true });
+  await composer.fill("Finish verifying the next export");
+  await composer.press("Enter");
+  await shell.overview();
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("ready");
+  await statuses("ready", /Completed/);
+  expect(await shell.prompts()).toHaveLength(2);
+  await shell.cli("conversation", "acknowledge", "--id", chat.id);
+  await statuses("");
+});
+
 test("Acknowledgment and native lifecycle preserve explicit plugin review status", async () => {
   const workspace = await shell.create("Explicit review attention");
   const chat = await shell.newChat(workspace, "codex");
