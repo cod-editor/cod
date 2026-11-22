@@ -464,6 +464,19 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
     await shell.send(chat.id, prompt);
     await expect(transcript(chat)).toContainText(/inventedstream-1/);
     await expect(transcript(chat)).not.toContainText(/inventedstream-2/);
+    await expect
+      .poll(async () => {
+        const saved = JSON.parse(
+          await readFile(path.join(shell.data, "state.json"), "utf8"),
+        ) as AppState;
+        const pending = saved.conversations.find(
+          (candidate) => candidate.id === chat.id,
+        );
+        return pending?.messages.some((message) =>
+          message.text.includes("inventedstream-1"),
+        );
+      })
+      .toBe(true);
     const prompts = await shell.prompts();
     await shell.quitWithChoice("Leave Running");
 

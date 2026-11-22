@@ -1584,7 +1584,9 @@ export class ConversationApplicationService {
       else next[index] = event.activity;
       conversation.backgroundActivities = next.slice(-64);
       this.store.notify(true);
-      this.store.schedulePersist(event.activity.state !== "running");
+      if (event.activity.state === "running")
+        this.store.scheduleConversationCheckpoint();
+      else this.store.schedulePersist(true);
       return;
     }
     const resume = this.resumeContexts.get(id);
@@ -1747,6 +1749,14 @@ export class ConversationApplicationService {
         return;
     }
     this.store.notify(true);
+    if (
+      event.type === "message-meta" ||
+      event.type === "tool" ||
+      (event.type === "text" && event.role === "assistant")
+    ) {
+      this.store.scheduleConversationCheckpoint();
+      return;
+    }
     this.store.schedulePersist(
       event.type === "completed" ||
         event.type === "error" ||

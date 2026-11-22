@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
@@ -47,6 +47,7 @@ export class ApplicationStateStore {
     { mutation: () => unknown | Promise<unknown>; promise: Promise<unknown> }
   >();
   private timer?: NodeJS.Timeout;
+  private conversationCheckpoint?: NodeJS.Timeout;
   private notificationTimer?: NodeJS.Timeout;
   private reviewPresentation?: AppState["reviewPresentation"];
   closing = false;
@@ -501,12 +502,34 @@ export class ApplicationStateStore {
       immediate ? 0 : 100,
     );
   }
+  scheduleConversationCheckpoint(): void {
+    if (this.closing || this.conversationCheckpoint) return;
+    // Stream deltas can contain gaps without marking a durable operation.
+    // Use one deadline for all chats, even if new deltas keep arriving.
+    const checkpoint = setTimeout(() => {
+      void this.serialize(() => {
+        if (this.conversationCheckpoint !== checkpoint) return;
+        this.conversationCheckpoint = undefined;
+        return this.persist();
+      }).catch((error) => console.error(error));
+    }, 2_000);
+    this.conversationCheckpoint = checkpoint;
+  }
+  private cancelConversationCheckpoint(): void {
+    if (this.conversationCheckpoint) clearTimeout(this.conversationCheckpoint);
+    this.conversationCheckpoint = undefined;
+  }
   beginShutdown(): void {
     this.closing = true;
+    this.cancelConversationCheckpoint();
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
   async persist(): Promise<void> {
+    // Every full checkpoint includes the accumulated conversation progress.
+    // Deltas emitted after this snapshot arrange the next checkpoint.
+    const includesPendingProgress = !!this.conversationCheckpoint;
+    this.cancelConversationCheckpoint();
     // JSON.stringify captures this shallow view synchronously before the first
     // await; a second deep clone of every transcript and image is unnecessary.
     const checkpoint = randomUUID();
@@ -525,8 +548,15 @@ export class ApplicationStateStore {
     };
     const statePath = path.join(this.directory, "state.json");
     const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, "utf8");
-    await rename(temporary, statePath);
+    try {
+      await writeFile(temporary, JSON.stringify(saved), "utf8");
+      await rename(temporary, statePath);
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      // A failed transaction did not absorb the passive progress it captured.
+      if (includesPendingProgress) this.scheduleConversationCheckpoint();
+      throw error;
+    }
     this.composerCheckpoint = checkpoint;
     this.draftOverlays = {};
   }
