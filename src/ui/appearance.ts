@@ -9,6 +9,7 @@ import {
   numberStepper,
   uiButton,
   settingEntry,
+  uiSwitch,
 } from "./primitives";
 import { readPreference, writePreference } from "./preferences";
 import {
@@ -321,7 +322,9 @@ export function appearanceDialog(
       font?.input ??
       ("choices" in spec
         ? document.createElement("select")
-        : document.createElement("input"));
+        : typeof spec.default === "boolean"
+          ? uiSwitch()
+          : document.createElement("input"));
     input.setAttribute("aria-label", label);
     if (input instanceof HTMLSelectElement && "choices" in spec) {
       const labels = "choiceLabels" in spec ? spec.choiceLabels : undefined;
@@ -329,12 +332,7 @@ export function appearanceDialog(
         input.add(new Option(labels?.[choice] ?? choice, choice));
     }
     if (input instanceof HTMLInputElement) {
-      input.type =
-        typeof spec.default === "boolean"
-          ? "checkbox"
-          : typeof spec.default === "number"
-            ? "number"
-            : "text";
+      if (typeof spec.default === "number") input.type = "number";
       if ("min" in spec) {
         input.min = String(spec.min);
         input.max = String(spec.max);

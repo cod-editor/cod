@@ -1,5 +1,5 @@
 import { diffHunks } from "./diff-hunks";
-import { uiButton, actionRow, toolbar } from "./ui/primitives";
+import { uiButton, actionRow, selectField, toolbar } from "./ui/primitives";
 import { reviewDocument } from "./ui/review-document";
 import { formatBinding } from "./keyboard";
 import {
@@ -439,7 +439,7 @@ export function reviewPane(
   });
   const context = document.createElement("div");
   context.className = "review-context";
-  context.append(roundSelect, originLabel);
+  context.append(selectField(roundSelect), originLabel);
   const controls = document.createElement("div");
   controls.className = "review-controls";
   controls.append(more, previewButton, submit);

@@ -1771,10 +1771,15 @@ test("Document Review scrolls long lines at the bottom and opens comments from t
   ).toBeVisible();
 });
 
-test("Review follows the current round, respects deliberate history, and preserves unfinished text", async () => {
+test("Review follows the current round, respects deliberate history, and preserves unfinished text", async ({}, info) => {
   const review = await open(await shell.create("Review revision selection"));
   const host = pane(review);
   const round = host.getByLabel("Round", { exact: true });
+  await expect(round).toBeVisible();
+  await round.focus();
+  await shell.page.screenshot({
+    path: info.outputPath("review-round-select.png"),
+  });
   const refresh = async (text: string) => {
     const current = await inspect(review);
     await writeFile(shell.file, text + "\n");

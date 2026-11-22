@@ -1,6 +1,7 @@
 import { remoteWorkspaceDialog } from "./remote-workspace";
 import {
   uiButton,
+  selectField,
   actionRow,
   dialogSurface,
   describeButton,
@@ -697,7 +698,7 @@ export function createCommands(
     cwd.value = workspace.folders[0] ?? "";
     const search = uiButton("Find sessions");
     search.type = "submit";
-    form.append(provider, cwd, search);
+    form.append(selectField(provider), cwd, search);
     const filter = document.createElement("input");
     filter.setAttribute("aria-label", "Filter sessions");
     filter.placeholder = "Search sessions...";

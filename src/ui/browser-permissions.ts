@@ -1,4 +1,4 @@
-import { actionRow, dialogSurface } from "./primitives";
+import { actionRow, dialogSurface, selectField } from "./primitives";
 import {
   sitePermissionNames,
   type SitePolicy,
@@ -101,7 +101,7 @@ export async function sitePermissions(invoke: Invoke, url?: string) {
           { reportError: false },
         ).catch((error) => showActionError(error, dialog));
       };
-      label.append(select);
+      label.append(selectField(select));
       dialog.append(label);
     }
   }

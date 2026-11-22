@@ -431,7 +431,7 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
       settings.getByText(/Applies when a local agent controller starts/),
     ).toBeHidden();
     await search.fill("detached");
-    const detached = settings.getByRole("checkbox", {
+    const detached = settings.getByRole("switch", {
       name: "Chat Run new sessions detached",
       exact: true,
     });

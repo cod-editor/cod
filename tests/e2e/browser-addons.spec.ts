@@ -133,7 +133,7 @@ test.afterEach(async () => {
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 
-test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-host UI/CLI toggle retained across restart", async () => {
+test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-host UI/CLI toggle retained across restart", async ({}, info) => {
   await shell.start();
   const workspace = await shell.create("Invented blocking");
   const browser = await open(workspace);
@@ -157,9 +157,21 @@ test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-ho
     name: "Site protection",
     exact: true,
   });
-  await protection
-    .getByRole("checkbox", { name: "Block ads on this site", exact: true })
-    .uncheck();
+  const switchControl = protection.getByRole("switch", {
+    name: "Block ads on this site",
+    exact: true,
+  });
+  await expect(switchControl).toBeChecked();
+  await switchControl.focus();
+  await shell.page.screenshot({
+    path: info.outputPath("site-protection-switch-enabled.png"),
+  });
+  await switchControl.press("Space");
+  await expect(switchControl).not.toBeChecked();
+  await expect(switchControl).toBeEnabled();
+  await shell.page.screenshot({
+    path: info.outputPath("site-protection-switch-off.png"),
+  });
   await shell.page.keyboard.press("Escape");
   await expect
     .poll(async () => (await inspect(browser.id)).addons.adblock.enabled)
@@ -197,7 +209,7 @@ test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-ho
     .toMatchObject({ blocked: false, cosmetic: "none" });
 });
 
-test("Add-ons AC2 first list failure and missing extension remain visible and never claim active protection", async () => {
+test("Add-ons AC2 first list failure and missing extension remain visible and never claim active protection", async ({}, info) => {
   listFails = true;
   await shell.start();
   const workspace = await shell.create("Invented setup failure");
@@ -219,7 +231,7 @@ test("Add-ons AC2 first list failure and missing extension remain visible and ne
     exact: true,
   });
   await expect(
-    protection.getByRole("checkbox", {
+    protection.getByRole("switch", {
       name: "Block ads on this site",
       exact: true,
     }),
@@ -230,6 +242,9 @@ test("Add-ons AC2 first list failure and missing extension remain visible and ne
       exact: true,
     }),
   ).toContainText(/failed|unavailable/i);
+  await shell.page.screenshot({
+    path: info.outputPath("site-protection-switch-disabled.png"),
+  });
   await shell.page.keyboard.press("Escape");
   await expect
     .poll(() => observe())
@@ -296,7 +311,7 @@ test("Add-ons AC4 failed updates retain the verified engine and visibly report c
       exact: true,
     }),
   ).toContainText("Filter update failed. Saved filters remain active.");
-  const blocking = protection.getByRole("checkbox", {
+  const blocking = protection.getByRole("switch", {
     name: "Block ads on this site",
     exact: true,
   });
@@ -397,7 +412,7 @@ test("Add-ons failed initial filters can be retried without restarting the brows
     name: "Site protection",
     exact: true,
   });
-  const checkbox = protection.getByRole("checkbox", {
+  const checkbox = protection.getByRole("switch", {
     name: "Block ads on this site",
     exact: true,
   });

@@ -1,3 +1,4 @@
+import { uiSwitch } from "./primitives";
 import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
@@ -302,9 +303,8 @@ export function createBrowserViews(
       status.setAttribute("role", "region");
       status.setAttribute("aria-label", "Browser add-on status");
       const label = document.createElement("label");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      label.append(checkbox, "Block ads on this site");
+      const checkbox = uiSwitch();
+      label.append("Block ads on this site", checkbox);
       const refresh = () => {
         const current = getState().browsers.find((b) => b.id === record.id);
         const adblock = current?.addons?.adblock;
