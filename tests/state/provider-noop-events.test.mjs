@@ -1,7 +1,15 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -71,6 +79,124 @@ async function fixture() {
     },
   };
 }
+
+test("Stream deltas checkpoint on a fixed deadline and completion absorbs pending work", async (t) => {
+  const app = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const emit = (text) =>
+      app.event({
+        type: "text",
+        text,
+        role: "assistant",
+        replay: false,
+        itemId: "synthetic reply",
+      });
+    emit("one");
+    t.mock.timers.tick(250);
+    emit(" two");
+    t.mock.timers.tick(1_749);
+    emit(" three");
+    await app.store.serialize(() => undefined);
+    assert.ok(app.counters().snapshots > 0);
+    assert.equal(app.counters().persists, 0);
+
+    t.mock.timers.tick(1);
+    await app.store.serialize(() => undefined);
+    assert.equal(app.counters().persists, 1);
+    const restart = async () => {
+      const store = new ApplicationStateStore(app.store.directory);
+      await store.load();
+      return store.data.conversations[0];
+    };
+    assert.equal((await restart()).messages[0].text, "one two three");
+
+    emit(" four");
+    app.event({ type: "completed", outcome: { status: "completed" } });
+    t.mock.timers.tick(1);
+    await app.store.serialize(() => undefined);
+    assert.equal(app.counters().persists, 2);
+    assert.equal((await restart()).messages[0].text, "one two three four");
+    t.mock.timers.tick(2_000);
+    await app.store.serialize(() => undefined);
+    assert.equal(app.counters().persists, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test("A delta arriving while a full snapshot is writing reaches the next checkpoint", async (t) => {
+  const app = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const emit = (text) =>
+      app.event({
+        type: "text",
+        text,
+        role: "assistant",
+        replay: false,
+        itemId: "synthetic reply",
+      });
+    emit("first");
+    const persist = app.store.persist.bind(app.store);
+    app.store.persist = () => {
+      app.store.persist = persist;
+      const pending = persist();
+      emit(" next");
+      return pending;
+    };
+    await app.store.change(() => {}, { notify: false });
+    const first = new ApplicationStateStore(app.store.directory);
+    await first.load();
+    assert.equal(first.data.conversations[0].messages[0].text, "first");
+
+    t.mock.timers.tick(2_000);
+    await app.store.serialize(() => undefined);
+    const second = new ApplicationStateStore(app.store.directory);
+    await second.load();
+    assert.equal(second.data.conversations[0].messages[0].text, "first next");
+    assert.equal(app.counters().persists, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test("A failed durable checkpoint leaves passive progress eligible for another save", async (t) => {
+  const app = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    await app.store.persist();
+    const state = path.join(app.store.directory, "state.json");
+    const previous = state + ".previous";
+    await rename(state, previous);
+    await mkdir(state);
+    app.event({
+      type: "text",
+      text: "Invented checkpoint retry",
+      role: "assistant",
+      replay: false,
+    });
+    await assert.rejects(app.store.change(() => {}, { notify: false }));
+    assert.ok(
+      (await readdir(app.store.directory)).every(
+        (file) => !file.endsWith(".tmp"),
+      ),
+    );
+    await rmdir(state);
+    await rename(previous, state);
+
+    t.mock.timers.tick(2_000);
+    await app.store.serialize(() => undefined);
+    const recovered = new ApplicationStateStore(app.store.directory);
+    await recovered.load();
+    assert.equal(
+      recovered.data.conversations[0].messages[0].text,
+      "Invented checkpoint retry",
+    );
+  } finally {
+    await app.close();
+  }
+});
 
 test("Informational provider diagnostics and ignored history do not rewrite or broadcast state", async () => {
   const app = await fixture();
