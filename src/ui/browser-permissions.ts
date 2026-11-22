@@ -87,22 +87,49 @@ export async function sitePermissions(invoke: Invoke, url?: string) {
         new Option("Allow", "allow"),
         new Option("Block", "block"),
       );
-      select.value =
-        policies.find(
+      const currentDecision = (entries: SitePolicy[]) =>
+        entries.find(
           (item) =>
             item.origin === origin &&
             item.topOrigin === topOrigin &&
             item.permission === permission,
         )?.decision ?? "ask";
-      select.onchange = () => {
-        void invoke(
-          "browser.permission-set",
-          { origin, topOrigin, permission, decision: select.value },
-          { reportError: false },
-        ).catch((error) => showActionError(error, dialog));
+      let committed: string = currentDecision(policies);
+      select.value = committed;
+      let revision = 0;
+      let committedRevision = 0;
+      const row = document.createElement("div");
+      select.onchange = async () => {
+        const attempt = ++revision;
+        const decision = select.value;
+        row.querySelector(".action-error")?.remove();
+        try {
+          await invoke(
+            "browser.permission-set",
+            { origin, topOrigin, permission, decision },
+            { reportError: false },
+          );
+          if (attempt > committedRevision) {
+            committed = decision;
+            committedRevision = attempt;
+          }
+        } catch (error) {
+          if (attempt !== revision || !dialog.open) return;
+          const latest = await invoke<SitePolicy[]>(
+            "browser.permissions",
+            {},
+            { reportError: false },
+          ).catch(() => undefined);
+          if (attempt !== revision || !dialog.open) return;
+          if (latest) committed = currentDecision(latest);
+          committedRevision = attempt;
+          select.value = committed;
+          showActionError(error, row);
+        }
       };
       label.append(selectField(select));
-      dialog.append(label);
+      row.append(label);
+      dialog.append(row);
     }
   }
   const note = document.createElement("p");

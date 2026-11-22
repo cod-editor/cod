@@ -1398,10 +1398,19 @@ export function createCommands(
           browserDialog();
           break;
         case "browser.bookmarks":
-          browserBookmarks(invoke, async (url) => {
-            if (w) await invoke("browser.open", { workspace: w.id, url });
-          });
+        case "browser.history": {
+          const origin = focus.capture();
+          const picker =
+            id === "browser.bookmarks" ? browserBookmarks : browserHistory;
+          picker(
+            invoke,
+            async (url) => {
+              if (w) await invoke("browser.open", { workspace: w.id, url });
+            },
+            () => focus.restore(origin),
+          );
           break;
+        }
         case "browser.bookmark":
         case "browser.pin": {
           if (pane?.kind !== "browser")
@@ -1431,11 +1440,6 @@ export function createCommands(
           break;
         case "browser.settings":
           openSettings("browser");
-          break;
-        case "browser.history":
-          browserHistory(invoke, async (url) => {
-            if (w) await invoke("browser.open", { workspace: w.id, url });
-          });
           break;
         case "browser.default":
           defaultBrowserDialog();
@@ -1763,6 +1767,8 @@ export function createCommands(
           [
             "settings",
             "browser.settings",
+            "browser.bookmarks",
+            "browser.history",
             "shortcuts",
             "workspace.reopen",
           ].includes(definition.id)
@@ -1983,7 +1989,9 @@ export function createCommands(
           !event.altKey)
       ) {
         const target = document.activeElement;
-        if (target?.closest(".workspace-overview")) return;
+        // These pickers route context actions to the selected result.
+        if (target?.closest(".workspace-overview, .browser-history-query"))
+          return;
         if (target instanceof HTMLElement) {
           event.preventDefault();
           event.stopPropagation();

@@ -39,7 +39,7 @@ body {
   overflow: hidden;
 }
 .app-header {
-  height: 34px;
+  min-height: 34px;
   flex: none;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -61,7 +61,7 @@ body {
 }
 #workspace-selector {
   max-width: 100%;
-  height: 27px;
+  min-height: 27px;
   border: 0;
   background: transparent;
   padding: 3px 8px;
@@ -357,11 +357,8 @@ body {
   max-width: 100%;
   overflow-x: auto;
 }
-.app-header:has(.preview-update:not([hidden])) {
-  height: max(34px, calc(1em * var(--ui-line-height) + var(--space-1)));
-}
 #pane-visibility:has(.preview-update:not([hidden])) {
-  height: 100%;
+  height: auto;
 }
 .preview-update {
   margin-inline-end: var(--space-1);
@@ -1716,24 +1713,50 @@ browser-action-list::part(action):focus-visible {
   padding: 4px;
 }
 .browser-suggestions button,
-.browser-library .command-list button {
+.browser-library .browser-history-link,
+.browser-library .bookmark-link {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
+  min-width: 0;
+  gap: var(--space-1);
   text-align: left;
+}
+.browser-suggestions button {
   padding: 6px 10px;
 }
 .browser-suggestions button[aria-selected="true"] {
   background: var(--element-selected);
 }
-.browser-suggestions small,
-.browser-library small {
-  color: var(--text-placeholder);
+.browser-suggestions button > :is(span, small),
+.browser-library :is(.browser-history-link, .bookmark-link) > :is(span, small) {
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  width: 100%;
+}
+.browser-suggestions small,
+.browser-library :is(.browser-history-link, .bookmark-link) > small {
+  color: var(--text-muted);
+}
+.browser-suggestions button[aria-selected="true"] > small,
+.browser-history-link.selected > small,
+.bookmark-link:focus-visible > small {
+  color: var(--text-primary);
+}
+.browser-history-row {
+  display: flex;
+}
+.browser-history-row > .browser-history-link {
+  flex: 1;
+}
+.browser-history-actions {
+  opacity: 0;
+}
+.browser-history-row:is(:hover, :has(.selected), :focus-within)
+  .browser-history-actions {
+  opacity: 1;
 }
 .browser-permission-requests {
   flex: 0 0 auto;
@@ -1768,21 +1791,17 @@ browser-action-list::part(action):focus-visible {
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
-.bookmark-row > small {
-  display: block;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin: 4px 0;
-}
-.bookmark-row > button:first-child {
+.bookmark-row .bookmark-link {
   background: transparent;
   border-color: transparent;
-  padding-left: 0;
+  padding: var(--space-1) var(--space-2);
 }
-.bookmark-row button {
-  margin-right: 6px;
+.bookmark-row .bookmark-link:is(:hover, :focus-visible) {
+  background: var(--element-selected);
+}
+.bookmark-actions {
+  justify-content: flex-start;
+  margin-top: var(--space-1);
 }
 .bookmark-row form input {
   display: block;
