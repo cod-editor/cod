@@ -526,9 +526,13 @@ for (const provider of ["codex", "kimi"] as const) {
     await expect(input).toHaveValue("");
     expect((await state()).conversations).toHaveLength(1);
     expect((await app.inspect(source.id)).status).toBe("waiting");
-    expect(
-      (await app.records()).filter((r) => r.event === "started"),
-    ).toHaveLength(records.filter((r) => r.event === "started").length);
+    const ownsSession = (record: (typeof records)[number]) =>
+      ["thread/start", "thread/resume", "session/new", "session/load"].includes(
+        record.message?.method ?? "",
+      );
+    expect((await app.records()).filter(ownsSession)).toEqual(
+      records.filter(ownsSession),
+    );
     const draft = (await active()).chatDrafts![child];
     expect(draft.provider).toBe(provider);
     expect(draft.initialSelection).toMatchObject({

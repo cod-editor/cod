@@ -721,9 +721,13 @@ test("New chat aliases recover from zero workspaces without restoring archived s
     const original = initial.workspaces[0];
     const conversation = initial.conversations[0];
     const promptCount = (await app.prompts()).length;
-    const starts = (await app.records()).filter(
-      (record) => record.event === "started",
-    ).length;
+    const sessionRequests = async () =>
+      (await app.records()).filter((record) =>
+        ["thread/start", "thread/resume"].includes(
+          record.message?.method ?? "",
+        ),
+      );
+    const starts = await sessionRequests();
     await composer.fill("Unsent draft remains with the archived chat.");
     await app.overview();
     await app.row(original.name).first().click({ button: "right" });
@@ -764,9 +768,7 @@ test("New chat aliases recover from zero workspaces without restoring archived s
     expect(await app.prompts()).toHaveLength(promptCount);
     await app.command("New chat");
     expect((await app.state()).workspaces[0].panes).toHaveLength(1);
-    expect(
-      (await app.records()).filter((record) => record.event === "started"),
-    ).toHaveLength(starts);
+    expect(await sessionRequests()).toEqual(starts);
     await app.page.screenshot({
       path: info.outputPath("new-chat-after-last-workspace-closed.png"),
     });

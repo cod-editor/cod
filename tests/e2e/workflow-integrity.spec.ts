@@ -22,6 +22,144 @@ async function pasteFixtureImage(app: ChatApp) {
   await app.page.keyboard.press(`${modifier}+V`);
 }
 
+test("Fresh Codex drafts show configured model and effort before the first send", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  await app.configure({
+    codex: {
+      options: true,
+      multipleModels: true,
+      reasoningOptions: true,
+      alternateReasoning: true,
+      configuredDraftModel: "fixture-alternate",
+      configuredDraftReasoning: "xhigh",
+    },
+  });
+  try {
+    await app.start();
+    const workspace = await app.create("Configured draft defaults");
+    await app.command("New chat");
+    const draftWorkspace = (await app.cli<AppState>("state")).workspaces.find(
+      (item) => item.id === workspace,
+    )!;
+    const paneId = draftWorkspace.activePaneId;
+    const pane = app.pane(paneId);
+    const model = pane.getByRole("button", { name: "Model", exact: true });
+    const effort = pane.getByRole("button", {
+      name: "Reasoning effort",
+      exact: true,
+    });
+    const input = pane.getByRole("textbox", { name: "Message", exact: true });
+    await expect(input).toBeFocused();
+    await expect(model).toHaveText("Alternate fixture");
+    await expect(effort).toHaveText("Extra high");
+    await expect(model).toHaveAccessibleDescription("Alternate fixture");
+    const reads = async () =>
+      (await app.records()).filter(
+        ({ message }) => message?.method === "model/list",
+      );
+    const requests = await reads();
+    expect(requests.length).toBeGreaterThan(0);
+    const providerSessions = async () =>
+      (await app.records()).filter(({ message }) =>
+        ["thread/start", "thread/resume"].includes(message?.method ?? ""),
+      );
+    expect(await providerSessions()).toHaveLength(0);
+    expect(await app.prompts()).toHaveLength(0);
+
+    await input.fill("Check the configured defaults");
+    await input.press("Home");
+    await input.press("ArrowRight");
+    await app.cli(
+      "file",
+      "open",
+      "--workspace",
+      workspace,
+      "--path",
+      app.file,
+      "--group",
+      draftWorkspace.activeGroupId,
+      "--source-pane",
+      paneId,
+      "--focus",
+      "true",
+    );
+    await expect(input).toBeHidden();
+    await app.cli("pane", "focus", "--workspace", workspace, "--id", paneId);
+    await expect(model).toHaveText("Alternate fixture");
+    await expect(effort).toHaveText("Extra high");
+    await expect(input).toHaveValue("Check the configured defaults");
+    expect(await reads()).toEqual(requests);
+    expect(
+      (await app.cli<AppState>("state")).workspaces.find(
+        (item) => item.id === workspace,
+      )?.chatDrafts?.[paneId]?.initialSelection,
+    ).toBeUndefined();
+    expect(await providerSessions()).toHaveLength(0);
+
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    await expect
+      .poll(async () =>
+        (await app.records()).some(
+          ({ message }) =>
+            message?.method === "config/read" &&
+            message.params?.cwd === app.folders[0],
+        ),
+      )
+      .toBe(true);
+    await expect(model).toHaveText("Alternate fixture");
+    await model.press("Enter");
+    const configuredChoice = app.page
+      .getByRole("dialog", { name: "Actions", exact: true })
+      .getByRole("button", { name: "Use provider default", exact: true });
+    await expect(configuredChoice).toHaveAttribute("aria-pressed", "true");
+    await configuredChoice.press("Escape");
+    await expect(model).toBeFocused();
+
+    for (const [width, height] of [
+      [1280, 800],
+      [760, 680],
+    ]) {
+      await app.app!.evaluate(
+        ({ BrowserWindow }, [width, height]) =>
+          BrowserWindow.getAllWindows()[0].setContentSize(width, height),
+        [width, height],
+      );
+      await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(width);
+      expect(
+        await pane.locator(".model-choices").evaluate((choices) => {
+          const composer = choices
+            .closest(".composer")!
+            .getBoundingClientRect();
+          return [...choices.querySelectorAll("button")].every(
+            (button) => button.getBoundingClientRect().right <= composer.right,
+          );
+        }),
+      ).toBe(true);
+      await app.page.screenshot({
+        path: info.outputPath(`draft-configured-${width}.png`),
+      });
+    }
+    await input.press(`${modifier}+Enter`);
+    await expect(
+      app.page.getByText("DONE Check the configured defaults", { exact: true }),
+    ).toBeVisible();
+    expect(await providerSessions()).toHaveLength(1);
+    const params = (await app.prompts()).at(-1)?.message?.params;
+    expect(params?.model).toBeUndefined();
+    expect(params?.effort).toBeUndefined();
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("An unsent Codex draft selects model and effort for its first actual turn", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
@@ -61,7 +199,13 @@ test("An unsent Codex draft selects model and effort for its first actual turn",
     let first = findDraft(paneId);
     await expect(first.model).toHaveText("Model");
     await expect(first.effort).toHaveText("Effort");
-    expect(await requests("model/list")).toHaveLength(0);
+    await expect
+      .poll(async () => (await requests("model/list")).length)
+      .toBeGreaterThan(0);
+    expect(await requests("thread/start")).toHaveLength(0);
+    expect(
+      (await draftSelections())?.[paneId]?.initialSelection,
+    ).toBeUndefined();
     await app.page.screenshot({
       path: info.outputPath("draft-model-unopened.png"),
     });
@@ -140,7 +284,8 @@ test("An unsent Codex draft selects model and effort for its first actual turn",
     await expect(second.model).toHaveCount(0);
     await second.provider.click();
     await pick("Codex").click();
-    await expect(second.model).toHaveText("Model");
+    await expect(second.model).toHaveText("Fixture model");
+    await expect(second.effort).toHaveText("Medium");
     expect(
       (await draftSelections())?.[child.paneId]?.initialSelection,
     ).toBeUndefined();
@@ -338,7 +483,11 @@ test("An agent moves its existing conversation during a turn without losing the 
       false,
     );
     expect(
-      (await app.records()).filter((r) => r.event === "started"),
+      (await app.records()).filter((record) =>
+        ["thread/start", "thread/resume"].includes(
+          record.message?.method ?? "",
+        ),
+      ),
     ).toHaveLength(1);
     await expect(composer()).toHaveValue(
       "The next request stays with this session.[Image 1]",
@@ -562,10 +711,24 @@ test("Native session commands inspect without inference and invoke only the sele
     expect(input.filter((part) => part.type === "skill")).toEqual([
       { type: "skill", name: "fixture-review", path: duplicateSkillPath },
     ]);
+    const records = await app.records();
+    const sessionProcesses = new Set(
+      records
+        .filter(({ message }) =>
+          ["thread/start", "thread/resume"].includes(message?.method ?? ""),
+        )
+        .map(({ pid }) => pid),
+    );
+    const configRequests = records.filter(({ message }) =>
+      message?.method?.startsWith("config/"),
+    );
     expect(
-      (await app.records())
-        .filter((r) => r.message?.method?.includes("config/"))
-        .map((r) => r.message?.method),
+      configRequests.every(({ message }) => message?.method === "config/read"),
+    ).toBe(true);
+    expect(
+      configRequests
+        .filter(({ pid }) => sessionProcesses.has(pid))
+        .map(({ message }) => message?.method),
     ).toEqual(["config/read"]);
   } finally {
     await app.cleanup();
