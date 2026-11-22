@@ -280,6 +280,8 @@ Local runtime diagnostics correlate process memory samples with WebContents IDs 
 
 ## Workspace Overview
 
+The title-bar Overview button shows the full workspace name as its accessible description. The compact header expands to fit configured interface text, and long titles ellipsize horizontally without overlapping the neighboring controls.
+
 Overview is the workspace switcher. Its flat groups contain workspace headings, chats, browser pages, terminals and reviews that need attention, have an open tab or were cancelled. Closing a pending review tab leaves its review reachable. The Files panel remains independent. Overview retains navigation metadata only and clears the search when reopened.
 The [Zed navigation documentation](https://zed.dev/docs/finding-navigating) informs the search-and-Enter picker behavior. Cod groups objects by workspace instead of the recent-use ordering documented for Zed's tab switcher. This is a documentation comparison, not a live desktop observation.
 

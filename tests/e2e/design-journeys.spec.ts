@@ -74,6 +74,38 @@ test("New task stays a compact bottom-composer chat at normal and wide window si
       path: info.outputPath(`empty-chat-${width}.png`),
     });
   }
+  await shell.cli("settings", "update", "--values", '{"ui.fontSize":32}');
+  const header = shell.page.locator(".app-header");
+  const selector = header.getByRole("button", {
+    name: "Overview",
+    exact: true,
+  });
+  const title = selector.locator("#workspace-name");
+  await expect(title).toHaveCSS("font-size", "32px");
+  await expect(selector).toHaveAccessibleDescription(name);
+  for (const width of [1280, 800]) {
+    await shell.app!.evaluate(({ BrowserWindow }, width) => {
+      BrowserWindow.getAllWindows()[0].setSize(width, 700);
+    }, width);
+    await expect
+      .poll(() =>
+        title.evaluate((element) => {
+          const title = element.getBoundingClientRect();
+          const button = element.closest("button")!.getBoundingClientRect();
+          const header = element.closest("header")!.getBoundingClientRect();
+          return (
+            title.top >= button.top &&
+            title.bottom <= button.bottom &&
+            button.top >= header.top &&
+            button.bottom <= header.bottom
+          );
+        }),
+      )
+      .toBe(true);
+    await shell.page.screenshot({
+      path: info.outputPath(`workspace-title-32px-${width}.png`),
+    });
+  }
   await composer.fill("Keep this unsent task description");
   await composer.press("Shift+Enter");
   await expect(composer).toHaveValue("Keep this unsent task description\n");
