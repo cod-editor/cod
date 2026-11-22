@@ -18,6 +18,21 @@ export function uiButton(
   }
   return button;
 }
+export function uiSwitch(): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "ui-switch";
+  input.setAttribute("role", "switch");
+  return input;
+}
+
+export function selectField(input: HTMLSelectElement): HTMLElement {
+  const field = document.createElement("span");
+  field.className = "ui-select";
+  field.append(input, icon("chevron"));
+  return field;
+}
+
 export function shortcutHint(text = ""): HTMLElement {
   const key = document.createElement("kbd");
   key.className = "shortcut-hint";
@@ -88,7 +103,9 @@ export function settingEntry(
   }
   const control = document.createElement("div");
   control.className = "setting-control";
-  control.append(input);
+  control.append(
+    input instanceof HTMLSelectElement ? selectField(input) : input,
+  );
   const reset = uiButton("", "quiet", icon("reset"));
   reset.classList.add("icon-button", "compact");
   reset.title = `Reset ${title.replace(" · ", " ")}`;

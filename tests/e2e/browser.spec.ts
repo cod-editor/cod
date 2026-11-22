@@ -1515,6 +1515,9 @@ test("Site media permissions require a page-bound decision and retain only remem
     .toBe("audio,video");
   await expect(prompt()).toHaveCount(0);
   await shell.command("Site permissions");
+  await shell.page.screenshot({
+    path: info.outputPath("site-permissions-selects.png"),
+  });
   await shell.page
     .getByRole("dialog", { name: "Site permissions" })
     .getByLabel(`Camera for ${origin}`, { exact: true })

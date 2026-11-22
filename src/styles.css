@@ -787,10 +787,6 @@ a {
   min-height: var(--toolbar-height);
   border-bottom: 1px solid var(--line);
 }
-.review-header select {
-  border: 0;
-  background: transparent;
-}
 .review-context {
   display: flex;
   align-items: center;
@@ -933,8 +929,7 @@ a {
 dialog .form-field {
   margin: 0 0 12px;
 }
-.form-field input,
-.form-field select {
+.form-field input {
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
@@ -1364,7 +1359,8 @@ browser-action-list::part(action):focus-visible {
 .browser-protection label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
 
 .browser-protection [aria-label="Browser add-on status"] section {

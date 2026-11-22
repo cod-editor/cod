@@ -560,9 +560,36 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     await dialog
       .getByRole("combobox", { name: "Terminal Cursor shape" })
       .selectOption("bar");
+    const blinking = dialog.getByRole("switch", {
+      name: "Terminal Blinking cursor",
+      exact: true,
+    });
+    await expect(blinking).not.toBeChecked();
+    await blinking.hover();
+    await expect(blinking).toHaveCSS("border-color", "rgb(169, 175, 188)");
+    const off = await blinking.boundingBox();
+    await blinking.focus();
+    await blinking.press("Space");
+    await expect(blinking).toBeChecked();
+    await expect(blinking).toBeFocused();
+    await expect(blinking).toHaveCSS("outline-style", "solid");
+    expect(await blinking.boundingBox()).toEqual(off);
+    await dialog.getByText("Blinking cursor", { exact: true }).click();
+    await expect(blinking).not.toBeChecked();
+    await blinking.press("Space");
+    await expect(blinking).toBeChecked();
     await dialog
-      .getByRole("checkbox", { name: "Terminal Blinking cursor" })
-      .check();
+      .getByRole("button", {
+        name: "Reset Terminal Blinking cursor",
+        exact: true,
+      })
+      .click();
+    await expect(blinking).not.toBeChecked();
+    await blinking.press("Space");
+    await expect(blinking).toBeChecked();
+    await app.page.screenshot({
+      path: info.outputPath("settings-controls-keyboard-focus.png"),
+    });
     await expect
       .poll(
         async () =>
@@ -582,7 +609,7 @@ test("Searchable settings apply font, terminal cursor and external edits live an
       )
       .toBe("monospace");
     await app.page.screenshot({
-      path: info.outputPath("searchable-settings.png"),
+      path: info.outputPath("settings-controls-normal.png"),
     });
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await app.cli(
@@ -608,6 +635,15 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     await expect(dialog.getByRole("status")).toContainText("Invalid JSON");
     await expect(app.page.locator("html")).toHaveCSS("font-size", "18px");
     expect(await readFile(file, "utf8")).toBe("broken JSON");
+    await dialog.getByRole("searchbox").fill("terminal cursor");
+    await expect(blinking).toBeDisabled();
+    await expect(
+      dialog.getByRole("combobox", { name: "Terminal Cursor shape" }),
+    ).toBeDisabled();
+    await app.page.screenshot({
+      path: info.outputPath("settings-controls-disabled.png"),
+    });
+    await dialog.getByRole("searchbox").fill("");
     // Browser preferences have independent ownership; changing one must not
     // hide the unresolved appearance-file failure or re-enable its writes.
     await dialog
@@ -784,6 +820,8 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       name: "Terminal Cursor shape",
       exact: true,
     });
+    await cursor.hover();
+    await expect(cursor).toHaveCSS("background-color", "rgb(54, 60, 70)");
     await expect(cursor).toHaveValue("block");
     const rect = (await cursor.boundingBox())!;
     const origin = await app.app!.evaluate(({ BrowserWindow }) => {
@@ -806,6 +844,10 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       "click",
       "1",
     ]);
+    await expect
+      .poll(() => cursor.evaluate((node) => node.matches(":open")))
+      .toBe(true);
+    await expect(cursor).toHaveCSS("background-color", "rgb(69, 74, 86)");
     const capture = await app.app!.evaluate(async ({ desktopCapturer }) => {
       const screens = await desktopCapturer.getSources({
         types: ["screen"],
@@ -813,15 +855,21 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       });
       return screens[0]?.thumbnail.toPNG().toString("base64");
     });
-    if (capture)
-      await writeFile(
-        info.outputPath("native-settings-selector.png"),
-        Buffer.from(capture, "base64"),
-      );
+    expect(capture).toBeTruthy();
+    await writeFile(
+      info.outputPath("native-settings-selector.png"),
+      Buffer.from(capture!, "base64"),
+    );
     await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
     await expect(cursor).toHaveValue("block");
+    await expect(dialog).toBeVisible();
     await expect(cursor).toBeFocused();
-    await cursor.selectOption("underline");
+    await execute("xdotool", ["key", "--clearmodifiers", "space"]);
+    await expect
+      .poll(() => cursor.evaluate((node) => node.matches(":open")))
+      .toBe(true);
+    await execute("xdotool", ["key", "--clearmodifiers", "End", "Return"]);
+    await expect(cursor).toHaveValue("underline");
     await expect
       .poll(
         async () =>
@@ -962,6 +1010,32 @@ test("Settings groups readable font choices and adjusts values without losing li
     ).toBeInViewport();
     await dialog.screenshot({
       path: info.outputPath("settings-narrow-enlarged.png"),
+    });
+    await search.fill("editor");
+    await family.scrollIntoViewIfNeeded();
+    const wrap = dialog.getByRole("switch", {
+      name: "Editor Wrap long lines",
+      exact: true,
+    });
+    await wrap.scrollIntoViewIfNeeded();
+    await expect(wrap).toBeInViewport({ ratio: 1 });
+    const selectBounds = (await family.boundingBox())!;
+    const arrow = family.locator("+ .icon");
+    const arrowBounds = (await arrow.boundingBox())!;
+    const selectStyle = await family.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        appearance: style.appearance,
+        inset: parseFloat(style.paddingInlineEnd),
+      };
+    });
+    expect(selectStyle.appearance).toBe("none");
+    expect(selectStyle.inset).toBeGreaterThan(arrowBounds.width);
+    expect(
+      selectBounds.x + selectBounds.width - arrowBounds.x - arrowBounds.width,
+    ).toBeGreaterThanOrEqual(8);
+    await app.page.screenshot({
+      path: info.outputPath("settings-controls-narrow-enlarged.png"),
     });
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await app.stop();

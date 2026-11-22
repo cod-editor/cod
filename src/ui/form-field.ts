@@ -1,3 +1,5 @@
+import { selectField } from "./primitives";
+
 /** Consistent compact label/control spacing in application forms. */
 export function formField(
   label: string,
@@ -8,6 +10,9 @@ export function formField(
   const title = document.createElement("span");
   title.className = "field-label";
   title.textContent = label;
-  field.append(title, control);
+  field.append(
+    title,
+    control instanceof HTMLSelectElement ? selectField(control) : control,
+  );
   return field;
 }
