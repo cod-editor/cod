@@ -212,6 +212,61 @@ input.ui-switch:focus-visible {
   color: var(--text-disabled);
 }
 
+@supports (appearance: base-select) and selector(select::picker(select)) {
+  @media (forced-colors: none) {
+    .ui-select > select,
+    .ui-select > select::picker(select) {
+      appearance: base-select;
+    }
+    .ui-select > select {
+      min-inline-size: min(10ch, 100%);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .ui-select > select::picker-icon {
+      display: none;
+    }
+    .ui-select > select::picker(select) {
+      margin-block: var(--space-1);
+      padding: var(--space-1);
+      max-inline-size: min(44ch, calc(100vw - 2 * var(--space-4)));
+      border: 1px solid var(--border-default);
+      border-radius: var(--popup-radius);
+      box-shadow: var(--popup-shadow);
+      color: var(--text-primary);
+      background: var(--surface-raised);
+    }
+    .ui-select > select > option {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-block-size: var(--control-height);
+      padding: var(--space-1) var(--space-2);
+      border-radius: var(--radius);
+      background: transparent;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .ui-select > select > option::checkmark {
+      content: "";
+      order: 1;
+      flex: none;
+      margin-inline-start: auto;
+      inline-size: 5px;
+      block-size: 9px;
+      border: solid var(--text-accent);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    .ui-select > select > option:disabled {
+      color: var(--text-disabled);
+    }
+    .ui-select > select > option:not(:disabled):is(:hover, :focus-visible) {
+      background: var(--element-selected);
+    }
+  }
+}
+
 @media (forced-colors: active) {
   input.ui-switch[type="checkbox"] {
     appearance: auto;
