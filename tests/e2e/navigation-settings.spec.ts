@@ -848,6 +848,30 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       .poll(() => cursor.evaluate((node) => node.matches(":open")))
       .toBe(true);
     await expect(cursor).toHaveCSS("background-color", "rgb(69, 74, 86)");
+    const savedOption = cursor.getByRole("option", {
+      name: "block",
+      exact: true,
+    });
+    await expect(savedOption).toHaveAttribute("value", "block");
+    expect(
+      await cursor.evaluate(
+        (node) => getComputedStyle(node, "::picker(select)").backgroundColor,
+      ),
+    ).toBe(
+      await cursor.evaluate((node) => {
+        const reference = document.createElement("span");
+        reference.style.color = "var(--surface-raised)";
+        node.parentElement!.append(reference);
+        const color = getComputedStyle(reference).color;
+        reference.remove();
+        return color;
+      }),
+    );
+    await execute("xdotool", ["key", "--clearmodifiers", "Down"]);
+    await expect(
+      cursor.getByRole("option", { name: "bar", exact: true }),
+    ).toBeFocused();
+    await expect(cursor).toHaveValue("block");
     const capture = await app.app!.evaluate(async ({ desktopCapturer }) => {
       const screens = await desktopCapturer.getSources({
         types: ["screen"],
@@ -868,7 +892,12 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
     await expect
       .poll(() => cursor.evaluate((node) => node.matches(":open")))
       .toBe(true);
-    await execute("xdotool", ["key", "--clearmodifiers", "End", "Return"]);
+    await execute("xdotool", ["key", "--clearmodifiers", "u"]);
+    await expect(
+      cursor.getByRole("option", { name: "underline", exact: true }),
+    ).toBeFocused();
+    await expect(cursor).toHaveValue("block");
+    await execute("xdotool", ["key", "--clearmodifiers", "Return"]);
     await expect(cursor).toHaveValue("underline");
     await expect
       .poll(
@@ -878,6 +907,32 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
           ],
       )
       .toBe("underline");
+    await app.page.setViewportSize({ width: 460, height: 640 });
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":20}');
+    await expect(cursor).toHaveCSS("font-size", "20px");
+    const longChoice =
+      "An invented unavailable cursor option with a deliberately long name";
+    await cursor.evaluate((element, text) => {
+      const option = new Option(text, "unavailable");
+      option.disabled = true;
+      (element as HTMLSelectElement).add(option);
+    }, longChoice);
+    await cursor.click();
+    const unavailable = cursor.getByRole("option", { name: longChoice });
+    await expect(unavailable).toBeDisabled();
+    await expect(unavailable).toBeInViewport();
+    expect((await unavailable.boundingBox())!.height).toBeGreaterThan(40);
+    await expect(cursor).toHaveValue("underline");
+    await app.page.screenshot({
+      path: info.outputPath("native-settings-selector-narrow.png"),
+    });
+    await dialog
+      .getByRole("heading", { name: "Settings", exact: true })
+      .click();
+    await expect
+      .poll(() => cursor.evaluate((node) => node.matches(":open")))
+      .toBe(false);
+    await expect(cursor).toHaveValue("underline");
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
   } finally {
     await app.cleanup();
@@ -1029,7 +1084,7 @@ test("Settings groups readable font choices and adjusts values without losing li
         inset: parseFloat(style.paddingInlineEnd),
       };
     });
-    expect(selectStyle.appearance).toBe("none");
+    expect(selectStyle.appearance).toBe("base-select");
     expect(selectStyle.inset).toBeGreaterThan(arrowBounds.width);
     expect(
       selectBounds.x + selectBounds.width - arrowBounds.x - arrowBounds.width,
