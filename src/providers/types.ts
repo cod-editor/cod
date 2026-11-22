@@ -144,8 +144,8 @@ export interface ProviderAdapter {
   earlierHistory?(cursor: string): Promise<{
     items: unknown[];
     nextCursor?: string;
-    startsAtTail: boolean;
   }>;
+  historyOutput?(turnId: string, itemId: string): Promise<unknown>;
   getOptions(): Promise<ProviderOptions>;
   getDraftOptions(
     selection: ProviderOptions["current"],

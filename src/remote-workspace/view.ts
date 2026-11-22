@@ -68,6 +68,7 @@ const chatOperations = new Set([
   "conversation.acknowledge",
   "conversation.inspect",
   "conversation.earlier-history",
+  "conversation.history-output",
 ]);
 
 export function requestBelongsToHost(

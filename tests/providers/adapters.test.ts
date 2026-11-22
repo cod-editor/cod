@@ -161,8 +161,8 @@ test("Codex history page timeout keeps the bound controller available", async ()
     await adapter.resume("codex-native");
     assert.ok(adapter.earlierHistory);
     await assert.rejects(
-      adapter.earlierHistory("invented-page"),
-      /Provider request timed out: thread\/items\/list/,
+      adapter.earlierHistory(JSON.stringify({ turn: "invented-page" })),
+      /Provider request timed out: thread\/turns\/list/,
     );
     assert.equal(events.filter((e) => e.type === "error").length, 0);
     assert.equal(
@@ -375,8 +375,10 @@ for (const provider of ["codex", "kimi"] as const) {
               : "session/new";
         const expected: Record<string, unknown> = { cwd: process.cwd() };
         if (provider === "codex") {
-          if (resume) expected.threadId = `${provider}-native`;
-          else expected.ephemeral = false;
+          if (resume) {
+            expected.threadId = `${provider}-native`;
+            expected.excludeTurns = true;
+          } else expected.ephemeral = false;
         } else {
           expected.mcpServers = [];
           if (resume) expected.sessionId = `${provider}-native`;
@@ -670,3 +672,57 @@ for (const mode of ["large", "unicode", "overlong"])
       await transport.close();
     }
   });
+
+test("An oversized Codex history reply leaves a parallel response and following notification intact", async () => {
+  const notices: string[] = [];
+  const failures: Error[] = [];
+  const transport = new RpcTransport(
+    {
+      cwd: process.cwd(),
+      executable: process.execPath,
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+        import { createInterface } from 'node:readline';
+        let history;
+        const reply = (id, result) => JSON.stringify({id, result}) + '\\n';
+        createInterface({input:process.stdin}).on('line', line => {
+          const request = JSON.parse(line);
+          if (request.method === 'thread/turns/list') {
+            history = request.id;
+            return;
+          }
+          const oversized = reply(history, 'x'.repeat(4 * 1024 * 1024));
+          process.stdout.write(oversized.slice(0, 2));
+          setImmediate(() => process.stdout.write(
+            oversized.slice(2) + reply(request.id, 'fixture response') +
+              JSON.stringify({method:'fixture/notice', params:{}}) + '\\n'
+          ));
+        });
+      `,
+      ],
+      requestTimeoutMs: 5000,
+    },
+    "unused",
+    [],
+    (message) => notices.push(message.method),
+    (error) => failures.push(error),
+    () => {},
+  );
+  try {
+    const history = transport.request(
+      "thread/turns/list",
+      {},
+      undefined,
+      "history",
+    );
+    const parallel = transport.request("fixture/parallel", {});
+    await assert.rejects(history, /saved Codex history item exceeds/);
+    assert.equal(await parallel, "fixture response");
+    await until(() => notices.includes("fixture/notice"));
+    assert.deepEqual(failures, []);
+  } finally {
+    await transport.close();
+  }
+});

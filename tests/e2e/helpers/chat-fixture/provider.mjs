@@ -331,14 +331,35 @@ function receive(message, external = false) {
     });
     return;
   }
-  if (
-    message.method === "thread/turns/list" &&
-    params.itemsView === "summary"
-  ) {
+  if (message.method === "thread/turns/list") {
+    if (params.itemsView === "summary") {
+      reply(message, {
+        data: history.map(({ id, status }) => ({ id, status })),
+        nextCursor: null,
+      });
+      return;
+    }
+    const offset = params.cursor ? Number(params.cursor.split("-").at(-1)) : 0;
+    const data = history
+      .slice()
+      .reverse()
+      .slice(offset, offset + params.limit);
+    const next = offset + data.length;
     reply(message, {
-      data: history.map(({ id, status }) => ({ id, status })),
-      nextCursor: null,
+      data:
+        params.itemsView === "notLoaded"
+          ? data.map(({ id, status }) => ({ id, status, items: [] }))
+          : data,
+      nextCursor: next < history.length ? "fixture-turns-" + next : null,
     });
+    return;
+  }
+  if (message.method === "thread/items/read") {
+    const turn = history.find(({ id }) => id === params.turnId);
+    const data = (turn?.items ?? [])
+      .filter(({ id }) => params.itemIds.includes(id))
+      .map((item) => ({ turnId: turn.id, item, outputDeferred: false }));
+    reply(message, { data });
     return;
   }
   if (message.method === "thread/items/list" && params.turnId) {
@@ -350,25 +371,13 @@ function receive(message, external = false) {
       });
       return;
     }
-    reply(message, {
-      data: turn.items.map((item) => ({ turnId: turn.id, item })),
-      nextCursor: null,
-    });
-    return;
-  }
-  if (message.method === "thread/items/list" && configuration().pagedHistory) {
-    const items = history
-      .flatMap(({ id: turnId, items }) =>
-        items.map((item) => ({ turnId, item })),
-      )
-      .reverse();
-    const offset = Number(params.cursor?.match(/^fixture-items-(\d+)$/)?.[1]);
+    const isPaged =
+      configuration().pagedHistory && params.sortDirection === "desc";
+    const offset = params.cursor ? Number(params.cursor.split("-").at(-1)) : 0;
     if (
-      configuration().earlierHistoryError ||
-      params.threadId !== nativeId ||
-      params.sortDirection !== "desc" ||
-      params.limit !== 50 ||
-      !Number.isSafeInteger(offset)
+      isPaged &&
+      configuration().earlierHistoryError &&
+      (params.cursor || history.at(-1)?.id !== turn.id)
     ) {
       write({
         id: message.id,
@@ -376,16 +385,32 @@ function receive(message, external = false) {
       });
       return;
     }
-    const data = items.slice(offset, offset + 3);
+    const items =
+      params.sortDirection === "desc"
+        ? turn.items.slice().reverse()
+        : turn.items;
+    const limit = isPaged
+      ? (configuration().historyPageSize ?? 2)
+      : (params.limit ?? items.length);
+    const data = items.slice(offset, offset + limit).map((item) => {
+      const outputDeferred =
+        params.deferOutput?.commandExecution &&
+        item.type === "commandExecution" &&
+        !!item.aggregatedOutput;
+      return {
+        turnId: turn.id,
+        item: outputDeferred ? { ...item, aggregatedOutput: null } : item,
+        outputDeferred,
+      };
+    });
     const next = offset + data.length;
     later(
       () =>
         reply(message, {
           data,
           nextCursor: next < items.length ? "fixture-items-" + next : null,
-          backwardsCursor: null,
         }),
-      configuration().earlierHistoryDelayMs ?? 0,
+      isPaged ? (configuration().earlierHistoryDelayMs ?? 0) : 0,
     );
     return;
   }
@@ -408,6 +433,19 @@ function receive(message, external = false) {
       params.threadId ??
       params.sessionId ??
       (portable() ? randomUUID() : `${provider}-fixture-${randomUUID()}`);
+    if (
+      message.method === "thread/resume" &&
+      configuration().heldNativeId === nativeId
+    ) {
+      write({
+        id: message.id,
+        error: {
+          code: -32000,
+          message: "Invented Codex session already has an active writer",
+        },
+      });
+      return;
+    }
     if (path.basename(nativeId) !== nativeId)
       throw new Error("Invalid fixture identity");
     const saved = path.join(historyDirectory, nativeId + ".json");
@@ -428,46 +466,32 @@ function receive(message, external = false) {
       return;
     }
     if (provider === "kimi" && message.method === "session/load") replayKimi();
-    if (
-      provider === "codex" &&
-      message.method === "thread/resume" &&
-      (configuration().partialTail || configuration().pagedHistory)
-    ) {
-      const last = history.at(-1);
-      const assistant = last?.items
-        .filter((item) => item.type === "agentMessage")
-        .at(-1);
-      reply(message, {
-        thread: {
-          id: nativeId,
-          historyMode: "paginated",
-          turns: last && assistant ? [{ ...last, items: [assistant] }] : [],
-        },
-        turnsBackwardsCursor: "fixture-older-page",
-        ...(configuration().pagedHistory && last
-          ? { itemsBackwardsCursor: "fixture-items-0" }
-          : {}),
-      });
-    } else
-      reply(
-        message,
-        provider === "codex"
-          ? {
-              thread: { id: nativeId, turns: history, path: rollout },
-              ...(portable() ? { cwd: params.cwd } : {}),
-              ...(configuration().reasoningOptions
-                ? { model: "fixture-model", reasoningEffort: "medium" }
-                : {}),
-            }
-          : {
-              sessionId: nativeId,
-              ...(configuration().options
-                ? {
-                    configOptions: kimiConfigOptions(),
-                  }
-                : {}),
+    reply(
+      message,
+      provider === "codex"
+        ? {
+            thread: {
+              id: nativeId,
+              turns: params.excludeTurns ? [] : history,
+              historyMode: configuration().pagedHistory
+                ? "paginated"
+                : "legacy",
+              path: rollout,
             },
-      );
+            ...(portable() ? { cwd: params.cwd } : {}),
+            ...(configuration().reasoningOptions
+              ? { model: "fixture-model", reasoningEffort: "medium" }
+              : {}),
+          }
+        : {
+            sessionId: nativeId,
+            ...(configuration().options
+              ? {
+                  configOptions: kimiConfigOptions(),
+                }
+              : {}),
+          },
+    );
     if (provider === "codex" && !queueWatcher) {
       queueWatcher = watch(historyDirectory, (_event, filename) => {
         if (filename !== nativeId + ".queue.json") return;

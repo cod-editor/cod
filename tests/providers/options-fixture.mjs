@@ -45,6 +45,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             configOptions: mode === "malformed" ? {} : config(),
           },
     );
+  if (m.method === "thread/turns/list")
+    return reply(m, { data: [], nextCursor: null });
   if (m.method === "model/list") {
     const finish = () =>
       reply(

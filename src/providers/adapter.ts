@@ -1,3 +1,5 @@
+import { codexHistoryTurns } from "../conversation-history.ts";
+import { codexHistoryPage } from "./codex-history.ts";
 import { CodexBackground } from "./codex-background.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
@@ -64,7 +66,7 @@ export class NativeAdapter implements ProviderAdapter {
   private closed = false;
   private failure?: Error;
   private id: string | null = null;
-  private resumeTailCursor?: string;
+  private paginatedHistory = false;
   private active?: ActiveTurn;
   private steeringUnavailable = false;
   private finishedTurns = new Set<string>();
@@ -209,7 +211,9 @@ export class NativeAdapter implements ProviderAdapter {
         this.provider === "codex"
           ? {
               cwd: this.cwd,
-              ...(resumeId ? { threadId: resumeId } : { ephemeral: false }),
+              ...(resumeId
+                ? { threadId: resumeId, excludeTurns: true }
+                : { ephemeral: false }),
             }
           : {
               cwd: this.cwd,
@@ -232,16 +236,22 @@ export class NativeAdapter implements ProviderAdapter {
       this.id = id;
       this.selection.bind(data);
       if (this.provider === "codex" && resumeId) {
-        const turns = object(data.thread).turns;
-        if (
-          !Array.isArray(turns) ||
-          !turns.some((turn) => {
-            const items = object(turn).items;
-            return Array.isArray(items) && items.length > 0;
-          })
-        )
-          this.resumeTailCursor = string(data.itemsBackwardsCursor);
-        this.emit({ type: "history", details: data.thread });
+        const thread = object(data.thread);
+        this.paginatedHistory = thread.historyMode === "paginated";
+        const page = await codexHistoryPage(
+          this.rpc!,
+          id,
+          this.paginatedHistory,
+        );
+        data.turnsBackwardsCursor = null;
+        data.itemsBackwardsCursor = page.nextCursor ?? null;
+        this.emit({
+          type: "history",
+          details: {
+            turns: codexHistoryTurns(page.items),
+            historyMode: page.nextCursor ? "paginated" : "legacy",
+          },
+        });
       }
       this.state("ready");
       return {
@@ -262,22 +272,29 @@ export class NativeAdapter implements ProviderAdapter {
     this.ensureOpen();
     if (this.provider !== "codex" || !this.id || this.binding)
       throw new Error("Codex history requires a bound conversation");
-    const result = object(
+    return codexHistoryPage(this.rpc!, this.id, this.paginatedHistory, cursor);
+  }
+
+  async historyOutput(turnId: string, itemId: string): Promise<unknown> {
+    this.ensureOpen();
+    if (this.provider !== "codex" || !this.id || this.binding)
+      throw new Error("Codex history requires a bound conversation");
+    const page = object(
       await this.rpc!.request(
-        "thread/items/list",
-        { threadId: this.id, cursor, sortDirection: "desc", limit: 50 },
+        "thread/items/read",
+        { threadId: this.id, turnId, itemIds: [itemId] },
         undefined,
-        "read-only",
+        "history",
       ),
     );
-    const nextCursor = string(result.nextCursor) || undefined;
-    if (!Array.isArray(result.data) || nextCursor === cursor)
-      throw new Error("Codex returned an invalid history page");
-    return {
-      items: result.data,
-      nextCursor,
-      startsAtTail: cursor === this.resumeTailCursor,
-    };
+    const entry = Array.isArray(page.data) ? object(page.data[0]) : {};
+    if (
+      entry.turnId !== turnId ||
+      object(entry.item).id !== itemId ||
+      entry.outputDeferred
+    )
+      throw new Error("Codex did not return the selected history output");
+    return entry.item;
   }
 
   async codexRolloutPath(nativeId: string): Promise<string> {

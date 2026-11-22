@@ -1022,7 +1022,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(transcript(chat).locator(".turn-activity")).toHaveCount(1);
   await expect(liveTool).toContainText("invented-tool");
   await shell.stop();
-  await shell.configure({ codex: { partialTail: true } });
+  await shell.configure({ codex: { pagedHistory: true, historyPageSize: 1 } });
   await shell.start();
   await shell.send(chat.id, "[hold] after-partial-load");
   await expect(transcript(chat)).toContainText(
@@ -1042,7 +1042,7 @@ test("Chat Codex partial history avoids duplicate/reordered cached items and pre
   await expect(
     shell
       .pane(chat.paneId)
-      .getByText("Earlier messages are not shown", { exact: true }),
+      .getByRole("button", { name: "Earlier messages", exact: true }),
   ).toBeVisible();
   expect(
     restored.messages.filter((message) =>
@@ -1084,6 +1084,7 @@ test("Chat Codex earlier native pages preserve focus, retry and render overlappi
             type: "commandExecution",
             command: "earlier fixture command",
             status: "completed",
+            aggregatedOutput: "Earlier output loaded on expansion",
           },
           assistant("old-answer", "Earlier fixture answer"),
         ],
@@ -1162,15 +1163,137 @@ test("Chat Codex earlier native pages preserve focus, retry and render overlappi
   ]);
   expect(restored.tools).toHaveLength(1);
   expect(await shell.prompts()).toEqual([]);
+  expect(
+    (await shell.records()).filter(
+      (record) => record.message?.method === "thread/items/read",
+    ),
+  ).toHaveLength(0);
+  await expandActivity(pane);
+  await pane.locator(".tool-activity > summary").click();
+  await expect(pane.locator(".tool-activity pre")).toContainText(
+    "Earlier output loaded on expansion",
+  );
   const pages = (await shell.records()).filter(
     (record) => record.message?.method === "thread/items/list",
   );
-  expect(pages.map((record) => record.message?.params?.cursor)).toEqual([
-    "fixture-items-0",
-    "fixture-items-0",
-    "fixture-items-3",
+  expect(
+    pages.map((record) => [
+      record.message?.params?.turnId,
+      record.message?.params?.cursor,
+    ]),
+  ).toEqual([
+    ["latest-turn", undefined],
+    ["older-turn", undefined],
+    ["older-turn", undefined],
+    ["older-turn", "fixture-items-2"],
   ]);
 });
+
+for (const detached of [false, true]) {
+  test(`Chat Codex oversized native history opens in ${detached ? "detached" : "direct"} chat after writer release`, async () => {
+    const owner = new LocalProviderOwner(shell.data);
+    try {
+      if (detached)
+        await shell.cli(
+          "settings",
+          "update",
+          "--values",
+          '{"chat.detachedSessions":true}',
+        );
+      const workspace = await shell.create("Native history fixture");
+      const nativeId = "codex-fixture-oversized-history";
+      const nativeHistory = shell.recording + ".sessions";
+      await mkdir(nativeHistory, { recursive: true });
+      await writeFile(
+        path.join(nativeHistory, nativeId + ".json"),
+        JSON.stringify(
+          Array.from({ length: 9 }, (_, index) => ({
+            id: `turn-${index}`,
+            status: "completed",
+            items: [
+              {
+                id: `prompt-${index}`,
+                type: "userMessage",
+                content: [
+                  { type: "text", text: `Invented saved prompt ${index}` },
+                ],
+              },
+              {
+                id: `tool-${index}`,
+                type: "commandExecution",
+                status: "completed",
+                command: "invented command",
+                aggregatedOutput: "x".repeat(750_000),
+              },
+              {
+                id: `answer-${index}`,
+                type: "agentMessage",
+                text: `Invented saved answer ${index}`,
+              },
+            ],
+          })),
+        ),
+      );
+      const resume = () =>
+        shell.cli<Chat>(
+          "conversation",
+          "resume",
+          "--workspace",
+          workspace,
+          "--provider",
+          "codex",
+          "--cwd",
+          shell.folders[0],
+          "--native-id",
+          nativeId,
+        );
+      await shell.configure({ codex: { heldNativeId: nativeId } });
+      await expect(resume()).rejects.toThrow("active writer");
+      expect((await shell.cli<AppState>("state")).conversations).toHaveLength(
+        0,
+      );
+      await shell.configure({ codex: {} });
+      const chat = await resume();
+      expect(chat.nativeId).toBe(nativeId);
+      await expect(transcript(chat)).toContainText("Invented saved answer 8");
+      await expect(transcript(chat)).not.toContainText(
+        "Invented saved prompt 0",
+      );
+      const earlier = transcript(chat).getByRole("button", {
+        name: "Earlier messages",
+        exact: true,
+      });
+      await earlier.click();
+      await expect(transcript(chat)).toContainText("Invented saved prompt 3");
+      const loaded = await shell.inspect(chat.id);
+      expect(
+        loaded.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.text),
+      ).toEqual(
+        [3, 4, 5, 6, 7, 8].map((index) => `Invented saved prompt ${index}`),
+      );
+      expect(await shell.prompts()).toEqual([]);
+      expect(
+        (await shell.records())
+          .filter((record) => record.message?.method === "thread/resume")
+          .every((record) => record.message?.params?.excludeTurns === true),
+      ).toBe(true);
+      expect(
+        (await shell.records())
+          .filter((record) => record.message?.method === "thread/turns/list")
+          .map((record) => record.message?.params?.limit),
+      ).toEqual([6, 3, 6, 3]);
+      await shell.stop();
+      await shell.start();
+      await expect(transcript(chat)).toContainText("Invented saved answer 8");
+      expect((await shell.inspect(chat.id)).nativeId).toBe(nativeId);
+      expect(await shell.prompts()).toEqual([]);
+    } finally {
+      if (detached) await owner.stop();
+    }
+  });
+}
 
 async function removalMenu(id: string) {
   const overview = await shell.overview();

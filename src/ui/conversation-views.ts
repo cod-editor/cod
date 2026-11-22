@@ -131,6 +131,29 @@ export function createConversationViews({
   const loadingImages = new Set<string>();
   const sendErrors = new Map<string, string>();
   const expandedTools = new Set<string>();
+  const toolOutputRequests = new Map<string, "loading" | { error: string }>();
+  async function loadToolOutput(
+    id: string,
+    toolId: string,
+    expansionKey: string,
+  ) {
+    if (toolOutputRequests.get(expansionKey) === "loading") return;
+    toolOutputRequests.set(expansionKey, "loading");
+    invalidate();
+    try {
+      await invoke(
+        "conversation.history-output",
+        { id, toolId },
+        { reportError: false },
+      );
+      toolOutputRequests.delete(expansionKey);
+    } catch (error) {
+      toolOutputRequests.set(expansionKey, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    invalidate();
+  }
   const integration = createIntegrationSetup(invoke, invalidate);
   function providerLabel(provider: string): string {
     return provider === "codex"
@@ -1208,8 +1231,12 @@ export function createConversationViews({
         tool.append(label);
         if (tool.open) {
           const details = document.createElement("pre");
-          details.textContent =
-            result && typeof info.output === "string"
+          const request = toolOutputRequests.get(expansionKey);
+          details.textContent = info?.outputDeferred
+            ? request && request !== "loading"
+              ? request.error
+              : "Loading output…"
+            : result && typeof info.output === "string"
               ? info.output
               : (JSON.stringify(entry.tool.details, null, 2) ??
                 String(entry.tool.details));
@@ -1219,8 +1246,13 @@ export function createConversationViews({
           const current = event.currentTarget as HTMLDetailsElement;
           if (!current.isConnected || actionable) return;
           if (current.open === expandedTools.has(expansionKey)) return;
-          if (current.open) expandedTools.add(expansionKey);
-          else expandedTools.delete(expansionKey);
+          if (current.open) {
+            expandedTools.add(expansionKey);
+            if (info?.outputDeferred)
+              void loadToolOutput(conversation.id, entry.tool.id, expansionKey);
+          } else {
+            expandedTools.delete(expansionKey);
+          }
           invalidate();
         };
         transcript.append(tool);
@@ -1911,7 +1943,11 @@ export function createConversationViews({
         ) {
           views.delete(id);
           historyCounts.delete(id.slice(id.indexOf(":") + 1));
-          historyRequests.delete(id.slice(id.indexOf(":") + 1));
+          const conversationId = id.slice(id.indexOf(":") + 1);
+          historyRequests.delete(conversationId);
+          for (const key of toolOutputRequests.keys())
+            if (key.startsWith(conversationId + ":"))
+              toolOutputRequests.delete(key);
         }
     },
   };

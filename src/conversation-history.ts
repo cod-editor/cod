@@ -174,25 +174,31 @@ export function codexItemsCursor(metadata: unknown): string | undefined {
   return text(object(metadata).itemsBackwardsCursor) || undefined;
 }
 
+export function codexHistoryTurns(entries: unknown[]) {
+  const turns = new Map<string, unknown[]>();
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const { turnId, item, outputDeferred } = object(entries[index]);
+    if (typeof turnId !== "string" || typeof object(item).id !== "string")
+      throw new Error("Codex returned an invalid history item");
+    const items = turns.get(turnId) ?? [];
+    items.push(
+      outputDeferred ? { ...object(item), outputDeferred: true } : item,
+    );
+    turns.set(turnId, items);
+  }
+  return [...turns].map(([id, items]) => ({ id, items }));
+}
+
 export function stageCodexItemsPage(
   staged: StagedHistory,
   descending: unknown[],
   nativeId: string,
 ): void {
-  const turns = new Map<string, unknown[]>();
-  for (let index = descending.length - 1; index >= 0; index--) {
-    const { turnId, item } = object(descending[index]);
-    if (typeof turnId !== "string" || typeof object(item).id !== "string")
-      throw new Error("Codex returned an invalid history item");
-    const items = turns.get(turnId) ?? [];
-    if (!turns.has(turnId)) turns.set(turnId, items);
-    items.push(item);
-  }
   stageCodexSnapshot(
     staged,
     {
       historyMode: "paginated",
-      turns: [...turns].map(([id, items]) => ({ id, items })),
+      turns: codexHistoryTurns(descending),
     },
     undefined,
     nativeId,
