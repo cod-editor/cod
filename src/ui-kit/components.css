@@ -266,11 +266,18 @@ input.ui-switch:focus-visible {
       order: 1;
       flex: none;
       margin-inline-start: auto;
-      inline-size: 5px;
-      block-size: 9px;
-      border: solid var(--text-accent);
-      border-width: 0 2px 2px 0;
-      transform: rotate(45deg);
+      inline-size: 12px;
+      block-size: 12px;
+      background: var(--text-accent);
+      /* The painted shape spans 2px to 10px vertically in this 12px box. */
+      clip-path: polygon(
+        1px 6px,
+        2.3px 4.7px,
+        4.6px 7px,
+        9.7px 2px,
+        11px 3.3px,
+        4.6px 10px
+      );
     }
     .ui-select > select > option:disabled {
       color: var(--text-disabled);
