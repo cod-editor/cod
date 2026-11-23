@@ -1,4 +1,10 @@
 import {
+  questionAnswers,
+  questionHistory,
+  questionTranscriptText,
+} from "../codex-questions";
+import { createAsyncQuestions } from "./async-questions";
+import {
   backgroundActivity,
   dismissBackgroundActivity,
   isRunningActivity,
@@ -1011,6 +1017,7 @@ export function createConversationViews({
     return host;
   }
 
+  const renderQuestion = createAsyncQuestions(invoke, invalidate);
   const historyCounts = new Map<string, number>();
   const historyRequests = new Map<string, "loading" | { error: string }>();
   function recentCount(
@@ -1087,6 +1094,17 @@ export function createConversationViews({
     );
     historyCounts.set(conversation.id, count);
     const start = Math.max(0, timeline.length - count);
+    const questions = conversation.messages.some(
+      (message) => message.questions?.length,
+    )
+      ? questionHistory(conversation)
+      : undefined;
+    const hosting = getState().remoteWorkspace;
+    const canAnswer =
+      conversation.provider === "codex" &&
+      !conversation.handoffTerminalId &&
+      !conversation.transfer &&
+      (!hosting?.ids.includes(conversation.workspaceId) || hosting.connected);
     const earlier = async (all = false, fetchNative = false) => {
       const current = getState().conversations.find(
         (item) => item.id === conversation.id,
@@ -1211,11 +1229,14 @@ export function createConversationViews({
             : entry.message.role;
         const text = document.createElement("div");
         text.className = "message-text";
-        const structured = structuredMessageLabel(
-          entry.message.text,
-          getState(),
-        );
-        const source = entry.message.text;
+        const source = questionTranscriptText(entry.message);
+        const answers =
+          entry.message.role === "user" && conversation.provider === "codex"
+            ? questionAnswers(source)
+            : [];
+        const structured = answers.length
+          ? undefined
+          : structuredMessageLabel(source, getState());
         const prior = old?.contents.get(entry.message.id);
         const existing = oldText.get(entry.message.id);
         contents.set(entry.message.id, { source, label: structured });
@@ -1234,23 +1255,39 @@ export function createConversationViews({
           const label = document.createElement("summary");
           label.textContent = structured;
           const payload = document.createElement("pre");
-          payload.textContent = JSON.stringify(
-            JSON.parse(entry.message.text),
-            null,
-            2,
-          );
+          payload.textContent = JSON.stringify(JSON.parse(source), null, 2);
           details.append(label, payload);
           text.append(details);
+        } else if (answers.length) {
+          for (const answer of answers) {
+            const prompt = document.createElement("blockquote");
+            prompt.textContent = answer.question;
+            const reply = document.createElement("p");
+            reply.textContent = answer.answer;
+            text.append(prompt, reply);
+          }
         } else
           appendChatReferences(
             text,
-            entry.message.text,
+            source,
             conversation.workspaceId,
             entry.message.id,
             conversation.id,
           );
         if (entry.message.role === "system") row.append(role);
         row.append(text);
+        for (const question of entry.message.questions ?? []) {
+          const status = questions?.wasAnswered(question)
+            ? "Answered"
+            : conversation.reservedQuestionAnswers?.includes(question.id)
+              ? "Answer delivery unconfirmed"
+              : entry.message.order < (questions?.latestPrompt ?? -1)
+                ? "Question closed"
+                : "";
+          row.append(
+            renderQuestion(conversation.id, question, status, !!canAnswer),
+          );
+        }
         if (entry.message.images?.length)
           row.append(imageStrip(entry.message.images));
         transcript.append(row);
@@ -1436,7 +1473,10 @@ export function createConversationViews({
         if (message.steering) {
           const preview = document.createElement("div");
           preview.className = "queued-message-text";
-          preview.textContent = message.text || "Image attachment";
+          const answers = questionAnswers(message.text);
+          preview.textContent = answers.length
+            ? answers.map(({ answer }) => answer).join("\n")
+            : message.text || "Image attachment";
           row.append(preview);
           if (message.images?.length) row.append(imageStrip(message.images));
           const status = document.createElement("div");

@@ -1,3 +1,8 @@
+import {
+  encodeQuestionAnswer,
+  questionAnswers,
+  questionHistory,
+} from "../codex-questions";
 import { normalizeGroups } from "../workspace-layout";
 import {
   acknowledgeConversation,
@@ -1149,6 +1154,7 @@ export class ConversationApplicationService {
     request: OperationRequest,
     fromQueue = false,
     trustedUi = false,
+    questionId?: string,
   ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
     if (conversation.transfer)
@@ -1206,6 +1212,7 @@ export class ConversationApplicationService {
           nativeTurnId,
           { id: randomUUID(), text, images, skills, status: "sending" },
           request.writer as string | undefined,
+          questionId,
         );
         if (steered) return steered;
       }
@@ -1266,7 +1273,7 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
-      if (!fromQueue)
+      if (!fromQueue && !questionId)
         this.clearSubmittedDraft(
           conversation,
           text,
@@ -1286,6 +1293,8 @@ export class ConversationApplicationService {
             this.activeTurns.delete(conversation.id);
           }
           finishPage("completed");
+          if (questionId && outcome.status === "completed")
+            this.releaseQuestionAnswer(conversation, questionId);
           if (outcome.status === "cancelled") conversation.queuePaused = true;
           this.finishQueued(
             conversation,
@@ -1359,6 +1368,7 @@ export class ConversationApplicationService {
     nativeTurnId: string,
     message: QueuedMessage,
     writer?: string,
+    questionId?: string,
   ) {
     const isTargetActive = () =>
       this.currentTurn(conversation) === localTurnId &&
@@ -1380,8 +1390,11 @@ export class ConversationApplicationService {
         message.steering = {
           nativeTurnId,
           localTurnId,
-          draftVersion: this.store.workspace(conversation.workspaceId)
-            .chatDrafts?.[conversation.paneId]?.version,
+          draftVersion: questionId
+            ? undefined
+            : this.store.workspace(conversation.workspaceId).chatDrafts?.[
+                conversation.paneId
+              ]?.version,
         };
         queue.push(message);
       });
@@ -1449,6 +1462,96 @@ export class ConversationApplicationService {
     conversation.queuedMessages = conversation.queuedMessages!.filter(
       (item) => item.id !== message.id,
     );
+    this.confirmQuestionAnswers(conversation, message.text);
+  }
+
+  private releaseQuestionAnswer(conversation: ConversationState, id: string) {
+    const remaining = conversation.reservedQuestionAnswers?.filter(
+      (item) => item !== id,
+    );
+    if (remaining?.length) conversation.reservedQuestionAnswers = remaining;
+    else delete conversation.reservedQuestionAnswers;
+  }
+
+  private confirmQuestionAnswers(
+    conversation: ConversationState,
+    text: string,
+  ) {
+    if (!conversation.reservedQuestionAnswers?.length) return;
+    for (const { questionItemId } of questionAnswers(text))
+      this.releaseQuestionAnswer(conversation, questionItemId);
+  }
+
+  private async answerQuestion(request: OperationRequest) {
+    const conversation = this.store.conversation(requiredString(request, "id"));
+    const id = requiredString(request, "questionId");
+    const answer = requiredString(request, "answer").trim();
+    if (!answer || answer.length > 16_384)
+      throw new Error("Enter an answer of at most 16,384 characters");
+    if (
+      conversation.provider !== "codex" ||
+      conversation.handoffTerminalId ||
+      conversation.transfer
+    )
+      throw new Error("Answer from a connected Codex chat");
+    await this.ensureController(conversation);
+    const { text, expectedTurn } = await this.store.change(() => {
+      this.assertCurrent(conversation);
+      if (this.store.closing) throw new Error("Cod is shutting down");
+      if (conversation.handoffTerminalId || conversation.transfer)
+        throw new Error("Answer from a connected Codex chat");
+      const history = questionHistory(conversation);
+      for (const replied of history.acknowledged.keys())
+        this.releaseQuestionAnswer(conversation, replied);
+      const question = conversation.messages
+        .filter((message) => message.order > history.latestPrompt)
+        .flatMap((message) => message.questions ?? [])
+        .find((question) => question.id === id);
+      if (!question) throw new Error("This question is no longer pending");
+      if (
+        conversation.reservedQuestionAnswers?.includes(id) ||
+        history.wasAnswered(question)
+      )
+        throw new Error(
+          "An answer was already submitted. Check the conversation before answering again.",
+        );
+      if ((conversation.reservedQuestionAnswers?.length ?? 0) >= 100)
+        throw new Error("Too many unconfirmed answers");
+      (conversation.reservedQuestionAnswers ??= []).push(id);
+      return {
+        text: encodeQuestionAnswer(question, answer),
+        expectedTurn: this.currentTurn(conversation),
+      };
+    });
+    try {
+      if (expectedTurn !== this.currentTurn(conversation))
+        throw new Error(
+          "The selected turn has changed. Your answer was not sent.",
+        );
+      return await this.sendConversation(
+        {
+          op: "conversation.send",
+          id: conversation.id,
+          text,
+          expectedTurn,
+          requireIdle: true,
+        },
+        false,
+        true,
+        id,
+      );
+    } catch (error) {
+      await this.store.change(() => {
+        this.assertCurrent(conversation);
+        const hasAdmissionRecord =
+          conversation.messages.some(
+            (message) => message.role === "user" && message.text === text,
+          ) ||
+          conversation.queuedMessages?.some((message) => message.text === text);
+        if (!hasAdmissionRecord) this.releaseQuestionAnswer(conversation, id);
+      });
+      throw error;
+    }
   }
 
   private async checkSteeredMessage(request: OperationRequest) {
@@ -1485,6 +1588,13 @@ export class ConversationApplicationService {
           "The turn may still accept the follow-up. Check again after it ends.",
         );
       this.clearSteeredDraft(conversation, current);
+      if (questionAnswers(current.text).length) {
+        conversation.queuedMessages = conversation.queuedMessages!.filter(
+          (message) => message.id !== current.id,
+        );
+        this.confirmQuestionAnswers(conversation, current.text);
+        return { status: "not-delivered" };
+      }
       delete current.steering;
       current.status = "queued";
       conversation.queuePaused = true;
@@ -1656,6 +1766,24 @@ export class ConversationApplicationService {
           const existing = event.itemId
             ? conversation.messages.find((message) => message.id === id)
             : undefined;
+          if (
+            event.role === "user" &&
+            event.itemId &&
+            questionAnswers(event.text).length
+          ) {
+            const prior = conversation.messages.find(
+              (message) =>
+                message.role === "user" &&
+                !message.id.includes("/") &&
+                message.text === event.text &&
+                message.turnId === this.currentTurn(conversation),
+            );
+            this.confirmQuestionAnswers(conversation, event.text);
+            if (prior) {
+              prior.id = id;
+              break;
+            }
+          }
           const last = conversation.messages.at(-1);
           const lastToolOrder = Math.max(
             0,
@@ -1699,6 +1827,7 @@ export class ConversationApplicationService {
         }
         if (event.phase) message.phase = event.phase;
         if (event.interactive) message.interactive = true;
+        if (event.questions?.length) message.questions = event.questions;
         if (!message.text && event.text) message.text = event.text;
         break;
       }
@@ -2089,6 +2218,9 @@ export class ConversationApplicationService {
 
       case "conversation.send-tool-result":
         return this.sendToolResult(request);
+
+      case "conversation.answer-question":
+        return this.answerQuestion(request);
 
       case "conversation.check-steer":
         return this.checkSteeredMessage(request);
