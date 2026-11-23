@@ -9,8 +9,8 @@ const stateLabels: Record<BackgroundActivity["state"], string> = {
   unknown: "State unknown",
 };
 
-export function showsActivityTrigger(activity: BackgroundActivity): boolean {
-  return activity.kind === "agent" || activity.state === "running";
+export function isRunningActivity(activity: BackgroundActivity): boolean {
+  return activity.state === "running";
 }
 
 export function backgroundActivity(
@@ -27,24 +27,22 @@ export function backgroundActivity(
     ["command", "Shells", "shell"],
   ] as const) {
     const items = activities.filter((item) => item.kind === kind);
-    if (!items.some(showsActivityTrigger)) continue;
-    const running = items.filter((item) => item.state === "running");
+    const running = items.filter(isRunningActivity);
+    if (!running.length) continue;
     const count = running.length;
     const id = `background-${conversationId}-${kind}`;
     const trigger = uiButton(
-      count
-        ? `${count} ${count === 1 ? singular : label.toLowerCase()}`
-        : label,
+      `${count} ${count === 1 ? singular : label.toLowerCase()}`,
       "quiet",
     );
-    trigger.classList.add("composer-background-trigger", "embedded");
+    trigger.classList.add(
+      "composer-background-trigger",
+      "embedded",
+      "compact-text",
+    );
     trigger.dataset.activityKind = kind;
     trigger.dataset.focusKey = `background:${kind}`;
-    trigger.dataset.running = String(count > 0);
-    trigger.setAttribute(
-      "aria-label",
-      count ? `${label}, ${count} running` : `Recent ${label.toLowerCase()}`,
-    );
+    trigger.setAttribute("aria-label", `${label}, ${count} running`);
     trigger.setAttribute("aria-expanded", String(expanded === kind));
     if (expanded === kind) trigger.setAttribute("aria-controls", id);
     trigger.onclick = (event) =>

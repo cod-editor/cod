@@ -2028,6 +2028,128 @@ async function backgroundFixture(
   await rename(destination + ".tmp", destination);
 }
 
+test("Composer options align in a draft and an existing chat at both interface sizes", async ({}, info) => {
+  const longModel = "Fixture model with a deliberately long readable name";
+  await shell.configure({
+    codex: {
+      options: true,
+      reasoningOptions: true,
+      configuredDraftModel: "fixture-model",
+      configuredDraftReasoning: "medium",
+      modelDisplayName: longModel,
+    },
+  });
+  const workspace = await shell.create("Composer control geometry");
+  await shell.command("New chat");
+  const draft = shell.pane((await shell.workspace(workspace)).activePaneId);
+  const check = async (pane: Locator, phase: string) => {
+    const model = pane.getByRole("button", { name: "Model", exact: true });
+    const effort = pane.getByRole("button", {
+      name: "Reasoning effort",
+      exact: true,
+    });
+    await expect(model).toHaveText(longModel);
+    await expect(effort).toHaveText("Medium");
+    for (const [fontSize, width, height] of [
+      [14, 1280, 800],
+      [13, 1280, 800],
+      [13, 760, 680],
+    ]) {
+      await shell.cli(
+        "settings",
+        "update",
+        "--values",
+        JSON.stringify({ "ui.fontSize": fontSize }),
+      );
+      await shell.app!.evaluate(
+        ({ BrowserWindow }, [width, height]) =>
+          BrowserWindow.getAllWindows()[0].setContentSize(width, height),
+        [width, height],
+      );
+      await expect
+        .poll(() => shell.page.evaluate(() => innerWidth))
+        .toBe(width);
+      if (width === 760) {
+        await shell.cli("group", "toggle-split", "--workspace", workspace);
+        await expect
+          .poll(
+            async () => (await pane.locator(".composer").boundingBox())!.width,
+          )
+          .toBeLessThan(380);
+      }
+      await expect(pane.locator(".composer-actions")).toHaveCSS(
+        "font-size",
+        `${fontSize - 2}px`,
+      );
+      const geometry = (button: Locator) =>
+        button.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const caption = element.querySelector("span")!;
+          const text = document.createRange();
+          text.selectNodeContents(caption);
+          const chevron = element.querySelector("svg")!.getBoundingClientRect();
+          return {
+            y: rect.y,
+            height: rect.height,
+            textTop: text.getBoundingClientRect().top,
+            chevronTop: chevron.top,
+            chevronBottom: chevron.bottom,
+            buttonRight: rect.right,
+            captionRight: caption.getBoundingClientRect().right,
+            captionWidth: caption.clientWidth,
+            textWidth: caption.scrollWidth,
+          };
+        });
+      const [a, b] = await Promise.all([geometry(model), geometry(effort)]);
+      await shell.page.screenshot({
+        path: info.outputPath(`composer-${phase}-${fontSize}-${width}.png`),
+      });
+      expect(a.y).toBeCloseTo(b.y);
+      expect(a.height).toBeCloseTo(b.height);
+      expect(a.textTop).toBeCloseTo(b.textTop);
+      expect(a.chevronTop).toBeCloseTo(b.chevronTop);
+      expect(a.chevronBottom).toBeCloseTo(b.chevronBottom);
+      expect(a.captionRight).toBeLessThan(a.buttonRight);
+      expect(b.captionRight).toBeLessThan(b.buttonRight);
+      expect(b.captionWidth).toBeGreaterThanOrEqual(b.textWidth);
+      const composer = (await pane.locator(".composer").boundingBox())!;
+      expect(b.buttonRight).toBeLessThanOrEqual(composer.x + composer.width);
+    }
+    await model.press("Enter");
+    const menu = shell.page.getByRole("dialog", {
+      name: "Actions",
+      exact: true,
+    });
+    await expect(menu).toBeVisible();
+    await shell.page.keyboard.press("Escape");
+    await expect(model).toBeFocused();
+    await expect(menu).toHaveCount(0);
+    await shell.cli("group", "toggle-split", "--workspace", workspace);
+  };
+  const input = draft.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("An invented draft with a retained selection");
+  await input.evaluate((element: HTMLTextAreaElement) =>
+    element.setSelectionRange(3, 9),
+  );
+  await check(draft, "draft");
+  await expect(input).toHaveValue(
+    "An invented draft with a retained selection",
+  );
+  expect(
+    await input.evaluate((element: HTMLTextAreaElement) => [
+      element.selectionStart,
+      element.selectionEnd,
+    ]),
+  ).toEqual([3, 9]);
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "An invented message for the composer");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(transcript(chat)).toContainText(
+    "An invented message for the composer",
+  );
+  await check(shell.pane(chat.paneId), "chat");
+});
+
 test("Codex late background results preserve the parent reply, composer and native continuation", async () => {
   const modelLabel = "Fixture model with a deliberately long readable name";
   await shell.configure({
@@ -2039,6 +2161,7 @@ test("Codex late background results preserve the parent reply, composer and nati
     },
   });
   const workspace = await shell.create("Background checks");
+  await shell.cli("settings", "update", "--values", '{"ui.fontSize":13}');
   const chat = await shell.newChat(workspace, "codex");
   const pane = shell.pane(chat.paneId);
   const agents = pane.locator('[data-focus-key="background:agent"]');
@@ -2213,18 +2336,16 @@ test("Codex late background results preserve the parent reply, composer and nati
   });
   await shell.page.setViewportSize({ width: 1280, height: 800 });
   await agents.click();
-  await input.focus();
+  await agentList.focus();
 
   await backgroundFixture(chat, "child-done", [
     childResult,
     childDone,
     childDone,
   ]);
-  await expect(agents).toHaveAccessibleName("Recent agents");
-  await expect(agents).toHaveText("Agents");
-  await expect(agents).not.toHaveCSS("color", "rgb(133, 183, 255)");
+  await expect(agents).toHaveCount(0);
   await expect(shells).toHaveCount(0);
-  await expect(agentList).toContainText("Invented child result");
+  await expect(agentList).toHaveCount(0);
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this unrelated draft");
 
@@ -2266,6 +2387,13 @@ test("Codex late background results preserve the parent reply, composer and nati
     state.messages.filter((message) => message.role === "user"),
   ).toHaveLength(1);
   expect(state.backgroundActivities).toHaveLength(3);
+  expect(state.backgroundActivities).toContainEqual(
+    expect.objectContaining({
+      kind: "agent",
+      state: "completed",
+      result: "Invented child result",
+    }),
+  );
   await expect(input).toBeFocused();
   await shell.page.screenshot({
     path: test.info().outputPath("background-activity.png"),
@@ -2280,6 +2408,7 @@ test("Escape dismisses chat controls before stopping only the focused response",
   };
   await shell.configure({ codex });
   const workspace = await shell.create("Scoped Escape");
+  await shell.cli("settings", "update", "--values", '{"ui.fontSize":13}');
   const other = await shell.newChat(workspace, "codex");
   await shell.send(other.id, "[hold] companion turn");
   await expect.poll(() => status(other.id)).toBe("working");
@@ -2348,7 +2477,7 @@ test("Escape dismisses chat controls before stopping only the focused response",
     name: "Reasoning effort",
     exact: true,
   });
-  const effortCaption = effort.locator(".choice-caption");
+  const effortCaption = effort.locator(".ui-button-label");
   await expect(effortCaption).toHaveText("Medium");
   expect(
     await effortCaption.evaluate((element) => element.scrollWidth),
@@ -2440,8 +2569,11 @@ test("Codex running background state becomes unknown on restart", async () => {
     },
   ]);
   await expect(
-    shell.pane(chat.paneId).getByRole("button", { name: "Recent agents" }),
-  ).toHaveText("Agents");
+    shell.pane(chat.paneId).locator('[data-focus-key="background:agent"]'),
+  ).toHaveCount(0);
+  await expect(
+    shell.pane(chat.paneId).getByRole("button", { name: "Shells, 2 running" }),
+  ).toHaveText("2 shells");
   await shell.stop();
   await shell.start();
   await shell.cli("conversation", "show", "--id", chat.id);
@@ -2452,9 +2584,9 @@ test("Codex running background state becomes unknown on restart", async () => {
   await expect(
     pane.getByRole("list", { name: "Background shells" }),
   ).toHaveCount(0);
-  await expect(
-    pane.getByRole("button", { name: "Recent agents" }),
-  ).toBeVisible();
+  await expect(pane.locator('[data-focus-key="background:agent"]')).toHaveCount(
+    0,
+  );
   expect(
     (await inspectQueuedChat(chat.id)).backgroundActivities?.map(
       (item) => item.state,

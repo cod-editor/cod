@@ -18,6 +18,27 @@ export function uiButton(
   }
   return button;
 }
+
+/** Compact button for a choice menu with a retained caption and fixed chevron. */
+export function choiceTrigger(caption: string): HTMLButtonElement {
+  const button = uiButton("", "quiet");
+  button.classList.add("compact-text", "choice-trigger");
+  button.setAttribute("aria-haspopup", "dialog");
+  const label = document.createElement("span");
+  label.className = "ui-button-label";
+  button.append(label, icon("chevron"));
+  setChoiceTriggerCaption(button, caption);
+  return button;
+}
+
+export function setChoiceTriggerCaption(
+  button: HTMLButtonElement,
+  text: string,
+) {
+  button.querySelector(".ui-button-label")!.textContent = text;
+  button.title = text;
+}
+
 export function uiSwitch(): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "checkbox";
