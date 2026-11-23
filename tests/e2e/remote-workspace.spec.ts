@@ -1886,6 +1886,244 @@ test("Linux workspace reconnect preserves host files, Codex chat and a running t
   }
 });
 
+test("Quick Terminal keeps independent Local and Linux PTYs through disconnect and workspace close", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "The production workspace host requires Linux",
+  );
+  test.setTimeout(45_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  let host: ChildProcess | undefined;
+  let exited: Promise<unknown> | undefined;
+  const home = path.join(desktop.temporary, "local-home");
+  await mkdir(home);
+  for (const app of [desktop, linux]) {
+    app.environment.COD_TERMINAL_SHELL = "/bin/sh";
+    app.environment.COD_TERMINAL_ARGS = '["-i"]';
+    app.environment.HISTFILE = "/dev/null";
+  }
+  desktop.environment.HOME = home;
+  try {
+    linux.socket = path.join(linux.data, "cod.sock");
+    linux.environment.COD_SOCKET_PATH = linux.socket;
+    host = spawn(process.execPath, ["dist/workspace-host.cjs", linux.data], {
+      env: linux.environment,
+      stdio: "ignore",
+    });
+    exited = once(host, "exit");
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    const workspace = (await linux.cli<AppState>("state")).activeWorkspaceId!;
+    await linux.cli(
+      "workspace",
+      "rename",
+      "--id",
+      workspace,
+      "--name",
+      "Invented Linux workspace",
+    );
+    await linux.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      linux.folders[0],
+    );
+    const original = (await linux.cli<AppState>("state")).workspaces.find(
+      (item) => item.id === workspace,
+    )!;
+    await desktop.start();
+    const local = await desktop.create("Invented Local workspace");
+    await installWorkspaceRelay(desktop);
+    await connectWorkspace(desktop, linux.socket);
+    const dialog = desktop.page.getByRole("dialog", { name: "Quick Terminal" });
+    const input = dialog.getByRole("textbox", { name: "Terminal input" });
+    const output = dialog.getByRole("region", { name: "Terminal output" });
+    const select = dialog.getByRole("combobox", {
+      name: "Quick Terminal host",
+    });
+    const toggle = () => desktop.page.keyboard.press("Control+Backquote");
+    const inspect = (app: ChatApp, id: string) =>
+      app.cli<{ id: string; pid: number; cwd: string; output: string }>(
+        "terminal",
+        "inspect",
+        "--id",
+        id,
+      );
+    const enter = async (line: string) => {
+      await expect(input).toBeFocused();
+      await desktop.page.keyboard.type(line);
+      await input.press("Enter");
+    };
+    await toggle();
+    await expect(input).toBeFocused();
+    await expect(select).toHaveValue("linux");
+    await expect(select.locator("selectedcontent")).toHaveText(
+      "invented-linux",
+    );
+    expect(
+      (await linux.cli<AppState>("state")).workspaces.find(
+        (item) => item.id === workspace,
+      ),
+    ).toEqual(original);
+    const remoteId = (await linux.cli<AppState>("state")).quickTerminals![0]!
+      .id;
+    const remote = await inspect(linux, remoteId);
+    expect(remote.cwd).toBe(linux.folders[0]);
+    await enter("printf 'SSH_QUICK_OUTPUT\\n'");
+    await expect(output).toContainText("SSH_QUICK_OUTPUT");
+    await desktop.page.screenshot({
+      path: info.outputPath("quick-terminal-linux.png"),
+    });
+
+    await select.focus();
+    await desktop.page.keyboard.press("Space");
+    await expect
+      .poll(() => select.evaluate((control) => control.matches(":open")))
+      .toBe(true);
+    await desktop.page.keyboard.press("ArrowUp");
+    await desktop.page.keyboard.press("Enter");
+    await expect(select).toHaveValue("local");
+    await enter("printf 'LOCAL_QUICK_OUTPUT\\n'");
+    await expect(output).toContainText("LOCAL_QUICK_OUTPUT");
+    await expect(output).not.toContainText("SSH_QUICK_OUTPUT");
+    const companionId = (
+      await desktop.cli<AppState>("state")
+    ).quickTerminals!.find(
+      ({ id, workspaceId }) => workspaceId === workspace && id !== remoteId,
+    )!.id;
+    const companion = await inspect(desktop, companionId);
+    expect(companion.cwd).toBe(home);
+    await toggle();
+    await expect(dialog).toHaveCount(0);
+    await desktop.page.evaluate(
+      (id) => window.cod.invoke({ op: "workspace.focus", id }),
+      local,
+    );
+    await expect(desktop.page.locator("#workspace-selector")).toHaveText(
+      "Invented Local workspace",
+    );
+    await toggle();
+    await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
+    await expect(select).toHaveCount(0);
+    await toggle();
+    await desktop.page.evaluate(
+      (id) => window.cod.invoke({ op: "workspace.focus", id }),
+      workspace,
+    );
+    await expect(desktop.page.locator("#workspace-selector")).toHaveText(
+      "Invented Linux workspace (invented-linux)",
+    );
+    await toggle();
+    await expect(select).toHaveValue("local");
+    await expect(output).toContainText("LOCAL_QUICK_OUTPUT");
+
+    await select.selectOption("linux");
+    await expect(output).toContainText("SSH_QUICK_OUTPUT");
+    await desktop.app!.evaluate(() => process.emit("cod-test-stop-forward"));
+    await expect(dialog.getByRole("status")).toContainText(
+      "Disconnected from invented-linux",
+    );
+    await expect(output).toContainText("SSH_QUICK_OUTPUT");
+    await desktop.page.screenshot({
+      path: info.outputPath("quick-terminal-disconnected.png"),
+    });
+    await linux.cli(
+      "terminal",
+      "write",
+      "--id",
+      remoteId,
+      "--data",
+      "printf 'MISSED_QUICK_OUTPUT\\n'\n",
+    );
+    await select.selectOption("local");
+    await enter("printf 'LOCAL_OFFLINE_OUTPUT\\n'");
+    await expect(output).toContainText("LOCAL_OFFLINE_OUTPUT");
+    expect((await inspect(desktop, companion.id)).pid).toBe(companion.pid);
+    await select.selectOption("linux");
+    await dialog
+      .getByRole("button", { name: "Reconnect", exact: true })
+      .click();
+    await expect(
+      dialog.getByRole("button", { name: "Reconnect", exact: true }),
+    ).toHaveCount(0);
+    await expect(output).toContainText("MISSED_QUICK_OUTPUT");
+    expect((await inspect(linux, remote.id)).pid).toBe(remote.pid);
+    await select.selectOption("local");
+    await expect(output).toContainText("LOCAL_OFFLINE_OUTPUT");
+    expect((await inspect(desktop, companion.id)).pid).toBe(companion.pid);
+    await desktop.stop();
+    await expect
+      .poll(() => {
+        try {
+          process.kill(companion.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
+    expect((await inspect(linux, remote.id)).pid).toBe(remote.pid);
+    const savedState = JSON.parse(
+      await readFile(path.join(desktop.data, "state.json"), "utf8"),
+    );
+    expect(savedState).not.toHaveProperty("quickTerminals");
+
+    await desktop.start();
+    await installWorkspaceRelay(desktop);
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(desktop.page.locator("#workspace-selector")).toHaveText(
+      "Invented Linux workspace (invented-linux)",
+    );
+    const restarted = desktop.page.getByRole("dialog", {
+      name: "Quick Terminal",
+    });
+    const newInput = restarted.getByRole("textbox", { name: "Terminal input" });
+    const newSelect = restarted.getByRole("combobox", {
+      name: "Quick Terminal host",
+    });
+    await toggle();
+    await expect(newInput).toBeFocused();
+    await expect(newSelect).toHaveValue("linux");
+    await expect(
+      restarted.getByRole("region", { name: "Terminal output" }),
+    ).toContainText("MISSED_QUICK_OUTPUT");
+    await newSelect.selectOption("local");
+    await expect(newInput).toBeFocused();
+    const restartedId = (
+      await desktop.cli<AppState>("state")
+    ).quickTerminals!.find(({ workspaceId }) => workspaceId === workspace)!.id;
+    const restartedCompanion = await inspect(desktop, restartedId);
+    expect(restartedCompanion.id).not.toBe(companion.id);
+    await linux.cli("workspace", "close", "--id", workspace, "--force", "true");
+    await expect(restarted).toHaveCount(0);
+    await expect
+      .poll(
+        async () =>
+          (await desktop.raw("terminal", "inspect", "--id", restartedId)).code,
+      )
+      .toBe(1);
+    await expect
+      .poll(
+        async () =>
+          (await linux.raw("terminal", "inspect", "--id", remote.id)).code,
+      )
+      .toBe(1);
+    for (const pid of [remote.pid, restartedCompanion.pid])
+      expect(() => process.kill(pid, 0)).toThrow();
+  } finally {
+    await desktop.cleanup();
+    if (host?.exitCode === null) host.kill("SIGTERM");
+    await exited;
+    await linux.cleanup();
+  }
+});
+
 test("Paired Linux review and approval preserve privacy, draft and exactly-once native feedback", async ({}) => {
   test.skip(
     process.platform !== "linux",

@@ -102,7 +102,11 @@ interface CommandFeatures {
   navigation: ReturnType<typeof createWorkspaceNavigation>;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
-  stageOverview: (dialog: HTMLDialogElement) => Promise<void>;
+  stageBrowserBackdrop: (dialog: HTMLDialogElement) => Promise<void>;
+  quickTerminal: Pick<
+    ReturnType<typeof import("./quick-terminal").createQuickTerminal>,
+    "toggle" | "isDialog"
+  >;
   find: {
     open: (pane: PaneState) => void;
     dismissFrom: (target: Element) => boolean;
@@ -172,7 +176,7 @@ export function createCommands(
       if (pane) await keys.focusPane(pane, intent);
     },
     {
-      stageBrowserBackdrop: features.stageOverview,
+      stageBrowserBackdrop: features.stageBrowserBackdrop,
       fallback: async () => {
         const intent = keys.beginFocus();
         const pane = activeWorkspace()?.panes.find(
@@ -1236,6 +1240,11 @@ export function createCommands(
         paneId: switching.paneId,
       };
     }
+    if (id === "terminal.quickToggle") {
+      if (browserId) focus.native(browserId);
+      features.quickTerminal.toggle();
+      return;
+    }
     if (browserId) focus.native(browserId);
     if (id === "workspace.overview") {
       overview.toggle();
@@ -1794,6 +1803,7 @@ export function createCommands(
             "shortcuts",
             "workspace.reopen",
             "workspace.remoteConnect",
+            "terminal.quickToggle",
           ].includes(definition.id)
         )
           prepareDialogOrigin(returnFocus);
@@ -1988,7 +1998,8 @@ export function createCommands(
         return;
       if (isPlainEscape(event)) {
         const dialog = document.querySelector("dialog[open]");
-        if (dialog && event.repeat) event.preventDefault();
+        if (dialog && event.repeat && !features.quickTerminal.isDialog(dialog))
+          event.preventDefault();
         // xterm consumes Escape at its input; Cod find takes priority only
         // while its bar is open for that terminal's group.
         if (
@@ -2031,7 +2042,11 @@ export function createCommands(
         return;
       }
       const openDialog = [...document.querySelectorAll("dialog[open]")].at(-1);
-      if (openDialog && !openDialog.classList.contains("workspace-overview"))
+      if (
+        openDialog &&
+        !openDialog.classList.contains("workspace-overview") &&
+        !features.quickTerminal.isDialog(openDialog)
+      )
         return;
       // Give the comment form first claim on its private-save shortcut.
       if (isReviewCommentSave(event)) return;
@@ -2051,7 +2066,14 @@ export function createCommands(
         keyboardPlatform,
         shortcutSurface(),
       );
-      if (!match || (openDialog && match.command !== "workspace.overview"))
+      if (!match) return;
+      if (
+        openDialog &&
+        match.command !==
+          (features.quickTerminal.isDialog(openDialog)
+            ? "terminal.quickToggle"
+            : "workspace.overview")
+      )
         return;
       if (match.command === "chat.stop") {
         stopShortcut(event, match.dispatch);

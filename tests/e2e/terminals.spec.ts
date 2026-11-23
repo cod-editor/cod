@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import { WorkspaceApp, modifier, tabTo } from "./helpers/workspace-app";
+import type { AppState } from "../../src/types";
 
 interface Terminal {
   id: string;
@@ -564,4 +565,94 @@ test("Two-group keyboard mode keeps a real terminal process alive while switchin
   await expect(editor).toBeVisible();
   await expect(input(terminal.paneId)).toBeFocused();
   expect((await inspect(terminal.id)).pid).toBe(original.pid);
+});
+
+test("Quick Terminal inherits its focused local cwd, retains its shell across hiding and never adds a tab", async ({}, info) => {
+  const workspace = await shell.create("Invented Quick Terminal workspace");
+  const ordinary = await open(workspace);
+  await command(ordinary.id, `cd ${JSON.stringify(shell.folders[1])}`);
+  await input(ordinary.paneId).focus();
+  const before = await shell.cli<AppState>("state");
+  const dialog = shell.page.getByRole("dialog", { name: "Quick Terminal" });
+  const quickInput = dialog.getByRole("textbox", { name: "Terminal input" });
+  const toggle = () => shell.page.keyboard.press("Control+Backquote");
+
+  await toggle();
+  await expect(quickInput).toBeFocused();
+  await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("combobox")).toHaveCount(0);
+  const first = (await shell.cli<AppState>("state")).quickTerminals!.find(
+    (item) => item.workspaceId === workspace,
+  )!;
+  const firstProcess = await inspect(first.id);
+  expect(firstProcess.cwd).toBe(shell.folders[1]);
+  expect(firstProcess.pid).toBeGreaterThan(0);
+  expect((await shell.cli<AppState>("state")).workspaces).toEqual(
+    before.workspaces,
+  );
+  expect(
+    (await shell.cli<AppState>("state")).terminals.map(({ id }) => id),
+  ).toEqual(before.terminals.map(({ id }) => id));
+  await ready(first.id);
+  await quickInput.pressSequentially(
+    "stty raw -echo; printf 'QUICK_RAW_READY\\n'; od -An -tu1 -N1; stty sane; stty -echo",
+  );
+  await quickInput.press("Enter");
+  await output(first.id, /QUICK_RAW_READY/);
+  await quickInput.press("Escape");
+  await output(first.id, /QUICK_RAW_READY[\s\S]*?\s27\r?\n/);
+  await expect(dialog).toBeVisible();
+  await write(first.id, "sleep .1; printf 'QUICK_HIDDEN_OUTPUT\\n'\n");
+  await toggle();
+  await expect(dialog).toHaveCount(0);
+  await expect(input(ordinary.paneId)).toBeFocused();
+  await output(first.id, /QUICK_HIDDEN_OUTPUT/);
+  await toggle();
+  await expect(quickInput).toBeFocused();
+  await expect(
+    dialog.getByRole("region", { name: "Terminal output" }),
+  ).toContainText("QUICK_HIDDEN_OUTPUT");
+  expect((await inspect(first.id)).pid).toBe(firstProcess.pid);
+  await shell.page.screenshot({
+    path: info.outputPath("quick-terminal-local.png"),
+  });
+
+  await shell.page.setViewportSize({ width: 440, height: 620 });
+  const compact = (await dialog.boundingBox())!;
+  expect(compact.width).toBeLessThanOrEqual(400);
+  expect(Math.abs(compact.x + compact.width / 2 - 220)).toBeLessThan(2);
+  await expect
+    .poll(() =>
+      dialog.evaluate((element) => {
+        const host = element.querySelector(".terminal-output")!;
+        const screen = element.querySelector(".xterm-screen")!;
+        return (
+          element.scrollWidth <= element.clientWidth &&
+          screen.getBoundingClientRect().right <=
+            host.getBoundingClientRect().right
+        );
+      }),
+    )
+    .toBe(true);
+  await expect(quickInput).toBeFocused();
+  await shell.page.screenshot({
+    path: info.outputPath("quick-terminal-narrow.png"),
+  });
+  await shell.page.setViewportSize({ width: 1280, height: 820 });
+
+  const other = await shell.create("Another workspace");
+  await expect(dialog).toHaveCount(0);
+  await toggle();
+  await expect(quickInput).toBeFocused();
+  const second = (await shell.cli<AppState>("state")).quickTerminals!.find(
+    (item) => item.workspaceId === other,
+  )!;
+  expect(second.id).not.toBe(first.id);
+  await shell.page.mouse.click(10, 70);
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    shell.raw("workspace", "close", "--id", workspace),
+  ).resolves.toMatchObject({ code: 1 });
+  await shell.cli("workspace", "close", "--id", workspace, "--force", "true");
+  await expect.poll(() => alive(firstProcess.pid)).toBe(false);
 });

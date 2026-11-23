@@ -1,6 +1,10 @@
 import type { OperationName } from "../command-catalog";
 export type DesktopOperationName =
-  OperationName | "remote.target" | "remote.disconnect" | "remote.cancel";
+  | OperationName
+  | "remote.target"
+  | "remote.disconnect"
+  | "remote.cancel"
+  | "remote.reconnect-current";
 
 export type Invoke = <T>(
   op: DesktopOperationName,

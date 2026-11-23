@@ -3,9 +3,21 @@ import { resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { AppState, TerminalState, TerminalUiEvent } from "../types";
+import type {
+  AppState,
+  TerminalProcessState,
+  TerminalState,
+  TerminalUiEvent,
+} from "../types";
 import type { Invoke } from "./contracts";
+interface TerminalBinding {
+  record: () => TerminalProcessState | undefined;
+  connected: () => boolean | undefined;
+  invoke: Invoke;
+  acceptsInput?: () => boolean;
+}
 interface TerminalSession {
+  binding: TerminalBinding;
   id: string;
   container: HTMLElement;
   terminal: Terminal;
@@ -32,7 +44,12 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
   const terminalSessions = new Map<string, TerminalSession>();
   function createTerminalSession(
     container: HTMLElement,
-    record: TerminalState,
+    record: TerminalProcessState,
+    binding: TerminalBinding = {
+      record: () => getState().terminals.find((item) => item.id === record.id),
+      connected: () => remoteConnected(record),
+      invoke,
+    },
   ): void {
     const body = document.createElement("div");
     body.className = "pane-body terminal-body";
@@ -97,6 +114,7 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
     const observer = new ResizeObserver(() => requestTerminalFit(session));
     observer.observe(output);
     session = {
+      binding,
       id: record.id,
       container,
       terminal,
@@ -104,20 +122,21 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
       observer,
       sequence: 0,
       ready: false,
-      remoteConnected: remoteConnected(record),
+      remoteConnected: binding.connected(),
       pending: [],
     };
     terminalSessions.set(record.id, session);
     terminal.onData((data) => {
-      void invoke("terminal.write", { id: record.id, data }).catch(
-        () => undefined,
-      );
+      if (binding.acceptsInput?.() === false) return;
+      void binding
+        .invoke("terminal.write", { id: record.id, data })
+        .catch(() => undefined);
     });
     requestTerminalFit(session);
     if (session.remoteConnected !== false) readTerminalOutput(session);
   }
 
-  function remoteConnected(record: TerminalState): boolean | undefined {
+  function remoteConnected(record: TerminalProcessState): boolean | undefined {
     const remote = getState().remoteWorkspace;
     return remote?.ids.includes(record.workspaceId)
       ? remote.connected
@@ -126,7 +145,8 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
 
   function readTerminalOutput(session: TerminalSession): void {
     session.ready = false;
-    void invoke<TerminalState>("terminal.inspect", { id: session.id })
+    void session.binding
+      .invoke<TerminalProcessState>("terminal.inspect", { id: session.id })
       .then((snapshot) => {
         session.sequence = snapshot.sequence;
         if (session.remoteConnected === true) session.terminal.reset();
@@ -150,19 +170,20 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
         session.terminal.options.fontSize = terminalTextSize();
       Object.assign(session.terminal.options, terminalOptions());
       session.fit.fit();
-      const record = getState().terminals.find(
-        (terminal) => terminal.id === session.id,
-      );
+      const record = session.binding.record();
       if (
         record &&
+        session.binding.acceptsInput?.() !== false &&
         (record.cols !== session.terminal.cols ||
           record.rows !== session.terminal.rows)
       ) {
-        void invoke("terminal.resize", {
-          id: session.id,
-          cols: session.terminal.cols,
-          rows: session.terminal.rows,
-        }).catch(() => undefined);
+        void session.binding
+          .invoke("terminal.resize", {
+            id: session.id,
+            cols: session.terminal.cols,
+            rows: session.terminal.rows,
+          })
+          .catch(() => undefined);
       }
     });
   }
@@ -178,21 +199,23 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
 
   function reconcile() {
     for (const [id, session] of terminalSessions) {
-      const record = getState().terminals.find(
-        (terminal) => terminal.id === id,
-      );
-      if (!record) {
-        session.observer.disconnect();
-        session.terminal.dispose();
-        terminalSessions.delete(id);
+      if (!session.binding.record()) {
+        remove(id);
         continue;
       }
-      const connected = remoteConnected(record);
+      const connected = session.binding.connected();
       if (connected !== session.remoteConnected) {
         session.remoteConnected = connected;
         if (connected) readTerminalOutput(session);
       }
     }
+  }
+  function remove(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+    session.observer.disconnect();
+    session.terminal.dispose();
+    terminalSessions.delete(id);
   }
   function update(
     record: TerminalState,
@@ -297,6 +320,8 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
   window.addEventListener("resize", resize);
   return {
     create: createTerminalSession,
+    focus: (id: string) => terminalSessions.get(id)?.terminal.focus(),
+    remove,
     update,
     reconcile,
     find,

@@ -193,10 +193,7 @@ export class ApplicationOperations {
   }
 
   closeRemovedQuickTerminalCompanions(host: string, state: AppState) {
-    return this.terminals.closeRemovedCompanions(
-      host,
-      new Set(state.workspaces.map((workspace) => workspace.id)),
-    );
+    return this.terminals.closeRemovedCompanions(host, state.workspaces);
   }
 
   private async newContextualTab(request: OperationRequest): Promise<unknown> {

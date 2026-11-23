@@ -186,7 +186,10 @@ function quickTerminalCompanionHost(link: HostLink): string {
 function reconcileQuickTerminalCompanions(link: HostLink) {
   if (link.connected)
     void operations
-      .closeRemovedQuickTerminalCompanions(link.selection.alias, link.state)
+      .closeRemovedQuickTerminalCompanions(
+        quickTerminalCompanionHost(link),
+        link.state,
+      )
       .catch((error) =>
         console.error("Could not close a Quick Terminal companion", error),
       );

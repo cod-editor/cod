@@ -2,6 +2,7 @@ import { normalizeGroups } from "../workspace-layout";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { spawn as spawnPty } from "@homebridge/node-pty-prebuilt-multiarch";
 import { TerminalService, type TerminalEvent } from "../terminals";
 import type {
@@ -110,11 +111,9 @@ export class TerminalApplicationService {
     companionHost?: string,
   ): Promise<TerminalProcessState> {
     if (this.store.closing) throw new Error("Cod is shutting down");
-    const cwd = path.resolve(
-      (companionHost
-        ? undefined
-        : this.store.workspace(workspaceId).folders[0]) ?? os.homedir(),
-    );
+    const workspace = companionHost
+      ? undefined
+      : this.store.workspace(workspaceId);
     const owner = this.quick.get(workspaceId);
     if (
       owner?.terminal.status === "running" &&
@@ -122,6 +121,7 @@ export class TerminalApplicationService {
     )
       return structuredClone(this.inspectTerminal(owner.terminal.id));
 
+    const cwd = workspace ? await this.quickDirectory(workspace) : os.homedir();
     await this.closeQuickTerminal(workspaceId);
     if (this.store.closing) throw new Error("Cod is shutting down");
     const terminal = {
@@ -140,6 +140,31 @@ export class TerminalApplicationService {
     return structuredClone(terminal);
   }
 
+  private async quickDirectory(workspace: WorkspaceState): Promise<string> {
+    const pane = workspace.panes.find(
+      ({ id }) => id === workspace.activePaneId,
+    );
+    const current =
+      pane?.kind === "terminal"
+        ? await this.currentDirectory(pane.terminalId).catch(() => undefined)
+        : pane?.kind === "conversation"
+          ? this.store.data.conversations.find(
+              (chat) =>
+                chat.id === pane.conversationId &&
+                chat.workspaceId === workspace.id,
+            )?.cwd
+          : undefined;
+    for (const folder of [current, workspace.folders[0]]) {
+      if (
+        folder &&
+        path.isAbsolute(folder) &&
+        (await stat(folder).catch(() => undefined))?.isDirectory()
+      )
+        return folder;
+    }
+    return os.homedir();
+  }
+
   async closeQuickTerminal(workspaceId: string): Promise<void> {
     const current = this.quick.get(workspaceId);
     if (!current) return;
@@ -149,10 +174,12 @@ export class TerminalApplicationService {
 
   closeRemovedCompanions(
     host: string,
-    workspaceIds: Set<string>,
+    workspaces: WorkspaceState[],
   ): Promise<void> {
     const removed = [...this.quick].filter(
-      ([id, entry]) => entry.companionHost === host && !workspaceIds.has(id),
+      ([id, entry]) =>
+        entry.companionHost === host &&
+        !workspaces.some((workspace) => workspace.id === id),
     );
     if (!removed.length) return Promise.resolve();
     return this.store.serialize(async () => {
@@ -164,8 +191,9 @@ export class TerminalApplicationService {
   }
 
   private quickTerminal(id: string): TerminalProcessState | undefined {
-    return [...this.quick.values()].find((entry) => entry.terminal.id === id)
-      ?.terminal;
+    for (const { terminal } of this.quick.values()) {
+      if (terminal.id === id) return terminal;
+    }
   }
 
   async openTerminal(
