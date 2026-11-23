@@ -74,13 +74,19 @@ Manual Developer Tools are available with F12 or Commands > Toggle Developer Too
 
 ## Linux workspace host
 
-The Linux build includes a Node workspace host for the remote-workspace development checkpoint. It uses the regular Cod workspace, file, Git, terminal and native-provider services without launching Electron.
+Set up the host once from a checked Cod source checkout on Linux. It needs Node.js 22 or newer, npm, and a systemd user manager with lingering already enabled for that account. The installer reports missing prerequisites and leaves account settings alone.
 
-On the Linux machine, build with `npm ci --ignore-scripts` and `npm run build`. Start `node dist/workspace-host.cjs "$HOME/.local/state/cod-host"` in an independent user service or a persistent host terminal. The host owns that profile and the terminal and provider processes for its lifetime. Reconnecting a client leaves those processes running. Closing the host itself ends its owned processes.
+```sh
+npm ci --ignore-scripts
+npm run build
+node scripts/install-workspace-host.mjs
+```
 
-Set `COD_SOCKET_PATH` to the profile's `cod.sock` to use `codctl` on Linux. On your desktop, run **Connect to Linux workspace** from Commands and enter your existing OpenSSH host alias and the absolute Linux socket path. The desktop uses your existing verified host key and non-interactive SSH authentication. The connected workspaces appear in Overview alongside your local workspaces.
+The user service owns its private profile at `~/.local/state/cod-host` and runs without a desktop attached. Repeating setup stages the checked host release without restarting an active service. The new release takes effect at the next service start. Check the service with `systemctl --user status cod-workspace-host`. Restart it explicitly only when its owned terminals and agents can end. Install and authorize Codex on Linux with its own account and configuration before starting agent work.
 
-From the connected workspace, you can open and edit existing text files, use terminals, and work in Codex chats. A lost connection is marked in the workspace title. Use **Reconnect to Linux workspace** to see the Linux host's current state and terminal output. Disconnecting or quitting the desktop leaves Linux work running. After restarting the desktop, use **Connect to Linux workspace** again.
+On the Mac, run **Connect to Linux workspace** from Commands and enter the existing OpenSSH alias. Cod uses the verified host key, non-interactive SSH authentication, and the host's installed endpoint command. The host's workspaces appear in Overview alongside local workspaces. You can also connect from any workspace with `codctl workspace connect --alias HOST`, then use `codctl workspace prepare --name NAME --location linux` to open a Linux task workspace.
+
+From the connected workspace, you can open and edit existing text files, use terminals, and work in Codex chats. A lost connection is marked in the workspace title. Use **Reconnect to Linux workspace** or `codctl workspace reconnect` to see the host state and terminal output, including after restarting the desktop. Disconnecting or quitting the desktop leaves Linux work running. A separately managed host may supply an explicit socket via **Connection options** or `--socket-path`. To operate directly on Linux, point `COD_SOCKET_PATH` at the host profile's `cod.sock`.
 
 Browser tabs, cookies and device permissions stay on the desktop. Use the Linux host's CLI to add folders and save a new file to a Linux path. File previews remain local in this checkpoint.
 
@@ -96,7 +102,7 @@ On the Linux host, add your chosen existing SSH public key to the private profil
 cod-desktop namespaces="cod-review" ssh-ed25519 YOUR_PUBLIC_KEY
 ```
 
-Use the full type and key data from your local public key file and keep the signer file writable only by its owner. In **Connect to Linux workspace**, enter the matching absolute `.pub` path in **SSH public key for private review**. OpenSSH must be available on both machines and the matching private key must be usable on the desktop, for example through the local SSH agent.
+Use the full type and key data from your local public key file and keep the signer file writable only by its owner. In **Connect to Linux workspace**, expand **Connection options** and enter the matching absolute `.pub` path in **SSH public key for private review**. OpenSSH must be available on both machines and the matching private key must be usable on the desktop, for example through the local SSH agent.
 
 A paired connection can annotate a remote review, respond to Codex approvals and steer an active Codex turn using ordinary send. A missing or rejected key leaves ordinary chat, files and terminals available. Removing a signer blocks the next private operation. Run **Reconnect to Linux workspace** with the same authorized key to resume review. The host-owner CLI retains its existing approval and review commands. The desktop remembers the entered host alias and paths for its next connection. The private key remains on the desktop, and pairings do not change SSH server configuration.
 

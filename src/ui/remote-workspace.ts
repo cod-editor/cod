@@ -1,7 +1,7 @@
 import { actionButton, showActionError } from "./action-feedback";
 import type { Invoke } from "./contracts";
 import { formField } from "./form-field";
-import type { WorkspaceHostTarget } from "../remote-workspace/protocol";
+import type { WorkspaceHostSelection } from "../remote-workspace/protocol";
 import {
   dialogRegions,
   dialogSurface,
@@ -23,19 +23,30 @@ export function remoteWorkspaceDialog(
   alias.required = true;
   alias.autocomplete = "off";
   const socket = document.createElement("input");
-  socket.required = true;
   socket.autocomplete = "off";
   const publicKey = document.createElement("input");
   publicKey.autocomplete = "off";
-  form.append(
-    formField("SSH host alias", alias),
-    formField("Linux socket path", socket),
+  const options = document.createElement("details");
+  options.className = "connection-options";
+  const optionsTitle = document.createElement("summary");
+  optionsTitle.textContent = "Connection options";
+  options.append(
+    optionsTitle,
+    formField("Linux socket path (optional)", socket),
     formField("SSH public key for private review (optional)", publicKey),
   );
+  form.append(formField("SSH host alias", alias), options);
   body.append(form);
 
   // Show the dialog in the same turn as Commands closes so it keeps the frame.
-  const initialized = invoke<WorkspaceHostTarget | null>(
+  let saved: WorkspaceHostSelection | null = null;
+  const fillSavedOptions = () => {
+    const target = saved?.alias === alias.value.trim() ? saved : null;
+    socket.defaultValue = target?.socketPath ?? "";
+    publicKey.defaultValue = target?.publicKey ?? "";
+  };
+  alias.addEventListener("input", fillSavedOptions);
+  const initialized = invoke<WorkspaceHostSelection | null>(
     "remote.target",
     {},
     { reportError: false },
@@ -43,9 +54,9 @@ export function remoteWorkspaceDialog(
     .catch(() => null)
     .then((target) => {
       if (!dialog.open || !target) return;
+      saved = target;
       alias.defaultValue = target.alias;
-      socket.defaultValue = target.socketPath;
-      publicKey.defaultValue = target.publicKey ?? "";
+      fillSavedOptions();
     });
   let connecting = false;
   let connectingToHost = false;
@@ -81,16 +92,18 @@ export function remoteWorkspaceDialog(
       if (!dialog.open) return;
       const target = {
         alias: alias.value.trim(),
-        socketPath: socket.value.trim(),
-        publicKey: publicKey.value.trim(),
+        socketPath: socket.value.trim() || undefined,
+        publicKey: publicKey.value.trim() || undefined,
       };
       connectingToHost = true;
-      const reviewAccess = await invoke<boolean>("remote.connect", target, {
-        reportError: false,
-      });
+      const { reviewAccess } = await invoke<{ reviewAccess: boolean }>(
+        "workspace.connect",
+        target,
+        { reportError: false },
+      );
       if (dialog.open) {
         dialog.close();
-        afterConnect(reviewAccess, target.publicKey !== "");
+        afterConnect(reviewAccess, Boolean(target.publicKey));
       }
     } catch (error) {
       if (dialog.open) showActionError(error, dialog);

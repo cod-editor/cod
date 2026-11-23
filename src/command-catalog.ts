@@ -29,6 +29,8 @@ export const commands = {
   context: ["conversation?"],
   state: [],
   capabilities: [],
+  "workspace.connect": ["alias", "socket-path?"],
+  "workspace.reconnect": [],
   "workspace.create": ["name", "focus?"],
   "workspace.prepare": ["name", "location?", "folders?", "conversation?"],
   "workspace.reopen": ["id?"],
@@ -217,6 +219,10 @@ export const trustedReviewOperations = [
 export type OperationName =
   keyof typeof commands | (typeof trustedReviewOperations)[number];
 export const operations = Object.keys(commands);
+export const desktopWorkspaceOperations = new Set<string>([
+  "workspace.connect",
+  "workspace.reconnect",
+]);
 export const help = `Cod local workspace CLI
 
 Usage: codctl OPERATION [arguments]
@@ -229,7 +235,7 @@ ${Object.entries(commands)
   .join("\n")}
 
 Flags in brackets are optional. provider: codex|kimi; direction: right|down; ratio: greater than 0 and less than 1; cols/rows: integers 1..1000. Content/data values may be empty; conversation send requires text or at least one image. terminal write sends exact input without an implicit newline. file save requires expected-content for conflict detection.
-Commands print one JSON result and return nonzero on errors. conversation send starts a turn or durably queues a message when busy; queue-edit and queue-remove change waiting messages, and queue-resume continues a paused queue; inspect or state reports progress. conversation check-steer checks uncertain desktop follow-up delivery before reuse. conversation send-tool-result submits a retained Codex tool result and returns its native turn ID after acceptance. Review wait returns submitted feedback or cancellation (timeout exits 2). Only humans submit draft reviews unless explicitly delegated. Uncertain delivery requires native-history reconciliation, never blind resending. Native model/reasoning selection is available through conversation options/option. Claude and mode selection are unavailable. workspace create is background by default; use --focus true or workspace focus explicitly. workspace prepare uses the default task host on desktop or the current Linux host on its socket. Pass --location local|linux to override desktop placement. --folders accepts a JSON array of absolute paths on the target host. Closing a conversation tab preserves its session; conversation show restores it. conversation remove detaches an idle chat from its workspace without deleting native provider history; pane reopen restores its local snapshot. file open --workspace ID --path ABSOLUTE_PDF_PATH opens a PDF in a Cod browser tab; browser open also accepts properly encoded local file:// URLs. No HTTP server or external viewer is required. Review feedback is bound to its origin conversation at creation. settings and images flags accept JSON.
+Commands print one JSON result and return nonzero on errors. conversation send starts a turn or durably queues a message when busy; queue-edit and queue-remove change waiting messages, and queue-resume continues a paused queue; inspect or state reports progress. conversation check-steer checks uncertain desktop follow-up delivery before reuse. conversation send-tool-result submits a retained Codex tool result and returns its native turn ID after acceptance. Review wait returns submitted feedback or cancellation (timeout exits 2). Only humans submit draft reviews unless explicitly delegated. Uncertain delivery requires native-history reconciliation, never blind resending. Native model/reasoning selection is available through conversation options/option. Claude and mode selection are unavailable. workspace connect opens a prepared Linux host by SSH alias; workspace reconnect uses the last successful target. workspace create is background by default; use --focus true or workspace focus explicitly. workspace prepare uses the default task host on desktop or the current Linux host on its socket. Pass --location local|linux to override desktop placement. --folders accepts a JSON array of absolute paths on the target host. Closing a conversation tab preserves its session; conversation show restores it. conversation remove detaches an idle chat from its workspace without deleting native provider history; pane reopen restores its local snapshot. file open --workspace ID --path ABSOLUTE_PDF_PATH opens a PDF in a Cod browser tab; browser open also accepts properly encoded local file:// URLs. No HTTP server or external viewer is required. Review feedback is bound to its origin conversation at creation. settings and images flags accept JSON.
 `;
 const camel = (flag: string) =>
   flag.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());

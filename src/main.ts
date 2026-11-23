@@ -34,6 +34,7 @@ import type { Server } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ApplicationOperations } from "./operations";
+import { desktopWorkspaceOperations } from "./command-catalog";
 import { BrowserApplicationService } from "./application/browser-service";
 import { startCommandSocket } from "./application/command-socket";
 import {
@@ -44,12 +45,13 @@ import { defaultDataDirectory, defaultSocketPath } from "./paths";
 import type { AppState, OperationRequest } from "./types";
 import {
   canUsePairedDesktop,
-  type WorkspaceHostTarget,
+  type WorkspaceHostSelection,
 } from "./remote-workspace/protocol";
 import { attachWorkspaceHost, type HostLink } from "./remote-workspace/client";
 import {
   readWorkspaceHostTarget,
   saveWorkspaceHostTarget,
+  workspaceHostSelection,
 } from "./remote-workspace/target";
 import {
   combineWorkspaces,
@@ -160,7 +162,7 @@ function displayState(local = operations.snapshot(true)): AppState {
   if (!link) return local;
   return combineWorkspaces(local, {
     state: link.state,
-    alias: link.target.alias,
+    alias: link.selection.alias,
     connected: link.connected,
     reviewAccess: link.reviewAccess,
     viewing: remoteView,
@@ -192,7 +194,7 @@ function followPreparedWorkspace(link: HostLink) {
 }
 
 async function connectRemoteWorkspace(
-  target: WorkspaceHostTarget,
+  selection: WorkspaceHostSelection,
   { select = true, remember = false } = {},
 ): Promise<HostLink> {
   if (attachingWorkspace)
@@ -201,7 +203,7 @@ async function connectRemoteWorkspace(
   attachingWorkspace = attempt;
   try {
     const link = await attachWorkspaceHost(
-      target,
+      selection,
       (link, frame) => {
         if (remoteWorkspace !== link) return;
         if (frame?.type === "terminal")
@@ -238,11 +240,12 @@ async function connectRemoteWorkspace(
       if (shutdown || quitting) throw new Error("Cod is shutting down");
       combineWorkspaces(operations.snapshot(true), {
         state: link.state,
-        alias: link.target.alias,
+        alias: link.selection.alias,
         connected: link.connected,
         reviewAccess: link.reviewAccess,
       });
-      if (remember) await saveWorkspaceHostTarget(dataDirectory, link.target);
+      if (remember)
+        await saveWorkspaceHostTarget(dataDirectory, selection, attempt.signal);
       attempt.signal.throwIfAborted();
       if (shutdown || quitting || !link.connected)
         throw new Error("The Linux workspace connection closed");
@@ -276,10 +279,10 @@ async function prepareDesktopWorkspace(request: OperationRequest) {
     let link = remoteWorkspace;
     if (!link?.connected) {
       const target =
-        link?.target ?? (await readWorkspaceHostTarget(dataDirectory));
+        link?.selection ?? (await readWorkspaceHostTarget(dataDirectory));
       if (!target)
         throw new Error(
-          "Connect to a Linux workspace from Commands before preparing a task on Linux",
+          "Connect to a Linux workspace from Commands or codctl before preparing a task on Linux",
         );
       try {
         link = await connectRemoteWorkspace(target, { select: false });
@@ -335,6 +338,37 @@ async function prepareDesktopWorkspace(request: OperationRequest) {
   return { ...prepared, location: task.location };
 }
 
+async function connectWorkspaceFromCommand(
+  request: OperationRequest,
+  allowReviewKey: boolean,
+) {
+  let selection: WorkspaceHostSelection;
+  if (request.op === "workspace.reconnect") {
+    const previous =
+      remoteWorkspace?.selection ??
+      (await readWorkspaceHostTarget(dataDirectory));
+    if (!previous) throw new Error("Connect to a Linux workspace first");
+    selection = previous;
+  } else {
+    selection = workspaceHostSelection({
+      alias:
+        typeof request.alias === "string"
+          ? request.alias.trim()
+          : request.alias,
+      socketPath: request.socketPath,
+      publicKey: allowReviewKey ? request.publicKey : undefined,
+    });
+  }
+  const link = await connectRemoteWorkspace(selection, {
+    remember: request.op === "workspace.connect",
+  });
+  return {
+    alias: link.selection.alias,
+    workspaceId: link.state.activeWorkspaceId ?? null,
+    reviewAccess: link.reviewAccess,
+  };
+}
+
 async function displayCommand(request: OperationRequest): Promise<unknown> {
   const link = remoteWorkspace;
   if (request.op === "state") return displayState();
@@ -365,7 +399,7 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
     const navigation = workspaceNavigation;
     const receipt = await operations.transfers.move(
       request.id,
-      { host: link.target.alias, workspace: workspace.id, cwd: request.cwd },
+      { host: link.selection.alias, workspace: workspace.id, cwd: request.cwd },
       (operation) => link.invoke(operation),
     );
     if (remoteWorkspace === link && navigation === workspaceNavigation) {
@@ -382,29 +416,11 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
     }
     return receipt;
   }
-  if (request.op === "remote.connect") {
-    if (
-      typeof request.alias !== "string" ||
-      typeof request.socketPath !== "string"
-    )
-      throw new Error("Choose an SSH host and socket path");
-    const connected = await connectRemoteWorkspace(
-      {
-        alias: request.alias.trim(),
-        socketPath: request.socketPath.trim(),
-        publicKey:
-          typeof request.publicKey === "string"
-            ? request.publicKey.trim() || undefined
-            : undefined,
-      },
-      { remember: true },
-    );
-    return connected.reviewAccess;
-  }
-  if (request.op === "remote.reconnect") {
-    if (!link) throw new Error("Connect to a Linux workspace first");
-    return (await connectRemoteWorkspace(link.target)).reviewAccess;
-  }
+  if (
+    request.op === "workspace.connect" ||
+    request.op === "workspace.reconnect"
+  )
+    return connectWorkspaceFromCommand(request, true);
   if (request.op === "remote.target")
     return readWorkspaceHostTarget(dataDirectory);
   if (request.op === "remote.cancel") {
@@ -625,13 +641,15 @@ async function start(): Promise<void> {
     await operations.initialize();
     initialized = true;
     displayedWorkspace = operations.activeWorkspaceId;
-    commandServer = await startCommandSocket(defaultSocketPath(), (request) =>
-      request?.op === "workspace.prepare"
-        ? prepareDesktopWorkspace(request)
-        : request?.op === "conversation.transfer"
-          ? displayCommand(request)
-          : operations.dispatch(request),
-    );
+    commandServer = await startCommandSocket(defaultSocketPath(), (request) => {
+      if (request?.op === "workspace.prepare")
+        return prepareDesktopWorkspace(request);
+      if (desktopWorkspaceOperations.has(request?.op))
+        return connectWorkspaceFromCommand(request, false);
+      if (request?.op === "conversation.transfer")
+        return displayCommand(request);
+      return operations.dispatch(request);
+    });
     await app.whenReady();
     operations.settings.onChange = (value) =>
       mainWindow?.webContents.send("cod:settings", value);

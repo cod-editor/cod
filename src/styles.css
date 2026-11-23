@@ -2078,3 +2078,11 @@ browser-action-list::part(action):focus-visible {
 .composer:has(.composer-background-list) {
   overflow: visible;
 }
+
+.connection-options {
+  margin-block-start: var(--space-3);
+}
+.connection-options > summary {
+  color: var(--text-muted);
+  cursor: pointer;
+}
