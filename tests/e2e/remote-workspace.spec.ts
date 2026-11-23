@@ -815,7 +815,7 @@ test("Default task host applies from either selected workspace and fails without
       path: info.outputPath("default-task-host-linux-narrow.png"),
     });
     await setting.dialog
-      .getByRole("button", { name: "Done", exact: true })
+      .getByRole("button", { name: "Close", exact: true })
       .click();
     await desktop.page.setViewportSize({ width: 1280, height: 800 });
 
@@ -941,7 +941,7 @@ test("Default task host applies from either selected workspace and fails without
     await expect(reopened.reset).toBeHidden();
     await expect(header()).toHaveText("Recover on Linux (invented-linux)");
     await reopened.dialog
-      .getByRole("button", { name: "Done", exact: true })
+      .getByRole("button", { name: "Close", exact: true })
       .click();
     const reset = await desktop.cli<{ location: string }>(
       ...prepare("Local after reset"),
