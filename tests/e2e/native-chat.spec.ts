@@ -25,6 +25,7 @@ import {
   type Chat,
   type Provider,
 } from "./helpers/chat-fixture/harness";
+import { questionAnswers } from "../../src/codex-questions";
 import { modifier, tabTo } from "./helpers/workspace-app";
 import {
   createCodexAdapter,
@@ -4609,4 +4610,203 @@ test("Native session picker returns to native browser input on cancel and focuse
       server.close((error) => (error ? reject(error) : resolve())),
     );
   }
+});
+
+test("Codex async questions retain structured replies and composer draft across active and reopened chats", async ({}, info) => {
+  await shell.configure({ codex: { asyncQuestionHold: true } });
+  const workspace = await shell.create(
+    "Invented asynchronous question workspace",
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "[async-question] Prepare invented checks");
+  const first = () =>
+    transcript(chat).getByRole("form", { name: "Which test environment?" });
+  const second = () =>
+    transcript(chat).getByRole("form", {
+      name: "Where should the test report go?",
+    });
+  const draft = () =>
+    shell
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  await expect(first()).toBeVisible();
+  await draft().fill("Keep this draft intact");
+  const staging = first().getByRole("radio", { name: "Staging" });
+  for (let i = 0; i < 4; i++) await shell.page.keyboard.press("Shift+Tab");
+  await expect(staging).toBeFocused();
+  await shell.page.keyboard.press("ArrowDown");
+  await expect(first().getByRole("radio", { name: "Preview" })).toBeChecked();
+  await expect(
+    first().getByRole("radio", { name: "Preview" }).locator(".."),
+  ).toHaveCSS("outline-style", "solid");
+  await shell.page.screenshot({
+    path: info.outputPath("async-question-active.png"),
+  });
+  await shell.page.keyboard.press("Enter");
+  await expect(first().getByRole("status")).toHaveText("Answered");
+  await expect(second().getByRole("radio", { name: "Project" })).toBeFocused();
+  await expect(draft()).toHaveValue("Keep this draft intact");
+  const asked = (
+    await shell.cli<ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      chat.id,
+    )
+  ).messages.find((message) => message.questions?.length);
+  expect(asked?.questions?.map(({ id }) => JSON.parse(id))).toEqual([
+    ["request_user_input_async", asked?.id.split("/").at(-1), 0],
+    ["request_user_input_async", asked?.id.split("/").at(-1), 1],
+  ]);
+  const initialReply = (
+    await shell.cli<ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      chat.id,
+    )
+  ).messages.flatMap(({ text }) => questionAnswers(text));
+  expect(initialReply).toEqual([
+    {
+      questionItemId: asked?.questions?.[0]?.id,
+      question: "Which test environment?",
+      answer: "Preview",
+    },
+  ]);
+  const duplicate = await shell.raw(
+    "conversation",
+    "answer-question",
+    "--id",
+    chat.id,
+    "--question-id",
+    initialReply[0]!.questionItemId,
+    "--answer",
+    "Send again",
+  );
+  expect(duplicate.code).not.toBe(0);
+  expect(duplicate.stdout + duplicate.stderr).toContain(
+    "An answer was already submitted",
+  );
+
+  await shell.configure({ codex: {} });
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(first().getByRole("status")).toHaveText("Answered");
+  await expect(first().getByRole("radio")).toHaveCount(0);
+  await expect(draft()).toHaveValue("Keep this draft intact");
+  await second().getByRole("radio", { name: "Other" }).check();
+  await second().getByRole("radio", { name: "Other" }).press("Enter");
+  const reply = second().getByRole("textbox", { name: "Your answer" });
+  await expect(reply).toBeFocused();
+  await reply.fill("Keep it in the release notes.");
+  await shell.page.setViewportSize({ width: 640, height: 800 });
+  await shell.page.screenshot({
+    path: info.outputPath("async-question-other-narrow.png"),
+  });
+  await reply.press("Enter");
+  await expect(second().getByRole("status")).toHaveText("Answered");
+  await expect(draft()).toBeFocused();
+  await expect(transcript(chat)).toContainText("Keep it in the release notes.");
+  await expect(transcript(chat)).not.toContainText(
+    "send_user_message_question_reply",
+  );
+  await expect(draft()).toHaveValue("Keep this draft intact");
+  const finalReply = (
+    await shell.cli<ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      chat.id,
+    )
+  ).messages.flatMap(({ text }) => questionAnswers(text));
+  expect(
+    finalReply.map(({ questionItemId, answer }) => ({
+      questionItemId,
+      answer,
+    })),
+  ).toEqual([
+    { questionItemId: asked?.questions?.[0]?.id, answer: "Preview" },
+    {
+      questionItemId: asked?.questions?.[1]?.id,
+      answer: "Keep it in the release notes.",
+    },
+  ]);
+});
+
+test("Codex async question does not queue a reply to a turn that rejects steering", async () => {
+  await shell.configure({
+    codex: { asyncQuestionHold: true, steering: "unsupported" },
+  });
+  const workspace = await shell.create("Invented unsupported answer workspace");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "[async-question] Prepare invented checks");
+  const first = transcript(chat).getByRole("form", {
+    name: "Which test environment?",
+  });
+  await first.getByRole("button", { name: "Send answer" }).click();
+  await expect(first.getByRole("alert")).toContainText("Wait for the active");
+  const after = await shell.cli<ConversationState>(
+    "conversation",
+    "inspect",
+    "--id",
+    chat.id,
+  );
+  expect(after.queuedMessages ?? []).toHaveLength(0);
+  expect(
+    after.messages.flatMap(({ text }) => questionAnswers(text)),
+  ).toHaveLength(0);
+  await expect(
+    first.getByRole("button", { name: "Send answer" }),
+  ).toBeEnabled();
+  await shell.configure({ codex: {} });
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const question = after.messages.find(({ questions }) => questions?.length)
+    ?.questions?.[0];
+  expect(question).toBeTruthy();
+  await shell.cli(
+    "conversation",
+    "answer-question",
+    "--id",
+    chat.id,
+    "--question-id",
+    question!.id,
+    "--answer",
+    "Staging",
+  );
+  await expect(first.getByRole("status")).toHaveText("Answered");
+});
+
+test("Codex async question reconciles a missing live echo without retry", async () => {
+  await shell.configure({
+    codex: { asyncQuestionHold: true, steering: "silent" },
+  });
+  const workspace = await shell.create("Invented missing answer echo");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "[async-question] Prepare invented checks");
+  const first = () =>
+    transcript(chat).getByRole("form", { name: "Which test environment?" });
+  await first().getByRole("button", { name: "Send answer" }).click();
+  await expect(first().getByRole("status")).toHaveText(
+    "Answer delivery unconfirmed",
+  );
+  await expect(
+    first().getByRole("button", { name: "Send answer" }),
+  ).toHaveCount(0);
+  await shell.configure({ codex: {} });
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(first().getByRole("status")).toHaveText("Answered");
+  const after = await shell.cli<ConversationState>(
+    "conversation",
+    "inspect",
+    "--id",
+    chat.id,
+  );
+  expect(
+    after.messages.flatMap(({ text }) => questionAnswers(text)),
+  ).toHaveLength(1);
 });

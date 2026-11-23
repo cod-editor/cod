@@ -768,6 +768,47 @@ function receive(message, external = false) {
       item: active.turn.items[0],
     });
   }
+  if (provider === "codex" && prompt.startsWith("[async-question]")) {
+    const turnId = active.turnId;
+    const questions = [
+      { title: "Which test environment?", options: ["Staging", "Preview"] },
+      {
+        title: "Where should the test report go?",
+        options: ["Project", "Skip"],
+      },
+    ];
+    const item = {
+      id: "questions-" + turnId,
+      type: "agentMessage",
+      phase: "commentary",
+      questions,
+      text: questions
+        .map(({ title, options }) =>
+          [title, ...options.map((label) => "- " + label)].join("\n"),
+        )
+        .join("\n\n"),
+    };
+    active.turn.items.push(item);
+    persist();
+    notify("item/completed", { threadId: nativeId, turnId, item });
+    const finish = () => {
+      if (!active || active.turnId !== turnId) return;
+      if (configuration().asyncQuestionHold) later(finish, 30);
+      else complete();
+    };
+    later(finish, 100);
+    return;
+  }
+  if (
+    provider === "codex" &&
+    prompt.startsWith("<send_user_message_question_reply>")
+  ) {
+    later(() => {
+      text("Answer recorded.");
+      complete();
+    }, 100);
+    return;
+  }
   if (provider === "codex" && prompt.startsWith("[latency-fixture]")) {
     const { latencyChunks = 105 } = configuration();
     const item = {

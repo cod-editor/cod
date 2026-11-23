@@ -131,6 +131,7 @@ export interface ConversationMessage {
   turnId?: string;
   phase?: "commentary" | "partial" | "final";
   interactive?: boolean;
+  questions?: import("./codex-questions").CodexQuestion[];
   images?: import("./providers/types").ImageAttachment[];
   id: string;
   role: "user" | "assistant" | "system";
@@ -170,6 +171,7 @@ export interface QueuedMessage {
 export interface ConversationState {
   initialSelection?: import("./providers/types").ProviderOptions["current"];
   queuedMessages?: QueuedMessage[];
+  reservedQuestionAnswers?: string[];
   queuePaused?: boolean;
   displayName?: string;
   handoffTerminalId?: string;

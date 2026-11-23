@@ -1,3 +1,4 @@
+import { codexQuestions, questionAnswers } from "../codex-questions.ts";
 import { codexHistoryTurns } from "../conversation-history.ts";
 import { codexHistoryPage } from "./codex-history.ts";
 import { CodexBackground } from "./codex-background.ts";
@@ -461,6 +462,7 @@ export class NativeAdapter implements ProviderAdapter {
     text: string,
     selected: Array<{ name: string; path: string }> = [],
   ): Promise<Array<{ name: string; path: string }>> {
+    if (this.provider === "codex" && questionAnswers(text).length) return [];
     const names = [
       ...new Set(
         [...text.matchAll(/(?:^|\s)\$([\w:.-]+)/g)].map((match) => match[1]!),
@@ -931,10 +933,16 @@ export class NativeAdapter implements ProviderAdapter {
       ) {
         const item = object(p.item);
         if (
-          (this.active?.external || typeof item.clientId === "string") &&
-          message.method === "item/started" &&
           item.type === "userMessage" &&
-          typeof item.id === "string"
+          typeof item.id === "string" &&
+          ((message.method === "item/started" &&
+            (this.active?.external || typeof item.clientId === "string")) ||
+            (message.method === "item/completed" &&
+              Array.isArray(item.content) &&
+              item.content.some((part) => {
+                const content = string(object(part).text);
+                return !!content && questionAnswers(content).length > 0;
+              })))
         ) {
           this.emit({
             type: "text",
@@ -966,9 +974,11 @@ export class NativeAdapter implements ProviderAdapter {
                     : undefined,
             interactive:
               Array.isArray(item.questions) && item.questions.length > 0,
-            ...(message.method === "item/completed" &&
-            typeof item.text === "string"
-              ? { text: item.text }
+            ...(message.method === "item/completed"
+              ? {
+                  questions: codexQuestions(item.id, item.questions),
+                  ...(typeof item.text === "string" ? { text: item.text } : {}),
+                }
               : {}),
           });
         }

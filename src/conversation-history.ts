@@ -1,3 +1,4 @@
+import { codexQuestions } from "./codex-questions.ts";
 import type { ProviderEvent } from "./providers/types";
 import type {
   ConversationMessage,
@@ -74,7 +75,9 @@ export function stageCodexSnapshot(
           order,
         });
       } else if (item.type === "agentMessage") {
+        const questions = codexQuestions(itemId, item.questions);
         staged.messages.push({
+          ...(questions.length ? { questions } : {}),
           id,
           turnId: historyTurnId,
           phase:
@@ -398,6 +401,7 @@ export function commitHistory(
         message.text = cached.text;
       }
       message.phase ??= cached.phase;
+      message.questions ??= cached.questions;
       message.interactive ||= cached.interactive;
     }
   }

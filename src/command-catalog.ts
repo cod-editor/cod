@@ -149,6 +149,7 @@ export const commands = {
   "conversation.queue-resume": ["id"],
   "conversation.send": ["id", "text?", "images?", "images-file?", "skills?"],
   "conversation.check-steer": ["id", "message-id"],
+  "conversation.answer-question": ["id", "question-id", "answer"],
   "conversation.send-tool-result": ["id", "name", "output", "namespace?"],
   "conversation.interrupt": ["id"],
   "conversation.permission": ["id", "request-id", "option-id"],

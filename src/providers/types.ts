@@ -65,6 +65,7 @@ export type ProviderEvent = {
       itemId: string;
       phase?: "commentary" | "partial" | "final";
       interactive?: boolean;
+      questions?: import("../codex-questions").CodexQuestion[];
       text?: string;
     }
   | { type: "completed"; outcome: TurnOutcome }
