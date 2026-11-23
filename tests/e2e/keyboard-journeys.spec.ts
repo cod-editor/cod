@@ -500,15 +500,54 @@ test("Native website keys stay on the page and palette cancellation restores its
       ),
     ).toHaveLength(1);
     await key("J", [mod, "shift"]);
-    await key("`", ["control"]);
     await expect
       .poll(async () => (await inspect())?.keys)
       .toEqual(
         expect.arrayContaining([
           expect.objectContaining({ code: "KeyJ", shift: true }),
-          expect.objectContaining({ code: "Backquote", ctrl: true }),
         ]),
       );
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    // Provide an already available real frame to exercise the composed path
+    // without racing the operating system's bounded native capture deadline.
+    await app.app!.evaluate(async ({ webContents }, fixtureUrl) => {
+      const native = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === fixtureUrl)!;
+      const capture = native.capturePage.bind(native);
+      const frame = await capture(undefined, { stayHidden: true });
+      native.capturePage = async () => {
+        native.capturePage = capture;
+        return frame;
+      };
+    }, url);
+    await key("`", ["control"]);
+    const quick = app.page.getByRole("dialog", { name: "Quick Terminal" });
+    await expect(
+      quick.getByRole("textbox", { name: "Terminal input" }),
+    ).toBeFocused();
+    await expect(quick).toHaveCSS("opacity", "1");
+    await expect(app.page.locator(".browser-overview-backdrop")).toBeVisible();
+    expect(
+      await app.app!.evaluate(
+        ({ BrowserWindow, WebContentsView }, fixtureUrl) =>
+          BrowserWindow.getAllWindows()[0].contentView.children.some(
+            (view) =>
+              view instanceof WebContentsView &&
+              view.webContents.getURL() === fixtureUrl &&
+              view.getVisible(),
+          ),
+        url,
+      ),
+    ).toBe(false);
+    await app.page.screenshot({
+      path: info.outputPath("quick-terminal-over-browser.png"),
+    });
+    await app.page.keyboard.press("Control+Backquote");
+    await expect(quick).toHaveCount(0);
+    expect((await inspect()).keys).not.toContainEqual(
+      expect.objectContaining({ code: "Backquote", ctrl: true }),
+    );
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     await key("E", [mod, "shift"]);
     await expect(app.page.locator("#project-panel")).toBeFocused();
@@ -792,19 +831,13 @@ test("Terminal readline and interruption survive global keyboard navigation with
         )
       ).output;
     await reach(app.page, input);
-    await input.evaluate((node) =>
-      node.addEventListener(
-        "keydown",
-        (event) => {
-          const key = event as KeyboardEvent;
-          if (key.code === "Backquote" && key.ctrlKey && !key.shiftKey)
-            (node as HTMLElement).dataset.retiredChord = "received";
-        },
-        { capture: true },
-      ),
-    );
     await app.page.keyboard.press("Control+Backquote");
-    await expect(input).toHaveAttribute("data-retired-chord", "received");
+    const quick = app.page.getByRole("dialog", { name: "Quick Terminal" });
+    await expect(
+      quick.getByRole("textbox", { name: "Terminal input" }),
+    ).toBeFocused();
+    await app.page.keyboard.press("Control+Backquote");
+    await expect(quick).toHaveCount(0);
     await expect(input).toBeFocused();
     await app.page.keyboard.press("Control+c");
     await app.page.keyboard.type(

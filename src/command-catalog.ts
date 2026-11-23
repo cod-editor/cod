@@ -193,6 +193,7 @@ export const commands = {
   "browser.recover": ["id"],
   "browser.inspect": ["id"],
   "browser.close": ["id", "include-pinned?"],
+  "terminal.quick-open": ["workspace"],
   "terminal.open": [
     "workspace",
     "cwd?",

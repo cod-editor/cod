@@ -55,7 +55,12 @@ export class WorkspaceApplicationService {
     private readonly browserHost: BrowserHost | undefined,
     private readonly terminals: Pick<
       TerminalApplicationService,
-      "terminal" | "stopProcess" | "restoreTerminal" | "openTerminal"
+      | "terminal"
+      | "stopProcess"
+      | "restoreTerminal"
+      | "openTerminal"
+      | "closeQuickTerminal"
+      | "quickTerminalSummaries"
     >,
     private readonly reviews: Pick<
       ReviewApplicationService,
@@ -132,6 +137,7 @@ export class WorkspaceApplicationService {
       );
       if (result.closed === false) return { id, closed: false };
     }
+    await this.terminals.closeQuickTerminal(id);
     for (const conversation of archived.conversations)
       delete conversation.detachedOwner;
     this.store.data.closedWorkspaces ??= [];
@@ -1133,7 +1139,10 @@ export class WorkspaceApplicationService {
                 (["working", "waiting", "starting"].includes(item.status) ||
                   hasRunningBackground(item)),
             ) ||
-              this.store.data.terminals.some(
+              [
+                ...this.store.data.terminals,
+                ...this.terminals.quickTerminalSummaries(),
+              ].some(
                 (item) =>
                   item.workspaceId === id &&
                   ["running", "starting"].includes(item.status),

@@ -15,6 +15,7 @@ import {
 import { createPaneLayout } from "./ui/pane-layout";
 import { createWorkspaceNavigation } from "./ui/workspace-navigation";
 import { createBrowserViews } from "./ui/browser-views";
+import { createQuickTerminal } from "./ui/quick-terminal";
 import { createConversationViews } from "./ui/conversation-views";
 import { createDocumentViews } from "./ui/document-views";
 import { FileTree } from "./ui/files";
@@ -46,6 +47,13 @@ let state: AppState = {
 };
 const browsers = createBrowserViews(panes, () => state, invoke, paneButton);
 const terminals = createTerminalViews(() => state, invoke);
+const quickTerminal = createQuickTerminal(
+  () => state,
+  invoke,
+  terminals,
+  focus,
+  browsers.stageBrowserBackdrop,
+);
 const documents = createDocumentViews(
   () => state,
   panes,
@@ -118,7 +126,8 @@ const commands = createCommands(() => state, invoke, panes, setStatus, {
   navigation,
   saveFile: documents.save,
   focusNativeView: browsers.focusNative,
-  stageOverview: browsers.stageOverview,
+  quickTerminal,
+  stageBrowserBackdrop: browsers.stageBrowserBackdrop,
   find: finder,
 });
 
@@ -227,6 +236,7 @@ window.cod.onCommand(({ command, browserId }) => {
 let pendingStateRender = false;
 window.cod.onState((next) => {
   state = next;
+  quickTerminal.reconcile();
   commands.refresh();
   if (pendingStateRender) return;
   pendingStateRender = true;

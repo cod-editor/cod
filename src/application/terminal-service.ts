@@ -2,10 +2,13 @@ import { normalizeGroups } from "../workspace-layout";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { spawn as spawnPty } from "@homebridge/node-pty-prebuilt-multiarch";
 import { TerminalService, type TerminalEvent } from "../terminals";
 import type {
   TerminalState,
+  TerminalProcessState,
+  QuickTerminalSummary,
   TerminalUiEvent,
   WorkspaceState,
   OperationRequest,
@@ -15,6 +18,10 @@ import { requiredString } from "./request";
 
 export class TerminalApplicationService {
   private readonly processes: TerminalService;
+  private readonly quick = new Map<
+    string,
+    { terminal: TerminalProcessState; companionHost?: string }
+  >();
   onDidTerminal?: (event: TerminalUiEvent) => void;
   constructor(private readonly store: ApplicationStateStore) {
     this.processes = new TerminalService({
@@ -88,6 +95,104 @@ export class TerminalApplicationService {
         sequence: 0,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  quickTerminalSummaries(): QuickTerminalSummary[] {
+    return [...this.quick.values()].map(({ terminal }) => ({
+      id: terminal.id,
+      workspaceId: terminal.workspaceId,
+      status: terminal.status,
+    }));
+  }
+
+  async openQuickTerminal(
+    workspaceId: string,
+    companionHost?: string,
+  ): Promise<TerminalProcessState> {
+    if (this.store.closing) throw new Error("Cod is shutting down");
+    const workspace = companionHost
+      ? undefined
+      : this.store.workspace(workspaceId);
+    const owner = this.quick.get(workspaceId);
+    if (
+      owner?.terminal.status === "running" &&
+      owner.companionHost === companionHost
+    )
+      return structuredClone(this.inspectTerminal(owner.terminal.id));
+
+    const cwd = workspace ? await this.quickDirectory(workspace) : os.homedir();
+    await this.closeQuickTerminal(workspaceId);
+    if (this.store.closing) throw new Error("Cod is shutting down");
+    const terminal = {
+      ...this.processes.create({
+        id: randomUUID(),
+        workspaceId,
+        cwd,
+        cols: 80,
+        rows: 24,
+        ...this.terminalShell(),
+      }),
+      sequence: 0,
+    };
+    this.quick.set(workspaceId, { terminal, companionHost });
+    this.store.notify();
+    return structuredClone(terminal);
+  }
+
+  private async quickDirectory(workspace: WorkspaceState): Promise<string> {
+    const pane = workspace.panes.find(
+      ({ id }) => id === workspace.activePaneId,
+    );
+    const current =
+      pane?.kind === "terminal"
+        ? await this.currentDirectory(pane.terminalId).catch(() => undefined)
+        : pane?.kind === "conversation"
+          ? this.store.data.conversations.find(
+              (chat) =>
+                chat.id === pane.conversationId &&
+                chat.workspaceId === workspace.id,
+            )?.cwd
+          : undefined;
+    for (const folder of [current, workspace.folders[0]]) {
+      if (
+        folder &&
+        path.isAbsolute(folder) &&
+        (await stat(folder).catch(() => undefined))?.isDirectory()
+      )
+        return folder;
+    }
+    return os.homedir();
+  }
+
+  async closeQuickTerminal(workspaceId: string): Promise<void> {
+    const current = this.quick.get(workspaceId);
+    if (!current) return;
+    await this.processes.remove(current.terminal.id);
+    if (this.quick.get(workspaceId) === current) this.quick.delete(workspaceId);
+  }
+
+  closeRemovedCompanions(
+    host: string,
+    workspaces: WorkspaceState[],
+  ): Promise<void> {
+    const removed = [...this.quick].filter(
+      ([id, entry]) =>
+        entry.companionHost === host &&
+        !workspaces.some((workspace) => workspace.id === id),
+    );
+    if (!removed.length) return Promise.resolve();
+    return this.store.serialize(async () => {
+      for (const [id, entry] of removed) {
+        if (this.quick.get(id) === entry) await this.closeQuickTerminal(id);
+      }
+      this.store.notify();
+    });
+  }
+
+  private quickTerminal(id: string): TerminalProcessState | undefined {
+    for (const { terminal } of this.quick.values()) {
+      if (terminal.id === id) return terminal;
     }
   }
 
@@ -172,14 +277,19 @@ export class TerminalApplicationService {
   async resizeTerminal(request: OperationRequest): Promise<{ id: string }> {
     const id = requiredString(request, "id");
     this.processes.resize(id, Number(request.cols), Number(request.rows));
+    const quick = this.quickTerminal(id);
+    if (quick) {
+      this.syncTerminal(quick);
+      return { id };
+    }
     this.syncTerminal(this.terminal(id));
     await this.store.persist();
     this.store.notify();
     return { id };
   }
 
-  inspectTerminal(id: string): TerminalState {
-    const terminal = this.terminal(id);
+  inspectTerminal(id: string): TerminalProcessState {
+    const terminal = this.quickTerminal(id) ?? this.terminal(id);
     if (
       terminal.pid !== 0 &&
       (terminal.status === "running" || terminal.status === "exited")
@@ -216,16 +326,16 @@ export class TerminalApplicationService {
     return terminal;
   }
 
-  syncTerminal(terminal: TerminalState): void {
+  syncTerminal(terminal: TerminalProcessState): void {
     Object.assign(terminal, this.processes.snapshot(terminal.id));
   }
 
   terminalEvent(event: TerminalEvent): void {
-    const terminal = this.store.data.terminals.find(
-      (item) => item.id === event.id,
-    );
+    const quick = this.quickTerminal(event.id);
+    const terminal =
+      quick ?? this.store.data.terminals.find((item) => item.id === event.id);
     if (!terminal || this.store.closing) return;
-    this.syncTerminal(terminal);
+    if (!quick || event.type !== "data") this.syncTerminal(terminal);
     terminal.sequence += 1;
     const output: TerminalUiEvent = {
       terminalId: terminal.id,
@@ -235,7 +345,7 @@ export class TerminalApplicationService {
       ...(event.type === "error" ? { message: event.message } : {}),
     };
     this.onDidTerminal?.(output);
-    this.store.notify();
+    if (!quick || event.type !== "data") this.store.notify();
   }
 
   async handle(
@@ -243,6 +353,11 @@ export class TerminalApplicationService {
     _trustedUi = false,
   ): Promise<unknown> {
     switch (request.op) {
+      case "terminal.quick-open":
+        return this.store.serialize(() =>
+          this.openQuickTerminal(requiredString(request, "workspace")),
+        );
+
       case "terminal.open":
         return this.store.serialize(() => this.openTerminal(request));
 

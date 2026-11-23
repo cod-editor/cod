@@ -80,7 +80,7 @@ export function createBrowserViews(
     }
     captureSession = null;
     if (!dialog || !workspace) return;
-    if (dialog.dataset.browserBackdrop === "overview") return;
+    if (dialog.dataset.browserBackdrop === "preserve") return;
     const session = { dialog };
     captureSession = session;
     void captureBrowserBackdrops(session, visibleSlots).catch(() => undefined);
@@ -185,7 +185,9 @@ export function createBrowserViews(
         });
     window.cod.browserLayout(rectangles);
   }
-  async function stageOverview(dialog: HTMLDialogElement): Promise<void> {
+  async function stageBrowserBackdrop(
+    dialog: HTMLDialogElement,
+  ): Promise<void> {
     const slots = visibleSlots();
     if (!slots.size && !getState().browsers.some((item) => item.visible))
       return;
@@ -612,7 +614,7 @@ export function createBrowserViews(
         }
     },
     layout: scheduleBrowserLayout,
-    stageOverview,
+    stageBrowserBackdrop,
     focusNative(id: string) {
       // These ordered IPC sends apply visibility before focus. A closed dialog
       // must not depend on a future observer/rAF to restore its native origin.

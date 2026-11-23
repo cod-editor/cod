@@ -246,11 +246,42 @@ test("Retired focus-and-return chords reach the current surface", () => {
       for (const chord of [
         input("J", { ...mod, shiftKey: true }),
         input("j", { code: "KeyJ", altKey: true }),
-        input("`", { code: "Backquote", ctrlKey: true }),
-        input("`", { code: "Backquote", ...mod }),
       ])
         assert.equal(resolveKeybinding(chord, platform, surface), undefined);
     }
+    for (const surface of [
+      "browser",
+      "agent-page",
+      "composer",
+      "terminal",
+      "shell",
+    ] as const) {
+      assert.equal(
+        resolveKeybinding(
+          input("`", { code: "Backquote", ctrlKey: true }),
+          platform,
+          surface,
+        )?.command,
+        "terminal.quickToggle",
+      );
+      assert.equal(
+        resolveKeybinding(
+          input("`", { code: "Backquote", ctrlKey: true, repeat: true }),
+          platform,
+          surface,
+        )?.dispatch,
+        false,
+      );
+    }
+    if (platform === "darwin")
+      assert.equal(
+        resolveKeybinding(
+          input("`", { code: "Backquote", metaKey: true }),
+          platform,
+          "terminal",
+        ),
+        undefined,
+      );
     assert.equal(
       resolveKeybinding(
         input("~", { code: "Backquote", ctrlKey: true, shiftKey: true }),

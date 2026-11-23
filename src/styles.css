@@ -484,6 +484,51 @@ body {
   width: 80px;
   object-fit: cover;
 }
+dialog.quick-terminal {
+  width: min(900px, calc(100vw - 40px));
+  height: clamp(300px, 54dvh, 460px);
+  max-height: calc(100dvh - 40px);
+}
+.quick-terminal-header,
+.quick-terminal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.quick-terminal-header,
+.quick-terminal-footer {
+  padding: var(--space-1) var(--space-3);
+}
+.quick-terminal-footer [role="status"] {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+.quick-terminal-footer[hidden] {
+  display: none;
+}
+.quick-terminal-header .ui-select {
+  min-width: 0;
+}
+.quick-terminal-body,
+.quick-terminal-session {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.quick-terminal-body {
+  background: var(--surface-base);
+}
+.quick-terminal-session .terminal-body {
+  flex: 1;
+  min-width: 0;
+}
+.quick-terminal-session .terminal-status {
+  display: none;
+}
 .terminal-body {
   color: var(--terminal-foreground);
   overflow: hidden;
@@ -534,8 +579,11 @@ body {
 body:has(dialog[open]) .browser-reveal-previous {
   visibility: hidden;
 }
-.workspace-overview[data-browser-preparing] {
+dialog[data-browser-preparing] {
   opacity: 0;
+}
+dialog[data-browser-preparing]::backdrop {
+  background: transparent;
 }
 .browser-overview-backdrop {
   position: absolute;
@@ -547,7 +595,7 @@ body:has(dialog[open]) .browser-reveal-previous {
   visibility: hidden;
 }
 body:has(
-    dialog[data-browser-backdrop="overview"][open],
+    dialog[data-browser-backdrop="preserve"][open],
     dialog[data-browser-backdrop="connection"][open]
   )
   .browser-overview-backdrop {

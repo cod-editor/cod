@@ -239,6 +239,14 @@ export const commands = [
   entry("tab.reorderRight", "Move tab right", "Tabs"),
   entry("tab.moveToPane", "Move tab to another pane", "Tabs"),
   entry("pane.splitRight", "Move tab to right pane", "Layout", [], [], all),
+  entry(
+    "terminal.quickToggle",
+    "Quick Terminal",
+    "Terminal",
+    [key("Backquote", { ctrl: true })],
+    ["scratch terminal"],
+    all,
+  ),
   entry("terminal.new", "New terminal", "Terminal", [
     key("Backquote", { ctrl: true, shift: true }),
   ]),
