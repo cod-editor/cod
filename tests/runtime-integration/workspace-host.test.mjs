@@ -11,6 +11,7 @@ import {
   rm,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { connect } from "node:net";
@@ -63,6 +64,9 @@ set -eu
 printf '%s\\n' "$*" >> "$HOME/systemctl.log"
 case "$*" in
   "--user show --property=Version --value" | "--user daemon-reload") exit 0 ;;
+  "--user show --property=FragmentPath --value cod-workspace-host.service")
+    unit="$HOME/.config/systemd/user/cod-workspace-host.service"
+    if [ -f "$unit" ]; then printf '%s\\n' "$unit"; fi ;;
   "--user enable --now cod-workspace-host.service")
     if [ ! -f "$HOME/pid" ]; then
       "$HOME/.local/bin/cod-workspace-host" serve </dev/null >"$HOME/host.log" 2>&1 &
@@ -78,6 +82,17 @@ esac
       await assert.rejects(install(), /needs systemd lingering/);
       await assert.rejects(stat(launcher), { code: "ENOENT" });
       await writeFile(path.join(home, "linger"), "yes\n");
+      const unrelated = "[Service]\nExecStart=/bin/false\n";
+      await mkdir(path.dirname(service), { recursive: true });
+      await writeFile(service, unrelated);
+      await assert.rejects(
+        install(),
+        /An unrelated cod-workspace-host.service/,
+      );
+      assert.equal(await readFile(service, "utf8"), unrelated);
+      await assert.rejects(stat(launcher), { code: "ENOENT" });
+      await assert.rejects(stat(activePid), { code: "ENOENT" });
+      await unlink(service);
       assert.match((await install()).stdout, /workspace host is ready/);
       assert.match(
         await readFile(service, "utf8"),
@@ -104,7 +119,13 @@ esac
       const shellPid = (await cli("terminal", "inspect", "--id", terminal.id))
         .pid;
       assert(shellPid > 0);
+      const customized = (await readFile(service, "utf8")).replace(
+        "Restart=on-failure",
+        "Restart=on-failure\nRestartSec=3",
+      );
+      await writeFile(service, customized);
       await install();
+      assert.equal(await readFile(service, "utf8"), customized);
       assert.equal(await readFile(activePid, "utf8"), firstPid);
       assert.equal(await readlink(revision), firstRelease);
       const reopened = await cli("terminal", "inspect", "--id", terminal.id);
@@ -113,10 +134,16 @@ esac
       assert.deepEqual((await readFile(commands, "utf8")).trim().split("\n"), [
         "--user show --property=Version --value",
         "--user show --property=Version --value",
+        "--user show --property=FragmentPath --value cod-workspace-host.service",
+        "--user show --property=Version --value",
+        "--user show --property=FragmentPath --value cod-workspace-host.service",
         "--user daemon-reload",
+        "--user show --property=FragmentPath --value cod-workspace-host.service",
         "--user enable --now cod-workspace-host.service",
         "--user show --property=Version --value",
+        "--user show --property=FragmentPath --value cod-workspace-host.service",
         "--user daemon-reload",
+        "--user show --property=FragmentPath --value cod-workspace-host.service",
         "--user enable --now cod-workspace-host.service",
       ]);
     } finally {

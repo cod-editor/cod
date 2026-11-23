@@ -27,6 +27,7 @@ const service = "cod-workspace-host.service";
 const pty = "@homebridge/node-pty-prebuilt-multiarch";
 const files = ["workspace-host.cjs", "cli.cjs"];
 const ownedLauncher = "# Installed by Cod's Linux workspace host installer";
+const serviceCommand = 'ExecStart="%h/.local/bin/cod-workspace-host" serve';
 
 async function run(command, args, options = {}) {
   return (
@@ -89,6 +90,19 @@ async function verifyBuild(directory, outputs) {
   }
 }
 
+async function assertManagedUnit(unit) {
+  const info = await lstat(unit);
+  const error = new Error(
+    "An unrelated cod-workspace-host.service already exists",
+  );
+  if (!info.isFile() || info.uid !== process.getuid()) throw error;
+  const commands = (await readFile(unit, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^ExecStart\s*=/.test(line));
+  if (commands.length !== 1 || commands[0] !== serviceCommand) throw error;
+}
+
 async function main() {
   if (process.argv.length !== 2)
     throw new Error("Usage: node scripts/install-workspace-host.mjs");
@@ -141,13 +155,27 @@ async function main() {
   const release = path.join(versions, revision);
   const launcher = path.join(home, ".local/bin/cod-workspace-host");
   const unit = path.join(home, ".config/systemd/user", service);
-  if (
-    !(await absent(launcher)) &&
-    !(await readFile(launcher, "utf8")).startsWith(
-      `#!/bin/sh\n${ownedLauncher}\n`,
+  const unitFragment = async () =>
+    (
+      await control("show", "--property=FragmentPath", "--value", service)
+    ).trim();
+  const existingUnit = await unitFragment();
+  if (existingUnit && existingUnit !== unit)
+    throw new Error("An unrelated cod-workspace-host.service already exists");
+  if (!(await absent(unit))) await assertManagedUnit(unit);
+  if (!(await absent(launcher))) {
+    const info = await lstat(launcher);
+    if (
+      !info.isFile() ||
+      info.uid !== process.getuid() ||
+      !(await readFile(launcher, "utf8")).startsWith(
+        `#!/bin/sh\n${ownedLauncher}\n`,
+      )
     )
-  )
-    throw new Error("An unrelated cod-workspace-host launcher already exists");
+      throw new Error(
+        "An unrelated cod-workspace-host launcher already exists",
+      );
+  }
   await mkdir(versions, { recursive: true, mode: 0o700 });
   await useRelease(versions, release);
   await verifyBuild(release, metadata.outputs);
@@ -190,18 +218,23 @@ exit 2
 Description=Cod workspace host
 
 [Service]
-ExecStart="%h/.local/bin/cod-workspace-host" serve
+${serviceCommand}
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 `,
     { flag: "wx", mode: 0o600 },
-  ).catch((error) => {
+  ).catch(async (error) => {
     if (error.code !== "EEXIST") throw error;
+    await assertManagedUnit(unit);
   });
   try {
     await control("daemon-reload");
+    if ((await unitFragment()) !== unit)
+      throw new Error(
+        "systemd did not load this account's Cod workspace service",
+      );
     // Asking systemd to start an already active unit leaves its process and PTYs intact.
     await control("enable", "--now", service);
     for (let attempt = 0; attempt < 8; attempt++) {
