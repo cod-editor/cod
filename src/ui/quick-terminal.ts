@@ -2,6 +2,7 @@ import { dialogSurface, iconButton, selectField, uiButton } from "../ui-kit";
 import type { AppState, TerminalProcessState } from "../types";
 import type { DesktopOperationName, Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
+import { shortcutTitle } from "./keyboard-ui";
 import type { createTerminalViews } from "./terminal-views";
 
 type Location = "local" | "linux";
@@ -28,6 +29,19 @@ export function createQuickTerminal(
         hide: (restore: boolean) => void;
       }
     | undefined;
+
+  const trigger = iconButton("terminal", "Quick Terminal", toggle);
+  trigger.disabled = true;
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-expanded", "false");
+  // Mouse activation preserves the focused pane. Keyboard activation can
+  // return directly to the trigger.
+  trigger.onpointerdown = (event) => event.preventDefault();
+  const updateShortcut = () => {
+    trigger.title = shortcutTitle("terminal.quickToggle");
+  };
+  updateShortcut();
+  document.addEventListener("cod:keymap-changed", updateShortcut);
 
   function remoteAlias(id: string) {
     const remote = state().remoteWorkspace;
@@ -131,6 +145,7 @@ export function createQuickTerminal(
     function hide(restore: boolean) {
       if (current?.workspace !== workspace || !dialog.open) return;
       current = undefined;
+      trigger.setAttribute("aria-expanded", "false");
       ++intent;
       body.replaceChildren();
       dialog.close();
@@ -266,6 +281,7 @@ export function createQuickTerminal(
     document.body.append(dialog);
     staged = stageBrowserBackdrop(dialog).catch(() => hide(true));
     dialog.showModal();
+    trigger.setAttribute("aria-expanded", "true");
     const present = workspace.shells[workspace.location];
     if (present) {
       body.append(present.view);
@@ -275,9 +291,11 @@ export function createQuickTerminal(
   }
 
   return {
+    trigger,
     toggle,
     isDialog: (dialog: Element) => dialog.classList.contains("quick-terminal"),
     reconcile() {
+      trigger.disabled = !state().activeWorkspaceId;
       if (!workspaces.size) return;
       if (
         current &&

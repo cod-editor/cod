@@ -1009,6 +1009,10 @@ test("Header participates in keyboard area traversal and its controls remain seq
   await composer.click();
   await shell.page.keyboard.press("Control+Alt+F6");
   const header = shell.page.locator(".app-header");
+  const quickTerminal = header.getByRole("button", {
+    name: "Quick Terminal",
+    exact: true,
+  });
   await expect(
     header.getByRole("button", { name: "Toggle files", exact: true }),
   ).toBeFocused();
@@ -1016,6 +1020,8 @@ test("Header participates in keyboard area traversal and its controls remain seq
   await expect(
     header.getByRole("button", { name: "Overview", exact: true }),
   ).toBeFocused();
+  await shell.page.keyboard.press("Tab");
+  await expect(quickTerminal).toBeFocused();
   await shell.page.keyboard.press("Tab");
   await expect(
     header.getByRole("button", { name: "Toggle split view", exact: true }),
@@ -1027,6 +1033,7 @@ test("Header participates in keyboard area traversal and its controls remain seq
   await expect(
     header.getByRole("button", { name: "Toggle files", exact: true }),
   ).toBeDisabled();
+  await expect(quickTerminal).toBeDisabled();
   const background = await shell.cli<{ id: string }>(
     "workspace",
     "create",
@@ -1042,4 +1049,5 @@ test("Header participates in keyboard area traversal and its controls remain seq
   await expect(
     header.getByRole("button", { name: "Toggle files", exact: true }),
   ).toBeEnabled();
+  await expect(quickTerminal).toBeEnabled();
 });

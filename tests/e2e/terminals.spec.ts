@@ -576,9 +576,28 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   const dialog = shell.page.getByRole("dialog", { name: "Quick Terminal" });
   const quickInput = dialog.getByRole("textbox", { name: "Terminal input" });
   const toggle = () => shell.page.keyboard.press("Control+Backquote");
+  const trigger = shell.page.locator(".app-header").getByRole("button", {
+    name: "Quick Terminal",
+    exact: true,
+    includeHidden: true,
+  });
+  await expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toHaveAttribute("title", /Quick Terminal.+`/);
+  const button = (await trigger.boundingBox())!;
+  const split = (await shell.page
+    .getByRole("button", {
+      name: "Toggle split view",
+    })
+    .boundingBox())!;
+  expect(button.x + button.width).toBeLessThanOrEqual(split.x);
+  await shell.page.screenshot({
+    path: info.outputPath("quick-terminal-titlebar-closed.png"),
+  });
 
-  await toggle();
+  await trigger.click();
   await expect(quickInput).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("combobox")).toHaveCount(0);
   const first = (await shell.cli<AppState>("state")).quickTerminals!.find(
@@ -603,11 +622,28 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await output(first.id, /QUICK_RAW_READY[\s\S]*?\s27\r?\n/);
   await expect(dialog).toBeVisible();
   await write(first.id, "sleep .1; printf 'QUICK_HIDDEN_OUTPUT\\n'\n");
-  await toggle();
+  // The native dialog owns backdrop clicks, including the trigger's position.
+  await shell.page.mouse.click(
+    button.x + button.width / 2,
+    button.y + button.height / 2,
+  );
   await expect(dialog).toHaveCount(0);
   await expect(input(ordinary.paneId)).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
   await output(first.id, /QUICK_HIDDEN_OUTPUT/);
-  await toggle();
+  await shell.page.getByRole("button", { name: "Overview" }).focus();
+  await shell.page.keyboard.press("Tab");
+  await expect(trigger).toBeFocused();
+  await trigger.press("Enter");
+  await expect(quickInput).toBeFocused();
+  await dialog.getByRole("button", { name: "Hide Quick Terminal" }).click();
+  await expect(trigger).toBeFocused();
+  await writeFile(
+    path.join(shell.data, "keymap.json"),
+    JSON.stringify({ "terminal.quickToggle": ["Alt+F7"] }),
+  );
+  await expect(trigger).toHaveAttribute("title", /Quick Terminal.+F7/);
+  await shell.page.keyboard.press("Alt+F7");
   await expect(quickInput).toBeFocused();
   await expect(
     dialog.getByRole("region", { name: "Terminal output" }),
@@ -638,6 +674,16 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await shell.page.screenshot({
     path: info.outputPath("quick-terminal-narrow.png"),
   });
+  await shell.page.keyboard.press("Alt+F7");
+  await expect(dialog).toHaveCount(0);
+  const narrowButton = (await trigger.boundingBox())!;
+  expect(narrowButton.x).toBeGreaterThanOrEqual(0);
+  expect(narrowButton.x + narrowButton.width).toBeLessThanOrEqual(440);
+  await shell.page.screenshot({
+    path: info.outputPath("quick-terminal-titlebar-narrow.png"),
+  });
+  await writeFile(path.join(shell.data, "keymap.json"), "{}");
+  await expect(trigger).toHaveAttribute("title", /Quick Terminal.+`/);
   await shell.page.setViewportSize({ width: 1280, height: 820 });
 
   const other = await shell.create("Another workspace");

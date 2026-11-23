@@ -2,7 +2,44 @@ import { documentFragment, type TextFragment } from "../markdown-document";
 import { renderMarkdown } from "../markdown-view";
 import type { Range as CommentRange } from "../reviews/snapshots";
 import { menu } from "./controls";
-import { createReviewSource } from "./review-source";
+import { createReviewSource, reviewTextPoint } from "./review-source";
+
+const draftHighlight = "cod-review-draft";
+
+function renderedRanges(
+  rendered: HTMLElement,
+  fragment: TextFragment,
+  quote: string,
+) {
+  const ranges: Range[] = [];
+  for (const block of rendered.querySelectorAll<HTMLElement>(
+    ":scope > .markdown-block",
+  )) {
+    const start = Number(block.dataset.textStart);
+    const end = Number(block.dataset.textEnd);
+    if (start >= fragment.end || end <= fragment.start) continue;
+    // Diagrams and sanitizer rewrites do not necessarily share text coordinates.
+    if (
+      block.querySelector("[data-diagram]") ||
+      block.textContent.length !== end - start
+    )
+      return [];
+    const first = reviewTextPoint(
+      block,
+      Math.max(fragment.start, start) - start,
+    );
+    const last = reviewTextPoint(block, Math.min(fragment.end, end) - start);
+    const range = document.createRange();
+    range.setStart(first.node, first.offset);
+    range.setEnd(last.node, last.offset);
+    ranges.push(range);
+  }
+  // Keep each range in its own block so draft and saved annotations between
+  // blocks are never painted or included in the selection.
+  return ranges.map((range) => range.toString()).join("") === quote
+    ? ranges
+    : [];
+}
 
 export function reviewDocument(
   source: string,
@@ -42,6 +79,39 @@ export function reviewDocument(
   const anchored = new Map<HTMLElement, CommentRange>();
   // The immutable snapshot lets us retain a pending form's exact anchor quote.
   const contextAnchors = new WeakMap<HTMLElement, string>();
+  let draft: { context: HTMLElement; fragment?: TextFragment } | undefined;
+  let marked: Range[] = [];
+  function clearMark() {
+    const registry = CSS.highlights;
+    const highlight = registry?.get(draftHighlight);
+    if (highlight) {
+      for (const range of marked) highlight.delete(range);
+      if (!highlight.size) registry.delete(draftHighlight);
+    }
+    marked = [];
+  }
+
+  function updateDraftMark() {
+    clearMark();
+    if (!draft) return;
+    const { context, fragment } = draft;
+    context.hidden = false;
+    if (!preview || fragment?.view !== "markdown" || !CSS.highlights) return;
+    const quote = context.lastElementChild!.textContent;
+    marked = renderedRanges(rendered, fragment, quote);
+    if (!marked.length) return;
+    const highlight = CSS.highlights.get(draftHighlight) ?? new Highlight();
+    for (const range of marked) highlight.add(range);
+    CSS.highlights.set(draftHighlight, highlight);
+    context.hidden = true;
+  }
+
+  function clearDraftAnchor() {
+    if (draft) draft.context.hidden = false;
+    draft = undefined;
+    clearMark();
+  }
+
   function positionAnnotations() {
     const blocks = preview
       ? [...rendered.querySelectorAll<HTMLElement>(".markdown-block")]
@@ -173,7 +243,10 @@ export function reviewDocument(
     if (preview && !renderedOnce) {
       renderedOnce = true;
       void renderMarkdown(rendered, source, () => element.isConnected)
-        .then(positionAnnotations)
+        .then(() => {
+          positionAnnotations();
+          updateDraftMark();
+        })
         .catch((error) => report(String(error)));
     }
   }
@@ -190,7 +263,9 @@ export function reviewDocument(
       commenting = enabled;
       sourceView.setCommenting(enabled);
     },
+    clearDraftAnchor,
     clearAnnotations(retain?: HTMLElement) {
+      clearDraftAnchor();
       for (const node of anchored.keys()) {
         if (node !== retain) node.remove();
       }
@@ -206,11 +281,13 @@ export function reviewDocument(
         if (!context) {
           context = document.createElement("div");
           context.className = "review-anchor-context";
-          context.append(
-            document.createElement("span"),
-            document.createElement("blockquote"),
-          );
+          const quote = document.createElement("blockquote");
+          quote.id = `review-comment-quote-${crypto.randomUUID()}`;
+          context.append(document.createElement("span"), quote);
           node.prepend(context);
+          node
+            .querySelector("textarea")
+            ?.setAttribute("aria-describedby", quote.id);
         }
         const anchor = `${range.startLine}:${range.endLine}:${range.fragment?.view}:${range.fragment?.start}:${range.fragment?.end}`;
         if (contextAnchors.get(node) !== anchor) {
@@ -223,6 +300,8 @@ export function reviewDocument(
                 .join("\n");
           contextAnchors.set(node, anchor);
         }
+        draft = { context, fragment: range.fragment };
+        updateDraftMark();
       } else {
         const caption = node.querySelector(".review-comment-caption");
         if (caption && !caption.querySelector(".review-anchor-label")) {
@@ -240,6 +319,7 @@ export function reviewDocument(
       preview = !preview;
       show();
       positionAnnotations();
+      updateDraftMark();
       focus();
       return preview;
     },

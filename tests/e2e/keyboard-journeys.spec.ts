@@ -549,6 +549,22 @@ test("Native website keys stay on the page and palette cancellation restores its
       expect.objectContaining({ code: "Backquote", ctrl: true }),
     );
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    const quickButton = app.page.locator(".app-header").getByRole("button", {
+      name: "Quick Terminal",
+      exact: true,
+    });
+    await quickButton.click();
+    await expect(
+      quick.getByRole("textbox", { name: "Terminal input" }),
+    ).toBeFocused();
+    await quick.getByRole("button", { name: "Hide Quick Terminal" }).click();
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    const afterButton = await inspect();
+    expect([afterButton.field, afterButton.start, afterButton.end]).toEqual([
+      "second",
+      1,
+      2,
+    ]);
     await key("E", [mod, "shift"]);
     await expect(app.page.locator("#project-panel")).toBeFocused();
     await app.page.keyboard.press(`${modifier}+Shift+E`);
