@@ -3,11 +3,14 @@ import { chmod, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
 
+const execute = promisify(execFile);
 let app: ChatApp;
 test.beforeEach(async () => {
   app = new ChatApp();
@@ -915,6 +918,287 @@ test("Overview keeps split browser backdrops in their own panes and discards the
   await expect(overview()).toHaveCount(0);
   await app.cli("workspace", "focus", "--id", workspace);
   await expect(app.page.locator(".browser-overview-backdrop")).toHaveCount(0);
+
+  // A deliberately delayed capture must not hold the other visible pane or input.
+  const leftUrl = pathToFileURL(path.join(app.folders[0], "alpha.html")).href;
+  await expect
+    .poll(async () => {
+      const state = await app.cli<AppState>("state");
+      return [left, right].every(
+        ({ id }) =>
+          state.browsers.find((browser) => browser.id === id)?.visible,
+      );
+    })
+    .toBe(true);
+  await app.app!.evaluate(({ webContents }, url) => {
+    const contents = webContents
+      .getAllWebContents()
+      .find((page) => page.getURL() === url)!;
+    const capture = contents.capturePage.bind(contents);
+    contents.capturePage = async (...args) => {
+      contents.capturePage = capture;
+      const frame = await capture(...args);
+      await new Promise<void>((resolve) => {
+        (process as import("node:events").EventEmitter).once(
+          "fixture-release-overview-capture",
+          resolve,
+        );
+      });
+      return frame;
+    };
+  }, leftUrl);
+  await show();
+  await expect(overview()).toHaveCSS("opacity", "1");
+  await expect(image(left.paneId)).toHaveCount(0);
+  await expect(image(right.paneId)).toHaveJSProperty("complete", true);
+  await search().pressSequentially("beta");
+  await expect(search()).toHaveValue("beta");
+  await app.app!.evaluate(() => {
+    (process as import("node:events").EventEmitter).emit(
+      "fixture-release-overview-capture",
+    );
+  });
+  await expect(image(left.paneId)).toHaveCount(0);
+  await search().press("Escape");
+  await expect(overview()).toHaveCount(0);
+});
+
+test("Overview stages browser pixels before native hide, accepts early input and ignores cancelled handoffs", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "Actual pointer input uses isolated X11",
+  );
+  const workspace = await app.create("Invented overview handoff");
+  const file = path.join(app.folders[0], "overview-handoff.html");
+  await writeFile(
+    file,
+    `<!doctype html><title>Invented handoff page</title>
+     <style>:root {background:#147dc1}</style>
+     <input value="Invented draft">
+     <script>window.fixtureClicks = 0;
+     addEventListener("pointerdown", () => window.fixtureClicks++);</script>`,
+  );
+  const url = pathToFileURL(file).href;
+  const browser = await app.cli<{ id: string; paneId: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    url,
+  );
+  const chat = await app.newChat(workspace, "codex");
+  const left = (await app.cli<AppState>("state")).workspaces
+    .find((item) => item.id === workspace)!
+    .groups.find((group) => group.paneIds.includes(browser.paneId))!;
+  await app.cli(
+    "group",
+    "split",
+    "--workspace",
+    workspace,
+    "--id",
+    left.id,
+    "--direction",
+    "right",
+    "--pane-id",
+    chat.paneId,
+  );
+
+  const composer = app
+    .pane(chat.paneId)
+    .getByRole("textbox", { name: "Message" });
+  const openingFixture = await app.app!.evaluate(
+    ({ BrowserWindow, ipcMain, WebContentsView }, url) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      win.setContentSize(760, 620);
+      const child = win.contentView.children.find(
+        (view) =>
+          view instanceof WebContentsView && view.webContents.getURL() === url,
+      ) as Electron.WebContentsView;
+      const gate = {
+        pending: false,
+        release: () => {},
+        visible: () => child.getVisible(),
+      };
+      const channel = "cod:browser-hide-for-overview";
+      const handler = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<
+            string,
+            (event: Electron.IpcMainInvokeEvent, opening: number) => boolean
+          >;
+        }
+      )._invokeHandlers.get(channel)!;
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, async (event, opening: number) => {
+        await new Promise<void>((resolve) => {
+          gate.pending = true;
+          gate.release = resolve;
+        });
+        gate.pending = false;
+        return handler(event, opening);
+      });
+      Object.assign(globalThis, { overviewHandoffFixture: gate });
+      return win.getNativeWindowHandle().readUInt32LE(0);
+    },
+    url,
+  );
+  await execute("xdotool", ["windowfocus", "--sync", String(openingFixture)]);
+  const site = app
+    .app!.context()
+    .pages()
+    .find((page) => page.url() === url)!;
+  const native = (action: "read" | "release") =>
+    app.app!.evaluate((_electron, action) => {
+      const gate = (
+        globalThis as unknown as {
+          overviewHandoffFixture: {
+            pending: boolean;
+            visible: () => boolean;
+            release: () => void;
+          };
+        }
+      ).overviewHandoffFixture;
+      if (action === "release") gate.release();
+      return { pending: gate.pending, visible: gate.visible() };
+    }, action);
+  const backdrop = app
+    .pane(browser.paneId)
+    .locator(".browser-overview-backdrop");
+  const browserPoint = await app
+    .pane(browser.paneId)
+    .locator(".browser-content")
+    .evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        x: Math.floor(bounds.x + 16),
+        y: Math.floor(bounds.bottom - 20),
+      };
+    });
+  const nativeWindowPoint = await app.app!.evaluate(
+    ({ BrowserWindow }, point) => {
+      const bounds = BrowserWindow.getAllWindows()[0].getContentBounds();
+      return { x: bounds.x + point.x, y: bounds.y + point.y };
+    },
+    browserPoint,
+  );
+  const clickPagePoint = () =>
+    execute("xdotool", [
+      "mousemove",
+      "--sync",
+      String(nativeWindowPoint.x),
+      String(nativeWindowPoint.y),
+      "click",
+      "1",
+    ]);
+  const captureScreen = async (name: string) => {
+    const screenShot = await app.app!.evaluate(
+      async ({ desktopCapturer, screen }, point) => {
+        const display = screen.getPrimaryDisplay();
+        const [source] = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: display.size,
+        });
+        const image = source.thumbnail;
+        const badge = image.crop({ ...point, width: 1, height: 1 });
+        const [blue, green, red] = badge.toBitmap();
+        return {
+          bluePage: blue > green + 20 && green > red + 40,
+          png: image.toPNG().toString("base64"),
+        };
+      },
+      nativeWindowPoint,
+    );
+    expect(screenShot.bluePage).toBe(true);
+    await writeFile(
+      info.outputPath(name + ".png"),
+      Buffer.from(screenShot.png, "base64"),
+    );
+  };
+  await app.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    browser.paneId,
+  );
+  await app.app!.evaluate(
+    ({ webContents }, url) =>
+      webContents
+        .getAllWebContents()
+        .find((page) => page.getURL() === url)
+        ?.focus(),
+    url,
+  );
+  await execute("xdotool", ["key", "--clearmodifiers", "ctrl+shift+o"]);
+  await expect
+    .poll(() => native("read"))
+    .toEqual({ pending: true, visible: true });
+  await expect(overview()).toHaveCSS("opacity", "0");
+  await expect(backdrop).toHaveJSProperty("complete", true);
+  await captureScreen("overview-native-handoff-before-hide");
+  await execute("xdotool", ["key", "--clearmodifiers", "h"]);
+  await expect(search()).toHaveValue("h");
+  await clickPagePoint();
+  expect(
+    await site.evaluate(
+      () => (window as Window & { fixtureClicks?: number }).fixtureClicks,
+    ),
+  ).toBe(0);
+  const focusAfterClick = await app.app!.evaluate(
+    ({ BrowserWindow, webContents }) =>
+      BrowserWindow.getAllWindows()[0].webContents ===
+      webContents.getFocusedWebContents(),
+  );
+  await info.attach("overview-shell-focus-after-native-click.json", {
+    body: JSON.stringify({
+      shellWebContents: focusAfterClick,
+      shellDocument: await app.page.evaluate(() => document.hasFocus()),
+      searchInput: await search().evaluate(
+        (input) => input === document.activeElement,
+      ),
+    }),
+    contentType: "application/json",
+  });
+  await execute("xdotool", ["type", "andoff"]);
+  await expect(search()).toHaveValue("handoff");
+  await native("release");
+  await expect(overview()).toHaveCSS("opacity", "1");
+  await expect
+    .poll(() => native("read"))
+    .toEqual({ pending: false, visible: false });
+  await captureScreen("overview-native-handoff-after-hide");
+  await clickPagePoint();
+  await expect(overview()).toHaveCount(0);
+  await expect(backdrop).toHaveCount(0);
+  await expect
+    .poll(() =>
+      app.app!.evaluate(({ webContents }) =>
+        webContents.getFocusedWebContents()?.getURL(),
+      ),
+    )
+    .toBe(url);
+
+  await app.cli("pane", "focus", "--workspace", workspace, "--id", chat.paneId);
+  await composer.focus();
+  await app.page.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect
+    .poll(() => native("read"))
+    .toEqual({ pending: true, visible: true });
+  await expect(overview()).toHaveCSS("opacity", "0");
+  await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
+  await expect(overview()).toHaveCount(0);
+  await expect(backdrop).toHaveCount(0);
+  await native("release");
+  await expect
+    .poll(() => native("read"))
+    .toEqual({ pending: false, visible: true });
+  expect(
+    await site.evaluate(
+      () => (window as Window & { fixtureClicks?: number }).fixtureClicks,
+    ),
+  ).toBe(0);
 });
 
 test("Overview reconciles review, streaming and removal updates without losing input, selected IDs or closure guards", async () => {

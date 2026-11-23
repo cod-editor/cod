@@ -25,7 +25,9 @@ export function createBrowserViews(
       flushBrowserLayout();
     });
   }
-  type CaptureSession = { dialog: HTMLDialogElement };
+  type CaptureSession = { dialog: HTMLDialogElement; opening?: number };
+  let nextOpening = 0;
+  const overviewBackdropDeadline = 100; // Bound capture, decode and the paint handoff.
   let captureSession: CaptureSession | null = null;
   const openBackdropDialog = () =>
     document.querySelector<HTMLDialogElement>(
@@ -78,70 +80,103 @@ export function createBrowserViews(
     }
     captureSession = null;
     if (!dialog || !workspace) return;
-    const overview = dialog.dataset.browserBackdrop === "overview";
+    if (dialog.dataset.browserBackdrop === "overview") return;
     const session = { dialog };
     captureSession = session;
+    void captureBrowserBackdrops(session, visibleSlots).catch(() => undefined);
+  }
+  async function captureBrowserBackdrops(
+    session: CaptureSession,
+    slots: Map<string, HTMLElement>,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const state = getState();
+    const workspace = state.workspaces.find(
+      ({ id }) => id === state.activeWorkspaceId,
+    );
+    const overview = session.opening !== undefined;
     const targets = state.browsers
       .filter(
         (item) =>
-          item.workspaceId === workspace.id &&
+          item.workspaceId === workspace?.id &&
           !item.agentPage &&
-          (overview || item.paneId === workspace.activePaneId) &&
-          visibleSlots.has(item.id),
+          (overview || item.paneId === workspace?.activePaneId) &&
+          slots.has(item.id),
       )
       .sort(
         (a, b) =>
-          Number(b.paneId === workspace.activePaneId) -
-          Number(a.paneId === workspace.activePaneId),
+          Number(b.paneId === workspace?.activePaneId) -
+          Number(a.paneId === workspace?.activePaneId),
       )
       .slice(0, overview ? 4 : 1)
       .map(({ id }) => id);
-    if (!targets.length) return;
-    // Request the last visible frame before sending the ordered native hide.
-    void window.cod
-      .browserOverviewBackdrop(targets)
-      .then((captures) => {
-        const open = openBackdropDialog();
-        if (
-          captureSession !== session ||
-          (open !== session.dialog && !passesCapture(session.dialog, open)) ||
-          getState().activeWorkspaceId !== workspace.id
-        )
-          return;
-        for (const { id, url, bytes } of captures) {
-          const target = visibleSlots.get(id);
-          const source = browser(id);
-          if (
-            !target ||
-            !panes.contains(target) ||
-            target.hidden ||
-            !target.getClientRects().length ||
-            source?.agentPage ||
-            source?.url !== url ||
-            source.workspaceId !== workspace.id
-          )
-            continue;
-          const image = document.createElement("img");
-          image.className = "browser-overview-backdrop";
-          image.alt = "";
-          image.setAttribute("aria-hidden", "true");
-          const objectUrl = URL.createObjectURL(
-            new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+    if (!overview && !targets.length) return false;
+    const captures = await window.cod.browserOverviewBackdrop(
+      targets,
+      session.opening,
+    );
+    const stillCurrent = () =>
+      !signal?.aborted &&
+      captureSession === session &&
+      getState().activeWorkspaceId === workspace?.id &&
+      (openBackdropDialog() === session.dialog ||
+        passesCapture(session.dialog, openBackdropDialog()));
+    if (!stillCurrent()) return false;
+    const images = await Promise.all(
+      captures.map(async ({ id, url, bytes }) => {
+        const target = slots.get(id);
+        if (!target) return false;
+        const validSource = () => {
+          const source = getState().browsers.find((record) => record.id === id);
+          return (
+            stillCurrent() &&
+            panes.contains(target) &&
+            !target.hidden &&
+            !!target.getClientRects().length &&
+            !source?.agentPage &&
+            source?.url === url &&
+            source.workspaceId === workspace?.id
           );
-          backdrops.set(image, { pageUrl: url, objectUrl });
-          image.src = objectUrl;
-          target.append(image);
+        };
+        if (!validSource()) return false;
+        const image = document.createElement("img");
+        image.className = "browser-overview-backdrop";
+        image.alt = "";
+        image.setAttribute("aria-hidden", "true");
+        const objectUrl = URL.createObjectURL(
+          new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+        );
+        image.src = objectUrl;
+        try {
+          if (overview) await image.decode();
+          if (validSource()) {
+            backdrops.set(image, { pageUrl: url, objectUrl });
+            target.append(image);
+            return true;
+          }
+        } catch {
+          // A missing frame leaves the ordinary empty browser backdrop.
         }
-      })
-      .catch(() => undefined);
+        URL.revokeObjectURL(objectUrl);
+        return false;
+      }),
+    );
+    return images.some(Boolean);
   }
-  function flushBrowserLayout(): void {
-    const slots = new Map(
+  function visibleSlots() {
+    return new Map(
       [...panes.querySelectorAll<HTMLElement>(".browser-content")]
         .filter((element) => !element.hidden && element.getClientRects().length)
         .map((element) => [element.dataset.browserId!, element]),
     );
-    updateBrowserBackdrops(openBackdropDialog(), slots);
+  }
+  function flushBrowserLayout(): void {
+    const dialog = openBackdropDialog();
+    // The native layer remains visible while the replacement frame is staged.
+    // Only the opening handoff can hide it during this interval.
+    if (dialog?.hasAttribute("data-browser-preparing")) return;
+    const slots = visibleSlots();
+    updateBrowserBackdrops(dialog, slots);
     const rectangles = document.querySelector("dialog[open]")
       ? []
       : [...slots].map(([id, element]) => {
@@ -149,6 +184,51 @@ export function createBrowserViews(
           return { id, x, y, width, height };
         });
     window.cod.browserLayout(rectangles);
+  }
+  async function stageOverview(dialog: HTMLDialogElement): Promise<void> {
+    const slots = visibleSlots();
+    if (!slots.size && !getState().browsers.some((item) => item.visible))
+      return;
+    for (const [image, { objectUrl }] of backdrops)
+      removeBackdrop(image, objectUrl);
+    const session = { dialog, opening: ++nextOpening };
+    captureSession = session;
+    dialog.dataset.browserPreparing = "";
+    const deadline = new AbortController();
+    const expired = new Promise<void>((resolve) => {
+      deadline.signal.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
+    const timer = window.setTimeout(
+      () => deadline.abort(),
+      overviewBackdropDeadline,
+    );
+    try {
+      await Promise.race([
+        captureBrowserBackdrops(session, slots, deadline.signal)
+          .then((painted) => {
+            if (painted)
+              return new Promise<void>((resolve) =>
+                // Give the decoded image a paint before removing the native view.
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => resolve()),
+                ),
+              );
+          })
+          .catch(() => undefined),
+        expired,
+      ]);
+    } finally {
+      window.clearTimeout(timer);
+      deadline.abort();
+    }
+    if (!dialog.open || captureSession !== session) return;
+    updateBrowserBackdrops(dialog, visibleSlots());
+    const hidden = await window.cod.browserHideForOverview(session.opening);
+    if (!dialog.open || captureSession !== session) return;
+    if (!hidden) throw new Error("Overview native layout was superseded");
+    delete dialog.dataset.browserPreparing;
   }
   const resizeObserver = new ResizeObserver(scheduleBrowserLayout);
   resizeObserver.observe(panes);
@@ -532,6 +612,7 @@ export function createBrowserViews(
         }
     },
     layout: scheduleBrowserLayout,
+    stageOverview,
     focusNative(id: string) {
       // These ordered IPC sends apply visibility before focus. A closed dialog
       // must not depend on a future observer/rAF to restore its native origin.

@@ -48,6 +48,7 @@ export function createWorkspaceOverview(
     newConversation: (workspace: string) => Promise<void>;
     openPane: (workspace: string, pane: string) => Promise<void>;
     fallback: () => Promise<void>;
+    stageBrowserBackdrop: (dialog: HTMLDialogElement) => Promise<void>;
   },
 ) {
   let current:
@@ -738,6 +739,7 @@ export function createWorkspaceOverview(
       rename: renameSelected,
       closeFromSearch,
     };
+    void destinations.stageBrowserBackdrop(dialog).catch(cancel);
     dialog.showModal();
     document
       .querySelector("#workspace-selector")

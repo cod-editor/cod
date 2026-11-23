@@ -817,17 +817,40 @@ async function start(): Promise<void> {
         event.sender === mainWindow?.webContents &&
         event.senderFrame?.url === rendererUrl
       )
-        operations.browserLayout(remoteView ? [] : rectangles);
+        operations.browserLayout(remoteView ? [] : rectangles, true);
     });
-    ipcMain.handle("cod:browser-overview-backdrop", (event, ids: unknown) => {
-      if (
-        event.sender !== mainWindow?.webContents ||
-        event.senderFrame !== event.sender.mainFrame ||
-        event.senderFrame.url !== rendererUrl
-      )
-        return [];
-      return operations.browserOverviewBackdrop(ids);
-    });
+    ipcMain.handle(
+      "cod:browser-hide-for-overview",
+      (event, opening: unknown) => {
+        if (
+          event.sender !== mainWindow?.webContents ||
+          event.senderFrame !== event.sender.mainFrame ||
+          event.senderFrame.url !== rendererUrl ||
+          typeof opening !== "number"
+        )
+          return false;
+        return operations.browserHideForOverview(opening);
+      },
+    );
+    ipcMain.handle(
+      "cod:browser-overview-backdrop",
+      (event, ids: unknown, opening: unknown) => {
+        if (
+          event.sender !== mainWindow?.webContents ||
+          event.senderFrame !== event.sender.mainFrame ||
+          event.senderFrame.url !== rendererUrl
+        )
+          return [];
+        return operations.browserOverviewBackdrop(
+          ids,
+          typeof opening === "number" &&
+            Number.isSafeInteger(opening) &&
+            opening > 0
+            ? opening
+            : undefined,
+        );
+      },
+    );
     ipcMain.handle("cod:choose-directory", async (event) => {
       const parent = mainWindow;
       if (
