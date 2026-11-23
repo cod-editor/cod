@@ -1618,7 +1618,9 @@ browser-action-list::part(action):focus-visible {
   max-height: 6lh;
   overflow: auto;
 }
-.review-markdown .review-anchor-context,
+.review-markdown::highlight(cod-review-draft) {
+  background-color: color-mix(in srgb, var(--focus) 42%, transparent);
+}
 .review-markdown .review-anchor-label {
   display: none;
 }
