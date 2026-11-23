@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { renameSync } from "node:fs";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceHostSelection } from "./protocol";
 
@@ -47,21 +48,21 @@ export async function readWorkspaceHostTarget(profile: string) {
   }
 }
 
-export async function saveWorkspaceHostTarget(
+export async function stageWorkspaceHostTarget(
   profile: string,
   target: WorkspaceHostSelection,
-  signal?: AbortSignal,
 ) {
   const file = path.join(profile, "workspace-host.json");
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(target) + "\n", {
-    mode: 0o600,
-    flag: "wx",
-  });
+  const discard = () => unlink(temporary).catch(() => undefined);
   try {
-    signal?.throwIfAborted();
-    await rename(temporary, file);
-  } finally {
-    await unlink(temporary).catch(() => undefined);
+    await writeFile(temporary, JSON.stringify(target) + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    await discard();
+    throw error;
   }
+  return { commit: () => renameSync(temporary, file), discard };
 }

@@ -50,7 +50,7 @@ import {
 import { attachWorkspaceHost, type HostLink } from "./remote-workspace/client";
 import {
   readWorkspaceHostTarget,
-  saveWorkspaceHostTarget,
+  stageWorkspaceHostTarget,
   workspaceHostSelection,
 } from "./remote-workspace/target";
 import {
@@ -235,6 +235,8 @@ async function connectRemoteWorkspace(
       },
       attempt.signal,
     );
+    let staged:
+      Awaited<ReturnType<typeof stageWorkspaceHostTarget>> | undefined;
     try {
       attempt.signal.throwIfAborted();
       if (shutdown || quitting) throw new Error("Cod is shutting down");
@@ -245,12 +247,15 @@ async function connectRemoteWorkspace(
         reviewAccess: link.reviewAccess,
       });
       if (remember)
-        await saveWorkspaceHostTarget(dataDirectory, selection, attempt.signal);
+        staged = await stageWorkspaceHostTarget(dataDirectory, selection);
       attempt.signal.throwIfAborted();
       if (shutdown || quitting || !link.connected)
         throw new Error("The Linux workspace connection closed");
+      // Publish the remembered destination and live link in the same turn.
+      staged?.commit();
     } catch (error) {
       link.close();
+      await staged?.discard();
       throw error;
     }
     remoteWorkspace?.close();
