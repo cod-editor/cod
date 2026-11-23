@@ -2,12 +2,20 @@ import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
-import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
+import { invokeCommand } from "../../src/command-client";
 
 async function readUnpairedWatch(socketPath: string): Promise<AppState> {
   const peer = connect(socketPath);
@@ -94,7 +102,10 @@ async function installWorkspaceRelay(
         args: string[],
         options: import("node:child_process").SpawnOptions,
       ) => {
-        if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
+        if (
+          command !== "/usr/bin/ssh" ||
+          !["invented-linux", "replacement-linux"].includes(args.at(-1) ?? "")
+        ) {
           return original(command, args, options);
         }
         const forward = args[args.indexOf("-L") + 1];
@@ -1082,6 +1093,41 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
       alias: "invented-linux",
     });
 
+    // Pause after the new alias has been written to a private staging file,
+    // then cancel before it can replace the remembered and displayed host.
+    await desktop.app!.evaluate(() => {
+      const files = process.getBuiltinModule(
+        "node:fs/promises",
+      ) as typeof import("node:fs/promises");
+      const write = files.writeFile;
+      files.writeFile = async (...args) => {
+        await write(...args);
+        if (!/workspace-host\.json\..+\.tmp$/.test(String(args[0]))) return;
+        files.writeFile = write;
+        await new Promise<void>((done) =>
+          process.once("cod-test-release-staged-workspace-target", done),
+        );
+      };
+    });
+    const pendingSelections = async () =>
+      (await readdir(desktop.data)).filter((name) =>
+        /^workspace-host\.json\..+\.tmp$/.test(name),
+      );
+    await openDialog();
+    await alias().fill("replacement-linux");
+    await connect().click();
+    await expect.poll(pendingSelections).toHaveLength(1);
+    await alias().press("Escape");
+    await expect(dialog()).toHaveCount(0);
+    await desktop.app!.evaluate(() =>
+      process.emit("cod-test-release-staged-workspace-target"),
+    );
+    await expect.poll(pendingSelections).toHaveLength(0);
+    await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
+
     await desktop.command("Disconnect Linux workspace");
     await focusLocal();
     const connectResult = await desktop.cli(
@@ -1096,6 +1142,18 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
       reviewAccess: false,
     });
     await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    // Use the raw ordinary socket to exercise the main-process trust boundary
+    // directly, independently of the CLI grammar rejecting the reserved flag.
+    expect(
+      await invokeCommand(desktop.socket, {
+        op: "workspace.connect",
+        alias: "invented-linux",
+        publicKey: "/invented/explicit-pairing-key.pub",
+      }),
+    ).toMatchObject({ reviewAccess: false });
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
     await focusLocal();
     const prepared = await desktop.cli<{ id: string; location: string }>(
       "workspace",
