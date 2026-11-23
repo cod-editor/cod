@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
+  readlink,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { connect } from "node:net";
@@ -21,6 +24,120 @@ const hostEntry = path.resolve("dist/workspace-host.cjs");
 const cliEntry = path.resolve("dist/cli.cjs");
 
 test(
+  "Linux installer creates a discoverable service and retains sessions on reinstall",
+  { skip: process.platform !== "linux", timeout: 20000 },
+  async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cod-installed-"));
+    const shim = path.join(home, "shim");
+    const launcher = path.join(home, ".local/bin/cod-workspace-host");
+    const service = path.join(
+      home,
+      ".config/systemd/user/cod-workspace-host.service",
+    );
+    const activePid = path.join(home, "pid");
+    const commands = path.join(home, "systemctl.log");
+    const socketPath = path.join(home, ".local/state/cod-host/cod.sock");
+    const env = {
+      ...process.env,
+      HOME: home,
+      PATH: shim + path.delimiter + process.env.PATH,
+      COD_SOCKET_PATH: socketPath,
+      COD_TERMINAL_SHELL: "/bin/sh",
+      COD_TERMINAL_ARGS: '["-i"]',
+    };
+    const install = () =>
+      execute(process.execPath, ["scripts/install-workspace-host.mjs"], {
+        env,
+        timeout: 10000,
+      });
+    await mkdir(shim);
+    await writeFile(
+      path.join(shim, "loginctl"),
+      '#!/bin/sh\ncat "$HOME/linger"\n',
+      { mode: 0o700 },
+    );
+    await writeFile(
+      path.join(shim, "systemctl"),
+      `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$HOME/systemctl.log"
+case "$*" in
+  "--user show --property=Version --value" | "--user daemon-reload") exit 0 ;;
+  "--user enable --now cod-workspace-host.service")
+    if [ ! -f "$HOME/pid" ]; then
+      "$HOME/.local/bin/cod-workspace-host" serve </dev/null >"$HOME/host.log" 2>&1 &
+      echo "$!" >"$HOME/pid"
+    fi ;;
+  *) exit 2 ;;
+esac
+`,
+      { mode: 0o700 },
+    );
+    try {
+      await writeFile(path.join(home, "linger"), "no\n");
+      await assert.rejects(install(), /needs systemd lingering/);
+      await assert.rejects(stat(launcher), { code: "ENOENT" });
+      await writeFile(path.join(home, "linger"), "yes\n");
+      assert.match((await install()).stdout, /workspace host is ready/);
+      assert.match(
+        await readFile(service, "utf8"),
+        /cod-workspace-host" serve/,
+      );
+      assert.deepEqual(
+        JSON.parse((await execute(launcher, ["endpoint"], { env })).stdout),
+        { socketPath },
+      );
+      const revision = path.join(home, ".local/lib/cod-workspace-host/current");
+      const firstRelease = await readlink(revision);
+      const firstPid = await readFile(activePid, "utf8");
+      const cli = async (...args) =>
+        JSON.parse(
+          (
+            await execute(process.execPath, [cliEntry, ...args], {
+              env,
+              timeout: 3000,
+            })
+          ).stdout,
+        );
+      const workspace = (await cli("state")).workspaces[0].id;
+      const terminal = await cli("terminal", "open", "--workspace", workspace);
+      const shellPid = (await cli("terminal", "inspect", "--id", terminal.id))
+        .pid;
+      assert(shellPid > 0);
+      await install();
+      assert.equal(await readFile(activePid, "utf8"), firstPid);
+      assert.equal(await readlink(revision), firstRelease);
+      const reopened = await cli("terminal", "inspect", "--id", terminal.id);
+      assert.equal(reopened.pid, shellPid);
+      assert.equal(reopened.status, "running");
+      assert.deepEqual((await readFile(commands, "utf8")).trim().split("\n"), [
+        "--user show --property=Version --value",
+        "--user show --property=Version --value",
+        "--user daemon-reload",
+        "--user enable --now cod-workspace-host.service",
+        "--user show --property=Version --value",
+        "--user daemon-reload",
+        "--user enable --now cod-workspace-host.service",
+      ]);
+    } finally {
+      const pid = Number(await readFile(activePid, "utf8").catch(() => ""));
+      if (pid > 1) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error;
+        }
+        for (let attempt = 0; attempt < 40; attempt++) {
+          if (!(await stat(socketPath).catch(() => undefined))) break;
+          await delay(25);
+        }
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "Linux workspace host retains files, layout and a native PTY across independent CLI clients",
   { skip: process.platform !== "linux", timeout: 15000 },
   async () => {
@@ -29,6 +146,15 @@ test(
     const socketPath = path.join(profile, "cod.sock");
     const repository = path.join(fixture, "fixture");
     const file = path.join(repository, "spec.md");
+    const inputrc = path.join(fixture, "inputrc");
+    // The fixture uses a real shell, including systems where /bin/sh is bash.
+    await writeFile(inputrc, "set enable-bracketed-paste off\n");
+    const endpoint = () =>
+      execute(process.execPath, [hostEntry, "--endpoint", profile], {
+        timeout: 3000,
+      });
+    await assert.rejects(endpoint(), /No ready Linux workspace host/);
+    await assert.rejects(stat(profile), { code: "ENOENT" });
     await mkdir(repository);
     await writeFile(file, "# Invented document\n");
     const git = (...args) => execute("git", ["-C", repository, ...args]);
@@ -48,6 +174,7 @@ test(
         ...process.env,
         COD_TERMINAL_SHELL: "/bin/sh",
         COD_TERMINAL_ARGS: '["-i"]',
+        INPUTRC: inputrc,
       },
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -78,6 +205,17 @@ test(
       assert(!capability.operations.includes("browser.open"));
       assert.equal((await stat(profile)).mode & 0o777, 0o700);
       assert.equal((await stat(socketPath)).mode & 0o777, 0o600);
+      assert.deepEqual(JSON.parse((await endpoint()).stdout), { socketPath });
+      await chmod(socketPath, 0o666);
+      await assert.rejects(endpoint(), /workspace host socket is not private/);
+      await chmod(socketPath, 0o600);
+      const otherProfile = path.join(fixture, "other");
+      await mkdir(otherProfile, { mode: 0o700 });
+      await symlink(socketPath, path.join(otherProfile, "cod.sock"));
+      await assert.rejects(
+        execute(process.execPath, [hostEntry, "--endpoint", otherProfile]),
+        /workspace host socket is not private/,
+      );
 
       await assert.rejects(
         execute(process.execPath, [hostEntry, profile], { timeout: 2000 }),

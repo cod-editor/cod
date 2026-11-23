@@ -4,6 +4,7 @@ import path from "node:path";
 import { ApplicationOperations } from "./operations";
 import type { AppState } from "./types";
 import { startCommandSocket } from "./application/command-socket";
+import { invokeCommand } from "./command-client";
 import {
   workspacePreparation,
   type PreparedWorkspace,
@@ -28,13 +29,7 @@ function watchState(state: AppState): AppState {
   };
 }
 
-async function main(): Promise<void> {
-  const [directory, ...rest] = process.argv.slice(2);
-  if (process.platform !== "linux")
-    throw new Error("The workspace host runs on Linux");
-  if (!directory || rest.length || !path.isAbsolute(directory))
-    throw new Error("Usage: node dist/workspace-host.cjs /absolute/profile");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+async function assertPrivateProfile(directory: string): Promise<void> {
   const profile = await lstat(directory);
   if (
     !profile.isDirectory() ||
@@ -42,8 +37,50 @@ async function main(): Promise<void> {
     (profile.mode & 0o077) !== 0
   )
     throw new Error("Choose a private workspace host profile you own");
+}
 
+const endpointOperation = "workspace-host.endpoint";
+
+async function printEndpoint(directory: string, socketPath: string) {
+  try {
+    await assertPrivateProfile(directory);
+    const socket = await lstat(socketPath);
+    if (
+      !socket.isSocket() ||
+      socket.uid !== process.getuid?.() ||
+      (socket.mode & 0o077) !== 0
+    )
+      throw new Error("The workspace host socket is not private");
+    const reply = (await invokeCommand(
+      socketPath,
+      { op: endpointOperation },
+      { timeoutMs: 1500 },
+    )) as { socketPath?: unknown } | null;
+    if (reply?.socketPath !== socketPath)
+      throw new Error("The socket did not identify the workspace host");
+    console.log(JSON.stringify({ socketPath }));
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `No ready Linux workspace host. Check systemctl --user status cod-workspace-host.service. ${reason}`,
+    );
+  }
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const endpoint = args[0] === "--endpoint";
+  const [directory, ...rest] = endpoint ? args.slice(1) : args;
+  if (process.platform !== "linux")
+    throw new Error("The workspace host runs on Linux");
+  if (!directory || rest.length || !path.isAbsolute(directory))
+    throw new Error(
+      "Usage: node dist/workspace-host.cjs [--endpoint] /absolute/profile",
+    );
   const socketPath = path.join(directory, "cod.sock");
+  if (endpoint) return printEndpoint(directory, socketPath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await assertPrivateProfile(directory);
   process.env.COD_DATA_DIR = directory;
   process.env.COD_SOCKET_PATH = socketPath;
   const runtime = new ApplicationOperations(directory);
@@ -82,6 +119,7 @@ async function main(): Promise<void> {
     socketPath,
     async (request) => {
       await requireReady();
+      if (request?.op === endpointOperation) return { socketPath };
       if (request?.op !== "workspace.prepare") return runtime.dispatch(request);
       const task = workspacePreparation(request, "linux");
       if (task.location !== "linux")
