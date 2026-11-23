@@ -2,10 +2,23 @@ import { test, expect, type Locator } from "@playwright/test";
 import type { AppState, ConversationState } from "../../src/types";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { LocalProviderOwner } from "../../src/providers/local-owner-client";
+import { createHash } from "node:crypto";
+import { build } from "esbuild";
+import {
+  LocalOwnerUnavailable,
+  LocalProviderOwner,
+} from "../../src/providers/local-owner-client";
+import { localOwnerSockets } from "../../src/providers/local-owner-protocol";
 import { createServer } from "node:http";
 import path from "node:path";
-import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  rename,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createConnection } from "node:net";
 import {
   ChatApp,
@@ -505,6 +518,167 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
       "DONE continue after detached completion",
     );
   } finally {
+    await owner.stop();
+  }
+});
+
+test("Detached owner upgrade retains a running turn and opens saved chats on the current build", async () => {
+  const owner = new LocalProviderOwner(shell.data);
+  const currentRoot = shell.root;
+  const earlierRoot = path.join(shell.temporary, "other-cod-build");
+  const historyDirectory = shell.recording + ".sessions";
+  const savedId = "codex-fixture-detached-upgrade";
+  const earlierSourceHash = createHash("sha256")
+    .update("invented earlier owner build")
+    .digest("hex");
+  try {
+    await shell.stop();
+    await mkdir(earlierRoot);
+    await cp(path.join(currentRoot, "dist"), path.join(earlierRoot, "dist"), {
+      recursive: true,
+    });
+    await symlink(
+      path.join(currentRoot, "node_modules"),
+      path.join(earlierRoot, "node_modules"),
+      "dir",
+    );
+    const metadataPath = path.join(earlierRoot, "dist/build-info.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    metadata.build.sourceHash = earlierSourceHash;
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    shell.root = earlierRoot;
+    await shell.start();
+    const workspace = await shell.create("Detached update fixture");
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      '{"chat.detachedSessions":true}',
+    );
+
+    await expect(shell.newChat(workspace, "codex")).rejects.toThrow(
+      "Reopen Cod to use the updated detached chat owner",
+    );
+    expect(await localOwnerSockets(shell.data)).toEqual([]);
+    await build({
+      entryPoints: [path.join(currentRoot, "src/provider-owner.ts")],
+      bundle: true,
+      target: "node20",
+      platform: "node",
+      format: "cjs",
+      define: {
+        __COD_OWNER_BUILD__: JSON.stringify(earlierSourceHash.slice(0, 24)),
+      },
+      outfile: path.join(earlierRoot, "dist/provider-owner.cjs"),
+    });
+    await shell.configure({
+      codex: { latencyChunks: 4, pauseLatencyAfter: 1 },
+    });
+    const running = await shell.newChat(workspace, "codex");
+    await shell.send(running.id, "[latency-fixture] work through update");
+    await expect(transcript(running)).toContainText(/inventedstream-1/);
+    const draft = () =>
+      shell.pane(running.paneId).getByRole("textbox", {
+        name: "Message",
+        exact: true,
+      });
+    await draft().fill("Unsent text across builds");
+    const original = await shell.cli<ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      running.id,
+    );
+    const originalOwner = await localOwnerSockets(shell.data);
+    expect(originalOwner).toHaveLength(1);
+    const originalCursor = original.detachedOwner!;
+    expect(originalCursor.build).toBe(earlierSourceHash.slice(0, 24));
+    await expect(
+      owner.reconnect(
+        running.id,
+        "codex",
+        running.nativeId,
+        { ...originalCursor, generation: "expired-fixture-owner" },
+        () => undefined,
+      ),
+    ).rejects.toBeInstanceOf(LocalOwnerUnavailable);
+    const starts = await shell.prompts();
+    await shell.quitWithChoice("Leave Running");
+
+    shell.root = currentRoot;
+    await shell.start();
+    expect(await status(running.id)).toBe("working");
+    await expect(draft()).toHaveValue("Unsent text across builds");
+    const resume = (nativeId: string) =>
+      shell.cli<Chat>(
+        "conversation",
+        "resume",
+        "--workspace",
+        workspace,
+        "--provider",
+        "codex",
+        "--cwd",
+        shell.folders[0],
+        "--native-id",
+        nativeId,
+      );
+    expect((await resume(running.nativeId)).id).toBe(running.id);
+    expect(await localOwnerSockets(shell.data)).toEqual(originalOwner);
+    await mkdir(historyDirectory, { recursive: true });
+    await writeFile(
+      path.join(historyDirectory, savedId + ".json"),
+      JSON.stringify([
+        {
+          id: "invented-saved-turn",
+          status: "completed",
+          items: [
+            {
+              id: "invented-saved-answer",
+              type: "agentMessage",
+              text: "Invented saved answer",
+            },
+          ],
+        },
+      ]),
+    );
+    const saved = await resume(savedId);
+    expect(saved.nativeId).toBe(savedId);
+    await expect(transcript(saved)).toContainText("Invented saved answer");
+    expect(await localOwnerSockets(shell.data)).toHaveLength(2);
+    expect(await status(running.id)).toBe("working");
+    const restored = await shell.cli<ConversationState>(
+      "conversation",
+      "inspect",
+      "--id",
+      running.id,
+    );
+    expect(restored.detachedOwner?.generation).toBe(
+      original.detachedOwner?.generation,
+    );
+    expect(restored.turns?.at(-1)?.id).toBe(original.turns?.at(-1)?.id);
+    expect(await shell.prompts()).toEqual(starts);
+    expect(
+      (await shell.records())
+        .filter((record) => record.message?.method === "thread/resume")
+        .map((record) => record.message?.params?.threadId),
+    ).toEqual([savedId]);
+
+    await shell.configure({ codex: { latencyChunks: 4 } });
+    await expect.poll(() => status(running.id)).toBe("ready");
+    await shell.cli("conversation", "show", "--id", running.id);
+    await expect(transcript(running)).toContainText(/inventedstream-4/);
+    await expect(draft()).toHaveValue("Unsent text across builds");
+    await shell.cli("conversation", "remove", "--id", running.id);
+    await expect.poll(() => localOwnerSockets(shell.data)).toHaveLength(1);
+    expect(await localOwnerSockets(shell.data)).not.toEqual(originalOwner);
+    await shell.send(saved.id, "[hold] stop the current build");
+    await expect(transcript(saved)).toContainText(
+      "STREAM [hold] stop the current build",
+    );
+    await shell.quitWithChoice("Stop");
+    await expect.poll(() => localOwnerSockets(shell.data)).toEqual([]);
+  } finally {
+    shell.root = currentRoot;
     await owner.stop();
   }
 });
