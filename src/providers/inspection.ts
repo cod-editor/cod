@@ -1,3 +1,4 @@
+import { listCodexChildren } from "./codex-children.ts";
 import { object, string } from "./transport.ts";
 import type { ProviderId } from "./types.ts";
 export type InspectionSection =
@@ -133,32 +134,12 @@ export class NativeInspection {
           "Selected effective settings only. Use the native Codex client to edit configuration; credentials and environment values are never shown here.",
         );
       } else if (section === "agents") {
-        const cursors = new Set<string>();
-        let cursor: string | undefined;
-        do {
-          const data = object(
-            await request("thread/list", {
-              sourceKinds: ["subAgent"],
-              limit: 100,
-              ...(cursor ? { cursor } : {}),
-            }),
-          );
-          if (!Array.isArray(data.data)) throw new Error();
-          for (const child of rows(data.data))
-            if (child.parentThreadId === nativeId)
-              result.entries.push({
-                id: String(child.id),
-                label:
-                  string(child.agentNickname) ??
-                  string(child.name) ??
-                  String(child.id),
-                detail: `${string(object(child.status).type) ?? "Status unavailable"} - ${String(child.id)}`,
-              });
-          cursor = string(data.nextCursor);
-          if (cursor && (cursors.has(cursor) || cursors.size >= 100))
-            throw new Error();
-          if (cursor) cursors.add(cursor);
-        } while (cursor);
+        for (const child of await listCodexChildren(request, nativeId))
+          result.entries.push({
+            id: child.id,
+            label: child.label ?? child.id,
+            detail: `${child.status ?? "Status unavailable"} - ${child.id}`,
+          });
         result.unavailable.push(
           "Child sessions are read-only here. Ask the parent agent to coordinate or interact with them in the native client.",
         );

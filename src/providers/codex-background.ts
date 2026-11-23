@@ -1,8 +1,32 @@
 import type { BackgroundActivity } from "./types";
+import type { CodexChild } from "./codex-children.ts";
 import { object, type RpcMessage } from "./transport.ts";
 
 const maxActivities = 64;
 const resultLimit = 4096;
+const maxChildren = 400;
+const maxChildLookups = 8;
+
+type ActivityUpdate = { activity: BackgroundActivity; removeId?: string };
+type ChildState = {
+  state: BackgroundActivity["state"];
+  at: number;
+  nativeStatus?: true;
+};
+type KnownChild = { label: string; legacy?: true; hasStatusEvent?: true };
+
+function statusState(status: unknown): ChildState["state"] | undefined {
+  switch (status) {
+    case "active":
+      return "running";
+    case "idle":
+      return "completed";
+    case "notLoaded":
+      return "unknown";
+    case "systemError":
+      return "failed";
+  }
+}
 
 function bounded(value: unknown, limit: number): string | undefined {
   return typeof value === "string" && value
@@ -12,7 +36,90 @@ function bounded(value: unknown, limit: number): string | undefined {
 
 export class CodexBackground {
   private activities = new Map<string, BackgroundActivity>();
-  private legacyChildren = new Set<string>();
+  private children = new Map<string, KnownChild>();
+  private childLookups = new Map<string | undefined, Map<string, ChildState>>();
+
+  async reconcileChildren(
+    childId: string | undefined,
+    list: () => Promise<CodexChild[]>,
+    publish: (update: ActivityUpdate) => void,
+    isCurrent: () => boolean,
+  ) {
+    if (
+      this.childLookups.has(childId) ||
+      this.childLookups.size >= maxChildLookups
+    )
+      return;
+    const newer = new Map<string, ChildState>();
+    this.childLookups.set(childId, newer);
+    try {
+      const rows = await list();
+      if (!isCurrent()) return;
+      for (const child of rows) {
+        this.rememberChild(child.id, child.label);
+        const snapshot = statusState(child.status);
+        const current =
+          newer.get(child.id) ??
+          (snapshot ? { state: snapshot, at: Date.now() } : undefined);
+        if (!current) continue;
+        const update = this.applyChildState(child.id, current);
+        if (update) publish(update);
+      }
+    } finally {
+      this.childLookups.delete(childId);
+    }
+  }
+
+  private rememberChild(id: string, name?: string) {
+    const child = this.children.get(id);
+    if (child) {
+      if (child.label === "Subagent")
+        child.label = bounded(name, 160) ?? child.label;
+      return child;
+    }
+    if (this.children.size >= maxChildren) {
+      const oldestInactive = [...this.children.keys()].find(
+        (key) => this.activities.get(key)?.state !== "running",
+      );
+      if (oldestInactive) this.children.delete(oldestInactive);
+    }
+    const created: KnownChild = { label: bounded(name, 160) ?? "Subagent" };
+    this.children.set(id, created);
+    return created;
+  }
+
+  private noteChildState(id: string, state: ChildState) {
+    // An in-flight list can describe a state older than a received notification.
+    // Only matching, provider-confirmed child rows can use buffered statuses.
+    for (const [target, lookup] of this.childLookups) {
+      if (target && target !== id) continue;
+      if (lookup.size >= maxChildren && !lookup.has(id)) {
+        const oldest = lookup.keys().next().value;
+        if (oldest) lookup.delete(oldest);
+      }
+      lookup.set(id, state);
+    }
+    return this.applyChildState(id, state);
+  }
+
+  private applyChildState(id: string, { state, at, nativeStatus }: ChildState) {
+    const child = this.children.get(id);
+    if (!child) return;
+    if (nativeStatus) child.hasStatusEvent = true;
+    const existing = this.activities.get(id);
+    if (state === "running") {
+      if (existing?.state === "running") return;
+      return this.update({
+        id,
+        kind: "agent",
+        state,
+        label: child.label,
+        startedAt: at,
+      });
+    }
+    if (!existing || existing.state !== "running") return;
+    return this.update({ ...existing, state, finishedAt: at });
+  }
 
   private foregroundCommands = new Map<
     string,
@@ -40,30 +147,42 @@ export class CodexBackground {
   observe(
     threadId: string,
     message: RpcMessage,
-  ): { activity: BackgroundActivity; removeId?: string } | undefined {
+    lookupChild: (id: string) => void,
+  ): ActivityUpdate | undefined {
     if (message.id !== undefined) return;
     const { params } = message;
     const origin = params.threadId;
     if (typeof origin !== "string") return;
-    const owner = origin === threadId ? undefined : this.activities.get(origin);
-    if (
-      owner?.kind === "agent" &&
-      this.legacyChildren.has(origin) &&
-      message.method === "turn/completed" &&
-      owner.state === "running"
-    ) {
-      const turn = object(params.turn);
-      const state =
-        turn.status === "completed"
-          ? "completed"
-          : turn.status === "interrupted"
-            ? "interrupted"
-            : "failed";
-      return this.update({
-        ...owner,
+    const child = origin === threadId ? undefined : this.children.get(origin);
+    if (message.method === "thread/status/changed" && origin !== threadId) {
+      const state = statusState(object(params.status).type);
+      if (!state) return;
+      return this.noteChildState(origin, {
         state,
-        finishedAt: this.time(turn.completedAtMs),
+        at: Date.now(),
+        nativeStatus: true,
       });
+    }
+    const owner = child ? this.activities.get(origin) : undefined;
+    if (child?.legacy && !child.hasStatusEvent) {
+      const turn = object(params.turn);
+      if (message.method === "turn/started")
+        return this.noteChildState(origin, {
+          state: "running",
+          at: this.time(turn.startedAtMs),
+        });
+      if (message.method === "turn/completed") {
+        const state =
+          turn.status === "completed"
+            ? "completed"
+            : turn.status === "interrupted"
+              ? "interrupted"
+              : "failed";
+        return this.noteChildState(origin, {
+          state,
+          at: this.time(turn.completedAtMs),
+        });
+      }
     }
     const completed = message.method === "item/completed";
     if (!completed && message.method !== "item/started") return;
@@ -78,50 +197,45 @@ export class CodexBackground {
       item.senderThreadId === threadId &&
       Array.isArray(item.receiverThreadIds)
     ) {
-      // A legacy spawn returns one child; its first snapshot is usually still
-      // pending. Use the child's own terminal event once its identity is known.
       const childId =
         item.receiverThreadIds.length === 1 ? item.receiverThreadIds[0] : null;
-      if (
-        typeof childId !== "string" ||
-        childId === threadId ||
-        this.activities.has(childId)
-      )
+      if (typeof childId !== "string" || !childId || childId === threadId)
         return;
-      const update = this.update({
-        id: childId,
-        kind: "agent",
-        label: "Subagent",
+      const child = this.rememberChild(childId);
+      child.legacy = true;
+      if (child.hasStatusEvent) return;
+      return this.noteChildState(childId, {
         state: "running",
-        startedAt: this.time(item.startedAtMs),
+        at: this.time(item.startedAtMs),
       });
-      if (update) this.legacyChildren.add(childId);
-      return update;
     }
 
     if (origin === threadId && item.type === "subAgentActivity") {
       const childId = item.agentThreadId;
-      if (typeof childId !== "string" || childId === threadId) return;
-      const previous = this.activities.get(childId);
-      if (item.kind === "started" && !previous) {
-        return this.update({
-          id: childId,
-          kind: "agent",
-          label: bounded(item.agentPath, 160) ?? "Subagent",
+      if (typeof childId !== "string" || !childId || childId === threadId)
+        return;
+      if (completed && item.kind === "started") {
+        const child = this.rememberChild(childId, bounded(item.agentPath, 160));
+        if (child.hasStatusEvent) return;
+        return this.noteChildState(childId, {
           state: "running",
-          startedAt: this.time(item.startedAtMs),
+          at: this.time(item.startedAtMs),
         });
       }
-      if (
-        previous?.state === "running" &&
+      if (completed && item.kind === "interacted") {
+        // The provider uses this for both queued messages and resumed work.
+        if (!this.children.has(childId)) lookupChild(childId);
+      } else if (
         completed &&
         (item.kind === "completed" || item.kind === "interrupted")
       ) {
-        return this.update({
-          ...previous,
-          state: item.kind === "completed" ? "completed" : "interrupted",
-          finishedAt: this.time(item.completedAtMs),
-        });
+        // Live thread status wins over a completion that can describe a prior turn.
+        const existing = this.children.get(childId);
+        if (existing && !existing.hasStatusEvent)
+          return this.noteChildState(childId, {
+            state: item.kind === "completed" ? "completed" : "interrupted",
+            at: this.time(item.completedAtMs),
+          });
       }
       return;
     }
@@ -199,7 +313,6 @@ export class CodexBackground {
       if (!inactive) return;
       removeId = inactive.id;
       this.activities.delete(removeId);
-      this.legacyChildren.delete(removeId);
     }
     this.activities.set(activity.id, activity);
     return { activity, removeId };

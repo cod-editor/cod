@@ -517,13 +517,11 @@ function receive(message, external = false) {
           readFileSync(path.join(historyDirectory, filename), "utf8"),
         );
         if (queued.id === lastQueueId || active) return;
-        if (
-          configuration().backgroundActivity &&
-          Array.isArray(queued.events)
-        ) {
+        if (Array.isArray(queued.events)) {
           lastQueueId = queued.id;
           for (const { method, params } of queued.events)
             notify(method, params);
+          record("background-fixture-delivered", { id: queued.id });
           return;
         }
         lastQueueId = queued.id;
@@ -541,6 +539,23 @@ function receive(message, external = false) {
   if (["turn/interrupt", "session/cancel"].includes(message.method)) {
     if (message.id !== undefined) reply(message, {});
     complete(true);
+    return;
+  }
+  if (message.method === "thread/list" && configuration().childThreads) {
+    const config = configuration();
+    if (params.parentThreadId !== nativeId) {
+      throw new Error("Child fixture expects its owning parent scope");
+    }
+    const rows = config.childThreads.map(({ foreign, ...child }) => ({
+      ...child,
+      parentThreadId: foreign ? "unrelated-parent" : nativeId,
+    }));
+    const data = params.includedThreadIds
+      ? rows.filter((child) => params.includedThreadIds.includes(child.id))
+      : rows;
+    for (const { threadId, status } of config.childChangesBeforeList ?? [])
+      notify("thread/status/changed", { threadId, status: { type: status } });
+    reply(message, { data, nextCursor: null });
     return;
   }
   const inspected = inspectionResponse(
