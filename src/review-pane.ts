@@ -80,7 +80,9 @@ export function reviewPane(
     ),
     restored = false,
     staleEditor = false;
-  const remember = () => {
+  const markdownDraftRange = () =>
+    pending?.range?.fragment?.view === "markdown" ? pending.range : undefined;
+  const remember = (range: Range | undefined) => {
     if (!detail) return;
     if (staleEditor && pending) {
       pending = { ...pending, body: input.value };
@@ -92,7 +94,7 @@ export function reviewPane(
       snapshotId: detail.rounds.find((r) => r.id === selectedRound)!.snapshotId,
       selection,
       end,
-      range: textRange,
+      range,
       body: input.value,
       ...(editing ? { editing } : {}),
     };
@@ -150,7 +152,9 @@ export function reviewPane(
     };
     document.addEventListener("focusin", movedFocus, true);
     try {
-      const range = editing ? undefined : selectedRange();
+      const range = editing
+        ? undefined
+        : (markdownDraftRange() ?? selectedRange());
       await invoke(editing ? "review.comment-edit" : "review.comment-add", {
         id,
         roundId: selectedRound,
@@ -159,6 +163,7 @@ export function reviewPane(
         ...(editing ? { commentId: editing } : { range }),
       });
       form.hidden = true;
+      documentView?.clearDraftAnchor();
       forget();
       editing = undefined;
       input.value = "";
@@ -222,7 +227,7 @@ export function reviewPane(
         editing = undefined;
         staleEditor = false;
         save.disabled = false;
-        remember();
+        remember(textRange);
         draw();
         status.textContent = "";
         input.focus();
@@ -256,7 +261,7 @@ export function reviewPane(
     staleEditor = false;
     save.disabled = false;
     restored = true;
-    remember();
+    remember(textRange);
     form.hidden = false;
     if (existingComment?.outdated) comments.after(form);
     else if (documentView)
@@ -272,7 +277,7 @@ export function reviewPane(
     input.focus();
   }
   input.addEventListener("input", () => {
-    remember();
+    remember(markdownDraftRange() ?? textRange);
     submit.disabled = !!input.value.trim();
   });
   function focusSelection() {
@@ -837,7 +842,7 @@ export function reviewPane(
           form,
           editing
             ? round.comments.find((c) => c.id === editing)!.anchor
-            : selectedRange(),
+            : (markdownDraftRange() ?? selectedRange()),
         );
       else buttons[Math.min(end, buttons.length - 1)]?.after(form);
     }
@@ -1022,6 +1027,16 @@ export function reviewPane(
     });
     return element;
   }
+  host.addEventListener(
+    "cod:dispose-view",
+    () => {
+      loading++;
+      clearTimeout(diskTimer);
+      documentView?.clearAnnotations();
+      updates.delete(host);
+    },
+    { once: true },
+  );
   updates.set(host, update);
   update(initial);
   return host;

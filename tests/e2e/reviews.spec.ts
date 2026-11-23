@@ -1007,6 +1007,185 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
   ).toHaveText(["world", "world"]);
 });
 
+test("Markdown review keeps a pending exact fragment through wrap, focus and view changes", async ({}, info) => {
+  const workspace = await shell.create("Release notes workshop");
+  const file = path.join(path.dirname(shell.file), "review-fragment.md");
+  await writeFile(
+    file,
+    "# Release checklist\n\nBefore publishing, **verify download integrity** against the signed release manifest and confirm that the `version selector` shows the new release.\n\nArchive the results with the draft announcement.\n",
+  );
+  const review = await open(workspace, file);
+  const host = pane(review);
+  const eye = host.locator("[data-preview-toggle]");
+  const preview = host.getByRole("document", { name: "Review preview" });
+  const commentBox = host.getByRole("textbox", {
+    name: "Comment",
+    exact: true,
+  });
+  const context = host.locator(".review-comment-editor .review-anchor-context");
+  await eye.click();
+  const strong = preview.locator("strong");
+  await expect(strong).toHaveText("verify download integrity");
+  const quote =
+    "download integrity against the signed release manifest and confirm that the version";
+  await preview.focus();
+  await strong.evaluate((node) =>
+    window.getSelection()!.setPosition(node.firstChild!, 7),
+  );
+  for (let i = 0; i < quote.length; i++)
+    await shell.page.keyboard.press("Shift+ArrowRight");
+  expect(
+    await shell.page.evaluate(() => window.getSelection()!.toString()),
+  ).toBe(quote);
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await expect(commentBox).toBeFocused();
+  await commentBox.fill("Which step verifies the downloaded archive?");
+  const marked = () =>
+    shell.page.evaluate(() =>
+      [...(CSS.highlights.get("cod-review-draft") ?? [])]
+        .map((range) => range.toString())
+        .join(""),
+    );
+  await expect.poll(marked).toBe(quote);
+  await expect(context).toBeHidden();
+  await expect(commentBox).toHaveAccessibleDescription(quote);
+  await shell.page.screenshot({
+    path: info.outputPath("markdown-pending-wide.png"),
+  });
+
+  await shell.page.setViewportSize({ width: 460, height: 710 });
+  await expect.poll(marked).toBe(quote);
+  expect(
+    await shell.page.evaluate(() => {
+      const range = [...CSS.highlights.get("cod-review-draft")!][0] as Range;
+      return new Set(
+        [...range.getClientRects()].map((rect) => Math.floor(rect.top)),
+      ).size;
+    }),
+  ).toBeGreaterThan(1);
+  await shell.page.screenshot({
+    path: info.outputPath("markdown-pending-narrow.png"),
+  });
+  await eye.click();
+  await expect(source(review)).toBeVisible();
+  await expect.poll(marked).toBe("");
+  await expect(context.locator("blockquote")).toHaveText(quote);
+  await expect(context).toBeVisible();
+  await shell.page.screenshot({
+    path: info.outputPath("markdown-pending-source-quote.png"),
+  });
+  await eye.click();
+  await expect.poll(marked).toBe(quote);
+  await expect(context).toBeHidden();
+  await expect(commentBox).toHaveValue(
+    "Which step verifies the downloaded archive?",
+  );
+
+  // A different native selection and a passive review refresh must not
+  // redirect the existing draft or alter its saved fragment.
+  await preview
+    .locator("p")
+    .last()
+    .evaluate((node) =>
+      window
+        .getSelection()!
+        .setBaseAndExtent(node.firstChild!, 0, node.firstChild!, 7),
+    );
+  await shell.page.keyboard.press("Shift+ArrowRight");
+  expect(
+    await shell.page.evaluate(() => window.getSelection()!.toString()),
+  ).toBe("Archive ");
+  await shell.page.evaluate((request) => window.cod.invoke(request), {
+    op: "review.comment-add",
+    id: review.reviewId,
+    roundId: review.roundId,
+    expectedVersion: (await inspect(review)).version,
+    body: "A separate draft comment",
+    range: { startLine: 1, endLine: 1 },
+  });
+  await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
+    "A separate draft comment",
+  );
+  await expect.poll(marked).toBe(quote);
+  await commentBox.press(`${modifier}+Enter`);
+  await expect.poll(marked).toBe("");
+  await expect(
+    host
+      .getByLabel("Draft comment", { exact: true })
+      .filter({ hasText: "Which step verifies" })
+      .locator("blockquote"),
+  ).toHaveText(quote);
+
+  const last = preview.locator("p").last();
+  await last.dblclick({ position: { x: 13, y: 8 } });
+  const pointerQuote = await shell.page.evaluate(() =>
+    window.getSelection()!.toString(),
+  );
+  expect(pointerQuote).toBe("Archive");
+  await last.click({ button: "right", position: { x: 13, y: 8 } });
+  await shell.page
+    .getByRole("dialog", { name: "Actions" })
+    .getByRole("button", { name: "Add comment", exact: true })
+    .click();
+  await expect(commentBox).toBeFocused();
+  await expect.poll(marked).toBe(pointerQuote);
+  await host
+    .getByRole("button", { name: "Cancel comment", exact: true })
+    .click();
+  await expect.poll(marked).toBe("");
+  await expect(commentBox).toBeHidden();
+
+  // A source-only anchor has no equivalent formatted coordinates.
+  await eye.click();
+  await source(review).focus();
+  await source(review)
+    .locator('[data-source-line="3"] .review-source-text')
+    .evaluate((node) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      const start = walker.nextNode()!;
+      window.getSelection()!.setBaseAndExtent(start, 0, start, 6);
+    });
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await commentBox.fill("Source-only review draft");
+  await eye.click();
+  await expect(context.locator("blockquote")).toHaveText("Before");
+  await expect(context).toBeVisible();
+  await expect.poll(marked).toBe("");
+  await host
+    .getByRole("button", { name: "Cancel comment", exact: true })
+    .click();
+  await expect(commentBox).toBeHidden();
+  await preview.focus();
+  await preview.evaluate((article) => {
+    const blocks = article.querySelectorAll(":scope > .markdown-block > p");
+    window
+      .getSelection()!
+      .setBaseAndExtent(
+        blocks[0].lastChild!,
+        1,
+        blocks[1].firstChild!,
+        "Archive".length,
+      );
+  });
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  await expect(commentBox).toBeFocused();
+  await expect.poll(marked).toBe("shows the new release.\nArchive");
+  expect(
+    await shell.page.evaluate(
+      () => CSS.highlights.get("cod-review-draft")!.size,
+    ),
+  ).toBe(2);
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    review.paneId,
+  );
+  await expect.poll(marked).toBe("");
+});
+
 test("Review comments stay beside their anchors without rebuilding or jumping to the top", async ({}, info) => {
   const workspace = await shell.create("Anchored review");
   const file = path.join(path.dirname(shell.file), "long-review.md");
