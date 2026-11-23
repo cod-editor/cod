@@ -2541,6 +2541,163 @@ test("Escape dismisses chat controls before stopping only the focused response",
   await expect(input).toBeFocused();
 });
 
+test("Codex restores and reactivates only confirmed running children", async ({}, info) => {
+  const child = "invented-reviewer";
+  const staleChild = "invented-stale-child";
+  const foreignChild = "unrelated-helper";
+  const row = (id: string, type: string, foreign = false) => ({
+    id,
+    foreign,
+    agentNickname: id,
+    status: { type },
+  });
+  await shell.configure({
+    codex: {
+      childThreads: [row(child, "idle"), row(foreignChild, "active", true)],
+    },
+  });
+  const workspace = await shell.create("Reused checks");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "Invented parent work");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const pane = shell.pane(chat.paneId);
+  const agents = pane.locator('[data-focus-key="background:agent"]');
+  const list = pane.getByRole("list", { name: "Background agents" });
+  const input = pane.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Keep this invented draft");
+  const change = (threadId: string, type: string) => ({
+    method: "thread/status/changed",
+    params: { threadId, status: { type } },
+  });
+  const activity = (id: string, kind: string, agentThreadId = child) => ({
+    method: "item/completed",
+    params: {
+      threadId: chat.nativeId,
+      turnId: "parent-turn",
+      item: { type: "subAgentActivity", id, kind, agentThreadId },
+    },
+  });
+  const wait = {
+    method: "item/completed",
+    params: {
+      threadId: chat.nativeId,
+      turnId: "parent-turn",
+      item: {
+        type: "collabAgentToolCall",
+        id: "invented-wait",
+        tool: "wait",
+        status: "completed",
+        senderThreadId: chat.nativeId,
+        receiverThreadIds: [],
+        agentsStates: {},
+      },
+    },
+  };
+  const scopedRequests = async () =>
+    (await shell.records()).filter(
+      ({ message }) => message?.method === "thread/list",
+    );
+  const inspector = () =>
+    shell.cli(
+      "conversation",
+      "native-inspect",
+      "--id",
+      chat.id,
+      "--section",
+      "agents",
+    );
+  const publish = async (id: string, events: unknown[]) => {
+    await backgroundFixture(chat, id, events);
+    await expect
+      .poll(async () =>
+        (await shell.records()).some(
+          (event) =>
+            event.event === "background-fixture-delivered" &&
+            (event as { id?: string }).id === id,
+        ),
+      )
+      .toBe(true);
+  };
+
+  await publish("queued-only", [
+    activity("queue-review", "interacted"),
+    change(foreignChild, "active"),
+    wait,
+  ]);
+  await expect.poll(async () => (await scopedRequests()).length).toBe(1);
+  expect((await scopedRequests())[0].message?.params).toMatchObject({
+    parentThreadId: chat.nativeId,
+    includedThreadIds: [child],
+    limit: 1,
+  });
+  expect(await inspector()).toMatchObject({
+    entries: [{ id: child, detail: `idle - ${child}` }],
+  });
+  await expect(agents).toHaveCount(0);
+
+  await publish("first-running-turn", [change(child, "active")]);
+  await expect(agents).toHaveAccessibleName("Agents, 1 running");
+  await expect(input).toBeFocused();
+  await agents.click();
+  await expect(list).toContainText(child);
+  await list.focus();
+  await publish("first-idle", [change(child, "idle")]);
+  await expect(agents).toHaveCount(0);
+  await expect(list).toHaveCount(0);
+  await expect(input).toBeFocused();
+
+  await publish("second-running-turn", [
+    // Global status may arrive before the parent interaction is rendered.
+    change(child, "active"),
+    activity("followup-review", "interacted"),
+    activity("late-prior-completion", "completed"),
+    change(foreignChild, "active"),
+    wait,
+  ]);
+  await expect(agents).toHaveText("1 agent");
+  await expect(input).toHaveValue("Keep this invented draft");
+  expect(await scopedRequests()).toHaveLength(2);
+  await agents.click();
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await shell.page.screenshot({
+    path: info.outputPath("reactivated-child.png"),
+  });
+  await publish("second-idle", [change(child, "idle")]);
+  await expect(agents).toHaveCount(0);
+
+  await shell.stop();
+  await shell.configure({
+    codex: {
+      childThreads: [
+        row(child, "active"),
+        row(staleChild, "active"),
+        row(foreignChild, "active", true),
+      ],
+      childChangesBeforeList: [{ threadId: staleChild, status: "idle" }],
+    },
+  });
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  const reopenedAgents = shell
+    .pane(chat.paneId)
+    .locator('[data-focus-key="background:agent"]');
+  await expect(reopenedAgents).toHaveText("1 agent");
+  const scope = (await scopedRequests()).at(-1)?.message?.params;
+  expect(scope).toMatchObject({ parentThreadId: chat.nativeId });
+  expect(scope).not.toHaveProperty("sourceKinds");
+  expect(scope).not.toHaveProperty("includedThreadIds");
+  expect((await inspectQueuedChat(chat.id)).backgroundActivities).toEqual([
+    expect.objectContaining({ id: child, kind: "agent", state: "running" }),
+  ]);
+  await publish("resumed-controller-unloads-child", [
+    change(child, "notLoaded"),
+  ]);
+  await expect(reopenedAgents).toHaveCount(0);
+  expect((await inspectQueuedChat(chat.id)).backgroundActivities).toEqual([
+    expect.objectContaining({ id: child, state: "unknown" }),
+  ]);
+});
+
 test("Codex running background state becomes unknown on restart", async () => {
   await shell.configure({ codex: { backgroundActivity: "legacy" } });
   const workspace = await shell.create("Interrupted checks");

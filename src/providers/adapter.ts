@@ -1,6 +1,7 @@
 import { codexHistoryTurns } from "../conversation-history.ts";
 import { codexHistoryPage } from "./codex-history.ts";
 import { CodexBackground } from "./codex-background.ts";
+import { listCodexChildren } from "./codex-children.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
 import { ProviderOptionError } from "./option-error.ts";
 import { NativeSelection, readCodexDraftOptions } from "./selection.ts";
@@ -254,6 +255,7 @@ export class NativeAdapter implements ProviderAdapter {
         });
       }
       this.state("ready");
+      if (this.provider === "codex" && resumeId) this.reconcileCodexChildren();
       return {
         provider: this.provider,
         nativeId: id,
@@ -397,7 +399,13 @@ export class NativeAdapter implements ProviderAdapter {
       this.id,
       this.cwd,
       section,
-      (method, params) => this.rpc!.request(method, params),
+      (method, params) =>
+        this.rpc!.request(
+          method,
+          params,
+          undefined,
+          section === "agents" ? "read-only" : undefined,
+        ),
     );
   }
   async getDraftOptions(
@@ -803,6 +811,28 @@ export class NativeAdapter implements ProviderAdapter {
     );
   }
 
+  private reconcileCodexChildren(childId?: string) {
+    const parentThreadId = this.id;
+    const rpc = this.rpc;
+    if (!rpc || !parentThreadId) return;
+    void this.background
+      .reconcileChildren(
+        childId,
+        () =>
+          listCodexChildren(
+            (method, params) => rpc.request(method, params, 5_000, "read-only"),
+            parentThreadId,
+            childId,
+          ),
+        (update) => this.emit({ type: "background", ...update }),
+        () => !this.closed && !this.failure && this.id === parentThreadId,
+      )
+      .catch(() => {
+        // Missing child lookup support does not affect ordinary chat or
+        // direct subagent lifecycle events.
+      });
+  }
+
   private receive(message: RpcMessage) {
     if (this.closed || this.failure) return;
     const p = message.params;
@@ -812,7 +842,9 @@ export class NativeAdapter implements ProviderAdapter {
     if (this.provider === "codex" && this.id) {
       for (const update of this.background.finishTurn(this.id, message))
         this.emit({ type: "background", ...update });
-      const update = this.background.observe(this.id, message);
+      const update = this.background.observe(this.id, message, (childId) =>
+        this.reconcileCodexChildren(childId),
+      );
       if (update) this.emit({ type: "background", ...update });
     }
     if (origin !== this.id || !this.id) {
