@@ -480,7 +480,8 @@ export function reviewPane(
       detail.rounds.find((r) => r.id === selectedRound) ??
       detail.rounds.at(-1)!;
     selectedRound = round.id;
-    roundSelect.replaceChildren(
+    roundSelect.length = 0;
+    roundSelect.append(
       ...detail.rounds.map(
         (r) =>
           new Option(

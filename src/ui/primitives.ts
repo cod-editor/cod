@@ -47,6 +47,7 @@ export function uiSwitch(): HTMLInputElement {
   return input;
 }
 
+/** Wrap a native select. Refresh its options without replacing the trigger. */
 export function selectField(input: HTMLSelectElement): HTMLElement {
   const field = document.createElement("span");
   field.className = "ui-select";
