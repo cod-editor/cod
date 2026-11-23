@@ -3,6 +3,7 @@ import {
   expect,
   _electron,
   type ElectronApplication,
+  type Locator,
 } from "@playwright/test";
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -384,9 +385,19 @@ test("Report evidence links render local JSON, images and JSONL and return throu
       (globalThis as any).lastPageMenu = this;
     };
   });
-  await page
-    .getByRole("link", { name: "JSON evidence", exact: true })
-    .click({ button: "right" });
+  const openMenu = async (target: Locator) => {
+    await app.evaluate(() => {
+      (globalThis as any).lastPageMenu = undefined;
+    });
+    await target.click({ button: "right" });
+    // The context-menu callback arrives asynchronously in Electron's main process.
+    await expect
+      .poll(() => app.evaluate(() => !!(globalThis as any).lastPageMenu))
+      .toBe(true);
+  };
+  await openMenu(
+    page.getByRole("link", { name: "JSON evidence", exact: true }),
+  );
   expect(
     await app.evaluate(() =>
       (globalThis as any).lastPageMenu.items.map((i: any) => ({
@@ -415,7 +426,7 @@ test("Report evidence links render local JSON, images and JSONL and return throu
     "undefined",
   );
   const back = async () => {
-    await page.locator("body").click({ button: "right" });
+    await openMenu(page.locator("body"));
     expect(
       await app.evaluate(
         () =>
