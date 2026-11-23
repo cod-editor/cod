@@ -18,8 +18,6 @@ async function prepareKeyboardProfile(app: ChatApp) {
       "pane.previous": ["Alt+Shift+Tab"],
       "pane.zoom": ["Alt+Enter"],
       "pane.splitRight": ["Alt+N"],
-      "focus.composer": ["Alt+J"],
-      "focus.terminal": ["Mod+Backquote"],
     }),
   );
 }
@@ -363,7 +361,7 @@ test("Native website keys stay on the page and palette cancellation restores its
     server = createServer((_request, response) => {
       response.setHeader("Content-Type", "text/html");
       response.end(
-        `<!doctype html><title>Invented keyboard page</title><label>First<input id="first" autofocus value="first field"></label><label>Second<input id="second" value="second field"></label><p>Closing marker</p><script>window.keys=[];document.addEventListener('keydown',e=>{window.keys.push({key:e.key,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey});if((e.ctrlKey||e.metaKey)&&['b','p','f'].includes(e.key.toLowerCase()))e.preventDefault()});</script>`,
+        `<!doctype html><title>Invented keyboard page</title><label>First<input id="first" autofocus value="first field"></label><label>Second<input id="second" value="second field"></label><p>Closing marker</p><script>window.keys=[];document.addEventListener('keydown',e=>{window.keys.push({key:e.key,code:e.code,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey});if((e.ctrlKey||e.metaKey)&&['b','p','f'].includes(e.key.toLowerCase()))e.preventDefault()});</script>`,
       );
     });
     await new Promise<void>((resolve) =>
@@ -501,11 +499,20 @@ test("Native website keys stay on the page and palette cancellation restores its
         (item: { key: string }) => item.key === "Escape",
       ),
     ).toHaveLength(1);
-    await key("J", ["alt"]);
-    await expect(
-      app.page.getByRole("textbox", { name: "Message", exact: true }),
-    ).toBeFocused();
-    await app.page.keyboard.press("Alt+J");
+    await key("J", [mod, "shift"]);
+    await key("`", ["control"]);
+    await expect
+      .poll(async () => (await inspect())?.keys)
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "KeyJ", shift: true }),
+          expect.objectContaining({ code: "Backquote", ctrl: true }),
+        ]),
+      );
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    await key("E", [mod, "shift"]);
+    await expect(app.page.locator("#project-panel")).toBeFocused();
+    await app.page.keyboard.press(`${modifier}+Shift+E`);
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     const afterFocusReturn = await inspect();
     expect([
@@ -769,15 +776,9 @@ test("Terminal readline and interruption survive global keyboard navigation with
   });
   try {
     await app.start();
-    const workspace = (await state(app)).activeWorkspaceId!;
-    const terminal = await app.cli<{ id: string; paneId: string }>(
-      "terminal",
-      "open",
-      "--workspace",
-      workspace,
-      "--cwd",
-      app.folders[0],
-    );
+    await command(app.page, "New terminal");
+    await expect.poll(async () => (await state(app)).terminals.length).toBe(1);
+    const terminal = (await state(app)).terminals[0]!;
     const input = app
       .pane(terminal.paneId)
       .getByRole("textbox", { name: "Terminal input" });
@@ -791,6 +792,21 @@ test("Terminal readline and interruption survive global keyboard navigation with
         )
       ).output;
     await reach(app.page, input);
+    await input.evaluate((node) =>
+      node.addEventListener(
+        "keydown",
+        (event) => {
+          const key = event as KeyboardEvent;
+          if (key.code === "Backquote" && key.ctrlKey && !key.shiftKey)
+            (node as HTMLElement).dataset.retiredChord = "received";
+        },
+        { capture: true },
+      ),
+    );
+    await app.page.keyboard.press("Control+Backquote");
+    await expect(input).toHaveAttribute("data-retired-chord", "received");
+    await expect(input).toBeFocused();
+    await app.page.keyboard.press("Control+c");
     await app.page.keyboard.type(
       "stty -echo; set +H; printf '\\nKEYBOARD_READY\\n'",
     );
@@ -1020,18 +1036,6 @@ test("Keyboard task layout edits files, reorders tabs, hides and restores panes 
         ]),
       ).toEqual(originalCaret);
     }
-    const chatsBeforeFocus = (await state(app)).workspaces.find(
-      (w) => w.id === workspace,
-    )!.panes.length;
-    await app.page.keyboard.press("Alt+J");
-    await expect(
-      app.page.getByRole("textbox", { name: "Message", exact: true }),
-    ).toBeFocused();
-    await app.page.keyboard.press("Alt+J");
-    await expect(editor()).toBeFocused();
-    expect(
-      (await state(app)).workspaces.find((w) => w.id === workspace)!.panes,
-    ).toHaveLength(chatsBeforeFocus);
     // Current-content search keeps the file unchanged and restores its exact caret.
     const beforeFind = await editor().evaluate((node: HTMLTextAreaElement) => ({
       start: node.selectionStart,
@@ -1682,6 +1686,13 @@ test("Keyboard reference and unavailable commands are discoverable without losin
     await app.page.screenshot({
       path: info.outputPath("keyboard-reference.png"),
     });
+    const retired = ["Focus chat / return", "Focus terminal / return"];
+    for (const name of retired) {
+      await filter.fill(name);
+      await expect(dialog.locator(".shortcut-row")).toHaveCount(0);
+    }
+    await filter.fill("Focus files / return");
+    await expect(dialog.locator(".shortcut-row")).toHaveCount(1);
     await app.page.keyboard.press(`${modifier}+A`);
     await app.page.keyboard.type("Select review lines");
     await expect(dialog.locator(".shortcut-row")).toHaveCount(1);
@@ -1707,6 +1718,15 @@ test("Keyboard reference and unavailable commands are discoverable without losin
       ),
     ).toBe(1);
     await app.page.keyboard.press(`${modifier}+Shift+P`);
+    const palette = app.page.getByRole("dialog", { name: "Command palette" });
+    const query = palette.getByRole("textbox", { name: "Filter commands" });
+    for (const name of retired) {
+      await query.fill(name);
+      await expect(
+        palette.getByRole("button", { name, exact: true }),
+      ).toHaveCount(0);
+    }
+    await query.fill("");
     await app.page.keyboard.type("Review active document");
     const action = app.page.getByRole("button", {
       name: /Review active document/,

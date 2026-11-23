@@ -232,12 +232,6 @@ export const commands = [
   entry("focus.files", "Focus files / return", "Navigation", [
     key("KeyE", { mod: true, shift: true }),
   ]),
-  entry("focus.composer", "Focus chat / return", "Navigation", [
-    key("KeyJ", { mod: true, shift: true }),
-  ]),
-  entry("focus.terminal", "Focus terminal / return", "Navigation", [
-    key("Backquote", { ctrl: true }),
-  ]),
   entry("tab.togglePin", "Toggle pin tab", "Tabs", [], [], all),
   entry("tab.closeOthers", "Close other tabs", "Tabs", [], [], all),
   entry("tab.closeAll", "Close all tabs", "Tabs", [], [], all),

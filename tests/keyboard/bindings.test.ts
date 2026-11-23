@@ -149,8 +149,6 @@ test("all declared bindings are reachable without command collisions", () => {
 });
 
 const personal = {
-  "focus.composer": ["Alt+J"],
-  "focus.terminal": ["Mod+Backquote"],
   "terminal.new": ["Mod+Shift+Backquote"],
   "pane.splitRight": ["Alt+N"],
   "pane.zoom": ["Alt+Enter"],
@@ -189,7 +187,7 @@ test("Pane cycling allows held keys with default and overridden bindings", () =>
 test("Option symbols and explicit dead-key chords use physical keys without taking ordinary composition", () => {
   configureKeymap(personal, "darwin");
   for (const [key, code, command] of [
-    ["∆", "KeyJ", "focus.composer"],
+    ["∆", "KeyJ", undefined],
     ["¡", "Digit1", "pane.focusLeft"],
     ["Dead", "KeyN", "pane.splitRight"],
     ["å", "KeyA", undefined],
@@ -227,20 +225,42 @@ test("Option symbols and explicit dead-key chords use physical keys without taki
   );
   assert.equal(
     resolveKeybinding(
-      input("`", { code: "Backquote", metaKey: true }),
-      "darwin",
-      "terminal",
-    )?.command,
-    "focus.terminal",
-  );
-  assert.equal(
-    resolveKeybinding(
       input("~", { code: "Backquote", metaKey: true, shiftKey: true }),
       "darwin",
       "shell",
     )?.command,
     "terminal.new",
   );
+});
+
+test("Retired focus-and-return chords reach the current surface", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    configureKeymap({}, platform);
+    const mod = platform === "darwin" ? { metaKey: true } : { ctrlKey: true };
+    for (const surface of [
+      "browser",
+      "composer",
+      "editor",
+      "terminal",
+    ] as const) {
+      for (const chord of [
+        input("J", { ...mod, shiftKey: true }),
+        input("j", { code: "KeyJ", altKey: true }),
+        input("`", { code: "Backquote", ctrlKey: true }),
+        input("`", { code: "Backquote", ...mod }),
+      ])
+        assert.equal(resolveKeybinding(chord, platform, surface), undefined);
+    }
+    assert.equal(
+      resolveKeybinding(
+        input("~", { code: "Backquote", ctrlKey: true, shiftKey: true }),
+        platform,
+        "terminal",
+      )?.command,
+      "terminal.new",
+    );
+  }
+  configureKeymap({}, "darwin");
 });
 
 test("Default split shortcuts cover only two sides while tab selection stays available", () => {

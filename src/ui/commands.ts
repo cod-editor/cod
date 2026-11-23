@@ -22,7 +22,7 @@ import {
   conversationRemovalReason,
   conversationHandoffReason,
 } from "../conversation-actions";
-import { createFocusTargets } from "./focus-targets";
+import { createFilesFocusToggle } from "./files-focus";
 import {
   commands as commandDefinitions,
   isPlainEscape,
@@ -142,7 +142,12 @@ export function createCommands(
       origin.browserId ? () => focus.restore(origin) : undefined,
     );
   }
-  const focusTargets = createFocusTargets(getState, invoke, focus, keys);
+  const toggleFilesFocus = createFilesFocusToggle(
+    getState,
+    invoke,
+    focus,
+    keys,
+  );
   const overview = createWorkspaceOverview(
     getState,
     invoke,
@@ -1554,13 +1559,7 @@ export function createCommands(
           layout.toggleFiles();
           break;
         case "focus.files":
-          await focusTargets.toggle("files", focusIntent);
-          break;
-        case "focus.composer":
-          await focusTargets.toggle("chat", focusIntent);
-          break;
-        case "focus.terminal":
-          await focusTargets.toggle("terminal", focusIntent);
+          await toggleFilesFocus(focusIntent);
           break;
         case "pane.focusLeft":
         case "pane.focusRight":
@@ -2076,7 +2075,6 @@ export function createCommands(
       refreshPalette = undefined;
       overview.dispose();
       events.abort();
-      focusTargets.dispose();
       keys.dispose();
     },
     palette: commandPalette,
