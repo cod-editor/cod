@@ -116,11 +116,14 @@ export class ApplicationOperations {
   ): void {
     this.browsers.attachBrowserHost(window, session, downloadDirectory);
   }
-  browserLayout(rectangles: BrowserRectangle[]): void {
-    this.browsers.browserLayout(rectangles);
+  browserLayout(rectangles: BrowserRectangle[], retireOverview = false): void {
+    this.browsers.browserLayout(rectangles, retireOverview);
   }
-  browserOverviewBackdrop(ids: unknown) {
-    return this.browsers.browserOverviewBackdrop(ids);
+  browserHideForOverview(opening: number): boolean {
+    return this.browsers.browserHideForOverview(opening);
+  }
+  browserOverviewBackdrop(ids: unknown, opening?: number) {
+    return this.browsers.browserOverviewBackdrop(ids, opening);
   }
   browserFind(
     id: string,

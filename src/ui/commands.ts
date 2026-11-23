@@ -102,6 +102,7 @@ interface CommandFeatures {
   navigation: ReturnType<typeof createWorkspaceNavigation>;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
+  stageOverview: (dialog: HTMLDialogElement) => Promise<void>;
   find: {
     open: (pane: PaneState) => void;
     dismissFrom: (target: Element) => boolean;
@@ -166,6 +167,7 @@ export function createCommands(
       if (pane) await keys.focusPane(pane, intent);
     },
     {
+      stageBrowserBackdrop: features.stageOverview,
       fallback: async () => {
         const intent = keys.beginFocus();
         const pane = activeWorkspace()?.panes.find(

@@ -534,6 +534,9 @@ body {
 body:has(dialog[open]) .browser-reveal-previous {
   visibility: hidden;
 }
+.workspace-overview[data-browser-preparing] {
+  opacity: 0;
+}
 .browser-overview-backdrop {
   position: absolute;
   inset: 0;

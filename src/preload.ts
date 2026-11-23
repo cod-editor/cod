@@ -53,8 +53,11 @@ const bridge: CodBridge = {
   browserLayout(rectangles) {
     ipcRenderer.send("cod:browser-layout", rectangles);
   },
-  browserOverviewBackdrop(ids) {
-    return ipcRenderer.invoke("cod:browser-overview-backdrop", ids);
+  browserHideForOverview(opening) {
+    return ipcRenderer.invoke("cod:browser-hide-for-overview", opening);
+  },
+  browserOverviewBackdrop(ids, opening) {
+    return ipcRenderer.invoke("cod:browser-overview-backdrop", ids, opening);
   },
   browserFind(id, text, options) {
     return ipcRenderer.invoke("cod:browser-find", id, text, options);

@@ -50,7 +50,8 @@ export class BrowserApplicationService {
   private browserAdmissions = new Map<string, AbortController>();
   private browserInitializations = new Map<string, Promise<unknown>>();
   private browserWindow?: BrowserWindow;
-  private overviewCapturePending = false;
+  private overviewOpening: number | undefined;
+  private readonly overviewCaptures = new Set<string>();
   constructor(
     private readonly store: ApplicationStateStore,
     private readonly conversations: BrowserConversationPort,
@@ -402,6 +403,10 @@ export class BrowserApplicationService {
     this.browserService.onEvent((event) => this.browserEvent(event));
   }
   private syncNativeFocus(contents: Electron.WebContents, id: string): void {
+    if (this.overviewOpening !== undefined) {
+      this.focusOverview(this.overviewOpening);
+      return;
+    }
     if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
       return;
     const current = this.store.data.browsers.find((item) => item.id === id);
@@ -489,7 +494,17 @@ export class BrowserApplicationService {
         finalUpdate: result.finalUpdate,
       });
     });
+    contents.on("before-mouse-event", (event, input) => {
+      if (this.overviewOpening === undefined) return;
+      event.preventDefault();
+      if (input.type === "mouseDown" || input.type === "mouseUp")
+        this.focusOverview(this.overviewOpening);
+    });
     contents.on("before-input-event", (event, input) => {
+      if (this.overviewOpening !== undefined) {
+        event.preventDefault();
+        return;
+      }
       const key = nativeKeyInput(input);
       if (
         input.type === "keyDown" &&
@@ -658,14 +673,32 @@ export class BrowserApplicationService {
     }
   }
 
-  async browserOverviewBackdrop(ids: unknown) {
+  private focusOverview(opening: number): void {
+    // Native click-to-focus may finish after the mouse/focus callback returns.
+    setImmediate(() => {
+      if (opening === this.overviewOpening)
+        this.browserWindow?.webContents.focus();
+    });
+  }
+
+  browserHideForOverview(opening: number): boolean {
+    if (opening !== this.overviewOpening) return false;
+    this.overviewOpening = undefined;
+    this.browserLayout([]);
+    return true;
+  }
+
+  async browserOverviewBackdrop(ids: unknown, opening?: number) {
+    if (opening !== undefined) {
+      this.overviewOpening = opening;
+      this.browserWindow?.webContents.focus();
+    }
     const service = this.browserService;
     const workspace = this.store.data.activeWorkspaceId;
     if (
       !service ||
       !workspace ||
       this.store.closing ||
-      this.overviewCapturePending ||
       !Array.isArray(ids) ||
       ids.length > 4 ||
       !ids.every((id) => typeof id === "string")
@@ -680,28 +713,42 @@ export class BrowserApplicationService {
         )
         .map((item) => item.id),
     );
-    this.overviewCapturePending = true;
-    try {
-      const captures = await Promise.all(
-        [...new Set<string>(ids)]
-          .filter((id) => visible.has(id))
-          .map(async (id) => {
-            const frame = await service
-              .captureOverviewBackdrop(id)
-              .catch(() => undefined);
-            return frame && { id, ...frame };
-          }),
-      );
-      return workspace === this.store.data.activeWorkspaceId &&
-        !this.store.closing
-        ? captures.filter((capture) => !!capture)
-        : [];
-    } finally {
-      this.overviewCapturePending = false;
+    const captures: { id: string; url: string; bytes: Uint8Array }[] = [];
+    const pending = Promise.all(
+      [...new Set<string>(ids)]
+        .filter((id) => visible.has(id) && !this.overviewCaptures.has(id))
+        .map(async (id) => {
+          this.overviewCaptures.add(id);
+          try {
+            const frame = await service.captureOverviewBackdrop(id);
+            if (frame) captures.push({ id, ...frame });
+          } catch {
+            // A browser may close between checking visibility and capturing.
+          } finally {
+            this.overviewCaptures.delete(id);
+          }
+        }),
+    );
+    if (opening === undefined) await pending;
+    else {
+      // A stalled pane must not hold up a frame from a neighboring pane.
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        pending,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 50);
+        }),
+      ]);
+      clearTimeout(timer);
     }
+    return workspace === this.store.data.activeWorkspaceId &&
+      !this.store.closing
+      ? captures.slice()
+      : [];
   }
 
-  browserLayout(rectangles: BrowserRectangle[]): void {
+  browserLayout(rectangles: BrowserRectangle[], retireOverview = false): void {
+    if (retireOverview) this.overviewOpening = undefined;
     const service = this.browserService,
       window = this.browserWindow;
     if (
