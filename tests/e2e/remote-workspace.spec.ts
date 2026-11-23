@@ -1190,6 +1190,11 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
     );
     await focusLocal();
     await expect(composer()).toHaveValue("Invented local draft");
+  } catch (error) {
+    await desktop.page.screenshot({
+      path: info.outputPath("ssh-alias-failure.png"),
+    });
+    throw error;
   } finally {
     await desktop.cleanup();
     host.kill("SIGTERM");
