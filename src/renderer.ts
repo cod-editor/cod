@@ -54,6 +54,7 @@ const quickTerminal = createQuickTerminal(
   focus,
   browsers.stageBrowserBackdrop,
 );
+document.querySelector("#pane-visibility")!.append(quickTerminal.trigger);
 const documents = createDocumentViews(
   () => state,
   panes,
@@ -258,6 +259,7 @@ void Promise.all([keymapReady, initializeAppearance()])
   .then(() => invoke<AppState>("state"))
   .then((next) => {
     state = next;
+    quickTerminal.reconcile();
     render();
     if (
       document.activeElement === document.body &&
