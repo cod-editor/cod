@@ -203,10 +203,8 @@ export interface ConversationState {
   historyPartial?: boolean;
 }
 
-export interface TerminalState {
-  nativeConversationId?: string;
+export interface TerminalProcessState {
   id: string;
-  paneId: string;
   workspaceId: string;
   cwd: string;
   status: "starting" | "running" | "exited" | "failed";
@@ -218,6 +216,16 @@ export interface TerminalState {
   exitCode?: number;
   error?: string;
 }
+
+export interface TerminalState extends TerminalProcessState {
+  nativeConversationId?: string;
+  paneId: string;
+}
+
+export type QuickTerminalSummary = Pick<
+  TerminalProcessState,
+  "id" | "workspaceId" | "status"
+>;
 
 export interface TerminalUiEvent {
   terminalId: string;
@@ -309,6 +317,8 @@ export interface AppState {
   activeWorkspaceId: string | null;
   conversations: ConversationState[];
   terminals: TerminalState[];
+  /** Live pane-free shells. Never written to workspace data. */
+  quickTerminals?: QuickTerminalSummary[];
   browsers: BrowserState[];
   drafts: Record<string, FileDraft>;
   reviews?: ReviewSummary[];

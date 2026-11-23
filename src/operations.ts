@@ -54,7 +54,8 @@ export class ApplicationOperations {
       isActive: (id) => this.conversations.isActive(id),
       send: (request) => this.conversations.sendConversation(request),
     });
-    this.store.onDidChange = (state) => this.onDidChange?.(state);
+    this.store.onDidChange = (state) =>
+      this.onDidChange?.(this.withQuickTerminals(state));
     this.store.beforeNotify = () => this.browserHost?.synchronizeNativeViews();
     this.terminals = new TerminalApplicationService(this.store);
     this.terminals.onDidTerminal = (event) => this.onDidTerminal?.(event);
@@ -177,7 +178,25 @@ export class ApplicationOperations {
     return this.store.data.activeWorkspaceId;
   }
   snapshot(forUi = false): AppState {
-    return this.store.snapshot(forUi);
+    return this.withQuickTerminals(this.store.snapshot(forUi));
+  }
+
+  private withQuickTerminals(state: AppState): AppState {
+    const quickTerminals = this.terminals.quickTerminalSummaries();
+    return quickTerminals.length ? { ...state, quickTerminals } : state;
+  }
+
+  openQuickTerminalCompanion(workspace: string, host: string) {
+    return this.store.serialize(() =>
+      this.terminals.openQuickTerminal(workspace, host),
+    );
+  }
+
+  closeRemovedQuickTerminalCompanions(host: string, state: AppState) {
+    return this.terminals.closeRemovedCompanions(
+      host,
+      new Set(state.workspaces.map((workspace) => workspace.id)),
+    );
   }
 
   private async newContextualTab(request: OperationRequest): Promise<unknown> {

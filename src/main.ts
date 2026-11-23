@@ -179,6 +179,19 @@ function showWorkspaceState(local?: AppState) {
     mainWindow.webContents.send("cod:state", state);
 }
 
+function quickTerminalCompanionHost(link: HostLink): string {
+  return JSON.stringify([link.selection.alias, link.selection.socketPath]);
+}
+
+function reconcileQuickTerminalCompanions(link: HostLink) {
+  if (link.connected)
+    void operations
+      .closeRemovedQuickTerminalCompanions(link.selection.alias, link.state)
+      .catch((error) =>
+        console.error("Could not close a Quick Terminal companion", error),
+      );
+}
+
 function followPreparedWorkspace(link: HostLink) {
   const pending = pendingWorkspace;
   if (!pending || pending.link !== link) return;
@@ -229,6 +242,7 @@ async function connectRemoteWorkspace(
             )
           )
             remoteView = undefined;
+          if (frame?.type === "state") reconcileQuickTerminalCompanions(link);
           followPreparedWorkspace(link);
           showWorkspaceState();
         }
@@ -261,7 +275,10 @@ async function connectRemoteWorkspace(
     remoteWorkspace?.close();
     pendingWorkspace = undefined;
     remoteWorkspace = link;
+    reconcileQuickTerminalCompanions(link);
     if (select) remoteView = link.state.activeWorkspaceId ?? undefined;
+    else if (!link.state.workspaces.some(({ id }) => id === remoteView))
+      remoteView = undefined;
     if (remoteView) operations.browserLayout([]);
     showWorkspaceState();
     return link;
@@ -441,6 +458,34 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
     showWorkspaceState();
     return;
   }
+  if (request.op === "remote.reconnect-current") {
+    if (!link || !remoteView)
+      throw new Error("Select a Linux workspace to reconnect");
+    await connectRemoteWorkspace(link.selection, { select: false });
+    return;
+  }
+  if (request.op === "terminal.quick-open" && request.location === "local") {
+    if (link && requestBelongsToHost(link.state, request)) {
+      if (
+        typeof request.workspace !== "string" ||
+        request.workspace !== remoteView
+      )
+        throw new Error(
+          "Select the Linux workspace before opening its Local shell",
+        );
+      return operations.openQuickTerminalCompanion(
+        request.workspace,
+        quickTerminalCompanionHost(link),
+      );
+    }
+    return operations.dispatch(request, true);
+  }
+  if (
+    request.op === "terminal.quick-open" &&
+    request.location === "linux" &&
+    (!link || !requestBelongsToHost(link.state, request))
+  )
+    throw new Error("Reconnect to the Linux workspace first");
   if (link && requestBelongsToHost(link.state, request)) {
     if (
       request.op === "browser.open" &&

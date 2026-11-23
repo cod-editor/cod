@@ -42,6 +42,7 @@ const fileOperations = new Set([
 ]);
 const terminalOperations = new Set([
   "terminal.open",
+  "terminal.quick-open",
   "terminal.inspect",
   "terminal.write",
   "terminal.resize",
@@ -82,7 +83,9 @@ export function requestBelongsToHost(
   if (request.op.startsWith("workspace."))
     return state.workspaces.some((workspace) => workspace.id === request.id);
   if (request.op.startsWith("terminal."))
-    return state.terminals.some((terminal) => terminal.id === request.id);
+    return [...state.terminals, ...(state.quickTerminals ?? [])].some(
+      (terminal) => terminal.id === request.id,
+    );
   if (request.op.startsWith("conversation."))
     return state.conversations.some((chat) => chat.id === request.id);
   if (request.op.startsWith("review."))
@@ -136,6 +139,10 @@ export function combineWorkspaces(
         : local.activeWorkspaceId,
     conversations: [...local.conversations, ...state.conversations],
     terminals: [...local.terminals, ...state.terminals],
+    quickTerminals: [
+      ...(local.quickTerminals ?? []),
+      ...(state.quickTerminals ?? []),
+    ],
     reviews: [...(local.reviews ?? []), ...(state.reviews ?? [])],
     reviewPresentation: viewing
       ? state.reviewPresentation

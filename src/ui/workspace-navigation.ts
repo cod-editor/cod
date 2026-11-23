@@ -25,7 +25,10 @@ export function createWorkspaceNavigation(
         c.workspaceId === workspace.id &&
         ["working", "waiting", "starting"].includes(c.status),
     );
-    const terminals = getState().terminals.filter(
+    const terminals = [
+      ...getState().terminals,
+      ...(getState().quickTerminals ?? []),
+    ].filter(
       (t) =>
         t.workspaceId === workspace.id &&
         ["running", "starting"].includes(t.status),

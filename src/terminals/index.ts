@@ -340,6 +340,12 @@ export class TerminalService {
     return record.closePromise;
   }
 
+  async remove(id: string): Promise<void> {
+    const record = this.requireTerminal(id);
+    await this.close(id);
+    if (this.terminals.get(id) === record) this.terminals.delete(id);
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
