@@ -562,19 +562,34 @@ export function createCommands(
     values: { workspace: string; [key: string]: unknown },
     intent = keys.beginFocus(),
   ): Promise<void> {
+    // Browser opens admit the tab before waiting for its native view to load.
+    // Select it in that first change and never reselect it after the load.
+    const selectOnOpen = op === "browser.open";
     const result = await invoke<{ paneId: string }>(op, {
       ...values,
-      focus: false,
+      focus: selectOnOpen,
     });
     if (intent.signal.aborted) return;
-    await invoke("pane.focus", {
-      workspace: values.workspace,
-      id: result.paneId,
-    });
+    if (!selectOnOpen)
+      await invoke("pane.focus", {
+        workspace: values.workspace,
+        id: result.paneId,
+      });
     await keys.focusActiveContent(result.paneId, intent);
   }
   async function newTab(workspaceId?: string, groupId?: string): Promise<void> {
     const { workspace, group, sourcePane } = tabTarget(workspaceId, groupId);
+    if (
+      workspace.panes.find((pane) => pane.id === sourcePane)?.kind === "browser"
+    ) {
+      await createTab("browser.open", {
+        workspace: workspace.id,
+        group: group.id,
+        sourcePane,
+        url: "about:blank",
+      });
+      return;
+    }
     await createTab("pane.new", {
       workspace: workspace.id,
       group: group.id,

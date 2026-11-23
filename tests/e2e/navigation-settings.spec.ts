@@ -851,6 +851,86 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       expect(geometry.valueGap).toBeGreaterThanOrEqual(8);
       expect(geometry.trailingInset).toBeGreaterThanOrEqual(12);
     };
+    const checkPaintedSelection = async (name: string) => {
+      const screenshot = await app.page.screenshot({
+        path: info.outputPath(name + ".png"),
+        scale: "css",
+      });
+      const selected = cursor.locator("option:checked");
+      const bounds = await selected.evaluate((option) => {
+        const row = option.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(option);
+        const text = range.getBoundingClientRect();
+        return {
+          left: Math.floor(row.right - 30),
+          right: Math.floor(row.right - 4),
+          top: Math.ceil(row.top + 2),
+          bottom: Math.floor(row.bottom - 2),
+          rowCenter: row.y + row.height / 2,
+          textCenter: text.y + text.height / 2,
+          textHeight: text.height,
+        };
+      });
+      const center = await app.page.evaluate(
+        async ({ screenshot, bounds }) => {
+          const bytes = Uint8Array.from(atob(screenshot), (byte) =>
+            byte.charCodeAt(0),
+          );
+          const bitmap = await createImageBitmap(
+            new Blob([bytes], { type: "image/png" }),
+          );
+          const canvas = document.createElement("canvas");
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(bitmap, 0, 0);
+          const width = bounds.right - bounds.left;
+          const height = bounds.bottom - bounds.top;
+          const { data } = context.getImageData(
+            bounds.left,
+            bounds.top,
+            width,
+            height,
+          );
+          const paintedRows = new Set<number>();
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const pixel = (y * width + x) * 4;
+              // Accent-colored check pixels on the otherwise neutral picker.
+              if (
+                data[pixel + 2]! - data[pixel]! >= 44 &&
+                data[pixel + 2]! - data[pixel + 1]! >= 25
+              ) {
+                paintedRows.add(y);
+              }
+            }
+          }
+          const rows = [...paintedRows];
+          return {
+            height: rows.length,
+            y:
+              rows.length > 0
+                ? bounds.top + (rows[0]! + rows.at(-1)! + 1) / 2
+                : null,
+          };
+        },
+        { screenshot: screenshot.toString("base64"), bounds },
+      );
+      expect(
+        center.height,
+        "visible selected checkmark height",
+      ).toBeGreaterThanOrEqual(5);
+      expect(
+        Math.abs(center.y! - bounds.rowCenter),
+        `paint center ${center.y} relative to option row ${bounds.rowCenter}`,
+      ).toBeLessThanOrEqual(1);
+      expect(bounds.textHeight).toBeGreaterThan(0);
+      expect(
+        Math.abs(center.y! - bounds.textCenter),
+        "paint center relative to option label",
+      ).toBeLessThanOrEqual(2);
+    };
     await checkClosedControl("block", 14);
     await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
     await checkClosedControl("block", 13);
@@ -908,6 +988,7 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       cursor.getByRole("option", { name: "bar", exact: true }),
     ).toBeFocused();
     await expect(cursor).toHaveValue("block");
+    await checkPaintedSelection("native-settings-selector-mark-14");
     const capture = await app.app!.evaluate(async ({ desktopCapturer }) => {
       const screens = await desktopCapturer.getSources({
         types: ["screen"],
@@ -923,6 +1004,15 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
     await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
     await expect(cursor).toHaveValue("block");
     await expect(dialog).toBeVisible();
+    await expect(cursor).toBeFocused();
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
+    await expect(cursor).toHaveCSS("font-size", "13px");
+    await execute("xdotool", ["key", "--clearmodifiers", "space"]);
+    await execute("xdotool", ["key", "--clearmodifiers", "Down"]);
+    await expect(cursor.getByRole("option", { name: "bar" })).toBeFocused();
+    await expect(cursor).toHaveValue("block");
+    await checkPaintedSelection("native-settings-selector-mark-13");
+    await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
     await expect(cursor).toBeFocused();
     await execute("xdotool", ["key", "--clearmodifiers", "space"]);
     await expect
@@ -968,6 +1058,25 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
     await expect
       .poll(() => cursor.evaluate((node) => node.matches(":open")))
       .toBe(false);
+    await expect(cursor).toHaveValue("underline");
+    const wrappedChoice =
+      "An invented selected cursor option with a deliberately long label";
+    await cursor.evaluate((element, text) => {
+      element.querySelector("option:checked")!.textContent = text;
+    }, wrappedChoice);
+    await cursor.focus();
+    await execute("xdotool", ["key", "--clearmodifiers", "space"]);
+    await expect
+      .poll(() => cursor.evaluate((node) => node.matches(":open")))
+      .toBe(true);
+    const wrapped = cursor.getByRole("option", { name: wrappedChoice });
+    expect((await wrapped.boundingBox())!.height).toBeGreaterThan(40);
+    await execute("xdotool", ["key", "--clearmodifiers", "Up"]);
+    await expect(cursor.getByRole("option", { name: "bar" })).toBeFocused();
+    await expect(cursor).toHaveValue("underline");
+    await checkPaintedSelection("native-settings-selector-mark-wrapped");
+    await execute("xdotool", ["key", "--clearmodifiers", "Escape"]);
+    await expect(cursor).toBeFocused();
     await expect(cursor).toHaveValue("underline");
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
   } finally {
