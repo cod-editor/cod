@@ -1,4 +1,4 @@
-import { dialogSurface, dialogRegions, actionRow } from "./primitives";
+import { dialogSurface, dialogRegions, actionRow } from "../ui-kit";
 import type { Invoke } from "./contracts";
 import type { BrowserDownload } from "../browser/download-types";
 import { actionButton, showActionError } from "./action-feedback";

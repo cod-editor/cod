@@ -7,7 +7,7 @@ import {
   dialogSurface,
   keyHintButton,
   uiButton,
-} from "./primitives";
+} from "../ui-kit";
 
 export function remoteWorkspaceDialog(
   invoke: Invoke,

@@ -3,8 +3,10 @@ import {
   setChoiceTriggerCaption,
   toolbar,
   uiButton,
-} from "../../../src/ui/primitives";
-import { icon, iconButton, menu } from "../../../src/ui/controls";
+  icon,
+  iconButton,
+  menu,
+} from "../../../src/ui-kit";
 import { previewFrame } from "./frame";
 
 const stage = previewFrame("Cod workspace preview");

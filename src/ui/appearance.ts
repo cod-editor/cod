@@ -10,7 +10,7 @@ import {
   uiButton,
   settingEntry,
   uiSwitch,
-} from "./primitives";
+} from "../ui-kit";
 import { readPreference, writePreference } from "./preferences";
 import {
   defaultSettings,

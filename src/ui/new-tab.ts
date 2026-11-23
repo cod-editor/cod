@@ -1,5 +1,5 @@
 import { actionButton } from "./action-feedback";
-import { icon } from "./controls";
+import { icon } from "../ui-kit";
 
 export function newTab(actions: {
   file: () => Promise<void>;

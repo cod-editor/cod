@@ -12,7 +12,9 @@ import {
   choiceTrigger,
   setChoiceTriggerCaption,
   uiButton,
-} from "./primitives";
+  icon,
+  iconButton,
+} from "../ui-kit";
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
 import {
@@ -29,7 +31,7 @@ import { reconcileView } from "./view-reconcile";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
-import { icon, iconButton, menu } from "./controls";
+import { menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
 import { readPreference, writePreference } from "./preferences";

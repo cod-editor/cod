@@ -1,4 +1,4 @@
-import { uiButton } from "./primitives";
+import { uiButton } from "../ui-kit";
 import { confirmAction } from "./dialogs";
 import { highlightedEditor, setChangedLines } from "../editor-highlight";
 import { reconcileView } from "./view-reconcile";

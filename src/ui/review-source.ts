@@ -1,7 +1,7 @@
 import { highlight, languageFor } from "../editor-highlight";
 import { documentFragment } from "../markdown-document";
 import type { Range as CommentRange } from "../reviews/snapshots";
-import { iconButton } from "./controls";
+import { iconButton } from "../ui-kit";
 
 function paintLines(text: string, path: string, lines: HTMLElement[]): void {
   if (text.length > 200_000) {

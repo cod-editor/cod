@@ -1,10 +1,9 @@
-import { uiSwitch } from "./primitives";
+import { uiSwitch, icon } from "../ui-kit";
 import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
-import { icon } from "./controls";
 import { createBrowserHome } from "./browser-home";
 export function createBrowserViews(
   panes: HTMLElement,

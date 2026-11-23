@@ -23,6 +23,8 @@ The OrbStack test environment uses an outer Docker seccomp exception for Chromiu
 
 ## Visual review fixtures
 
+Build a standalone interactive sample with `node scripts/build-ui-preview.mjs gallery` and open `artifacts/ui-preview/gallery.html` in a browser. Use its width and font selectors to compare default, narrow and enlarged states. Tab through the native controls or open the model choices and dialog with the keyboard. Run `node scripts/build-ui-preview.mjs workspace` for `artifacts/ui-preview/workspace.html`, a full-window example you can adapt from [its source](support/ui-preview/workspace.ts). Both pages use [Cod's production UI kit](../src/ui-kit/index.ts) with invented data. They run offline and have no app connection.
+
 For shared control work, start with the nearest surface in this index. Reproduce the reported state and compare it on the base and candidate with the same fixture data, viewport, interface text size and display scale. Capture the reported settings even when the default or enlarged view also passes. Use a reference from the design decision when it helps explain a difference. Inspect the actual PNG at a readable size. Record the visual judgment separately from the geometry assertion results.
 
 | Control family                    | Fixture file and scenario prefix                                                                                                                                                | Captures and assertions                                                                                                                                                                                                                                         |

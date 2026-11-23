@@ -1,8 +1,8 @@
-import { actionRow } from "./primitives";
+import { actionRow, iconButton } from "../ui-kit";
 import type { Invoke } from "./contracts";
 import { actionButton, showActionError } from "./action-feedback";
 import { createSearchList } from "./search-list";
-import { iconButton, menu } from "./controls";
+import { menu } from "./controls";
 export function browserHistory(
   invoke: Invoke,
   open: (url: string) => Promise<void>,

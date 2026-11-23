@@ -1,4 +1,4 @@
-export const icons: Record<string, string> = {
+const icons: Record<string, string> = {
   history: '<path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/>',
   reset: '<path d="M4 10a8 8 0 1 1 2 8M4 3v7h7"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',

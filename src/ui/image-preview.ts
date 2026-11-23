@@ -3,7 +3,7 @@ import type { PreviewPane, WorkspaceState } from "../types";
 import type { ImageAttachment } from "../providers/types";
 import type { Invoke } from "./contracts";
 import { menu } from "./controls";
-import { uiButton } from "./primitives";
+import { uiButton } from "../ui-kit";
 
 /** A local document preview, with no browser chrome or editable binary text. */
 export function imagePreviewPane(

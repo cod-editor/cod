@@ -1,3 +1,6 @@
+@import "../../../src/ui-kit/components.css";
+@import "../../../src/ui-kit/theme.css";
+
 body {
   min-block-size: 100vh;
   margin: 0;

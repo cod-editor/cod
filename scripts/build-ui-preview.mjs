@@ -20,7 +20,10 @@ if (!title || rest.length) {
 
 const output = path.join(root, "artifacts", "ui-preview");
 const { outputFiles } = await build({
-  entryPoints: [path.join(root, "tests/support/ui-preview", `${name}.ts`)],
+  entryPoints: [
+    path.join(root, "tests/support/ui-preview", `${name}.ts`),
+    path.join(root, "tests/support/ui-preview/preview.css"),
+  ],
   outdir: output,
   bundle: true,
   write: false,

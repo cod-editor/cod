@@ -19,6 +19,20 @@ export function uiButton(
   return button;
 }
 
+export function iconButton(
+  name: string,
+  label: string,
+  action: () => void,
+): HTMLButtonElement {
+  const button = uiButton("");
+  button.classList.add("icon-button");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(icon(name));
+  button.onclick = action;
+  return button;
+}
+
 /** Compact button for a choice menu with a retained caption and fixed chevron. */
 export function choiceTrigger(caption: string): HTMLButtonElement {
   const button = uiButton("", "quiet");

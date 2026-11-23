@@ -1,4 +1,4 @@
-import { selectField } from "./primitives";
+import { selectField } from "../ui-kit";
 
 /** Consistent compact label/control spacing in application forms. */
 export function formField(

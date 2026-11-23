@@ -1,4 +1,4 @@
-import { uiButton } from "./primitives";
+import { uiButton } from "../ui-kit";
 import type { BackgroundActivity } from "../providers/types";
 
 const stateLabels: Record<BackgroundActivity["state"], string> = {

@@ -1,6 +1,4 @@
-import { selectField, toolbar } from "../../../src/ui/primitives";
-import "../../../src/ui/components.css";
-import "./preview.css";
+import { selectField, toolbar } from "../../../src/ui-kit";
 
 export function sampleSelect(
   label: string,

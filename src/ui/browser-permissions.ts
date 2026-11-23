@@ -1,4 +1,4 @@
-import { dialogRegions, dialogSurface, selectField } from "./primitives";
+import { dialogRegions, dialogSurface, selectField } from "../ui-kit";
 import {
   sitePermissionNames,
   type SitePolicy,

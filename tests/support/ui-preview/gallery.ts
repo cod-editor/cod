@@ -9,8 +9,9 @@ import {
   toolbar,
   uiButton,
   uiSwitch,
-} from "../../../src/ui/primitives";
-import { icon, menu } from "../../../src/ui/controls";
+  icon,
+  menu,
+} from "../../../src/ui-kit";
 import { previewFrame, sampleSelect } from "./frame";
 
 const stage = previewFrame("Cod component gallery");
