@@ -53,15 +53,24 @@ const agents = uiButton("2 agents", "quiet");
 agents.classList.add("compact-text", "preview-running");
 const shells = uiButton("1 shell", "quiet");
 shells.classList.add("compact-text", "preview-running");
+const result = document.createElement("p");
+result.setAttribute("role", "status");
+transcript.append(result);
+const activityItem = (label: string) => ({
+  label,
+  run: () => {
+    result.textContent = `${label} is running.`;
+  },
+});
 agents.onclick = () =>
   menu(agents, [
-    { label: "Fixture agent A", run: () => undefined },
-    { label: "Fixture agent B", run: () => undefined },
+    activityItem("Fixture agent A"),
+    activityItem("Fixture agent B"),
   ]);
-shells.onclick = () =>
-  menu(shells, [{ label: "Fixture build command", run: () => undefined }]);
+shells.onclick = () => menu(shells, [activityItem("Fixture build command")]);
 const stop = iconButton("stop", "Stop", () => {
   agents.hidden = shells.hidden = stop.hidden = true;
+  result.textContent = "";
   input.focus();
 });
 const activity = toolbar(agents, shells, stop);

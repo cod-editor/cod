@@ -85,16 +85,31 @@ const readOnlySelect = sampleSelect("Unavailable select", [
 readOnlySelect.select.disabled = true;
 section("Select", toolbar(field, readOnlySelect.field));
 
-const wrap = uiSwitch();
-const checked = uiSwitch();
-checked.checked = true;
-const fixed = uiSwitch();
-fixed.disabled = true;
+function switchRow(label: string, initial = false, disabled = false) {
+  const input = uiSwitch();
+  input.checked = initial;
+  input.disabled = disabled;
+  const { row, reset } = settingEntry(label, input);
+  const refresh = () => {
+    const hidden = disabled || input.checked === initial;
+    reset.style.visibility = hidden ? "hidden" : "visible";
+    reset.disabled = hidden;
+  };
+  input.onchange = refresh;
+  reset.onclick = () => {
+    input.checked = initial;
+    input.focus();
+    refresh();
+  };
+  refresh();
+  return row;
+}
+
 section(
   "Switch",
-  settingEntry("Wrap long lines", wrap).row,
-  settingEntry("Run new sessions detached", checked).row,
-  settingEntry("Read-only preference", fixed).row,
+  switchRow("Wrap long lines"),
+  switchRow("Run new sessions detached", true),
+  switchRow("Read-only preference", false, true),
 );
 
 const open = uiButton("Open example dialog");
@@ -109,7 +124,7 @@ open.onclick = () => {
     "Use browser suggestions",
     "Follow available system appearance",
   ])
-    body.append(settingEntry(name, uiSwitch()).row);
+    body.append(switchRow(name));
   const cancel = keyHintButton(uiButton("Cancel", "quiet"), "Esc");
   const done = uiButton("Done", "primary");
   cancel.onclick = done.onclick = () => dialog.close();
