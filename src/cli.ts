@@ -2,11 +2,17 @@
 import { readFile } from "node:fs/promises";
 import { invokeCommand } from "./command-client";
 import { defaultSocketPath } from "./paths";
-import { help, parseArguments } from "./command-catalog";
+import {
+  desktopWorkspaceOperations,
+  help,
+  parseArguments,
+} from "./command-catalog";
 import type { OperationRequest, ReviewSummary } from "./types";
 
 const invoke = (request: OperationRequest) =>
-  invokeCommand(defaultSocketPath(), request);
+  invokeCommand(defaultSocketPath(), request, {
+    timeoutMs: desktopWorkspaceOperations.has(request.op) ? 45_000 : undefined,
+  });
 
 async function main(): Promise<void> {
   try {

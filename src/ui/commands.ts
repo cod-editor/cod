@@ -1028,8 +1028,6 @@ export function createCommands(
     if (id === "workspace.remoteConnect") return;
     if (id === "workspace.remoteDisconnect")
       return host ? undefined : "Connect to a Linux workspace first";
-    if (id === "workspace.remoteReconnect")
-      return host ? undefined : "Connect to a Linux workspace first";
     if (id === "link.open")
       return linkUrl && w ? undefined : "Place the caret on a web link first";
     if (id === "browser.openExternal") {
@@ -1300,7 +1298,7 @@ export function createCommands(
           break;
         }
         case "workspace.remoteReconnect":
-          await invoke("remote.reconnect");
+          await invoke("workspace.reconnect");
           break;
         case "workspace.remoteDisconnect":
           await invoke("remote.disconnect");

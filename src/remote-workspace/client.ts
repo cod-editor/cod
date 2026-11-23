@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { CommandSocketError, invokeCommand } from "../command-client";
 import type { AppState, OperationRequest } from "../types";
@@ -11,13 +12,78 @@ import {
   maximumWorkspaceFrameBytes,
   unconfirmedRemoteSend,
   type WorkspaceHostFrame,
+  type WorkspaceHostSelection,
   type WorkspaceHostTarget,
 } from "./protocol";
 import { signWorkspaceReview } from "./review-signature";
-import { workspaceHostTarget } from "./target";
+import { validWorkspaceSocket } from "./target";
+
+const sshOptions = [
+  "-T",
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "StrictHostKeyChecking=yes",
+  "-o",
+  "ForwardAgent=no",
+  "-o",
+  "ForwardX11=no",
+  "-o",
+  "ControlMaster=no",
+  "-o",
+  "ControlPath=none",
+  "-o",
+  "PermitLocalCommand=no",
+  "-o",
+  "ConnectTimeout=10",
+];
+
+async function discoverWorkspaceSocket(
+  alias: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  let output: string;
+  try {
+    const result = await promisify(execFile)(
+      "/usr/bin/ssh",
+      [
+        ...sshOptions,
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
+        "RemoteCommand=none",
+        alias,
+        'exec "$HOME/.local/bin/cod-workspace-host" endpoint',
+      ],
+      { signal, timeout: 12_000, maxBuffer: 4_096, killSignal: "SIGKILL" },
+    );
+    output = result.stdout;
+  } catch (error) {
+    signal?.throwIfAborted();
+    const failure = error as { code?: unknown; stderr?: string };
+    if (failure.code === 127)
+      throw new Error(
+        `Set up the Cod workspace host on "${alias}" first. See the Linux workspace host setup in the Cod guide.`,
+      );
+    const diagnostic = failure.stderr?.trim().slice(-2_048);
+    throw new Error(
+      diagnostic ||
+        `Could not discover the Cod workspace host on "${alias}". Check SSH access and the host service.`,
+    );
+  }
+  let response: { socketPath?: unknown } | null;
+  try {
+    response = JSON.parse(output);
+  } catch {
+    response = null;
+  }
+  if (!validWorkspaceSocket(response?.socketPath))
+    throw new Error("The Linux workspace host returned an invalid endpoint");
+  return response.socketPath;
+}
 
 export interface HostLink {
-  target: WorkspaceHostTarget;
+  selection: WorkspaceHostSelection;
   state: AppState;
   connected: boolean;
   reviewAccess: boolean;
@@ -26,11 +92,17 @@ export interface HostLink {
 }
 
 export async function attachWorkspaceHost(
-  target: WorkspaceHostTarget,
+  selection: WorkspaceHostSelection,
   update: (link: HostLink, frame?: WorkspaceHostFrame) => void,
   signal?: AbortSignal,
 ): Promise<HostLink> {
-  target = workspaceHostTarget(target);
+  signal?.throwIfAborted();
+  const target: WorkspaceHostTarget = {
+    ...selection,
+    socketPath:
+      selection.socketPath ??
+      (await discoverWorkspaceSocket(selection.alias, signal)),
+  };
   signal?.throwIfAborted();
   // A short private directory also leaves room in the Unix socket path limit.
   const directory = await mkdtemp(path.join(os.tmpdir(), "cod-ssh-"));
@@ -39,25 +111,9 @@ export async function attachWorkspaceHost(
     "/usr/bin/ssh",
     [
       "-N",
-      "-T",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "ForwardAgent=no",
-      "-o",
-      "ForwardX11=no",
-      "-o",
-      "ControlMaster=no",
-      "-o",
-      "ControlPath=none",
-      "-o",
-      "PermitLocalCommand=no",
+      ...sshOptions,
       "-o",
       "ExitOnForwardFailure=yes",
-      "-o",
-      "ConnectTimeout=10",
       "-o",
       "ServerAliveInterval=15",
       "-o",
@@ -239,7 +295,7 @@ export async function attachWorkspaceHost(
             } else {
               clearTimeout(timeout);
               link = {
-                target,
+                selection,
                 state: frame.value,
                 connected: true,
                 reviewAccess: false,

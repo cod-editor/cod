@@ -2,12 +2,20 @@ import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
-import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChatApp, type Chat } from "./helpers/chat-fixture/harness";
 import { modifier } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
+import { invokeCommand } from "../../src/command-client";
 
 async function readUnpairedWatch(socketPath: string): Promise<AppState> {
   const peer = connect(socketPath);
@@ -30,21 +38,77 @@ async function readUnpairedWatch(socketPath: string): Promise<AppState> {
   }
 }
 
-async function installWorkspaceRelay(desktop: ChatApp, dropReply?: string) {
+async function installWorkspaceRelay(
+  desktop: ChatApp,
+  dropReply?: string,
+  discoverySocket?: string,
+) {
   const forwarder = path.resolve("tests/e2e/helpers/unix-socket-forward.mjs");
   await desktop.app!.evaluate(
-    (_electron, { fixture, dropReply }) => {
+    (_electron, { fixture, dropReply, discoverySocket }) => {
       const childProcess = process.getBuiltinModule(
         "node:child_process",
       ) as typeof import("node:child_process");
       const original = childProcess.spawn;
+      if (discoverySocket) {
+        const { promisify } = process.getBuiltinModule(
+          "node:util",
+        ) as typeof import("node:util");
+        const exec = promisify(childProcess.execFile);
+        // Bind the callable so the original immutable promisifier stays intact.
+        childProcess.execFile = new Proxy(childProcess.execFile.bind(null), {
+          get(target, property, receiver) {
+            if (property !== promisify.custom)
+              return Reflect.get(target, property, receiver);
+            return (
+              command: string,
+              args: string[],
+              options: import("node:child_process").ExecFileOptions,
+            ) => {
+              if (command !== "/usr/bin/ssh")
+                return exec(command, args, options);
+              const host = args.at(-2);
+              const checkedArguments =
+                args.at(-1) ===
+                  'exec "$HOME/.local/bin/cod-workspace-host" endpoint' &&
+                [
+                  "BatchMode=yes",
+                  "StrictHostKeyChecking=yes",
+                  "ForwardAgent=no",
+                  "ForwardX11=no",
+                  "ClearAllForwardings=yes",
+                  "PermitLocalCommand=no",
+                ].every((option) => args.includes(option)) &&
+                options.maxBuffer === 4_096 &&
+                options.timeout === 12_000 &&
+                options.signal instanceof AbortSignal;
+              const fixture = !checkedArguments
+                ? 'process.stderr.write("Unexpected discovery invocation"); process.exitCode = 2'
+                : host === "missing-linux"
+                  ? "process.exitCode = 127"
+                  : host === "invalid-linux"
+                    ? 'process.stdout.write(JSON.stringify({ socketPath: "/invalid:forward" }))'
+                    : host === "waiting-linux"
+                      ? "setTimeout(() => {}, 10_000)"
+                      : `process.stdout.write(${JSON.stringify(JSON.stringify({ socketPath: discoverySocket }))})`;
+              return exec(process.execPath, ["-e", fixture], {
+                ...options,
+                env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+              });
+            };
+          },
+        });
+      }
       let pid = 0;
       childProcess.spawn = ((
         command: string,
         args: string[],
         options: import("node:child_process").SpawnOptions,
       ) => {
-        if (command !== "/usr/bin/ssh" || args.at(-1) !== "invented-linux") {
+        if (
+          command !== "/usr/bin/ssh" ||
+          !["invented-linux", "replacement-linux"].includes(args.at(-1) ?? "")
+        ) {
           return original(command, args, options);
         }
         const forward = args[args.indexOf("-L") + 1];
@@ -61,7 +125,7 @@ async function installWorkspaceRelay(desktop: ChatApp, dropReply?: string) {
       }) as typeof original;
       process.on("cod-test-stop-forward", () => process.kill(pid, "SIGTERM"));
     },
-    { fixture: forwarder, dropReply },
+    { fixture: forwarder, dropReply, discoverySocket },
   );
 }
 
@@ -80,8 +144,9 @@ async function connectWorkspace(
   await connect
     .getByRole("textbox", { name: "SSH host alias" })
     .fill("invented-linux");
+  await connect.getByText("Connection options", { exact: true }).click();
   await connect
-    .getByRole("textbox", { name: "Linux socket path" })
+    .getByRole("textbox", { name: "Linux socket path (optional)" })
     .fill(socket);
   if (key)
     await connect
@@ -893,6 +958,254 @@ test("Default task host applies from either selected workspace and fails without
   }
 });
 
+test("Desktop connects by SSH alias from Commands and codctl, then reconnects to the same host", async ({}, info) => {
+  test.skip(process.platform !== "linux", "The workspace host requires Linux");
+  test.setTimeout(70_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+  const host = spawn(
+    process.execPath,
+    ["dist/workspace-host.cjs", linux.data],
+    { env: linux.environment, stdio: "ignore" },
+  );
+  const exited = once(host, "exit");
+  const title = () =>
+    desktop.page.getByRole("button", { name: "Overview", exact: true });
+  const dialog = () =>
+    desktop.page.getByRole("dialog", { name: "Connect to Linux workspace" });
+  const alias = () => dialog().getByRole("textbox", { name: "SSH host alias" });
+  const connect = () =>
+    dialog().getByRole("button", { name: "Connect", exact: true });
+  const openDialog = () => desktop.command("Connect to Linux workspace");
+  const focusLocal = async () => {
+    await desktop.overview();
+    await desktop.row("Desktop source").click();
+    await expect(title()).toHaveText("Desktop source");
+  };
+  const savedTarget = path.join(desktop.data, "workspace-host.json");
+
+  try {
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    const remote = await linux.cli<{ id: string }>(
+      "workspace",
+      "prepare",
+      "--name",
+      "Linux fixture",
+    );
+    const localCapabilities = await linux.cli<{ operations: string[] }>(
+      "capabilities",
+    );
+    expect(localCapabilities.operations).not.toContain("workspace.connect");
+    await desktop.start();
+    const desktopCapabilities = await desktop.cli<{ operations: string[] }>(
+      "capabilities",
+    );
+    expect(desktopCapabilities.operations).toContain("workspace.connect");
+    await installWorkspaceRelay(desktop, undefined, linux.socket);
+    const source = await desktop.create("Desktop source");
+    const paneId = (await desktop.workspace(source)).activePaneId;
+    const composer = () =>
+      desktop
+        .pane(paneId)
+        .getByRole("textbox", { name: "Message", exact: true });
+    await desktop.page.getByRole("button", { name: "Not now" }).click();
+    await composer().fill("Invented local draft");
+
+    await desktop.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "ui.fontSize": 13 }),
+    );
+    await expect(desktop.page.locator("html")).toHaveCSS("font-size", "13px");
+    await openDialog();
+    await expect(alias()).toBeFocused();
+    const socket = () =>
+      dialog().getByRole("textbox", { name: "Linux socket path (optional)" });
+    await expect(socket()).toHaveCount(0);
+    await alias().fill("invented-linux");
+    await desktop.page.screenshot({
+      path: info.outputPath("ssh-alias-connection.png"),
+    });
+    await alias().press("Tab");
+    const options = dialog().getByText("Connection options", { exact: true });
+    await expect(options).toBeFocused();
+    await options.press("Enter");
+    await expect(socket()).toBeVisible();
+    await options.press("Enter");
+    await expect(socket()).toHaveCount(0);
+
+    await desktop.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 650);
+    });
+    await expect.poll(() => desktop.page.evaluate(() => innerWidth)).toBe(760);
+    await alias().fill("missing-linux");
+    await connect().click();
+    await expect(
+      dialog().getByText(
+        'Set up the Cod workspace host on "missing-linux" first.',
+        { exact: false },
+      ),
+    ).toBeVisible();
+    await expect(title()).toHaveText("Desktop source");
+    await expect(readFile(savedTarget, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await desktop.page.screenshot({
+      path: info.outputPath("ssh-alias-narrow-error.png"),
+    });
+
+    await alias().fill("waiting-linux");
+    await connect().click();
+    await expect(connect()).toBeDisabled();
+    await alias().press("Escape");
+    await expect(dialog()).toHaveCount(0);
+    await expect(composer()).toBeFocused();
+    await expect(composer()).toHaveValue("Invented local draft");
+    await expect(readFile(savedTarget, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await openDialog();
+    await alias().fill("invented-linux");
+    await alias().press("Enter");
+    await expect(dialog()).toHaveCount(0);
+    await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
+
+    const invalid = await desktop.raw(
+      "workspace",
+      "connect",
+      "--alias",
+      "invalid-linux",
+    );
+    expect(invalid.code).toBe(1);
+    expect(invalid.stderr).toContain(
+      "The Linux workspace host returned an invalid endpoint",
+    );
+    await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
+
+    // Pause after the new alias has been written to a private staging file,
+    // then cancel before it can replace the remembered and displayed host.
+    await desktop.app!.evaluate(() => {
+      const files = process.getBuiltinModule(
+        "node:fs/promises",
+      ) as typeof import("node:fs/promises");
+      const write = files.writeFile;
+      files.writeFile = async (...args) => {
+        await write(...args);
+        if (!/workspace-host\.json\..+\.tmp$/.test(String(args[0]))) return;
+        files.writeFile = write;
+        await new Promise<void>((done) =>
+          process.once("cod-test-release-staged-workspace-target", done),
+        );
+      };
+    });
+    const pendingSelections = async () =>
+      (await readdir(desktop.data)).filter((name) =>
+        /^workspace-host\.json\..+\.tmp$/.test(name),
+      );
+    await openDialog();
+    await alias().fill("replacement-linux");
+    await connect().click();
+    await expect.poll(pendingSelections).toHaveLength(1);
+    await alias().press("Escape");
+    await expect(dialog()).toHaveCount(0);
+    await desktop.app!.evaluate(() =>
+      process.emit("cod-test-release-staged-workspace-target"),
+    );
+    await expect.poll(pendingSelections).toHaveLength(0);
+    await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
+
+    await desktop.command("Disconnect Linux workspace");
+    await focusLocal();
+    const connectResult = await desktop.cli(
+      "workspace",
+      "connect",
+      "--alias",
+      "invented-linux",
+    );
+    expect(connectResult).toEqual({
+      alias: "invented-linux",
+      workspaceId: remote.id,
+      reviewAccess: false,
+    });
+    await expect(title()).toHaveText("Linux fixture (invented-linux)");
+    // Use the raw ordinary socket to exercise the main-process trust boundary
+    // directly, independently of the CLI grammar rejecting the reserved flag.
+    expect(
+      await invokeCommand(desktop.socket, {
+        op: "workspace.connect",
+        alias: "invented-linux",
+        publicKey: "/invented/explicit-pairing-key.pub",
+      }),
+    ).toMatchObject({ reviewAccess: false });
+    expect(JSON.parse(await readFile(savedTarget, "utf8"))).toEqual({
+      alias: "invented-linux",
+    });
+    await focusLocal();
+    const prepared = await desktop.cli<{ id: string; location: string }>(
+      "workspace",
+      "prepare",
+      "--name",
+      "Remote task from non-General",
+      "--location",
+      "linux",
+    );
+    expect(prepared.location).toBe("linux");
+    expect((await linux.workspace(prepared.id)).name).toBe(
+      "Remote task from non-General",
+    );
+    await expect(title()).toHaveText(
+      "Remote task from non-General (invented-linux)",
+    );
+
+    await desktop.stop();
+    await desktop.start();
+    await installWorkspaceRelay(desktop, undefined, linux.socket);
+    await expect(title()).toHaveText("Desktop source");
+    await desktop.command("Reconnect to Linux workspace");
+    await expect(title()).toHaveText(
+      "Remote task from non-General (invented-linux)",
+    );
+    await desktop.command("Disconnect Linux workspace");
+    expect(await desktop.cli("workspace", "reconnect")).toEqual({
+      alias: "invented-linux",
+      workspaceId: prepared.id,
+      reviewAccess: false,
+    });
+    await expect(title()).toHaveText(
+      "Remote task from non-General (invented-linux)",
+    );
+    await focusLocal();
+    await expect(composer()).toHaveValue("Invented local draft");
+  } catch (error) {
+    await desktop.page.screenshot({
+      path: info.outputPath("ssh-alias-failure.png"),
+    });
+    throw error;
+  } finally {
+    await desktop.cleanup();
+    host.kill("SIGTERM");
+    await exited;
+    await linux.cleanup();
+  }
+});
+
 test("Linux connection keeps the native browser context and aligns dialog actions", async ({}, info) => {
   const desktop = new ChatApp();
   await desktop.prepare();
@@ -1020,7 +1333,10 @@ test("Linux connection keeps the native browser context and aligns dialog action
         exact: true,
       });
       await expect(alias).toBeFocused();
-      const socket = dialog.getByRole("textbox", { name: "Linux socket path" });
+      const socket = dialog.getByRole("textbox", {
+        name: "Linux socket path (optional)",
+        includeHidden: true,
+      });
       if (width === 1280) {
         await expect(backdrop).toBeVisible();
         await expect(socket).toHaveValue("");
@@ -1028,9 +1344,10 @@ test("Linux connection keeps the native browser context and aligns dialog action
         await desktop.app!.evaluate(() =>
           process.emit("cod-test-release-remote-target"),
         );
-        await expect(socket).toHaveValue("/tmp/saved.sock");
+        await expect(socket).toHaveValue("");
         await expect(alias).toHaveValue("typed-linux");
         await alias.fill("saved-linux");
+        await expect(socket).toHaveValue("/tmp/saved.sock");
       } else {
         await expect(alias).toHaveValue("saved-linux");
         await expect(socket).toHaveValue("/tmp/saved.sock");

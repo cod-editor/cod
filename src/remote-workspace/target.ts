@@ -1,22 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { renameSync } from "node:fs";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { WorkspaceHostTarget } from "./protocol";
+import type { WorkspaceHostSelection } from "./protocol";
 
-export function workspaceHostTarget(raw: unknown): WorkspaceHostTarget {
+export function workspaceHostSelection(raw: unknown): WorkspaceHostSelection {
   const { alias, socketPath, publicKey } = (raw ??
-    {}) as Partial<WorkspaceHostTarget>;
+    {}) as Partial<WorkspaceHostSelection>;
   if (
     typeof alias !== "string" ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(alias)
   )
     throw new Error("Enter an OpenSSH host alias");
-  if (
-    typeof socketPath !== "string" ||
-    !path.posix.isAbsolute(socketPath) ||
-    /[:\u0000-\u001f\u007f]/.test(socketPath) ||
-    Buffer.byteLength(socketPath) > 107
-  )
+  if (socketPath !== undefined && !validWorkspaceSocket(socketPath))
     throw new Error("Enter a valid absolute Linux workspace socket path");
   if (
     publicKey !== undefined &&
@@ -24,6 +20,15 @@ export function workspaceHostTarget(raw: unknown): WorkspaceHostTarget {
   )
     throw new Error("Enter a valid SSH public key for private review");
   return { alias, socketPath, publicKey: publicKey || undefined };
+}
+
+export function validWorkspaceSocket(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    path.posix.isAbsolute(value) &&
+    !/[:\u0000-\u001f\u007f]/.test(value) &&
+    Buffer.byteLength(value) <= 107
+  );
 }
 
 export async function readWorkspaceHostTarget(profile: string) {
@@ -34,7 +39,7 @@ export async function readWorkspaceHostTarget(profile: string) {
     );
     if (saved.length > 16384)
       throw new Error("Linux workspace target is too large");
-    return workspaceHostTarget(JSON.parse(saved));
+    return workspaceHostSelection(JSON.parse(saved));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new Error(
@@ -43,19 +48,21 @@ export async function readWorkspaceHostTarget(profile: string) {
   }
 }
 
-export async function saveWorkspaceHostTarget(
+export async function stageWorkspaceHostTarget(
   profile: string,
-  target: WorkspaceHostTarget,
+  target: WorkspaceHostSelection,
 ) {
   const file = path.join(profile, "workspace-host.json");
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(target) + "\n", {
-    mode: 0o600,
-    flag: "wx",
-  });
+  const discard = () => unlink(temporary).catch(() => undefined);
   try {
-    await rename(temporary, file);
-  } finally {
-    await unlink(temporary).catch(() => undefined);
+    await writeFile(temporary, JSON.stringify(target) + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    await discard();
+    throw error;
   }
+  return { commit: () => renameSync(temporary, file), discard };
 }

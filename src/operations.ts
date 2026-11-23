@@ -13,7 +13,7 @@ import { FileApplicationService } from "./application/file-service";
 import { TerminalApplicationService } from "./application/terminal-service";
 import { ApplicationStateStore } from "./application/state";
 import type { BrowserWindow, Session } from "electron";
-import { operations } from "./command-catalog";
+import { desktopWorkspaceOperations, operations } from "./command-catalog";
 import type { BuildInfo } from "./build-info";
 import { LocalProviderOwner } from "./providers/local-owner-client";
 import type {
@@ -332,7 +332,10 @@ export class ApplicationOperations {
           operations: this.browserHost
             ? operations
             : operations.filter(
-                (op) => !op.startsWith("browser.") && !op.startsWith("page."),
+                (op) =>
+                  !op.startsWith("browser.") &&
+                  !op.startsWith("page.") &&
+                  !desktopWorkspaceOperations.has(op),
               ),
           providers: {
             codex: {
