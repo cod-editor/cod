@@ -1378,7 +1378,7 @@ for (const feedback of [false, true])
           const pane = header.parentElement!.getBoundingClientRect();
           const controls = [
             ...header.querySelectorAll<HTMLElement>(
-              "button:not([hidden]), select",
+              "button:not([hidden], select > button), select",
             ),
           ].map((control) => {
             const box = control.getBoundingClientRect();
