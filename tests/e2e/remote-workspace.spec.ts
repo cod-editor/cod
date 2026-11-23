@@ -50,60 +50,54 @@ async function installWorkspaceRelay(
         "node:child_process",
       ) as typeof import("node:child_process");
       const original = childProcess.spawn;
-      const originalExec = childProcess.execFile;
       if (discoverySocket) {
-        childProcess.execFile = ((
-          command: string,
-          args: string[],
-          options: import("node:child_process").ExecFileOptions,
-          callback: (
-            error: Error | null,
-            result: { stdout: string; stderr: string },
-          ) => void,
-        ) => {
-          if (command !== "/usr/bin/ssh") {
-            return originalExec(command, args, options, callback as never);
-          }
-          const host = args.at(-2);
-          const checkedArguments =
-            args.at(-1) ===
-              'exec "$HOME/.local/bin/cod-workspace-host" endpoint' &&
-            [
-              "BatchMode=yes",
-              "StrictHostKeyChecking=yes",
-              "ForwardAgent=no",
-              "ForwardX11=no",
-              "ClearAllForwardings=yes",
-              "PermitLocalCommand=no",
-            ].every((option) => args.includes(option)) &&
-            options.maxBuffer === 4_096 &&
-            options.timeout === 12_000 &&
-            options.signal instanceof AbortSignal;
-          const fixture = !checkedArguments
-            ? 'process.stderr.write("Unexpected discovery invocation"); process.exitCode = 2'
-            : host === "missing-linux"
-              ? "process.exitCode = 127"
-              : host === "invalid-linux"
-                ? 'process.stdout.write(JSON.stringify({ socketPath: "/invalid:forward" }))'
-                : host === "waiting-linux"
-                  ? "setTimeout(() => {}, 10_000)"
-                  : "process.stdout.write(JSON.stringify({ socketPath: process.argv[1] }))";
-          return originalExec(
-            process.execPath,
-            ["-e", fixture, discoverySocket],
-            {
-              ...options,
-              env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-            },
-            (error, stdout, stderr) => {
-              // The substitute has no custom promisifier. Deliver the same
-              // resolved shape that node's execFile promisifier produces.
-              const result = { stdout: String(stdout), stderr: String(stderr) };
-              if (error) Object.assign(error, result);
-              callback(error, result);
-            },
-          );
-        }) as typeof originalExec;
+        const { promisify } = process.getBuiltinModule(
+          "node:util",
+        ) as typeof import("node:util");
+        const exec = promisify(childProcess.execFile);
+        // Bind the callable so the original immutable promisifier stays intact.
+        childProcess.execFile = new Proxy(childProcess.execFile.bind(null), {
+          get(target, property, receiver) {
+            if (property !== promisify.custom)
+              return Reflect.get(target, property, receiver);
+            return (
+              command: string,
+              args: string[],
+              options: import("node:child_process").ExecFileOptions,
+            ) => {
+              if (command !== "/usr/bin/ssh")
+                return exec(command, args, options);
+              const host = args.at(-2);
+              const checkedArguments =
+                args.at(-1) ===
+                  'exec "$HOME/.local/bin/cod-workspace-host" endpoint' &&
+                [
+                  "BatchMode=yes",
+                  "StrictHostKeyChecking=yes",
+                  "ForwardAgent=no",
+                  "ForwardX11=no",
+                  "ClearAllForwardings=yes",
+                  "PermitLocalCommand=no",
+                ].every((option) => args.includes(option)) &&
+                options.maxBuffer === 4_096 &&
+                options.timeout === 12_000 &&
+                options.signal instanceof AbortSignal;
+              const fixture = !checkedArguments
+                ? 'process.stderr.write("Unexpected discovery invocation"); process.exitCode = 2'
+                : host === "missing-linux"
+                  ? "process.exitCode = 127"
+                  : host === "invalid-linux"
+                    ? 'process.stdout.write(JSON.stringify({ socketPath: "/invalid:forward" }))'
+                    : host === "waiting-linux"
+                      ? "setTimeout(() => {}, 10_000)"
+                      : `process.stdout.write(${JSON.stringify(JSON.stringify({ socketPath: discoverySocket }))})`;
+              return exec(process.execPath, ["-e", fixture], {
+                ...options,
+                env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+              });
+            };
+          },
+        });
       }
       let pid = 0;
       childProcess.spawn = ((
