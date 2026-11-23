@@ -402,6 +402,154 @@ test("Double click creates exactly one contextual tab only on free tab bar space
   expect((await active()).panes).toHaveLength(before + 1);
 });
 
+for (const scenario of ["browser content", "other pane", "newer selection"]) {
+  test(`Double-click selects a blank browser before its view loads from ${scenario}`, async () => {
+    test.skip(process.platform !== "linux", "Native pointer fixture uses X11");
+    const file = path.join(app.folders[0], "browser-source.html");
+    await writeFile(file, "<title>Browser source</title><input>");
+    const url = pathToFileURL(file).href;
+    const chat = await app.newChat(workspace, "codex");
+    const split = scenario !== "browser content";
+    const right = split
+      ? await app.cli<{ groupId: string }>(
+          "group",
+          "ensure",
+          "--workspace",
+          workspace,
+          "--side",
+          "right",
+        )
+      : undefined;
+    const target = (await active()).groups!.find(
+      (g) => g.id === right?.groupId,
+    );
+    const source = await app.cli<{ paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+      ...(target
+        ? [
+            "--group",
+            target.id,
+            "--source-pane",
+            target.activePaneId,
+            "--focus",
+            "true",
+          ]
+        : []),
+    );
+    const sourceGroup = (await active()).groups!.find((g) =>
+      g.paneIds.includes(source.paneId),
+    )!;
+    const tab = (id: string) =>
+      app.page.getByRole("tab").and(app.page.locator(`[data-tab-id="${id}"]`));
+    if (split) {
+      await tab(chat.paneId).click();
+      await expect(tab(chat.paneId)).toHaveAttribute("aria-selected", "true");
+    }
+    await app.app!.evaluate(
+      ({ BrowserWindow, webContents }, args) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((item) => item.getURL() === args.url)!;
+        if (!args.split) {
+          BrowserWindow.getAllWindows()[0]!.focus();
+          contents.focus();
+          if (!contents.isFocused())
+            throw new Error("Source browser did not take keyboard focus");
+        }
+        const prototype = Object.getPrototypeOf(contents);
+        const loadURL = prototype.loadURL;
+        const gate = Object.assign(globalThis, {
+          blankBrowserPending: false,
+          releaseBlankBrowser: () => {},
+        });
+        prototype.loadURL = async function (
+          url: string,
+          ...options: unknown[]
+        ) {
+          if (url === "about:blank" && !gate.blankBrowserPending) {
+            prototype.loadURL = loadURL;
+            gate.blankBrowserPending = true;
+            await new Promise<void>(
+              (resolve) => (gate.releaseBlankBrowser = resolve),
+            );
+          }
+          return Reflect.apply(loadURL, this, [url, ...options]);
+        };
+      },
+      { url, split },
+    );
+    const child = async () =>
+      (await state()).browsers.filter(
+        (browser) =>
+          browser.workspaceId === workspace && browser.paneId !== source.paneId,
+      );
+    let id: string;
+    const laterSelection = scenario === "newer selection";
+    try {
+      const strip = app.page.locator(
+        `[data-group-id="${sourceGroup.id}"] .tabs`,
+      );
+      const bounds = (await strip.boundingBox())!;
+      const location = {
+        x: bounds.x + bounds.width - 5,
+        y: bounds.y + bounds.height / 2,
+      };
+      const desktop = await app.app!.evaluate(({ BrowserWindow }, point) => {
+        const { x, y } = BrowserWindow.getAllWindows()[0]!.getContentBounds();
+        return { x: Math.round(x + point.x), y: Math.round(y + point.y) };
+      }, location);
+      await promisify(execFile)("xdotool", [
+        "mousemove",
+        "--sync",
+        String(desktop.x),
+        String(desktop.y),
+        "click",
+        "--repeat",
+        "2",
+        "--delay",
+        "35",
+        "1",
+      ]);
+      await expect
+        .poll(() =>
+          app.app!.evaluate(() => (globalThis as any).blankBrowserPending),
+        )
+        .toBe(true);
+      expect(await child()).toHaveLength(1);
+      id = (await child())[0]!.paneId;
+      await expect(tab(id)).toHaveAttribute("aria-selected", "true");
+      const model = await active();
+      expect(model.activePaneId).toBe(id);
+      expect(
+        model.groups!.find((g) => g.id === sourceGroup.id)!.paneIds,
+      ).toEqual([...sourceGroup.paneIds, id]);
+      if (laterSelection) {
+        await tab(chat.paneId).click();
+        await expect
+          .poll(async () => (await active()).activePaneId)
+          .toBe(chat.paneId);
+      }
+    } finally {
+      await app.app!.evaluate(() => (globalThis as any).releaseBlankBrowser());
+    }
+    if (laterSelection) {
+      await expect.poll(async () => (await child())[0]?.loading).toBe(false);
+      expect((await active()).activePaneId).toBe(chat.paneId);
+    } else {
+      const address = app
+        .pane(id)
+        .getByRole("combobox", { name: "Address", exact: true });
+      await expect(address).toBeFocused();
+      await expect(address).toHaveValue("");
+    }
+  });
+}
+
 test("Contextual terminal starts a fresh shell in the live directory after cd", async () => {
   const directory = path.join(app.folders[0], "nested folder \u03b1");
   await mkdir(directory);
