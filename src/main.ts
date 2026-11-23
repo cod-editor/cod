@@ -980,12 +980,37 @@ async function start(): Promise<void> {
       click: () =>
         mainWindow?.webContents.send("cod:command", { command: "settings" }),
     };
+    const quickTerminalItem: Electron.MenuItemConstructorOptions = {
+      id: "terminal.quickToggle",
+      label: "Quick Terminal",
+      visible: false,
+      acceleratorWorksWhenHidden: true,
+      click: () => {
+        const window = mainWindow;
+        if (!window?.isFocused()) return;
+        const contents = webContents.getFocusedWebContents();
+        const browserId = contents
+          ? operations.diagnosticContext(contents.id)?.browserId
+          : undefined;
+        if (contents && contents !== window.webContents && !browserId) return;
+        if (browserId) window.webContents.focus();
+        window.webContents.send("cod:command", {
+          command: "terminal.quickToggle",
+          browserId,
+        });
+      },
+    };
     const template: Electron.MenuItemConstructorOptions[] =
       process.platform === "darwin"
         ? [
             {
               label: app.name,
-              submenu: [settingsItem, { type: "separator" }, { role: "quit" }],
+              submenu: [
+                settingsItem,
+                quickTerminalItem,
+                { type: "separator" },
+                { role: "quit" },
+              ],
             },
             { role: "editMenu" },
           ]
@@ -1004,6 +1029,23 @@ async function start(): Promise<void> {
           ];
     refreshKeyboardMenu = () => {
       settingsItem.accelerator = settingsAccelerator();
+      // AppKit can claim Command+Backquote before it reaches a view. Only an
+      // explicit binding for it in Cod may take precedence over window cycling.
+      quickTerminalItem.accelerator =
+        keyboardPlatform === "darwin" &&
+        resolveKeybinding(
+          {
+            key: "`",
+            metaKey: true,
+            ctrlKey: false,
+            altKey: false,
+            shiftKey: false,
+          },
+          keyboardPlatform,
+          "shell",
+        )?.command === "terminal.quickToggle"
+          ? "Command+`"
+          : undefined;
       Menu.setApplicationMenu(Menu.buildFromTemplate(template));
     };
     refreshKeyboardMenu();
