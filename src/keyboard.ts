@@ -343,6 +343,14 @@ function normalizedCode(input: KeyInput): string | undefined {
     /^F(?:[1-9]|1[0-2])$/.test(input.key)
   )
     return input.key;
+  // A localized printable key such as ё can occupy the Backquote position.
+  // Logical shortcuts above and unmodified text retain their existing meaning.
+  if (
+    input.code === "Backquote" &&
+    (input.ctrlKey || input.metaKey) &&
+    /^[\p{Letter}\p{Number}\p{Punctuation}\p{Symbol}]$/u.test(input.key)
+  )
+    return input.code;
   // Physical letter position keeps shortcuts reachable on non-Latin layouts,
   // while Latin layouts (including Dvorak/AZERTY) retain their logical letters.
   if (

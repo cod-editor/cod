@@ -84,6 +84,58 @@ test("IME, AltGraph and releases never dispatch; held discrete commands remain c
     { command: "text.inc", dispatch: true },
   );
 });
+test("Localized Backquote opens Quick Terminal without overriding logical shortcuts or text input", () => {
+  const localized = input("ё", { code: "Backquote", ctrlKey: true });
+  for (const platform of ["darwin", "linux"] as const) {
+    configureKeymap({}, platform);
+    for (const surface of ["composer", "browser", "terminal"] as const) {
+      assert.deepEqual(resolveKeybinding(localized, platform, surface), {
+        command: "terminal.quickToggle",
+        dispatch: true,
+      });
+      assert.equal(
+        resolveKeybinding(
+          { ...localized, key: "²", repeat: true },
+          platform,
+          surface,
+        )?.dispatch,
+        false,
+      );
+      for (const extra of [
+        { ctrlKey: false },
+        { isComposing: true },
+        { key: "Dead" },
+        { keyCode: 229 },
+        { altGraph: true },
+        { type: "keyup" },
+      ]) {
+        assert.equal(
+          resolveKeybinding({ ...localized, ...extra }, platform, surface),
+          undefined,
+        );
+      }
+    }
+    assert.equal(
+      resolveKeybinding(
+        { ...localized, key: "Ё", shiftKey: true },
+        platform,
+        "terminal",
+      )?.command,
+      "terminal.new",
+    );
+  }
+  configureKeymap({}, "darwin");
+  const command = { ...localized, ctrlKey: false, metaKey: true };
+  assert.equal(resolveKeybinding(command, "darwin", "shell"), undefined);
+  assert.equal(
+    resolveKeybinding({ ...command, key: "b" }, "darwin", "shell")?.command,
+    "navigation.toggleFiles",
+  );
+  assert.equal(
+    resolveKeybinding({ ...command, key: "0" }, "darwin", "shell")?.command,
+    "text.reset",
+  );
+});
 test("website and terminal editing belongs to its own surface", () => {
   for (const key of ["b", "i", "p", "s", "Enter"])
     assert.equal(
