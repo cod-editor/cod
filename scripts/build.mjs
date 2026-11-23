@@ -49,6 +49,9 @@ await Promise.all([
   build({
     ...shared,
     entryPoints: ["src/provider-owner.ts"],
+    define: {
+      __COD_OWNER_BUILD__: JSON.stringify(identity.sourceHash.slice(0, 24)),
+    },
     outfile: "dist/provider-owner.cjs",
   }),
   ...(process.platform === "linux"

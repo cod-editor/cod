@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { ProviderAdapter, ProviderEvent } from "./types";
 import type { ProviderOptionError } from "./option-error";
 
 export const ownerProtocol = 1;
+export const ownerBuildMismatchExit = 2;
+export const ownerUnavailable =
+  "The detached chat owner is no longer available";
 export const maximumOwnerFrame = 8 * 1024 * 1024;
 
 export const ownerMethods = [
@@ -30,6 +33,7 @@ export type OwnerMethod = (typeof ownerMethods)[number];
 export interface LocalOwnerCursor {
   generation: string;
   sequence: number;
+  build?: string;
 }
 
 export interface LocalOwnerState {
@@ -67,7 +71,7 @@ export function localOwnerDirectory(profile: string): string {
   return path.join("/tmp", `cod-owner-${process.getuid?.()}-${key}`);
 }
 
-export async function localOwnerSocket(
+async function privateOwnerDirectory(
   profile: string,
   create = false,
 ): Promise<string> {
@@ -82,5 +86,27 @@ export async function localOwnerSocket(
     info.mode & 0o077
   )
     throw new Error("Detached chat session directory is not private");
-  return path.join(directory, "control");
+  return directory;
+}
+
+export async function localOwnerSocket(
+  profile: string,
+  build?: string,
+  create = false,
+): Promise<string> {
+  if (build !== undefined && !/^[a-f0-9]{24}$/.test(build))
+    throw new Error("Invalid detached chat owner build");
+  const directory = await privateOwnerDirectory(profile, create);
+  return path.join(directory, build ? `control-${build}` : "control");
+}
+
+export async function localOwnerSockets(profile: string): Promise<string[]> {
+  const directory = await privateOwnerDirectory(profile);
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries
+    .filter(
+      (entry) =>
+        entry.isSocket() && /^(control|control-[a-f0-9]{24})$/.test(entry.name),
+    )
+    .map((entry) => path.join(directory, entry.name));
 }

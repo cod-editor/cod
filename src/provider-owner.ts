@@ -10,12 +10,16 @@ import {
   maximumOwnerFrame,
   ownerMethods,
   ownerProtocol,
+  ownerBuildMismatchExit,
+  ownerUnavailable,
   type LocalOwnerFrame,
   type LocalOwnerReply,
   type LocalOwnerState,
   type OwnerMethod,
 } from "./providers/local-owner-protocol";
 import type { OperationRequest } from "./types";
+
+declare const __COD_OWNER_BUILD__: string;
 
 const maximumReplayPerChat = 4 * 1024 * 1024;
 const maximumChats = 32;
@@ -133,15 +137,20 @@ class OwnedChat {
 }
 
 async function main() {
-  const profile = process.argv[2];
-  const socket = await localOwnerSocket(profile!, true);
+  const [profile, expectedBuild] = process.argv.slice(2);
+  const build = __COD_OWNER_BUILD__;
+  if (expectedBuild !== build) {
+    process.exitCode = ownerBuildMismatchExit;
+    return;
+  }
+  const socket = await localOwnerSocket(profile!, build, true);
   const chats = new Map<string, OwnedChat>();
-  let stopping = false;
+  let stopping: Promise<void> | undefined;
   const owned = (request: OperationRequest) => {
     const id = requiredString(request, "id");
     const chat = chats.get(id);
     if (!chat || chat.generation !== request.generation)
-      throw new Error("The detached chat owner is no longer available");
+      throw new Error(ownerUnavailable);
     return chat;
   };
   const environment = { ...process.env };
@@ -150,12 +159,13 @@ async function main() {
   const server = await startCommandSocket(
     socket,
     async (request) => {
-      if (stopping) throw new Error("The detached chat owner is stopping");
-      if (request.op === "owner.ping") return { protocol: ownerProtocol };
       if (request.op === "owner.stop") {
         await stop();
         return { stopped: true };
       }
+      if (stopping) throw new Error("The detached chat owner is stopping");
+      if (request.op === "owner.ping")
+        return { protocol: ownerProtocol, build };
       if (request.op === "owner.add") {
         const id = requiredString(request, "id");
         if (chats.has(id)) throw new Error("This chat already has an owner");
@@ -189,7 +199,7 @@ async function main() {
             : createKimiAdapter(options),
         );
         chats.set(id, chat);
-        return { generation: chat.generation, sequence: 0 };
+        return { generation: chat.generation, sequence: 0, build };
       }
       if (request.op === "owner.release") {
         const id = requiredString(request, "id");
@@ -198,6 +208,7 @@ async function main() {
           return { stopped: false };
         await chat.dispose();
         if (chats.get(id) === chat) chats.delete(id);
+        if (chats.size === 0) await stop();
         return { stopped: true };
       }
       const chat = owned(request);
@@ -214,11 +225,14 @@ async function main() {
       owned(request).watch(connection, Number(request.sequence));
     },
   );
-  async function stop() {
-    if (stopping) return;
-    stopping = true;
-    server.close();
-    await Promise.allSettled([...chats.values()].map((chat) => chat.dispose()));
+  function stop(): Promise<void> {
+    stopping ??= (async () => {
+      server.close();
+      await Promise.allSettled(
+        [...chats.values()].map((chat) => chat.dispose()),
+      );
+    })();
+    return stopping;
   }
   process.on("SIGTERM", () => void stop());
   process.on("SIGINT", () => void stop());

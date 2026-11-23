@@ -69,7 +69,10 @@ export class ApplicationOperations {
       this.browserHost &&
         (process.platform === "darwin" || process.platform === "linux")
         ? {
-            owner: new LocalProviderOwner(dataDirectory),
+            owner: new LocalProviderOwner(
+              dataDirectory,
+              runtimeBuild?.sourceHash.slice(0, 24),
+            ),
             enabled: () => this.settings.state.values["chat.detachedSessions"],
           }
         : undefined,

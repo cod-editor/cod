@@ -6,8 +6,11 @@ import { CommandSocketError, invokeCommand } from "../command-client";
 import type { OperationRequest } from "../types";
 import {
   localOwnerSocket,
+  localOwnerSockets,
   maximumOwnerFrame,
   ownerProtocol,
+  ownerBuildMismatchExit,
+  ownerUnavailable,
   type LocalOwnerCursor,
   type LocalOwnerFrame,
   type LocalOwnerReply,
@@ -57,33 +60,39 @@ export class LocalOwnerUnavailable extends Error {}
 export class LocalProviderOwner {
   private starting?: Promise<string>;
   private stopping = false;
-  constructor(private readonly profile: string) {}
+  constructor(
+    private readonly profile: string,
+    private readonly build?: string,
+  ) {}
 
-  private async ping(socket: string) {
+  private async ping(socket: string, build?: string) {
     const reply = (await invokeCommand(
       socket,
       { op: "owner.ping" },
       { timeoutMs: 1_000 },
     )) as {
       protocol: number;
+      build?: string;
     };
-    if (reply.protocol !== ownerProtocol)
+    if (reply.protocol !== ownerProtocol || reply.build !== build)
       throw new Error(
         "The running detached chat owner uses a different protocol",
       );
   }
 
   private async start(): Promise<string> {
-    const socket = await localOwnerSocket(this.profile, true);
+    if (!this.build)
+      throw new Error("The build of this detached chat owner is unknown");
+    const socket = await localOwnerSocket(this.profile, this.build, true);
     try {
-      await this.ping(socket);
+      await this.ping(socket, this.build);
       return socket;
     } catch (error) {
       if (!absent(error)) throw error;
     }
     const worker = spawn(
       process.execPath,
-      [path.join(__dirname, "provider-owner.cjs"), this.profile],
+      [path.join(__dirname, "provider-owner.cjs"), this.profile, this.build],
       {
         detached: true,
         stdio: "ignore",
@@ -97,8 +106,10 @@ export class LocalProviderOwner {
     worker.unref();
     for (let retry = 0; retry < 40 && !failed; retry++) {
       await delay(50);
+      if (worker.exitCode === ownerBuildMismatchExit)
+        throw new Error("Reopen Cod to use the updated detached chat owner");
       try {
-        await this.ping(socket);
+        await this.ping(socket, this.build);
         return socket;
       } catch (error) {
         if (!absent(error)) throw error;
@@ -112,17 +123,17 @@ export class LocalProviderOwner {
     onEvent: OwnerEvent,
   ): Promise<DetachedProviderAdapter> {
     if (this.stopping) throw new Error("Cod is shutting down");
-    this.starting ??= this.start().finally(() => {
-      this.starting = undefined;
+    const { socket, cursor } = await this.add(session).catch((error) => {
+      // The last release can close the idle owner's socket between ping and add.
+      // Retry only when the request never reached the owner or it refused it.
+      if (
+        absent(error) ||
+        (error instanceof Error &&
+          error.message === "The detached chat owner is stopping")
+      )
+        return this.add(session);
+      throw error;
     });
-    const socket = await this.starting;
-    if (this.stopping) throw new Error("Cod is shutting down");
-    const cursor = (await invokeCommand(socket, {
-      op: "owner.add",
-      ...session,
-      node: process.execPath,
-      cli: path.join(__dirname, "cli.cjs"),
-    })) as LocalOwnerCursor;
     try {
       return await DetachedProviderAdapter.attach(
         socket,
@@ -141,6 +152,21 @@ export class LocalProviderOwner {
     }
   }
 
+  private async add(session: SessionRequest) {
+    this.starting ??= this.start().finally(() => {
+      this.starting = undefined;
+    });
+    const socket = await this.starting;
+    if (this.stopping) throw new Error("Cod is shutting down");
+    const cursor = (await invokeCommand(socket, {
+      op: "owner.add",
+      ...session,
+      node: process.execPath,
+      cli: path.join(__dirname, "cli.cjs"),
+    })) as LocalOwnerCursor;
+    return { socket, cursor };
+  }
+
   async reconnect(
     id: string,
     provider: Provider,
@@ -149,8 +175,8 @@ export class LocalProviderOwner {
     onEvent: OwnerEvent,
   ) {
     try {
-      const socket = await localOwnerSocket(this.profile);
-      await this.ping(socket);
+      const socket = await localOwnerSocket(this.profile, cursor.build);
+      await this.ping(socket, cursor.build);
       return await DetachedProviderAdapter.attach(
         socket,
         id,
@@ -171,7 +197,7 @@ export class LocalProviderOwner {
 
   async release(id: string, cursor: LocalOwnerCursor): Promise<void> {
     try {
-      const socket = await localOwnerSocket(this.profile);
+      const socket = await localOwnerSocket(this.profile, cursor.build);
       await invokeCommand(socket, {
         op: "owner.release",
         id,
@@ -194,8 +220,13 @@ export class LocalProviderOwner {
     this.stopping = true;
     await this.starting?.catch(() => undefined);
     try {
-      const socket = await localOwnerSocket(this.profile);
-      await invokeCommand(socket, { op: "owner.stop" });
+      const sockets = await localOwnerSockets(this.profile);
+      const results = await Promise.allSettled(
+        sockets.map((socket) => invokeCommand(socket, { op: "owner.stop" })),
+      );
+      for (const result of results)
+        if (result.status === "rejected" && !absent(result.reason))
+          throw result.reason;
     } catch (error) {
       if (
         !(
@@ -290,13 +321,29 @@ export class DetachedProviderAdapter implements ProviderAdapter {
           offset >= 0;
           offset = buffer.indexOf("\n")
         ) {
-          let frame: LocalOwnerFrame;
+          let frame: LocalOwnerFrame | { ok: false; error: string };
           try {
-            frame = JSON.parse(buffer.slice(0, offset)) as LocalOwnerFrame;
+            frame = JSON.parse(buffer.slice(0, offset)) as typeof frame;
           } catch {
             return connection.destroy();
           }
           buffer = buffer.slice(offset + 1);
+          if (!frame || typeof frame !== "object") return connection.destroy();
+          if ("ok" in frame) {
+            if (
+              !attached &&
+              frame.ok === false &&
+              typeof frame.error === "string"
+            ) {
+              clearTimeout(deadline);
+              reject(
+                frame.error === ownerUnavailable
+                  ? new LocalOwnerUnavailable(frame.error)
+                  : new Error(frame.error),
+              );
+            }
+            return connection.destroy();
+          }
           if (frame.type === "ready" && through === undefined) {
             if (
               frame.protocol !== ownerProtocol ||
