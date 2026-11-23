@@ -1000,6 +1000,7 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
       desktop
         .pane(paneId)
         .getByRole("textbox", { name: "Message", exact: true });
+    await desktop.page.getByRole("button", { name: "Not now" }).click();
     await composer().fill("Invented local draft");
 
     await desktop.cli(
@@ -1027,9 +1028,9 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
     await expect(socket()).toHaveCount(0);
 
     await desktop.app!.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0].setContentSize(470, 650);
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 650);
     });
-    await expect.poll(() => desktop.page.evaluate(() => innerWidth)).toBe(470);
+    await expect.poll(() => desktop.page.evaluate(() => innerWidth)).toBe(760);
     await alias().fill("missing-linux");
     await connect().click();
     await expect(
@@ -1053,6 +1054,9 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
     await expect(dialog()).toHaveCount(0);
     await expect(composer()).toBeFocused();
     await expect(composer()).toHaveValue("Invented local draft");
+    await expect(readFile(savedTarget, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     await openDialog();
     await alias().fill("invented-linux");
