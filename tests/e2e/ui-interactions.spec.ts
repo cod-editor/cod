@@ -997,11 +997,24 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     );
     expect(new Set(heights).size).toBe(1);
     expect(heights[0]).toBe(28);
+    const checkFooterAlignment = async () => {
+      const centers = await buttons.evaluateAll((items) =>
+        items.map((button) => {
+          const range = document.createRange();
+          range.selectNodeContents(button);
+          const text = range.getBoundingClientRect();
+          return (text.top + text.bottom) / 2;
+        }),
+      );
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(1);
+    };
+    await checkFooterAlignment();
     await app.page.screenshot({
       path: info.outputPath("shared-settings-normal.png"),
     });
     await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
     await expect(app.page.locator("html")).toHaveCSS("--ui-font-size", "13px");
+    await checkFooterAlignment();
     await app.page.screenshot({
       path: info.outputPath("shared-settings-13.png"),
     });
@@ -1041,7 +1054,7 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
       browser.getByRole("combobox", { name: "Search engine", exact: true }),
     ).toBeVisible();
     await expect(
-      browser.getByRole("button", { name: "Done", exact: true }),
+      browser.getByRole("button", { name: "Close", exact: true }),
     ).toHaveCSS("min-height", "28px");
     await app.page.screenshot({
       path: info.outputPath("shared-browser-settings.png"),

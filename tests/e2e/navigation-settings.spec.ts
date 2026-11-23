@@ -130,7 +130,7 @@ test("Settings adjust the actual interface, editor and chat text and survive res
         .getByRole("spinbutton", { name, exact: true })
         .press("Tab");
     }
-    await settings.getByRole("button", { name: "Done", exact: true }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
     await expect(app.page.locator(".file-editor")).toHaveCSS(
       "font-size",
       "19px",
@@ -192,7 +192,7 @@ test("Settings adjust the actual interface, editor and chat text and survive res
     await app.page
       .getByRole("button", { name: "Reset defaults", exact: true })
       .click();
-    await app.page.getByRole("button", { name: "Done", exact: true }).click();
+    await app.page.getByRole("button", { name: "Close", exact: true }).click();
     await expect(app.page.locator(".file-editor")).toHaveCSS(
       "font-size",
       "16px",
@@ -611,7 +611,7 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     await app.page.screenshot({
       path: info.outputPath("settings-controls-normal.png"),
     });
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await app.cli(
       "settings",
       "update",
@@ -659,7 +659,7 @@ test("Searchable settings apply font, terminal cursor and external edits live an
     expect(await readFile(file, "utf8")).toBe("broken JSON");
     await writeFile(file, JSON.stringify(saved));
     await expect(dialog.getByRole("status")).toBeEmpty();
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await app.stop();
     await app.start();
     expect(
@@ -715,7 +715,7 @@ test("Global settings search and reset include the persisted browser search engi
     await expect
       .poll(() => app.cli("browser", "settings"))
       .toEqual({ searchEngine: "yandex" });
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await app.stop();
     await app.start();
     await app.command("Browser settings");
@@ -748,7 +748,7 @@ test("Global settings search and reset include the persisted browser search engi
       .poll(() => app.cli("browser", "settings"))
       .toEqual({ searchEngine: "google" });
     await expect(engine).toHaveValue("google");
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await app.cli("browser", "settings", "--search-engine", "bing");
     await app.cli("settings", "update", "--reset", "true");
     expect(await app.cli("browser", "settings")).toEqual({
@@ -820,6 +820,42 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       name: "Terminal Cursor shape",
       exact: true,
     });
+    const checkClosedControl = async (value: string, fontSize: number) => {
+      await expect(cursor).toHaveCSS("font-size", `${fontSize}px`);
+      await expect(cursor.locator("selectedcontent")).toHaveText(value);
+      const geometry = await cursor.evaluate((select) => {
+        const label = select.querySelector("selectedcontent")!;
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const text = range.getBoundingClientRect();
+        const field = select.getBoundingClientRect();
+        const arrow = select
+          .parentElement!.querySelector(".icon")!
+          .getBoundingClientRect();
+        return {
+          labelVisible: text.width > 0,
+          labelCenter: (text.top + text.bottom) / 2,
+          arrowCenter: (arrow.top + arrow.bottom) / 2,
+          fieldCenter: (field.top + field.bottom) / 2,
+          valueGap: arrow.left - text.right,
+          trailingInset: field.right - arrow.right,
+        };
+      });
+      expect(geometry.labelVisible).toBe(true);
+      expect(
+        Math.abs(geometry.labelCenter - geometry.arrowCenter),
+      ).toBeLessThanOrEqual(1.5);
+      expect(
+        Math.abs(geometry.arrowCenter - geometry.fieldCenter),
+      ).toBeLessThan(1);
+      expect(geometry.valueGap).toBeGreaterThanOrEqual(8);
+      expect(geometry.trailingInset).toBeGreaterThanOrEqual(12);
+    };
+    await checkClosedControl("block", 14);
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
+    await checkClosedControl("block", 13);
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":14}');
+    await expect(cursor).toHaveCSS("font-size", "14px");
     await cursor.hover();
     await expect(cursor).toHaveCSS("background-color", "rgb(54, 60, 70)");
     await expect(cursor).toHaveValue("block");
@@ -909,7 +945,7 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       .toBe("underline");
     await app.page.setViewportSize({ width: 460, height: 640 });
     await app.cli("settings", "update", "--values", '{"ui.fontSize":20}');
-    await expect(cursor).toHaveCSS("font-size", "20px");
+    await checkClosedControl("underline", 20);
     const longChoice =
       "An invented unavailable cursor option with a deliberately long name";
     await cursor.evaluate((element, text) => {
@@ -933,7 +969,7 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       .poll(() => cursor.evaluate((node) => node.matches(":open")))
       .toBe(false);
     await expect(cursor).toHaveValue("underline");
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
   } finally {
     await app.cleanup();
   }
@@ -1023,7 +1059,7 @@ test("Settings groups readable font choices and adjusts values without losing li
     ).toBeHidden();
     expect((await search.boundingBox())!.y).toBeCloseTo(before!.y, 0);
     await expect(
-      dialog.getByRole("button", { name: "Done", exact: true }),
+      dialog.getByRole("button", { name: "Close", exact: true }),
     ).toBeVisible();
     await search.fill("Interface text size");
     await expect(
@@ -1068,14 +1104,14 @@ test("Settings groups readable font choices and adjusts values without losing li
       ),
     ).toBeLessThan(2);
     await expect(
-      dialog.getByRole("button", { name: "Done", exact: true }),
+      dialog.getByRole("button", { name: "Close", exact: true }),
     ).toBeInViewport();
     await dialog.screenshot({
       path: info.outputPath("settings-narrow-enlarged.png"),
     });
-    const done = dialog.getByRole("button", { name: "Done", exact: true });
+    const close = dialog.getByRole("button", { name: "Close", exact: true });
     const narrowSearch = await search.boundingBox();
-    const narrowDone = await done.boundingBox();
+    const narrowClose = await close.boundingBox();
     const browserSection = dialog.getByRole("heading", {
       name: "Browser",
       exact: true,
@@ -1084,7 +1120,7 @@ test("Settings groups readable font choices and adjusts values without losing li
     await browserSection.scrollIntoViewIfNeeded();
     await expect(browserSection).toBeInViewport({ ratio: 1 });
     expect(await search.boundingBox()).toEqual(narrowSearch);
-    expect(await done.boundingBox()).toEqual(narrowDone);
+    expect(await close.boundingBox()).toEqual(narrowClose);
     expect((await dialog.boundingBox())!.width).toBeLessThan(460);
     await app.page.screenshot({
       path: info.outputPath("settings-scrolled-narrow.png"),
@@ -1098,6 +1134,7 @@ test("Settings groups readable font choices and adjusts values without losing li
     await wrap.scrollIntoViewIfNeeded();
     await expect(wrap).toBeInViewport({ ratio: 1 });
     const selectBounds = (await family.boundingBox())!;
+    expect(selectBounds.height).toBeLessThan(44);
     const arrow = family.locator("+ .icon");
     const arrowBounds = (await arrow.boundingBox())!;
     const selectStyle = await family.evaluate((node) => {
@@ -1115,7 +1152,7 @@ test("Settings groups readable font choices and adjusts values without losing li
     await app.page.screenshot({
       path: info.outputPath("settings-controls-narrow-enlarged.png"),
     });
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await app.stop();
     await app.start();
     expect(
@@ -1209,7 +1246,7 @@ test("Settings-related input dialogs retain native submission and exact cancel f
   }
 });
 
-test("Settings returns native page focus and field selection after Done and Escape", async () => {
+test("Settings returns native page focus and field selection after Close and Escape", async () => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -1331,7 +1368,7 @@ test("Settings returns native page focus and field selection after Done and Esca
       exact: true,
     });
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect
       .poll(inspect)
@@ -1444,7 +1481,7 @@ test("Settings preserves a shell field selection and late cleanup respects newer
       };
       dialog.addEventListener("close", hold, true);
     });
-    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(input).toBeFocused();
     const selection = () =>
       input.evaluate((node: HTMLTextAreaElement) => [

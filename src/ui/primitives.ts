@@ -50,6 +50,10 @@ export function uiSwitch(): HTMLInputElement {
 export function selectField(input: HTMLSelectElement): HTMLElement {
   const field = document.createElement("span");
   field.className = "ui-select";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.append(document.createElement("selectedcontent"));
+  input.prepend(trigger);
   field.append(input, icon("chevron"));
   return field;
 }
