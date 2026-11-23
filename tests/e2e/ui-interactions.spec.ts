@@ -661,6 +661,14 @@ test("Keyboard model choice retains focus and the next prompt uses the selected 
     await app.page.screenshot({
       path: info.outputPath("model-reasoning-closed-controls.png"),
     });
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
+    await expect(app.page.locator("html")).toHaveCSS("--ui-font-size", "13px");
+    await expect(
+      app.page.getByRole("button", { name: "Reasoning effort", exact: true }),
+    ).toBeEnabled();
+    await app.page.screenshot({
+      path: info.outputPath("model-reasoning-13.png"),
+    });
     await model.focus();
     await model.press("Enter");
     const menu = app.page.getByRole("dialog", { name: "Actions" });
@@ -693,6 +701,9 @@ test("Keyboard model choice retains focus and the next prompt uses the selected 
       "fixture-alternate",
     );
     expect((await app.inspect(chat.id)).status).toBe("ready");
+    await app.page.screenshot({
+      path: info.outputPath("model-reasoning-after-send-13.png"),
+    });
   } finally {
     await app.cleanup();
   }
@@ -986,6 +997,14 @@ test("Shared dialog controls retain consistent geometry and fit enlarged text", 
     );
     expect(new Set(heights).size).toBe(1);
     expect(heights[0]).toBe(28);
+    await app.page.screenshot({
+      path: info.outputPath("shared-settings-normal.png"),
+    });
+    await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');
+    await expect(app.page.locator("html")).toHaveCSS("--ui-font-size", "13px");
+    await app.page.screenshot({
+      path: info.outputPath("shared-settings-13.png"),
+    });
     const input = settings.getByRole("spinbutton", {
       name: "Interface text size",
       exact: true,
