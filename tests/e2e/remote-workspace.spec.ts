@@ -56,7 +56,10 @@ async function installWorkspaceRelay(
           command: string,
           args: string[],
           options: import("node:child_process").ExecFileOptions,
-          callback: Parameters<typeof originalExec>[3],
+          callback: (
+            error: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
         ) => {
           if (command !== "/usr/bin/ssh") {
             return originalExec(command, args, options, callback as never);
@@ -92,7 +95,13 @@ async function installWorkspaceRelay(
               ...options,
               env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
             },
-            callback as never,
+            (error, stdout, stderr) => {
+              // The substitute has no custom promisifier. Deliver the same
+              // resolved shape that node's execFile promisifier produces.
+              const result = { stdout: String(stdout), stderr: String(stderr) };
+              if (error) Object.assign(error, result);
+              callback(error, result);
+            },
           );
         }) as typeof originalExec;
       }

@@ -79,17 +79,6 @@ export function remoteWorkspaceDialog(
   connect.type = "submit";
   connect.setAttribute("form", form.id);
   actions.append(cancelButton, connect);
-  form.onkeydown = (event) => {
-    if (
-      event.key !== "Enter" ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      !(event.target instanceof HTMLInputElement)
-    )
-      return;
-    event.preventDefault();
-    if (!connecting) form.requestSubmit(connect);
-  };
   dialog.onclose = () => dialog.remove();
   form.onsubmit = async (event) => {
     event.preventDefault();
