@@ -10,7 +10,7 @@ import {
   uiButton,
   settingEntry,
   uiSwitch,
-} from "./primitives";
+} from "../ui-kit";
 import { readPreference, writePreference } from "./preferences";
 import {
   defaultSettings,
@@ -520,9 +520,9 @@ export function appearanceDialog(
       });
   };
   utilities.append(resetAll);
-  const done = uiButton("Done", "primary");
-  done.onclick = close;
-  actions.append(utilities, done);
+  const dismiss = uiButton("Close");
+  dismiss.onclick = close;
+  actions.append(utilities, dismiss);
   header.append(search, error);
   body.append(list, empty);
   refresh();

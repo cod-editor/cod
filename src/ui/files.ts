@@ -4,8 +4,8 @@ import { readPreference, writePreference } from "./preferences";
 import type { WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 import type { createFocusManager } from "./focus";
-import { icon, menu } from "./controls";
-import { pickerShortcuts } from "./primitives";
+import { icon, pickerShortcuts } from "../ui-kit";
+import { menu } from "./controls";
 interface Entry {
   name: string;
   path: string;

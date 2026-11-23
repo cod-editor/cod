@@ -3,7 +3,7 @@ import {
   dialogRegions,
   dialogSurface,
   keyHintButton,
-} from "./primitives";
+} from "../ui-kit";
 let formSequence = 0;
 import { formField } from "./form-field";
 import { actionButton } from "./action-feedback";

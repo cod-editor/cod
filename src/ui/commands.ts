@@ -7,7 +7,8 @@ import {
   describeButton,
   pickerShortcuts,
   shortcutHint,
-} from "./primitives";
+  icon,
+} from "../ui-kit";
 import { createWorkspaceOverview } from "./workspace-overview";
 import type { createWorkspaceNavigation } from "./workspace-navigation";
 import { focusedWebLink, webLink, webLinkMenu } from "./web-links";
@@ -48,7 +49,7 @@ import { readPreference, writePreference } from "./preferences";
 import { appearanceDialog, changeTextSize } from "./appearance";
 import { inputDialog, confirmAction } from "./dialogs";
 import { actionButton as paneButton, showActionError } from "./action-feedback";
-import { menu, icon, type MenuAction } from "./controls";
+import { menu, type MenuAction } from "./controls";
 import type {
   AppState,
   PaneState,

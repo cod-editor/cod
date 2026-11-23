@@ -49,7 +49,7 @@ Apply established preferences everywhere: compact editor conventions, keyboard-f
 
 For new or changed Cod controls, use native semantics where possible. Expose an accurate accessible name, role and current state or value, and keep keyboard operation and visible focus. Check the affected controls and state changes in the accessibility tree. Report screen reader behavior only for the assistive technology and platform actually exercised.
 
-Use the shared UI primitives in `src/ui/primitives.ts`, behavior helpers in `controls.ts`/`action-feedback.ts`, and the spacing/control tokens in `src/ui/components.css`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.
+Use the shared controls and theme in `src/ui-kit/`, and application behavior helpers in `src/ui/controls.ts` and `src/ui/action-feedback.ts`. Extend these components before inventing a feature-specific button, field, toolbar or dialog style. Feature CSS may arrange components but must not override their basic geometry or target every nested `div`/region. Verify new control states and spacing in isolated rendered tests, including narrow panes, keyboard focus and disabled states.
 
 When asked to revise the standalone mock, apply and validate the change without another confirmation; keep production changes separate unless requested. Ask one question at a time. Put durable product decisions in the vision and behavior contracts in the spec.
 

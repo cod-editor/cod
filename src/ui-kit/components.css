@@ -166,6 +166,7 @@ input.ui-switch:focus-visible {
   outline-offset: 2px;
 }
 .ui-select {
+  --select-inset: var(--space-3);
   position: relative;
   display: inline-flex;
   min-inline-size: 0;
@@ -180,15 +181,17 @@ input.ui-switch:focus-visible {
     var(--control-height),
     calc(1em * var(--ui-line-height) + 2 * var(--space-1))
   );
-  padding: 0 var(--space-2);
-  padding-inline-end: calc(2 * var(--space-2) + var(--compact-icon-size));
+  padding: 0 var(--select-inset);
+  padding-inline-end: calc(
+    var(--select-inset) + var(--space-2) + var(--compact-icon-size)
+  );
   border-color: var(--border-default);
   background: var(--surface-control);
   text-overflow: ellipsis;
 }
 .ui-select > .icon {
   position: absolute;
-  inset-inline-end: var(--space-2);
+  inset-inline-end: var(--select-inset);
   inset-block: 0;
   margin-block: auto;
   inline-size: var(--compact-icon-size);
@@ -219,9 +222,20 @@ input.ui-switch:focus-visible {
       appearance: base-select;
     }
     .ui-select > select {
+      display: flex;
+      align-items: center;
       min-inline-size: min(10ch, 100%);
       overflow: hidden;
       white-space: nowrap;
+    }
+    .ui-select > select > button {
+      display: contents;
+    }
+    .ui-select selectedcontent {
+      min-inline-size: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
     .ui-select > select::picker-icon {
       display: none;
@@ -417,6 +431,35 @@ dialog .setting-row.compact {
   gap: var(--space-2);
 }
 
+.ui-button.compact-text {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--control-height);
+  padding: 0 var(--space-1);
+  border-color: transparent;
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+
+.ui-button.choice-trigger {
+  min-inline-size: 0;
+  gap: var(--space-1);
+}
+
+.ui-button.choice-trigger > .icon {
+  inline-size: 10px;
+  block-size: 10px;
+  transform: rotate(90deg);
+}
+
+.ui-button.choice-trigger:not(:disabled):hover {
+  color: var(--text-primary);
+}
+
+.ui-button.choice-trigger[aria-busy="true"] {
+  opacity: 0.65;
+}
+
 .ui-button-label {
   flex: 1;
   min-width: 0;
@@ -598,12 +641,11 @@ option {
   border-top: 1px solid var(--border-subtle);
 }
 .ui-dialog-utilities {
-  font-size: var(--font-small);
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-  margin-right: auto;
+  margin-inline-end: auto;
 }
 .search-picker::backdrop,
 .context-menu::backdrop {

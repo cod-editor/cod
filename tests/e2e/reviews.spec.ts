@@ -1378,7 +1378,7 @@ for (const feedback of [false, true])
           const pane = header.parentElement!.getBoundingClientRect();
           const controls = [
             ...header.querySelectorAll<HTMLElement>(
-              "button:not([hidden]), select",
+              "button:not([hidden], select > button), select",
             ),
           ].map((control) => {
             const box = control.getBoundingClientRect();
@@ -1775,7 +1775,9 @@ test("Review follows the current round, respects deliberate history, and preserv
   const review = await open(await shell.create("Review revision selection"));
   const host = pane(review);
   const round = host.getByLabel("Round", { exact: true });
+  const caption = round.locator("selectedcontent");
   await expect(round).toBeVisible();
+  await expect(caption).toHaveText("Round 1");
   await round.focus();
   await shell.page.screenshot({
     path: info.outputPath("review-round-select.png"),
@@ -1799,6 +1801,7 @@ test("Review follows the current round, respects deliberate history, and preserv
   await draft.fill("Unfinished text before refreshing");
   const second = await refresh("Second invented revision");
   await expect(round).toHaveValue(second.currentRoundId);
+  await expect(caption).toHaveText("Round 2");
   await expect(source(review)).toContainText("Second invented revision");
   await expect(draft).toHaveValue("Unfinished text before refreshing");
   await expect(host.getByRole("status")).toContainText("older revision");
@@ -1811,6 +1814,7 @@ test("Review follows the current round, respects deliberate history, and preserv
   const third = await refresh("Third invented revision");
   await expect(round.locator("option")).toHaveCount(3);
   await expect(round).toHaveValue(review.roundId);
+  await expect(caption).toHaveText("Round 1");
   await expect(source(review)).toContainText("first line");
   await expect(draft).toHaveValue("Updated unfinished text after refreshing");
 
@@ -1825,6 +1829,7 @@ test("Review follows the current round, respects deliberate history, and preserv
     paneId: review.paneId,
   });
   await expect(round).toHaveValue(third.currentRoundId);
+  await expect(caption).toHaveText("Round 3");
   await expect(source(review)).toContainText("Third invented revision");
   await expect(draft).toHaveValue("Updated unfinished text after refreshing");
   await expect(save).toBeDisabled();

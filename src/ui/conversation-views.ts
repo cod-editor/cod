@@ -1,13 +1,20 @@
 import {
   backgroundActivity,
   dismissBackgroundActivity,
-  showsActivityTrigger,
+  isRunningActivity,
 } from "./background-activity";
 import { canStopResponse } from "../conversation-actions";
 import { isPlainEscape } from "../keyboard";
 import { shortcutTitle } from "./keyboard-ui";
 import { webLinkMenu } from "./web-links";
-import { actionRow, uiButton } from "./primitives";
+import {
+  actionRow,
+  choiceTrigger,
+  setChoiceTriggerCaption,
+  uiButton,
+  icon,
+  iconButton,
+} from "../ui-kit";
 import { showActionError } from "./action-feedback";
 import { permissionContent } from "./permission-content";
 import {
@@ -24,7 +31,7 @@ import { reconcileView } from "./view-reconcile";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
-import { icon, iconButton, menu } from "./controls";
+import { menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
 import { readPreference, writePreference } from "./preferences";
@@ -37,18 +44,6 @@ import type {
   ProviderOptions,
 } from "../providers/types";
 
-function setChoiceCaption(button: HTMLButtonElement, text: string): void {
-  let label = button.querySelector<HTMLSpanElement>(".choice-caption");
-  if (!label) {
-    label = document.createElement("span");
-    label.className = "choice-caption";
-    const arrow = icon("chevron");
-    arrow.classList.add("choice-chevron");
-    button.append(label, arrow);
-  }
-  label.textContent = text;
-  button.title = text;
-}
 function optionLabel(
   option: DraftOptionChange["option"],
   choice: NativeChoice,
@@ -75,16 +70,13 @@ function optionButton(
   key: string,
   caption: string,
 ) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.classList.add("composer-choice", `composer-choice-${option}`);
+  const button = choiceTrigger(caption);
+  button.classList.add(`composer-choice-${option}`);
   button.dataset.focusKey = `option:${key}`;
   button.setAttribute(
     "aria-label",
     option === "model" ? "Model" : "Reasoning effort",
   );
-  button.setAttribute("aria-haspopup", "dialog");
-  setChoiceCaption(button, caption);
   return button;
 }
 
@@ -584,12 +576,8 @@ export function createConversationViews({
     };
     const actions = document.createElement("div");
     actions.className = "composer-actions";
-    const provider = document.createElement("button");
-    provider.type = "button";
+    const provider = choiceTrigger(providerLabel(selected));
     provider.setAttribute("aria-label", "Provider");
-    provider.className = "composer-choice";
-    provider.setAttribute("aria-haspopup", "dialog");
-    setChoiceCaption(provider, providerLabel(selected));
     provider.disabled = remote === true || !!draftModels.get(pane.id)?.saving;
     provider.onclick = () =>
       menu(
@@ -603,7 +591,7 @@ export function createConversationViews({
               draftModels.delete(pane.id);
             draftProviders.set(pane.id, id);
             void persistComposer(pane.id);
-            setChoiceCaption(provider, providerLabel(id));
+            setChoiceTriggerCaption(provider, providerLabel(id));
             input.placeholder = `Message ${providerLabel(id)}...`;
             invalidate();
           },
@@ -987,7 +975,7 @@ export function createConversationViews({
                 )
                   return;
                 pendingOptions.set(optionKey, choice.value);
-                setChoiceCaption(button, choiceLabel(choice));
+                setChoiceTriggerCaption(button, choiceLabel(choice));
                 button.setAttribute("aria-busy", "true");
                 void invoke<import("../providers/types").ProviderOptions>(
                   "conversation.option",
@@ -1938,19 +1926,19 @@ export function createConversationViews({
       const id = "chat:" + conversation.id;
       const previous = views.get(id);
       const active = document.activeElement;
-      const shell = '[data-activity-kind="command"]';
-      const shellHadFocus =
-        document.hasFocus() &&
-        previous?.contains(active) &&
-        active?.closest(shell);
+      const focusedActivity =
+        document.hasFocus() && previous?.contains(active)
+          ? active?.closest<HTMLElement>("[data-activity-kind]")?.dataset
+              .activityKind
+          : undefined;
       const { body, contents, retained } = renderConversation(
         conversation,
         previous,
       );
       const view = stable(id, body, retained);
       if (
-        shellHadFocus &&
-        !view.querySelector(shell) &&
+        focusedActivity &&
+        !view.querySelector(`[data-activity-kind="${focusedActivity}"]`) &&
         document.activeElement === document.body
       )
         view.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus({
@@ -1976,7 +1964,7 @@ export function createConversationViews({
             item.backgroundActivities?.some(
               (activity) =>
                 activity.kind === expandedBackground?.kind &&
-                showsActivityTrigger(activity),
+                isRunningActivity(activity),
             ),
         )
       )

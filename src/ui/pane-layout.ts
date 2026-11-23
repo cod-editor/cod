@@ -5,7 +5,8 @@ import { createTabDrag } from "./tab-drag";
 import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
-import { icon, iconButton, menu, type MenuAction } from "./controls";
+import { icon, iconButton } from "../ui-kit";
+import { menu, type MenuAction } from "./controls";
 import type {
   AppState,
   ConversationState,

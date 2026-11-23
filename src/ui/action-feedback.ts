@@ -1,4 +1,4 @@
-import { uiButton } from "./primitives";
+import { uiButton } from "../ui-kit";
 export function actionButton(
   label: string,
   action: () => Promise<unknown>,

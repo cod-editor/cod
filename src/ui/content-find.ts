@@ -2,7 +2,7 @@ import { isPlainEscape } from "../keyboard";
 import { reviewTextPoint } from "./review-source";
 import type { AppState, PaneState } from "../types";
 import type { createFocusManager } from "./focus";
-import { iconButton } from "./controls";
+import { iconButton } from "../ui-kit";
 
 export function createContentFind(
   getState: () => AppState,

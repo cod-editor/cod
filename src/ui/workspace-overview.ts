@@ -8,9 +8,15 @@ import {
   type NavigationItem,
 } from "./navigation-model";
 import { createSearchList } from "./search-list";
-import { dialogSurface, shortcutHint, uiButton } from "./primitives";
+import {
+  dialogSurface,
+  shortcutHint,
+  uiButton,
+  icon,
+  iconButton,
+} from "../ui-kit";
 import { confirmAction } from "./dialogs";
-import { icon, iconButton, menu } from "./controls";
+import { menu } from "./controls";
 import { commands, formatBinding, resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { showActionError } from "./action-feedback";

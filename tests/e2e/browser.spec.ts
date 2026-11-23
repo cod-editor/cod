@@ -1323,7 +1323,7 @@ test("Local address suggestions, searchable history and search engine settings s
   await shell.page
     .getByLabel("Search engine", { exact: true })
     .selectOption("duckduckgo");
-  await shell.page.getByRole("button", { name: "Done", exact: true }).click();
+  await shell.page.getByRole("button", { name: "Close", exact: true }).click();
   await expect
     .poll(() => shell.cli("browser", "settings"))
     .toEqual({ searchEngine: "duckduckgo" });

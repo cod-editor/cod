@@ -1,4 +1,4 @@
-import { icon } from "./controls";
+import { icon } from "../ui-kit";
 
 function workedDuration(ms: number, outcome?: string): string {
   const prefix =

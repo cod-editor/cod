@@ -18,6 +18,41 @@ export function uiButton(
   }
   return button;
 }
+
+export function iconButton(
+  name: string,
+  label: string,
+  action: () => void,
+): HTMLButtonElement {
+  const button = uiButton("");
+  button.classList.add("icon-button");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(icon(name));
+  button.onclick = action;
+  return button;
+}
+
+/** Compact button for a choice menu with a retained caption and fixed chevron. */
+export function choiceTrigger(caption: string): HTMLButtonElement {
+  const button = uiButton("", "quiet");
+  button.classList.add("compact-text", "choice-trigger");
+  button.setAttribute("aria-haspopup", "dialog");
+  const label = document.createElement("span");
+  label.className = "ui-button-label";
+  button.append(label, icon("chevron"));
+  setChoiceTriggerCaption(button, caption);
+  return button;
+}
+
+export function setChoiceTriggerCaption(
+  button: HTMLButtonElement,
+  text: string,
+) {
+  button.querySelector(".ui-button-label")!.textContent = text;
+  button.title = text;
+}
+
 export function uiSwitch(): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "checkbox";
@@ -26,9 +61,14 @@ export function uiSwitch(): HTMLInputElement {
   return input;
 }
 
+/** Wrap a native select. Refresh its options without replacing the trigger. */
 export function selectField(input: HTMLSelectElement): HTMLElement {
   const field = document.createElement("span");
   field.className = "ui-select";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.append(document.createElement("selectedcontent"));
+  input.prepend(trigger);
   field.append(input, icon("chevron"));
   return field;
 }

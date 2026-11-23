@@ -1,5 +1,11 @@
 import { diffHunks } from "./diff-hunks";
-import { uiButton, actionRow, selectField, toolbar } from "./ui/primitives";
+import {
+  uiButton,
+  actionRow,
+  selectField,
+  toolbar,
+  iconButton,
+} from "./ui-kit";
 import { reviewDocument } from "./ui/review-document";
 import { formatBinding } from "./keyboard";
 import {
@@ -9,7 +15,7 @@ import {
 } from "./ui/keyboard-ui";
 import { conversationLabel } from "./ui/message-label";
 import { readPreference, writePreference } from "./ui/preferences";
-import { iconButton, menu } from "./ui/controls";
+import { menu } from "./ui/controls";
 import type { AppState, ReviewSummary } from "./types";
 import type { Invoke } from "./ui/contracts";
 import type { ReviewService } from "./reviews/index";
@@ -480,7 +486,8 @@ export function reviewPane(
       detail.rounds.find((r) => r.id === selectedRound) ??
       detail.rounds.at(-1)!;
     selectedRound = round.id;
-    roundSelect.replaceChildren(
+    roundSelect.length = 0;
+    roundSelect.append(
       ...detail.rounds.map(
         (r) =>
           new Option(
