@@ -531,9 +531,9 @@ body {
   object-fit: cover;
 }
 dialog.quick-terminal {
-  width: min(900px, calc(100vw - 40px));
-  height: clamp(300px, 54dvh, 460px);
-  max-height: calc(100dvh - 40px);
+  width: min(1800px, 90vw);
+  height: 90dvh;
+  max-height: 1000px;
 }
 .quick-terminal-header,
 .quick-terminal-footer {

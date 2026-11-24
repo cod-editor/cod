@@ -567,6 +567,87 @@ test("Two-group keyboard mode keeps a real terminal process alive while switchin
   expect((await inspect(terminal.id)).pid).toBe(original.pid);
 });
 
+test("Quick Terminal keeps centered margins and refits its live shell across window sizes", async ({}, info) => {
+  const workspace = await shell.create("Quick Terminal sizing fixture");
+  const dialog = shell.page.getByRole("dialog", { name: "Quick Terminal" });
+  const quickInput = dialog.getByRole("textbox", { name: "Terminal input" });
+  await shell.page.keyboard.press("Control+Backquote");
+  await expect(quickInput).toBeFocused();
+  const terminal = (await shell.cli<AppState>("state")).quickTerminals!.find(
+    (item) => item.workspaceId === workspace,
+  )!;
+  await ready(terminal.id);
+  const original = await inspect(terminal.id);
+  await write(
+    terminal.id,
+    "clear; printf '%s\\n' '$ npm run check' '' 'Checking project files…' 'Type check passed' 'Formatting check passed'\n",
+  );
+  await expect(
+    dialog.getByRole("region", { name: "Terminal output" }),
+  ).toContainText("Formatting check passed");
+
+  const sizes = [
+    {
+      name: "laptop",
+      width: 1280,
+      height: 820,
+      box: { x: 64, y: 41, width: 1152, height: 738 },
+    },
+    {
+      name: "large",
+      width: 2200,
+      height: 1300,
+      box: { x: 200, y: 150, width: 1800, height: 1000 },
+    },
+    {
+      name: "compact",
+      width: 760,
+      height: 520,
+      box: { x: 38, y: 26, width: 684, height: 468 },
+    },
+  ];
+  const measured = [];
+  for (const { name, width, height } of sizes) {
+    await shell.app!.evaluate(
+      ({ BrowserWindow }, size) =>
+        BrowserWindow.getAllWindows()[0].setContentSize(
+          size.width,
+          size.height,
+        ),
+      { width, height },
+    );
+    await expect
+      .poll(() => shell.page.evaluate(() => [innerWidth, innerHeight]))
+      .toEqual([width, height]);
+    await expect(quickInput).toBeFocused();
+    const bounds = (await dialog.boundingBox())!;
+    measured.push(
+      Object.fromEntries(
+        Object.entries(bounds).map(([key, value]) => [key, Math.round(value)]),
+      ),
+    );
+    await shell.page.screenshot({
+      path: info.outputPath(`quick-terminal-sizing-${name}.png`),
+    });
+  }
+  expect(measured).toEqual(sizes.map(({ box }) => box));
+
+  await expect
+    .poll(async () => {
+      const current = await inspect(terminal.id);
+      return current.cols < original.cols && current.rows < original.rows;
+    })
+    .toBe(true);
+  const fitted = await inspect(terminal.id);
+  expect(fitted.pid).toBe(original.pid);
+  const tag = marker();
+  await command(terminal.id, `printf '${tag}:'; stty size`);
+  await output(terminal.id, new RegExp(`${tag}:${fitted.rows} ${fitted.cols}`));
+
+  await shell.page.mouse.click(10, 260);
+  await expect(dialog).toHaveCount(0);
+});
+
 test("Quick Terminal inherits its focused local cwd, retains its shell across hiding and never adds a tab", async ({}, info) => {
   const workspace = await shell.create("Invented Quick Terminal workspace");
   const ordinary = await open(workspace);
