@@ -696,6 +696,228 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
   }
 });
 
+for (const recovery of ["reachable", "unverified"] as const) {
+  test(`Detached chat keeps its native owner when the event connection drops (${recovery})`, async () => {
+    const owner = new LocalProviderOwner(shell.data);
+    const inspect = (id: string) =>
+      shell.cli<ConversationState>("conversation", "inspect", "--id", id);
+    try {
+      const main = shell.app!;
+      await main.evaluate(() => {
+        const net = process.getBuiltinModule("node:net")!;
+        const write = net.Socket.prototype.write;
+        net.Socket.prototype.write = function (
+          chunk: string,
+          ...rest: unknown[]
+        ) {
+          const probe = globalThis as typeof globalThis & {
+            codWatch?: { destroy(): void };
+            rejectCodWatch?: boolean;
+            codWatches?: number;
+            codReleases?: number;
+          };
+          if (
+            typeof chunk === "string" &&
+            chunk.startsWith('{"op":"workspace.watch"')
+          ) {
+            probe.codWatch = this;
+            probe.codWatches = (probe.codWatches ?? 0) + 1;
+            if (probe.rejectCodWatch) {
+              this.destroy();
+              return false;
+            }
+          }
+          if (
+            typeof chunk === "string" &&
+            chunk.startsWith('{"op":"owner.release"')
+          )
+            probe.codReleases = (probe.codReleases ?? 0) + 1;
+          return Reflect.apply(write, this, [chunk, ...rest]);
+        };
+      });
+
+      const workspace = await shell.create("Detached reconnect fixture");
+      await shell.cli(
+        "settings",
+        "update",
+        "--values",
+        '{"chat.detachedSessions":true}',
+      );
+      await shell.configure({
+        codex: { latencyChunks: 4, pauseLatencyAfter: 1 },
+      });
+      const chat = await shell.newChat(workspace, "codex");
+      await shell.send(chat.id, "[latency-fixture] retained native turn");
+      await expect(transcript(chat)).toContainText(/inventedstream-1/);
+      const original = await inspect(chat.id);
+      const localTurn = original.turns?.at(-1)?.id;
+      expect(localTurn).toBeDefined();
+      async function readNativeTurn(conversation: ConversationState) {
+        const reader = await owner.reconnect(
+          chat.id,
+          "codex",
+          chat.nativeId,
+          conversation.detachedOwner!,
+          () => {},
+        );
+        try {
+          return reader.activeTurnIdentity();
+        } finally {
+          reader.detach();
+        }
+      }
+      const originalNativeTurn = await readNativeTurn(original);
+      expect(originalNativeTurn).toBeDefined();
+      const starts = await shell.prompts();
+      const draftText = "Invented draft across reconnect";
+      const composer = shell.pane(chat.paneId).getByRole("textbox", {
+        name: "Message",
+        exact: true,
+      });
+      await composer.fill(draftText);
+      await expect
+        .poll(() =>
+          readWorkspaceChatDraftBody(shell.data, workspace, chat.paneId),
+        )
+        .toContain(draftText);
+
+      await main.evaluate((_electron, rejectCodWatch) => {
+        const probe = globalThis as typeof globalThis & {
+          codWatch?: { destroy(): void };
+          rejectCodWatch?: boolean;
+        };
+        if (!probe.codWatch) throw new Error("Fixture watch did not connect");
+        probe.rejectCodWatch = rejectCodWatch;
+        probe.codWatch.destroy();
+      }, recovery === "unverified");
+      await expect
+        .poll(() => main.evaluate(() => (globalThis as any).codWatches))
+        .toBe(2);
+
+      if (recovery === "unverified") {
+        await expect.poll(() => status(chat.id)).toBe("failed");
+        const attempt = await shell.raw(
+          "conversation",
+          "option",
+          "--id",
+          chat.id,
+          "--option",
+          "reasoning",
+          "--value",
+          "high",
+        );
+        expect(attempt.code).not.toBe(0);
+        expect(attempt.stderr).toContain(
+          "Could not reconnect to the detached chat owner",
+        );
+        expect(await readNativeTurn(original)).toBe(originalNativeTurn);
+        await expect(composer).toHaveValue(draftText);
+        expect(await shell.prompts()).toEqual(starts);
+        expect(
+          await main.evaluate(() => (globalThis as any).codReleases ?? 0),
+        ).toBe(0);
+        await shell.quitWithChoice("Stop");
+        await expect.poll(() => localOwnerSockets(shell.data)).toEqual([]);
+        return;
+      }
+
+      // Complete the first watch handshake before dropping the replacement.
+      const inspectNativeStatus = () =>
+        shell.cli(
+          "conversation",
+          "native-inspect",
+          "--id",
+          chat.id,
+          "--section",
+          "status",
+        );
+      await inspectNativeStatus();
+      await main.evaluate(() => {
+        const probe = globalThis as typeof globalThis & {
+          codWatch?: { destroy(): void };
+        };
+        if (!probe.codWatch) throw new Error("Fixture watch did not reconnect");
+        probe.codWatch.destroy();
+      });
+      await expect
+        .poll(() => main.evaluate(() => (globalThis as any).codWatches))
+        .toBe(3);
+      await inspectNativeStatus();
+      const restored = await inspect(chat.id);
+      expect(restored.status).toBe("working");
+      expect(restored.turns?.at(-1)?.id).toBe(localTurn);
+      expect(await readNativeTurn(restored)).toBe(originalNativeTurn);
+      expect(restored.detachedOwner?.generation).toBe(
+        original.detachedOwner?.generation,
+      );
+      expect(await shell.prompts()).toEqual(starts);
+      await shell.configure({ codex: { latencyChunks: 4 } });
+      await expect(transcript(chat)).toContainText(/inventedstream-4/);
+      await expect.poll(() => status(chat.id)).toBe("ready");
+      expect((await inspect(chat.id)).turns?.at(-1)?.id).toBe(localTurn);
+      await expect(composer).toHaveValue(draftText);
+      await composer.press("Enter");
+      await expect(transcript(chat)).toContainText(`DONE ${draftText}`);
+      const finished = await inspect(chat.id);
+      expect(finished.nativeId).toBe(original.nativeId);
+      expect(finished.detachedOwner?.generation).toBe(
+        original.detachedOwner?.generation,
+      );
+      expect(finished.turns?.at(-2)?.id).toBe(localTurn);
+      const prompts = await shell.prompts();
+      expect(prompts).toHaveLength(starts.length + 1);
+      expect(prompts.every((record) => record.pid === starts[0].pid)).toBe(
+        true,
+      );
+      expect(
+        (await shell.records()).filter(
+          (record) => record.message?.method === "thread/resume",
+        ),
+      ).toEqual([]);
+      expect(
+        await main.evaluate(() => (globalThis as any).codReleases ?? 0),
+      ).toBe(0);
+    } finally {
+      await owner.stop();
+    }
+  });
+}
+
+test("Detached chat can explicitly resume after its owner stops in the same desktop", async () => {
+  const workspace = await shell.create("Ended owner recovery fixture");
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    '{"chat.detachedSessions":true}',
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  try {
+    await shell.send(chat.id, "Invented turn before the owner stops");
+    await expect.poll(() => status(chat.id)).toBe("ready");
+    await expect(transcript(chat)).toContainText(
+      "DONE Invented turn before the owner stops",
+    );
+    await new LocalProviderOwner(shell.data).stop();
+    await expect.poll(() => localOwnerSockets(shell.data)).toEqual([]);
+    await expect.poll(() => status(chat.id)).toBe("failed");
+    const composer = shell.pane(chat.paneId).getByRole("textbox", {
+      name: "Message",
+      exact: true,
+    });
+    await composer.fill("Invented retry after known owner stop");
+    await composer.press("Enter");
+    await expect(transcript(chat)).toContainText(
+      "DONE Invented retry after known owner stop",
+      { timeout: 8000 },
+    );
+    expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+    expect(await shell.prompts()).toHaveLength(2);
+  } finally {
+    await new LocalProviderOwner(shell.data).stop();
+  }
+});
+
 for (const output of ["streaming", "quiet"] as const) {
   test(`Detached recovery keeps the live owner with a failed checkpoint and ${output} turn`, async () => {
     const owner = new LocalProviderOwner(shell.data);
