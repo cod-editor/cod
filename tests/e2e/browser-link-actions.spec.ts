@@ -447,35 +447,67 @@ async function makeCertificate(
 ) {
   const keyPath = path.join(app.data, `${name}-key.pem`);
   const certPath = path.join(app.data, `${name}-cert.pem`);
+  const requestPath = path.join(app.data, `${name}.csr`);
   await execute("openssl", [
     "req",
-    "-x509",
+    ...(expired ? ["-new"] : ["-x509", "-days", "2"]),
     "-newkey",
     "rsa:2048",
     "-nodes",
-    "-days",
-    "2",
     "-keyout",
     keyPath,
     "-out",
-    certPath,
+    expired ? requestPath : certPath,
     "-subj",
     `/CN=${hostname}`,
     "-addext",
     `subjectAltName=${san}`,
   ]);
-  if (!expired)
-    return { key: await readFile(keyPath), cert: await readFile(certPath) };
-  const { stdout } = await execute("openssl", [
-    "x509",
-    "-signkey",
-    keyPath,
-    "-days",
-    "-1",
-    "-in",
-    certPath,
-  ]);
-  return { key: await readFile(keyPath), cert: stdout };
+  if (expired) {
+    const config = path.join(app.data, `${name}.cnf`);
+    await writeFile(path.join(app.data, `${name}.index`), "");
+    await writeFile(
+      config,
+      `[ca]
+default_ca = fixture
+[fixture]
+default_md = sha256
+policy = policy
+database = ${name}.index
+new_certs_dir = .
+serial = ${name}.serial
+x509_extensions = leaf
+[policy]
+commonName = supplied
+[leaf]
+subjectAltName = ${san}
+`,
+    );
+    await execute(
+      "openssl",
+      [
+        "ca",
+        "-config",
+        config,
+        "-selfsign",
+        "-keyfile",
+        keyPath,
+        "-create_serial",
+        "-in",
+        requestPath,
+        "-startdate",
+        "000101000000Z",
+        "-enddate",
+        "010101000000Z",
+        "-batch",
+        "-notext",
+        "-out",
+        certPath,
+      ],
+      { cwd: app.data },
+    );
+  }
+  return { key: await readFile(keyPath), cert: await readFile(certPath) };
 }
 
 test("Untrusted HTTPS domain explains the certificate error and offers an explicit handoff", async ({}, info) => {
