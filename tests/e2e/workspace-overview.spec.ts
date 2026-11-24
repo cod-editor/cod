@@ -1,5 +1,9 @@
+import {
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
@@ -1653,8 +1657,7 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
       .toString("base64");
   });
   await app.stop();
-  const stateFile = path.join(app.data, "state.json");
-  const state: AppState = JSON.parse(await readFile(stateFile, "utf8"));
+  const state = readWorkspaceState(app.data);
   const original = state.conversations.find((c) => c.id === chat.id)!;
   const streaming = state.conversations.find((c) => c.id === stream.id)!;
   const template = state.workspaces.find((w) => w.id === first)!;
@@ -1734,7 +1737,7 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
     reference: index + 1,
   }));
   state.activeWorkspaceId = first;
-  await writeFile(stateFile, JSON.stringify(state));
+  writeWorkspaceState(app.data, state);
   await app.configure({
     codex: { extraTools: 50, streamDelayMs: 500, finalDelayMs: 2000 },
   });

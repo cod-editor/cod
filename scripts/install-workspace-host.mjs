@@ -25,7 +25,7 @@ const execute = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
 const service = "cod-workspace-host.service";
 const pty = "@homebridge/node-pty-prebuilt-multiarch";
-const files = ["workspace-host.cjs", "cli.cjs"];
+const files = ["workspace-host.cjs", "cli.cjs", "sqlite-state-worker.cjs"];
 const ownedLauncher = "# Installed by Cod's Linux workspace host installer";
 const serviceCommand = 'ExecStart="%h/.local/bin/cod-workspace-host" serve';
 
@@ -108,10 +108,10 @@ async function main() {
     throw new Error("Usage: node scripts/install-workspace-host.mjs");
   if (
     process.platform !== "linux" ||
-    Number(process.versions.node.split(".")[0]) < 22
+    !(await import("node:sqlite").catch(() => undefined))?.DatabaseSync
   )
     throw new Error(
-      "Installing the workspace host requires Linux and Node.js 22 or newer",
+      "Installing the workspace host requires Linux and Node.js with built-in SQLite enabled (Node.js 24 recommended)",
     );
   const home = homedir();
   const profile = path.join(home, ".local/state/cod-host");

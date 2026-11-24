@@ -1,3 +1,4 @@
+import { openWorkspaceState } from "../support/workspace-state";
 import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -2069,10 +2070,17 @@ test("Quick Terminal keeps independent Local and Linux PTYs through disconnect a
       })
       .toBe(false);
     expect((await inspect(linux, remote.id)).pid).toBe(remote.pid);
-    const savedState = JSON.parse(
-      await readFile(path.join(desktop.data, "state.json"), "utf8"),
-    );
-    expect(savedState).not.toHaveProperty("quickTerminals");
+    {
+      using db = openWorkspaceState(desktop.data, true);
+      const meta = db
+        .prepare(
+          "SELECT body FROM records WHERE kind = 'meta' AND id = 'state'",
+        )
+        .get();
+      expect(JSON.parse(String(meta?.body))).not.toHaveProperty(
+        "quickTerminals",
+      );
+    }
 
     await desktop.start();
     await installWorkspaceRelay(desktop);

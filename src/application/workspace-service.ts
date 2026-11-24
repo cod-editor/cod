@@ -109,7 +109,9 @@ export class WorkspaceApplicationService {
         "Resolve the pending move to Linux before closing this workspace",
       );
     const archived = structuredClone({
-      workspace: this.store.data.workspaces[index]!,
+      workspace: await this.store.workspaceWithClosedChats(
+        this.store.data.workspaces[index]!,
+      ),
       conversations: this.store.data.conversations.filter(
         (item) => item.workspaceId === id,
       ),
@@ -177,13 +179,10 @@ export class WorkspaceApplicationService {
     request: OperationRequest,
     trustedUi: boolean,
   ): Promise<{ id: string }> {
-    const record = await this.store.change(() => {
-      const record =
-        typeof request.id === "string"
-          ? this.store.data.closedWorkspaces?.find(
-              (item) => item.workspace.id === request.id,
-            )
-          : this.store.data.closedWorkspaces?.at(-1);
+    const record = await this.store.change(async () => {
+      const record = await this.store.archivedWorkspace(
+        typeof request.id === "string" ? request.id : undefined,
+      );
       if (!record) throw new Error("No closed workspace to reopen");
       if (trustedUi && record.terminals.length && request.newShell !== true)
         throw new Error("Confirm reopening the workspace with new shells");
@@ -201,7 +200,9 @@ export class WorkspaceApplicationService {
           "A native session from this workspace is already controlled elsewhere",
         );
       this.store.data.closedWorkspaces =
-        this.store.data.closedWorkspaces!.filter((item) => item !== record);
+        this.store.data.closedWorkspaces!.filter(
+          (item) => item.workspace.id !== record.workspace.id,
+        );
       this.store.data.workspaces.push(record.workspace);
       for (const conversation of record.conversations) {
         conversation.status = "ready";
@@ -556,8 +557,9 @@ export class WorkspaceApplicationService {
     const workspace = this.store.workspace(
       requiredString(request, "workspace"),
     );
-    const closed = workspace.closedTabs?.at(-1);
-    if (!closed) throw new Error("No closed tab to reopen");
+    const reference = workspace.closedTabs?.at(-1);
+    if (!reference) throw new Error("No closed tab to reopen");
+    const closed = await this.store.closedTab(workspace.id, reference);
     if (closed.terminal) {
       if (request.newShell !== true && request.newShell !== "true")
         throw new Error(
@@ -581,7 +583,7 @@ export class WorkspaceApplicationService {
         if (
           this.store.closing ||
           !this.store.data.workspaces.includes(workspace) ||
-          workspace.closedTabs?.at(-1) !== closed
+          workspace.closedTabs?.at(-1) !== reference
         )
           throw new Error("The closed tab list changed. Try reopening again.");
         if (

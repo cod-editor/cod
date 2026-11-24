@@ -96,6 +96,7 @@ const names = await files(dist);
 for (const name of [
   "main.cjs",
   "preload.cjs",
+  "sqlite-state-worker.cjs",
   "cli.cjs",
   "renderer.js",
   "index.html",

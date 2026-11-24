@@ -32,7 +32,11 @@ await Promise.all([
       "@ghostery/adblocker-electron",
     ],
     entryPoints: ["src/main.ts"],
-    define: { __COD_BUILD_ID__: JSON.stringify(identity.id) },
+    define: {
+      __COD_BUILD_ID__: JSON.stringify(identity.id),
+      "import.meta.dirname": "__dirname",
+      "import.meta.filename": "__filename",
+    },
     outfile: "dist/main.cjs",
   }),
   build({
@@ -48,6 +52,11 @@ await Promise.all([
   build({ ...shared, entryPoints: ["src/cli.ts"], outfile: "dist/cli.cjs" }),
   build({
     ...shared,
+    entryPoints: ["src/application/sqlite-state-worker.ts"],
+    outfile: "dist/sqlite-state-worker.cjs",
+  }),
+  build({
+    ...shared,
     entryPoints: ["src/provider-owner.ts"],
     define: {
       __COD_OWNER_BUILD__: JSON.stringify(identity.sourceHash.slice(0, 24)),
@@ -59,6 +68,10 @@ await Promise.all([
         build({
           ...shared,
           entryPoints: ["src/workspace-host.ts"],
+          define: {
+            "import.meta.dirname": "__dirname",
+            "import.meta.filename": "__filename",
+          },
           outfile: "dist/workspace-host.cjs",
         }),
       ]

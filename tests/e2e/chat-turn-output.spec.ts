@@ -1,7 +1,10 @@
+import {
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppState } from "../../src/types";
+import { writeFile } from "node:fs/promises";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 
 let shell: ChatApp;
@@ -58,14 +61,13 @@ test("Kimi empty completion shows an error and old empty completed turns show a 
   ).toContainText("Kimi returned no response");
   await shell.stop();
   // Reproduce a completion saved by older Cod builds, which trusted end_turn.
-  const file = path.join(shell.data, "state.json");
-  const state = JSON.parse(await readFile(file, "utf8")) as AppState;
+  const state = readWorkspaceState(shell.data);
   const saved = state.conversations.find((item) => item.id === chat.id)!;
   saved.status = "ready";
   saved.error = undefined;
   saved.messages = saved.messages.filter((message) => message.role === "user");
   saved.turns!.at(-1)!.outcome = "completed";
-  await writeFile(file, JSON.stringify(state));
+  writeWorkspaceState(shell.data, state);
   await shell.start();
   await expect(
     shell

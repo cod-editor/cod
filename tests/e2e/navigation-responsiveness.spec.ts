@@ -1,6 +1,9 @@
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 
 test("Long conversations open a recent window, preserve earlier messages and search the complete history", async ({}, info) => {
@@ -11,11 +14,10 @@ test("Long conversations open a recent window, preserve earlier messages and sea
     const workspace = await app.create("Invented history workspace");
     const chat = await app.newChat(workspace, "codex");
     await app.stop();
-    const file = path.join(app.data, "state.json");
-    const state = JSON.parse(await readFile(file, "utf8"));
+    const state = readWorkspaceState(app.data);
     const conversation = state.conversations.find(
-      (item: any) => item.id === chat.id,
-    );
+      (item) => item.id === chat.id,
+    )!;
     conversation.messages = Array.from({ length: 200 }, (_, index) => ({
       id: `invented-${index}`,
       role: index % 2 ? "assistant" : "user",
@@ -23,7 +25,7 @@ test("Long conversations open a recent window, preserve earlier messages and sea
       order: index,
       text: `${index === 0 ? "Oldest invented marker" : index === 199 ? "Latest invented marker" : "Invented message " + index}\n\n${"Invented history. ".repeat(150)}`,
     }));
-    await writeFile(file, JSON.stringify(state));
+    writeWorkspaceState(app.data, state);
     await app.start();
     const pane = app.pane(chat.paneId);
     await expect(
@@ -114,121 +116,92 @@ test("Layout selection renders during the state checkpoint and rolls back a fail
     await app.cli("workspace", "focus", "--id", main);
     await expect(toggle()).toHaveAttribute("aria-pressed", "true");
 
-    const stateFile = path.join(app.data, "state.json");
-    const saved = async () =>
-      JSON.parse(
-        await readFile(stateFile, "utf8"),
-      ) as import("../../src/types").AppState;
-    await app.app!.evaluate((_, stateFile) => {
-      const fs = process.getBuiltinModule("node:fs/promises")!;
-      const rename = fs.rename;
-      let armed = false;
-      let release: ((reject: boolean) => void) | undefined;
-      Object.assign(globalThis, {
-        navigationCheckpoint: {
-          arm: () => {
-            armed = true;
-          },
-          waiting: () => !!release,
-          finish: (reject: boolean) => {
-            armed = false;
-            release?.(reject);
-            release = undefined;
-          },
-        },
-      });
-      fs.rename = async (from, to) => {
-        if (armed && String(to) === stateFile) {
-          armed = false;
-          const reject = await new Promise<boolean>((resolve) => {
-            release = resolve;
-          });
-          if (reject) throw new Error("Invented checkpoint failure");
-        }
-        return rename(from, to);
-      };
-    }, stateFile);
-    const checkpoint = (action: "arm" | "waiting" | "finish", reject = false) =>
-      app.app!.evaluate(
-        (_, { action, reject }) => {
-          const scope = globalThis as unknown as {
-            navigationCheckpoint: {
-              arm: () => void;
-              waiting: () => boolean;
-              finish: (reject: boolean) => void;
-            };
-          };
-          return scope.navigationCheckpoint[action](reject);
-        },
-        { action, reject },
-      );
+    const saved = () => readWorkspaceState(app.data);
+    const active = () => saved().workspaces.find((w) => w.id === main)!;
     const files = () =>
       app.page.getByRole("button", {
         name: "Toggle files",
         exact: true,
       });
-    const filesVisible = async () =>
-      (await saved()).workspaces.find((w) => w.id === main)?.settings
-        ?.filesVisible === true;
-    const initialFiles = await filesVisible();
-    try {
-      await app.overview();
-      await checkpoint("arm");
+    const filesVisible = () => active().settings?.filesVisible === true;
+    const initialFiles = filesVisible();
+
+    // Hold the writer lock while checking that the UI updates and the durable
+    // state does not. The worker has a bounded busy timeout.
+    const whileWriteLocked = async (check: () => Promise<void>) => {
+      using db = openWorkspaceState(app.data);
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        await check();
+      } finally {
+        db.exec("ROLLBACK");
+      }
+    };
+    await app.overview();
+    await whileWriteLocked(async () => {
       await app.row("Invented other task").click();
-      await expect.poll(() => checkpoint("waiting")).toBe(true);
       await expect(
         app.page.getByRole("button", { name: "Overview", exact: true }),
       ).toHaveText("Invented other task");
-      expect((await saved()).activeWorkspaceId).toBe(main);
-      await checkpoint("finish");
-      await expect
-        .poll(async () => (await saved()).activeWorkspaceId)
-        .toBe(other);
-      await expect(
-        app.page.getByRole("textbox", { name: "Message", exact: true }),
-      ).toBeFocused();
-      await app.cli("workspace", "focus", "--id", main);
+      expect(saved().activeWorkspaceId).toBe(main);
+    });
+    await expect.poll(() => saved().activeWorkspaceId).toBe(other);
+    await expect(
+      app.page.getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await app.cli("workspace", "focus", "--id", main);
 
-      await checkpoint("arm");
+    const collapsed = () => active().groups.some((group) => group.hidden);
+    await whileWriteLocked(async () => {
       await toggle().click();
-      await expect.poll(() => checkpoint("waiting")).toBe(true);
       await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-      const collapsed = async () =>
-        (await saved()).workspaces
-          .find((w) => w.id === main)
-          ?.groups.some((group) => group.hidden);
-      expect(await collapsed()).toBe(false);
-      await checkpoint("finish");
-      await expect.poll(collapsed).toBe(true);
+      expect(collapsed()).toBe(false);
+    });
+    await expect.poll(collapsed).toBe(true);
 
-      await checkpoint("arm");
+    await whileWriteLocked(async () => {
       await files().click();
-      await expect.poll(() => checkpoint("waiting")).toBe(true);
       await expect(files()).toHaveAttribute(
         "aria-pressed",
         String(!initialFiles),
       );
-      expect(await filesVisible()).toBe(initialFiles);
-      await checkpoint("finish");
-      await expect.poll(filesVisible).toBe(!initialFiles);
+      expect(filesVisible()).toBe(initialFiles);
+    });
+    await expect.poll(filesVisible).toBe(!initialFiles);
 
-      const tab = (id: string) =>
-        app.page.locator(`[role="tab"][data-tab-id="${id}"]`);
-      await checkpoint("arm");
-      await tab(file.paneId).click();
-      await expect.poll(() => checkpoint("waiting")).toBe(true);
-      await expect(tab(file.paneId)).toHaveAttribute("aria-selected", "true");
-      expect(
-        (await saved()).workspaces.find((w) => w.id === main)?.activePaneId,
-      ).toBe(initial.activePaneId);
-      await checkpoint("finish", true);
-      await expect(tab(initial.activePaneId)).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      await expect(tab(file.paneId)).toHaveAttribute("aria-selected", "false");
-    } finally {
-      await checkpoint("finish");
+    const tab = (id: string) =>
+      app.page.locator(`[role="tab"][data-tab-id="${id}"]`);
+    {
+      using db = openWorkspaceState(app.data);
+      db.exec(`
+        CREATE TRIGGER fail_navigation_checkpoint BEFORE UPDATE ON records
+        WHEN NEW.kind = 'workspace'
+          AND json_extract(NEW.body, '$.activePaneId') = '${file.paneId}'
+        BEGIN
+          SELECT RAISE(ABORT, 'Invented checkpoint failure');
+        END;
+      `);
+      try {
+        await whileWriteLocked(async () => {
+          await tab(file.paneId).click();
+          await expect(tab(file.paneId)).toHaveAttribute(
+            "aria-selected",
+            "true",
+          );
+          expect(active().activePaneId).toBe(initial.activePaneId);
+        });
+        await expect(tab(initial.activePaneId)).toHaveAttribute(
+          "aria-selected",
+          "true",
+        );
+        await expect(tab(file.paneId)).toHaveAttribute(
+          "aria-selected",
+          "false",
+        );
+        expect(active().activePaneId).toBe(initial.activePaneId);
+      } finally {
+        db.exec("DROP TRIGGER fail_navigation_checkpoint");
+      }
     }
     await app.stop();
     await app.start();

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 let temporary, Store, Workspaces, Reviews, Files;
+const stores = new Set();
 before(async () => {
   temporary = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "cod-transfer-")),
@@ -21,18 +22,24 @@ before(async () => {
     bundle: true,
     platform: "node",
     format: "cjs",
+    define: {
+      "import.meta.dirname": JSON.stringify(path.resolve("src/application")),
+      "import.meta.filename": JSON.stringify("services.ts"),
+    },
   });
   ({ Store, Workspaces, Reviews, Files } = createRequire(import.meta.url)(
     outfile,
   ));
 });
 after(async () => {
+  await Promise.all(Array.from(stores, (store) => store.close()));
   await rm(temporary, { recursive: true, force: true });
 });
 async function setup(name) {
   const root = path.join(temporary, name);
   await mkdir(root);
   const store = new Store(path.join(root, "state"));
+  stores.add(store);
   await store.load();
   const reviews = new Reviews({
     dataDirectory: store.directory,
@@ -156,6 +163,7 @@ test("move keeps the live session, draft, permission and origin review; restart 
     expectedVersion: moved.version,
   });
   const restored = new Store(f.store.directory);
+  stores.add(restored);
   await restored.load();
   assert.equal(restored.data.conversations[0].workspaceId, f.destination);
 });
@@ -211,17 +219,14 @@ test("failed application persistence rolls review membership and live conversati
   f.store.persist = persist;
 });
 
-test("ensure left reveals an empty material pane once and real files replace the placeholder", async () => {
+test("ensuring the left group is stable before a file opens beside the chat", async () => {
   const f = await setup("empty-material");
   const first = await f.workspace.handle({
     op: "group.ensure",
     workspace: f.source,
     side: "left",
   });
-  assert.equal(
-    f.store.workspace(f.source).panes.find((p) => p.id === first.paneId).kind,
-    "empty",
-  );
+  assert.equal(first.paneId, f.paneId);
   const repeated = await f.workspace.handle({
     op: "group.ensure",
     workspace: f.source,
@@ -236,11 +241,12 @@ test("ensure left reveals an empty material pane once and real files replace the
     workspace: f.source,
     path: file,
   });
-  assert.equal(
-    f.store.workspace(f.source).groups.find((g) => g.id === first.groupId)
-      .paneIds[0],
-    opened.paneId,
-  );
+  const material = await f.workspace.handle({
+    op: "group.ensure",
+    workspace: f.source,
+    side: "left",
+  });
+  assert.equal(material.paneId, opened.paneId);
   assert.equal(
     f.store.workspace(f.source).panes.some((p) => p.kind === "empty"),
     false,
@@ -254,25 +260,23 @@ test("ensure left reveals an empty material pane once and real files replace the
   await f.workspace.handle({
     op: "group.visibility",
     workspace: f.source,
-    id: first.groupId,
+    id: material.groupId,
     hidden: true,
   });
-  await assert.rejects(
-    f.workspace.handle({
-      op: "group.visibility",
-      workspace: f.source,
-      id: right.groupId,
-      hidden: true,
-    }),
-    /remain visible/,
-  );
+  await f.workspace.handle({
+    op: "group.visibility",
+    workspace: f.source,
+    id: right.groupId,
+    hidden: true,
+  });
+  assert.equal(f.store.workspace(f.source).activeGroupId, material.groupId);
   await f.workspace.handle({
     op: "group.ensure",
     workspace: f.source,
     side: "left",
   });
   assert.equal(
-    f.store.workspace(f.source).groups.find((g) => g.id === first.groupId)
+    f.store.workspace(f.source).groups.find((g) => g.id === material.groupId)
       .hidden,
     false,
   );
@@ -280,8 +284,15 @@ test("ensure left reveals an empty material pane once and real files replace the
 
 test("global new chat starts from no workspaces and preserves closed tasks", async () => {
   const store = new Store(path.join(temporary, "new-chat"));
+  stores.add(store);
   await store.load();
-  const service = new Workspaces(store, {}, {}, {}, { list: async () => [] });
+  const service = new Workspaces(
+    store,
+    {},
+    {},
+    { quickTerminalSummaries: () => [], closeQuickTerminal: async () => {} },
+    { list: async () => [] },
+  );
   const first = await service.handle({ op: "conversation.draft" });
   assert.equal(store.data.workspaces.length, 1);
   assert.equal(store.data.workspaces[0].name, "Untitled");
@@ -294,10 +305,14 @@ test("global new chat starts from no workspaces and preserves closed tasks", asy
   };
   await service.handle({ op: "workspace.close", id: first.workspaceId });
   assert.equal(store.data.workspaces.length, 0);
-  const archive = structuredClone(store.data.closedWorkspaces);
+  const archive = await store.archivedWorkspace();
+  assert.equal(
+    archive.workspace.chatDrafts[first.paneId].text,
+    "Keep this unfinished task",
+  );
   const second = await service.handle({ op: "conversation.draft" });
   assert.notEqual(second.workspaceId, first.workspaceId);
-  assert.deepEqual(store.data.closedWorkspaces, archive);
+  assert.deepEqual(await store.archivedWorkspace(), archive);
   assert.equal(store.data.conversations.length, 0);
   const explicit = await service.handle({
     op: "conversation.draft",
@@ -306,8 +321,9 @@ test("global new chat starts from no workspaces and preserves closed tasks", asy
   assert.notEqual(explicit.paneId, second.paneId);
   assert.equal(store.data.workspaces.length, 1);
   const restored = new Store(store.directory);
+  stores.add(restored);
   await restored.load();
-  assert.deepEqual(restored.data.closedWorkspaces, archive);
+  assert.deepEqual(await restored.archivedWorkspace(), archive);
   assert.equal(restored.data.activeWorkspaceId, second.workspaceId);
 });
 

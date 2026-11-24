@@ -20,6 +20,8 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
+import { readWorkspaceState } from "../support/workspace-state.ts";
+
 const execute = promisify(execFile);
 const hostEntry = path.resolve("dist/workspace-host.cjs");
 const cliEntry = path.resolve("dist/cli.cjs");
@@ -350,9 +352,7 @@ test(
         current.panes.find((pane) => pane.id === paneId).pinned,
         true,
       );
-      const saved = JSON.parse(
-        await readFile(path.join(profile, "state.json"), "utf8"),
-      );
+      const saved = readWorkspaceState(profile);
       assert.deepEqual(saved.workspaces[0].groups, current.groups);
 
       const socket = connect(socketPath);

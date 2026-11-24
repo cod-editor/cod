@@ -1,5 +1,10 @@
+import { readWorkspaceChatDraftBody } from "./helpers/workspace-state";
+import {
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppState, ConversationState } from "../../src/types";
 import { ChatApp } from "./helpers/chat-fixture/harness";
@@ -619,9 +624,8 @@ test("Composer typing stays responsive with large history and an attachment", as
     { workspace, paneId: chat.paneId, initial, image },
   );
   await shell.stop();
-  const stateFile = path.join(shell.data, "state.json");
-  const state = JSON.parse(await readFile(stateFile, "utf8"));
-  const conversation = state.conversations.find((c: any) => c.id === chat.id);
+  const state = readWorkspaceState(shell.data);
+  const conversation = state.conversations.find((c) => c.id === chat.id)!;
   conversation.messages = Array.from({ length: 120 }, (_, index) => ({
     id: `fixture-message-${index}`,
     role: index % 2 ? "assistant" : "user",
@@ -630,14 +634,14 @@ test("Composer typing stays responsive with large history and an attachment", as
   }));
   // Apply pressure through a real retained conversation, not unknown fields
   // that no supported profile can create and UI projection cannot classify.
-  const retained = state.conversations.find((c: any) => c.id === background.id);
+  const retained = state.conversations.find((c) => c.id === background.id)!;
   retained.messages = Array.from({ length: 120 }, (_, index) => ({
     id: `retained-message-${index}`,
     role: index % 2 ? "assistant" : "user",
     text: "Invented retained history. ".repeat(8400),
     order: index,
   }));
-  await writeFile(stateFile, JSON.stringify(state));
+  writeWorkspaceState(shell.data, state);
   await shell.start();
   const input = shell
     .pane(chat.paneId)
@@ -689,15 +693,14 @@ test("Composer typing stays responsive with large history and an attachment", as
   expect(p95).toBeLessThan(200);
   await expect
     .poll(async () => {
-      const overlay = await readFile(
-        path.join(shell.data, "composer-text.json"),
-        "utf8",
+      const body = readWorkspaceChatDraftBody(
+        shell.data,
+        workspace,
+        chat.paneId,
       );
       return {
-        text: (Object.values(JSON.parse(overlay).drafts) as any[]).find(
-          (entry) => entry.pane === chat.paneId,
-        )?.draft.text,
-        bounded: overlay.length < 55000 && !overlay.includes(image.data),
+        text: body && JSON.parse(body).text,
+        bounded: !!body && body.length < 55000 && !body.includes(image.data),
       };
     })
     .toEqual({ text: expected, bounded: true });
