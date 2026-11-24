@@ -1,6 +1,7 @@
 import type { AppState } from "../types";
 import type { Invoke } from "./contracts";
 import { menu } from "./controls";
+import { siteFavicon, siteIcon } from "./site-icon";
 
 export function createBrowserHome(
   getState: () => AppState,
@@ -32,6 +33,18 @@ export function createBrowserHome(
   form.append(address, title, save, cancel, error);
   element.append(grid, form);
   let signature = "";
+  const marks = new Map<string, HTMLElement>();
+  function updateMark(site: { url: string; title: string; favicon?: string }) {
+    const mark = marks.get(site.url)!;
+    const favicon = siteFavicon(site.favicon);
+    const previous = mark.querySelector("img");
+    if (favicon) {
+      if (previous?.getAttribute("src") !== favicon)
+        mark.replaceChildren(siteIcon(favicon));
+    } else if (previous || !mark.textContent) {
+      mark.textContent = [...site.title][0]?.toUpperCase() ?? "?";
+    }
+  }
   let origin: HTMLElement | undefined;
   const close = () => {
     form.hidden = true;
@@ -80,9 +93,13 @@ export function createBrowserHome(
     element,
     update() {
       const sites = getState().pinnedSites ?? [];
-      const next = JSON.stringify(sites);
-      if (signature === next) return;
+      const next = JSON.stringify(sites.map(({ url, title }) => [url, title]));
+      if (signature === next) {
+        for (const site of sites) updateMark(site);
+        return;
+      }
       signature = next;
+      marks.clear();
       grid.replaceChildren();
       for (const site of sites) {
         const button = document.createElement("button");
@@ -91,7 +108,8 @@ export function createBrowserHome(
         const mark = document.createElement("span");
         mark.className = "browser-home-monogram";
         mark.setAttribute("aria-hidden", "true");
-        mark.textContent = [...site.title][0]?.toUpperCase() ?? "?";
+        marks.set(site.url, mark);
+        updateMark(site);
         let hash = 0;
         for (const char of new URL(site.url).hostname)
           hash = (hash * 31 + char.charCodeAt(0)) | 0;

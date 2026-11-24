@@ -6,6 +6,7 @@ import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
 import { browserLabel } from "./browser-label";
+import { siteFavicon, siteIcon } from "./site-icon";
 import { icon, iconButton } from "../ui-kit";
 import { menu, type MenuAction } from "./controls";
 import type {
@@ -385,9 +386,21 @@ export function createPaneLayout(
             : pane.kind === "empty" && pane.launcher
               ? "plus"
               : pane.kind;
-      if (tab.dataset.iconKind !== iconKind) {
-        tab.querySelector(":scope > svg")?.remove();
-        tab.prepend(icon(iconKind));
+      const favicon =
+        pane.kind === "browser"
+          ? siteFavicon(
+              getState().browsers.find((b) => b.id === pane.browserId)?.favicon,
+            )
+          : undefined;
+      const oldIcon = tab.querySelector(":scope > .icon");
+      if (
+        tab.dataset.iconKind !== iconKind ||
+        oldIcon?.getAttribute("src") !== (favicon ?? null)
+      ) {
+        oldIcon?.remove();
+        const glyph = favicon ? siteIcon(favicon) : icon(iconKind);
+        glyph.classList.add("icon");
+        tab.prepend(glyph);
         tab.dataset.iconKind = iconKind;
       }
       const label =

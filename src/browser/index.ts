@@ -13,6 +13,8 @@ import {
 import { mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { BrowserDiagnostics } from "./diagnostics";
+import { loadFavicon } from "./favicon";
+import { faviconOrigin } from "./favicon-origin";
 import {
   navigationWindow,
   normalizeNavigation,
@@ -31,6 +33,7 @@ export interface BrowserSnapshot {
   visible: boolean;
   error?: string;
   lastSuccessfulUrl?: string;
+  favicon?: string;
 }
 export type BrowserEvent =
   | {
@@ -61,6 +64,10 @@ interface Resource {
   restoredTitle?: string;
   lastSuccessfulUrl?: string;
   diagnostics?: BrowserDiagnostics;
+  favicon?: string;
+  pendingFavicon?: AbortController;
+  faviconCandidates?: string;
+  awaitingDocument?: boolean;
   popups: Set<BrowserWindow>;
   closing?: Promise<boolean>;
 }
@@ -116,6 +123,7 @@ export class BrowserService {
   private owners = new Map<number, Resource>();
   private listeners = new Set<(event: BrowserEvent) => void>();
   private disposed = false;
+  private favicons = new Map<string, string>();
   private retries = new Map<string, { count: number; expires: number }>();
   private downloads = new Map<
     string,
@@ -186,6 +194,47 @@ export class BrowserService {
       workspaceId: resource.workspaceId,
       snapshot: this.snapshot(resource.id),
     });
+  }
+  cachedFavicon(url: string): string | undefined {
+    const origin = faviconOrigin(url);
+    return origin ? this.favicons.get(origin) : undefined;
+  }
+  private readFavicon(resource: Resource, candidates: string[]) {
+    if (resource.awaitingDocument || resource.error) return;
+    const origin = faviconOrigin(resource.contents.getURL());
+    if (!origin) return;
+    const key = JSON.stringify(
+      candidates.slice(0, 4).filter((value) => value.length <= 2048),
+    );
+    if (resource.faviconCandidates === key) return;
+    resource.faviconCandidates = key;
+    resource.pendingFavicon?.abort();
+    const pending = new AbortController();
+    resource.pendingFavicon = pending;
+    const signal = AbortSignal.any([
+      pending.signal,
+      AbortSignal.timeout(4_000),
+    ]);
+    void loadFavicon(this.options.session, origin, candidates, signal).then(
+      (icon) => {
+        if (
+          signal.aborted ||
+          resource.contents.isDestroyed() ||
+          resource.error ||
+          faviconOrigin(resource.contents.getURL()) !== origin ||
+          icon === resource.favicon
+        )
+          return;
+        if (icon) {
+          this.favicons.delete(origin);
+          this.favicons.set(origin, icon);
+          if (this.favicons.size > 64)
+            this.favicons.delete(this.favicons.keys().next().value!);
+        }
+        resource.favicon = icon;
+        this.changed(resource);
+      },
+    );
   }
   private secure(contents: WebContents, resource: Resource) {
     installPageContextMenu(contents, this.options.window, {
@@ -322,6 +371,10 @@ export class BrowserService {
         "did-start-navigation",
         (_event, _url, inPlace, mainFrame) => {
           if (!mainFrame || inPlace) return;
+          resource.pendingFavicon?.abort();
+          resource.favicon = undefined;
+          resource.faviconCandidates = undefined;
+          resource.awaitingDocument = true;
           resource.restoredFailure = false;
           resource.error = undefined;
           resource.failedUrl = undefined;
@@ -352,7 +405,13 @@ export class BrowserService {
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
       const committed = () => this.updateNavigation(resource);
-      view.webContents.on("did-navigate", committed);
+      view.webContents.on("did-navigate", () => {
+        resource.awaitingDocument = false;
+        committed();
+      });
+      view.webContents.on("page-favicon-updated", (_event, urls) =>
+        this.readFavicon(resource, urls),
+      );
       view.webContents.on("did-finish-load", () => {
         const url = resource.contents.getURL();
         if (!resource.error && /^https?:\/\//.test(url))
@@ -551,6 +610,7 @@ export class BrowserService {
       error: resource.error,
       lastSuccessfulUrl: resource.lastSuccessfulUrl,
       navigation: resource.navigation,
+      favicon: resource.error ? undefined : resource.favicon,
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
       visible: resource.visible,
@@ -684,6 +744,7 @@ export class BrowserService {
     const resource = this.resources.get(id);
     if (!resource || (contents && contents !== resource.contents)) return;
     resource.diagnostics?.dispose();
+    resource.pendingFavicon?.abort();
     this.resources.delete(id);
     for (const popup of resource.popups)
       if (!popup.isDestroyed()) popup.destroy();
