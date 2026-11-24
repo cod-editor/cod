@@ -1385,6 +1385,44 @@ test("Chat Codex earlier native pages preserve focus, retry and render overlappi
   ]);
 });
 
+async function pasteLargeFixtureImage(composer: Locator) {
+  const bytes = await composer.evaluate(async (input) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 900;
+    const context = canvas.getContext("2d")!;
+    const pixels = context.createImageData(canvas.width, canvas.height);
+    // Deterministic opaque noise is a valid PNG above the frame threshold.
+    let seed = 42817;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      pixels.data[i] = seed & 255;
+      pixels.data[i + 1] = (seed >>> 8) & 255;
+      pixels.data[i + 2] = (seed >>> 16) & 255;
+      pixels.data[i + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    const png = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => {
+        if (value) resolve(value);
+        else reject(new Error("Could not encode fixture PNG"));
+      });
+    });
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([png], "fixture.png", { type: png.type }));
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: transfer,
+        bubbles: true,
+      }),
+    );
+    return png.size;
+  });
+  expect(Math.ceil(bytes / 3) * 4).toBeGreaterThan(4 * 1024 * 1024);
+}
+
 for (const detached of [false, true]) {
   test(`Chat Codex large pasted images survive native echoes in ${detached ? "detached" : "direct"} chat`, async () => {
     await shell.configure({
@@ -1412,43 +1450,7 @@ for (const detached of [false, true]) {
       });
       const paste = async (prompt: string) => {
         await composer.fill(prompt);
-        const bytes = await composer.evaluate(async (input) => {
-          const canvas = document.createElement("canvas");
-          canvas.width = 1600;
-          canvas.height = 900;
-          const context = canvas.getContext("2d")!;
-          const pixels = context.createImageData(canvas.width, canvas.height);
-          // Deterministic opaque noise is a valid PNG above the frame threshold.
-          let seed = 42817;
-          for (let i = 0; i < pixels.data.length; i += 4) {
-            seed ^= seed << 13;
-            seed ^= seed >>> 17;
-            seed ^= seed << 5;
-            pixels.data[i] = seed & 255;
-            pixels.data[i + 1] = (seed >>> 8) & 255;
-            pixels.data[i + 2] = (seed >>> 16) & 255;
-            pixels.data[i + 3] = 255;
-          }
-          context.putImageData(pixels, 0, 0);
-          const png = await new Promise<Blob>((resolve, reject) => {
-            canvas.toBlob((value) => {
-              if (value) resolve(value);
-              else reject(new Error("Could not encode fixture PNG"));
-            });
-          });
-          const transfer = new DataTransfer();
-          transfer.items.add(
-            new File([png], "fixture.png", { type: png.type }),
-          );
-          input.dispatchEvent(
-            new ClipboardEvent("paste", {
-              clipboardData: transfer,
-              bubbles: true,
-            }),
-          );
-          return png.size;
-        });
-        expect(Math.ceil(bytes / 3) * 4).toBeGreaterThan(4 * 1024 * 1024);
+        await pasteLargeFixtureImage(composer);
         await expect(pane.locator(".composer-images img")).toHaveCount(1);
         await composer.press(`${modifier}+Enter`);
         await expect(composer).toHaveValue("");
@@ -1499,6 +1501,88 @@ for (const detached of [false, true]) {
             ?.pid,
         );
       }
+    } finally {
+      if (detached) await owner.stop();
+    }
+  });
+
+  test(`Chat Codex restores a failed image turn and sends the saved draft after restart in ${detached ? "detached" : "direct"} chat`, async () => {
+    await shell.configure({
+      codex: { echoUserInput: true, pagedHistory: true },
+    });
+    const owner = new LocalProviderOwner(shell.data);
+    try {
+      if (detached)
+        await shell.cli(
+          "settings",
+          "update",
+          "--values",
+          '{"chat.detachedSessions":true}',
+        );
+      const workspace = await shell.create("Image history recovery fixture");
+      const chat = await shell.newChat(workspace, "codex");
+      const composer = () =>
+        shell.pane(chat.paneId).getByRole("textbox", {
+          name: "Message",
+          exact: true,
+        });
+      const nativeFile = path.join(
+        shell.recording + ".sessions",
+        chat.nativeId + ".json",
+      );
+
+      await shell.send(chat.id, "Earlier fixture turn");
+      await expect.poll(() => status(chat.id)).toBe("ready");
+
+      const draftImages = () =>
+        shell.pane(chat.paneId).locator(".composer-images img");
+      await composer().fill("[crash] Saved image prompt");
+      await pasteLargeFixtureImage(composer());
+      await expect(draftImages()).toHaveCount(1);
+      await pasteLargeFixtureImage(composer());
+      await expect(draftImages()).toHaveCount(2);
+      await composer().press(`${modifier}+Enter`);
+      await expect.poll(() => status(chat.id)).toBe("failed");
+      const stored = JSON.parse(await readFile(nativeFile, "utf8"));
+      expect(stored).toHaveLength(2);
+      expect(stored[1].items).toHaveLength(1);
+      expect(
+        stored[1].items[0].content.filter(
+          (part: { type: string }) => part.type === "image",
+        ),
+      ).toHaveLength(2);
+      expect(JSON.stringify(stored).length).toBeGreaterThan(8 * 1024 * 1024);
+
+      await composer().fill("Saved retry draft");
+      await pasteLargeFixtureImage(composer());
+      await expect(composer()).toHaveValue("Saved retry draft[Image 1]");
+      await expect(draftImages()).toHaveCount(1);
+      await shell.stop();
+      if (detached) await owner.stop();
+      await shell.start();
+      await expect(composer()).toHaveValue("Saved retry draft[Image 1]");
+      await expect(
+        shell.pane(chat.paneId).locator(".composer-images img"),
+      ).toHaveCount(1);
+      expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+      expect(await shell.prompts()).toHaveLength(2);
+
+      await composer().press(`${modifier}+Enter`);
+      await expect(transcript(chat)).toContainText("DONE Saved retry draft");
+      await expect(composer()).toHaveValue("");
+      await expect.poll(() => status(chat.id)).toBe("ready");
+      const resumed = await inspectQueuedChat(chat.id);
+      expect(resumed.nativeId).toBe(chat.nativeId);
+      expect(
+        resumed.messages
+          .filter((message) => message.role === "user")
+          .map(({ text, images }) => ({ text, images: images?.length })),
+      ).toEqual([
+        { text: "Earlier fixture turn", images: undefined },
+        { text: "[crash] Saved image prompt[Image 1][Image 2]", images: 2 },
+        { text: "Saved retry draft[Image 1]", images: 1 },
+      ]);
+      expect(await shell.prompts()).toHaveLength(3);
     } finally {
       if (detached) await owner.stop();
     }
@@ -3150,6 +3234,8 @@ test("Codex steering preserves a rejected draft and reconciles an uncertain rece
   ).toContainText("Fixture turn no longer active");
   await expect(composer()).toHaveValue("Recoverable follow-up");
   await shell.configure({ codex: { steering: "silent" } });
+  await pasteLargeFixtureImage(composer());
+  await expect(pane().locator(".composer-images img")).toHaveCount(1);
   await composer().press("Enter");
   await expect(pane().getByLabel("Pending follow-ups")).toContainText(
     "Waiting for the current turn",
@@ -3168,7 +3254,10 @@ test("Codex steering preserves a rejected draft and reconciles an uncertain rece
   const restored = await inspectQueuedChat(chat.id);
   expect(
     restored.messages.filter(
-      (item) => item.role === "user" && item.text === "Recoverable follow-up",
+      (item) =>
+        item.role === "user" &&
+        item.text === "Recoverable follow-up[Image 1]" &&
+        item.images?.length === 1,
     ),
   ).toHaveLength(1);
   expect(await shell.prompts()).toHaveLength(1);

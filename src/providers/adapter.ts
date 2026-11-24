@@ -1,6 +1,6 @@
 import { codexQuestions, questionAnswers } from "../codex-questions.ts";
 import { codexHistoryTurns } from "../conversation-history.ts";
-import { codexHistoryPage } from "./codex-history.ts";
+import { codexHistoryPage, readCodexHistoryPage } from "./codex-history.ts";
 import { CodexBackground } from "./codex-background.ts";
 import { listCodexChildren } from "./codex-children.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
@@ -579,18 +579,11 @@ export class NativeAdapter implements ProviderAdapter {
     const seen = new Set<string>();
     let cursor: string | undefined;
     while (seen.size < 20) {
-      const page = object(
-        await this.rpc!.request(
-          method,
-          {
-            threadId: this.id,
-            ...target,
-            ...(cursor ? { cursor } : {}),
-            limit: 30,
-          },
-          undefined,
-          "read-only",
-        ),
+      const page = await readCodexHistoryPage(
+        this.rpc!,
+        method,
+        { threadId: this.id, ...target, cursor },
+        30,
       );
       if (!Array.isArray(page.data) || !("nextCursor" in page))
         throw new Error("Codex did not confirm the selected turn history");

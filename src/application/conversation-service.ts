@@ -27,8 +27,8 @@ import {
   type ProviderAdapter,
   type ProviderEvent,
 } from "../providers";
+import { codexItemsCursor } from "../conversation-history-cursor";
 import {
-  codexItemsCursor,
   commitHistory,
   emptyHistory,
   stageCodexItemsPage,
