@@ -1630,6 +1630,7 @@ test("Tabs keep review identity and unsaved state visible beside truncated filen
     visible: true,
     height: 32,
   });
+  await expect(reviewTab).toHaveAttribute("aria-selected", "true");
   await reviewTab.focus();
   await app.page.keyboard.press("Tab");
   await app.page.keyboard.press("Shift+Tab");

@@ -403,9 +403,13 @@ export class ApplicationStateStore {
   }
   change<T>(
     mutation: () => T | Promise<T>,
-    options: { notify?: boolean; publishBeforePersist?: boolean } = {},
+    options: { notify?: boolean } = {},
   ): Promise<T> {
     return this.serialize(() => this.commitChange(mutation, options));
+  }
+  /** A change confined to open workspace layout cannot mutate closed archives. */
+  changeLayout<T>(mutation: () => T): Promise<T> {
+    return this.serialize(() => this.commitChange(mutation, {}, true));
   }
   /** Coalesce only consecutive trusted text edits, never across another operation. */
   changeDraft(
@@ -428,7 +432,8 @@ export class ApplicationStateStore {
   }
   private async commitChange<T>(
     mutation: () => T | Promise<T>,
-    options: { notify?: boolean; publishBeforePersist?: boolean },
+    options: { notify?: boolean },
+    layoutOnly = false,
   ): Promise<T> {
     this.data.workspaces.forEach(normalizeGroups);
     // rollbackState deliberately preserves live provider fields. Copying those
@@ -436,6 +441,7 @@ export class ApplicationStateStore {
     // unrelated pane, browser or workspace mutation.
     const before = structuredClone({
       ...this.data,
+      closedWorkspaces: layoutOnly ? undefined : this.data.closedWorkspaces,
       conversations: this.data.conversations.map((conversation) => ({
         ...conversation,
         messages: [],
@@ -445,6 +451,7 @@ export class ApplicationStateStore {
         metadata: undefined,
       })),
     });
+    if (layoutOnly) before.closedWorkspaces = this.data.closedWorkspaces;
     const original = {
       ...this.data,
       workspaces: [...this.data.workspaces],
@@ -457,9 +464,9 @@ export class ApplicationStateStore {
       const result = await mutation();
       // Display layout selections while the existing checkpoint is saved.
       // The operation and subsequent mutations still wait for that checkpoint.
-      if (notify && options.publishBeforePersist) this.notify();
+      if (notify && layoutOnly) this.notify();
       await this.persist();
-      if (notify && !options.publishBeforePersist) this.notify();
+      if (notify && !layoutOnly) this.notify();
       return result;
     } catch (error) {
       rollbackState(this.data, before, original);
