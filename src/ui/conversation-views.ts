@@ -34,7 +34,7 @@ import {
 } from "./provider-commands";
 import { createIntegrationSetup } from "./integration";
 import { reconcileView } from "./view-reconcile";
-import { marked } from "marked";
+import { chatMarkdown, visualizationStart } from "./chat-markdown";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
 import { menu } from "./controls";
@@ -96,6 +96,7 @@ interface ChatDependencies {
     workspace: string,
     reference: string,
     conversation: string,
+    kind?: "visualization",
   ) => Promise<void>;
   actionButton: (
     label: string,
@@ -621,6 +622,7 @@ export function createConversationViews({
     workspace: string,
     messageId: string,
     conversationId: string,
+    assistant: boolean,
   ): void {
     target.classList.add("markdown-message");
     const imageReferences = new Set<string>();
@@ -632,13 +634,43 @@ export function createConversationViews({
         return `[${label || reference}](${reference})`;
       },
     );
-    target.innerHTML = DOMPurify.sanitize(
-      marked.parse(source, { async: false }) as string,
-      {
-        FORBID_TAGS: ["img", "iframe", "style", "form", "input", "button"],
-        FORBID_ATTR: ["style"],
-      },
-    );
+    const { html, visualizations } = chatMarkdown(source, assistant);
+    target.innerHTML = DOMPurify.sanitize(html, {
+      FORBID_TAGS: ["img", "iframe", "style", "form", "input", "button"],
+      FORBID_ATTR: ["style"],
+    });
+    const ownerWorkspace = () =>
+      getState().conversations.find((item) => item.id === conversationId)
+        ?.workspaceId ?? workspace;
+    for (const slot of target.querySelectorAll<HTMLElement>(
+      "[data-cod-visualization]",
+    )) {
+      const index = Number(slot.dataset.codVisualization);
+      const reference = visualizations[index];
+      slot.removeAttribute("data-cod-visualization");
+      if (!reference) continue;
+      if (slot.closest("blockquote, li")) {
+        slot.textContent = reference.raw;
+        continue;
+      }
+      const label = reference.title
+        ? `Open ${reference.title}`
+        : "Open visualization";
+      const button = paneButton(label, () =>
+        openReference(
+          ownerWorkspace(),
+          reference.path,
+          conversationId,
+          "visualization",
+        ),
+      );
+      button.dataset.focusKey = JSON.stringify([
+        "visualization",
+        messageId,
+        index,
+      ]);
+      slot.replaceChildren(button);
+    }
     let occurrence = 0;
     const link = (element: HTMLElement, reference: string) => {
       element.dataset.focusKey = JSON.stringify([
@@ -648,9 +680,7 @@ export function createConversationViews({
         reference,
       ]);
       element.oncontextmenu = (event) => {
-        const owner =
-          getState().conversations.find((item) => item.id === conversationId)
-            ?.workspaceId ?? workspace;
+        const owner = ownerWorkspace();
         if (
           webLinkMenu(
             { x: event.clientX, y: event.clientY },
@@ -668,10 +698,7 @@ export function createConversationViews({
       };
       element.onclick = (event) => {
         event.preventDefault();
-        const owner =
-          getState().conversations.find(
-            (conversation) => conversation.id === conversationId,
-          )?.workspaceId ?? workspace;
+        const owner = ownerWorkspace();
         if (/^https?:\/\//i.test(reference) || !/^[a-z]+:/i.test(reference))
           void openReference(owner, reference, conversationId).catch(
             () => undefined,
@@ -706,7 +733,11 @@ export function createConversationViews({
     for (const code of target.querySelectorAll<HTMLElement>("code")) {
       if (code.closest("pre")) continue;
       const reference = code.textContent ?? "";
-      if (!/^[a-z]+:/i.test(reference) && /[./\\]/.test(reference)) {
+      if (
+        !reference.includes(visualizationStart) &&
+        !/^[a-z]+:/i.test(reference) &&
+        /[./\\]/.test(reference)
+      ) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "file-reference";
@@ -1273,6 +1304,7 @@ export function createConversationViews({
             conversation.workspaceId,
             entry.message.id,
             conversation.id,
+            entry.message.role === "assistant",
           );
         if (entry.message.role === "system") row.append(role);
         row.append(text);

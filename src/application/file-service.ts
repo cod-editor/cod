@@ -454,7 +454,10 @@ export class FileApplicationService {
       ),
       reference = requiredString(request, "path");
     const find = async (reference: string) => {
-      if (path.isAbsolute(reference) || reference.startsWith("~/")) {
+      if (
+        request.workspaceOnly !== true &&
+        (path.isAbsolute(reference) || reference.startsWith("~/"))
+      ) {
         try {
           const file = await realpath(
             reference.startsWith("~/")

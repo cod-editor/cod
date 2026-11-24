@@ -69,8 +69,8 @@ const chats = createConversationViews({
   host: panes,
   invalidate: render,
   report: setStatus,
-  openReference: (workspace, reference, conversation) =>
-    workspaceView.openReference(workspace, reference, conversation),
+  openReference: (workspace, reference, conversation, kind) =>
+    workspaceView.openReference(workspace, reference, conversation, kind),
   actionButton: paneButton,
 });
 const layout = createPaneLayout(() => state, invoke, {
