@@ -83,26 +83,30 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
         white: "#abb2bf",
       },
     });
-    terminal.attachCustomKeyEventHandler(
-      (event) =>
-        !event.defaultPrevented &&
-        !resolveKeybinding(
-          {
-            key: event.key,
-            code: event.code,
-            ctrlKey: event.ctrlKey,
-            metaKey: event.metaKey,
-            shiftKey: event.shiftKey,
-            altKey: event.altKey,
-            repeat: event.repeat,
-            isComposing: event.isComposing,
-            altGraph: event.getModifierState("AltGraph"),
-            type: event.type,
-          },
-          keyboardPlatform,
-          "terminal",
-        ),
-    );
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.defaultPrevented) return false;
+      const match = resolveKeybinding(
+        {
+          key: event.key,
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          repeat: event.repeat,
+          isComposing: event.isComposing,
+          altGraph: event.getModifierState("AltGraph"),
+          type: event.type,
+        },
+        keyboardPlatform,
+        "terminal",
+      );
+      if (match?.command === "terminal.interrupt") {
+        event.preventDefault();
+        if (match.dispatch) terminal.input("\x03");
+      }
+      return !match;
+    });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(output);

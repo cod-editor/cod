@@ -262,6 +262,14 @@ export const commands = [
   entry("terminal.new", "New terminal", "Terminal", [
     key("Backquote", { ctrl: true, shift: true }),
   ]),
+  entry(
+    "terminal.interrupt",
+    "Interrupt terminal command",
+    "Terminal",
+    [key("KeyC", { mod: true, shift: true, platform: "darwin" }, ["terminal"])],
+    [],
+    ["terminal"],
+  ),
   entry("link.open", "Open link", "Navigation", [], ["url"], cod),
   entry(
     "browser.openExternal",

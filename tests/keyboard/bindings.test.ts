@@ -58,6 +58,50 @@ test("native and DOM inputs match with exact platform modifiers and non-Latin fa
     undefined,
   );
 });
+test("terminal interrupt is focused and leaves native copy and control keys alone", () => {
+  const interrupt = input("C", { metaKey: true, shiftKey: true });
+  assert.deepEqual(resolveKeybinding(interrupt, "darwin", "terminal"), {
+    command: "terminal.interrupt",
+    dispatch: true,
+  });
+  assert.deepEqual(
+    resolveKeybinding({ ...interrupt, repeat: true }, "darwin", "terminal"),
+    { command: "terminal.interrupt", dispatch: false },
+  );
+  for (const surface of ["shell", "editor", "composer", "browser"] as const)
+    assert.equal(resolveKeybinding(interrupt, "darwin", surface), undefined);
+  for (const modifiers of [
+    { metaKey: true },
+    { ctrlKey: true },
+    { altKey: true },
+  ])
+    assert.equal(
+      resolveKeybinding(input("c", modifiers), "darwin", "terminal"),
+      undefined,
+    );
+  assert.equal(
+    resolveKeybinding(input("v", { metaKey: true }), "darwin", "terminal"),
+    undefined,
+  );
+  const linuxInterrupt = { ...interrupt, metaKey: false, ctrlKey: true };
+  assert.equal(
+    resolveKeybinding(linuxInterrupt, "linux", "terminal"),
+    undefined,
+  );
+  try {
+    configureKeymap({ "terminal.interrupt": ["Mod+Shift+C"] }, "linux");
+    assert.equal(
+      resolveKeybinding(linuxInterrupt, "linux", "terminal")?.command,
+      "terminal.interrupt",
+    );
+    assert.equal(
+      resolveKeybinding(linuxInterrupt, "linux", "editor"),
+      undefined,
+    );
+  } finally {
+    configureKeymap({}, "darwin");
+  }
+});
 test("IME, AltGraph and releases never dispatch; held discrete commands remain consumed", () => {
   const base = input("w", { metaKey: true });
   for (const extra of [

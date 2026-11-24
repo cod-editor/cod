@@ -214,6 +214,69 @@ test("T1 AC4 keyboard Ctrl-C interrupts foreground work and global shortcuts wor
   await expect(shell.row("Keyboard terminal")).toBeVisible();
 });
 
+test("The terminal interrupt shortcut signals only the focused PTY", async () => {
+  // The Linux harness exercises the same input route with an explicit binding.
+  if (process.platform !== "darwin")
+    await writeFile(
+      path.join(shell.data, "keymap.json"),
+      JSON.stringify({ "terminal.interrupt": ["Mod+Shift+F8"] }),
+    );
+  await shell.command("Keyboard shortcuts");
+  const reference = shell.page.getByRole("dialog", {
+    name: "Keyboard shortcuts",
+  });
+  await expect(
+    reference
+      .locator(".shortcut-row")
+      .filter({ hasText: "Interrupt terminal command" })
+      .locator("kbd"),
+  ).toHaveText(process.platform === "darwin" ? "⌘⇧C" : "Ctrl+Shift+F8");
+  await shell.page.keyboard.press("Escape");
+
+  const workspace = await shell.create("Terminal interrupt fixture");
+  const ordinary = await open(workspace);
+  async function startForeground(id: string) {
+    const tag = marker();
+    await write(
+      id,
+      `bash -c 'printf "\\n${tag}:%s\\n" "$$"; exec sleep 300'\n`,
+    );
+    const text = await output(id, new RegExp(`${tag}:\\d+`));
+    const pid = Number(text.match(new RegExp(`${tag}:(\\d+)`))![1]);
+    expect(alive(pid)).toBe(true);
+    return pid;
+  }
+  const ordinaryPid = await startForeground(ordinary.id);
+  await input(ordinary.paneId).focus();
+  await shell.page.keyboard.press("Control+Backquote");
+  const dialog = shell.page.getByRole("dialog", { name: "Quick Terminal" });
+  const quickInput = dialog.getByRole("textbox", { name: "Terminal input" });
+  await expect(quickInput).toBeFocused();
+  const quick = (await shell.cli<AppState>("state")).quickTerminals!.find(
+    (item) => item.workspaceId === workspace,
+  )!;
+  await ready(quick.id);
+  const quickPid = await startForeground(quick.id);
+  const shortcut = `${modifier}+Shift+${process.platform === "darwin" ? "C" : "F8"}`;
+  const copyValue = marker();
+  await shell.app!.evaluate(({ clipboard }, value) => {
+    clipboard.writeText(value);
+  }, copyValue);
+  await quickInput.press(shortcut);
+  await expect.poll(() => alive(quickPid)).toBe(false);
+  expect(alive(ordinaryPid)).toBe(true);
+  expect(
+    await shell.app!.evaluate(({ clipboard }) => clipboard.readText()),
+  ).toBe(copyValue);
+  expect((await inspect(quick.id)).status).toBe("running");
+  await expect(quickInput).toBeFocused();
+  await quickInput.press("Escape");
+  await expect(input(ordinary.paneId)).toBeFocused();
+  await input(ordinary.paneId).press(shortcut);
+  await expect.poll(() => alive(ordinaryPid)).toBe(false);
+  expect((await inspect(ordinary.id)).status).toBe("running");
+});
+
 async function deferPaletteClose() {
   await shell.page.evaluate(() => {
     let released = false;
