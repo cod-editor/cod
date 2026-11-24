@@ -247,6 +247,8 @@ export class DetachedProviderAdapter implements ProviderAdapter {
   >();
   private readonly pending = new AbortController();
   private watched?: Socket;
+  private watchRecovery?: Promise<void>;
+  private watchFailure?: Error;
   private closed = false;
   private state!: LocalOwnerState;
   private readonly waiting = new Set<() => void>();
@@ -286,18 +288,9 @@ export class DetachedProviderAdapter implements ProviderAdapter {
       const interrupted = () => {
         connection.destroy();
         clearTimeout(deadline);
-        if (this.closed) return;
-        const message = "Connection to the detached chat owner was lost";
-        if (!attached) reject(new Error(message));
-        else {
-          this.pending.abort();
-          this.emit({
-            type: "error",
-            provider: this.provider,
-            nativeId: this.nativeId,
-            message,
-          });
-        }
+        if (!attached)
+          reject(new Error("Connection to the detached chat owner was lost"));
+        else if (!this.closed) this.reconnectWatch();
       };
       const deadline = setTimeout(interrupted, 5_000);
       connection.setEncoding("utf8");
@@ -310,7 +303,15 @@ export class DetachedProviderAdapter implements ProviderAdapter {
           }) + "\n",
         ),
       );
-      connection.once("error", () => connection.destroy());
+      connection.once("error", (error) => {
+        if (
+          !attached &&
+          "code" in error &&
+          (error.code === "ENOENT" || error.code === "ECONNREFUSED")
+        )
+          reject(new LocalOwnerUnavailable(ownerUnavailable));
+        connection.destroy();
+      });
       connection.once("close", interrupted);
       connection.on("data", (chunk: string) => {
         buffer += chunk;
@@ -379,6 +380,30 @@ export class DetachedProviderAdapter implements ProviderAdapter {
     });
   }
 
+  private reconnectWatch(): void {
+    const recovery = this.watch(this.nativeId ?? undefined)
+      .catch((cause) => {
+        if (this.closed) return;
+        this.watchFailure =
+          cause instanceof LocalOwnerUnavailable
+            ? cause
+            : new Error("Could not reconnect to the detached chat owner", {
+                cause,
+              });
+        this.pending.abort(this.watchFailure);
+        this.emit({
+          type: "error",
+          provider: this.provider,
+          nativeId: this.nativeId,
+          message: this.watchFailure.message,
+        });
+      })
+      .finally(() => {
+        if (this.watchRecovery === recovery) this.watchRecovery = undefined;
+      });
+    this.watchRecovery = recovery;
+  }
+
   private emit(event: ProviderEvent, at?: number) {
     for (const listener of this.listeners) listener(event, at);
   }
@@ -387,6 +412,8 @@ export class DetachedProviderAdapter implements ProviderAdapter {
     method: K,
     ...args: Parameters<Method[K]>
   ): Promise<Awaited<ReturnType<Method[K]>>> {
+    if (this.watchRecovery) await this.watchRecovery;
+    this.pending.signal.throwIfAborted();
     const request: OperationRequest = {
       op: "owner.call",
       id: this.id,
@@ -432,6 +459,9 @@ export class DetachedProviderAdapter implements ProviderAdapter {
 
   get capabilities() {
     return this.state.capabilities;
+  }
+  get watchError() {
+    return this.watchFailure;
   }
   get nativeId() {
     return this.state.nativeId;

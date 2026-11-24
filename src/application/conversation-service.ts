@@ -1011,8 +1011,16 @@ export class ConversationApplicationService {
       );
     this.assertCurrent(conversation);
     const existing = this.controllers.get(conversation.id);
-    if (existing && conversation.status !== "failed") return existing;
-    if (existing) {
+    if (existing instanceof DetachedProviderAdapter && existing.watchError) {
+      // A replay failure cannot tell us whether the owner is still running.
+      // A verified unavailable owner can be retired locally without release.
+      if (!(existing.watchError instanceof LocalOwnerUnavailable))
+        throw existing.watchError;
+      this.controllers.delete(conversation.id);
+      existing.detach();
+      delete conversation.detachedOwner;
+    } else if (existing) {
+      if (conversation.status !== "failed") return existing;
       this.controllers.delete(conversation.id);
       await existing.dispose();
       delete conversation.detachedOwner;
