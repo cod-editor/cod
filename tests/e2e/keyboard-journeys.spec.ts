@@ -557,7 +557,10 @@ test("Native website keys stay on the page and palette cancellation restores its
     await expect(
       quick.getByRole("textbox", { name: "Terminal input" }),
     ).toBeFocused();
-    await quick.getByRole("button", { name: "Hide Quick Terminal" }).click();
+    await quick
+      .getByRole("textbox", { name: "Terminal input" })
+      .press("Escape");
+    await expect(quick).toHaveCount(0);
     await expect.poll(async () => (await inspect())?.focused).toBe(true);
     const afterButton = await inspect();
     expect([afterButton.field, afterButton.start, afterButton.end]).toEqual([
