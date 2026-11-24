@@ -1,9 +1,10 @@
 import {
+  openWorkspaceState,
   readWorkspaceState,
   writeWorkspaceState,
 } from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { chmod, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
@@ -1432,16 +1433,27 @@ test("A failed Overview rename retains the edit and query and supports a success
     exact: true,
   });
   await name.fill("Invented rename recovered");
+  using db = openWorkspaceState(app.data);
+  db.exec(`
+    CREATE TRIGGER fail_workspace_rename BEFORE UPDATE ON records
+    WHEN NEW.kind = 'workspace'
+      AND OLD.id = '${workspace}'
+      AND json_extract(NEW.body, '$.name') = 'Invented rename recovered'
+    BEGIN SELECT RAISE(ABORT, 'Invented rename rejected'); END;
+  `);
   try {
-    await chmod(app.data, 0o500);
     await name.press("Enter");
     await expect(overview().getByRole("alert")).toContainText(
-      /EACCES|permission denied/i,
+      "Invented rename rejected",
     );
     await expect(name).toHaveValue("Invented rename recovered");
     await expect(search()).toHaveValue("Invented");
+    expect(
+      readWorkspaceState(app.data).workspaces.find(({ id }) => id === workspace)
+        ?.name,
+    ).toBe("Invented rename source");
   } finally {
-    await chmod(app.data, 0o700);
+    db.exec("DROP TRIGGER fail_workspace_rename");
   }
   await name.press("Enter");
   await expect(search()).toBeFocused();
