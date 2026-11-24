@@ -7,6 +7,18 @@ import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
 import type { Invoke } from "./contracts";
 import { createBrowserHome } from "./browser-home";
+
+function untrustedCertificate(record: BrowserState): boolean {
+  return (
+    !record.agentPage &&
+    !record.httpFallback &&
+    record.url.startsWith("https://") &&
+    /\bERR_CERT_(AUTHORITY_INVALID|SELF_SIGNED_LOCAL_NETWORK)\b/.test(
+      record.error ?? "",
+    )
+  );
+}
+
 export function createBrowserViews(
   panes: HTMLElement,
   getState: () => AppState,
@@ -303,6 +315,7 @@ export function createBrowserViews(
     const failure = container.querySelector<HTMLElement>(".browser-failure")!;
     failure.hidden = !failed;
     const fallback = failed ? record.httpFallback : undefined;
+    const certificate = untrustedCertificate(record);
     const previous =
       record.lastSuccessfulUrl && record.lastSuccessfulUrl !== record.url;
     const recover = failure.querySelector<HTMLButtonElement>(
@@ -317,30 +330,37 @@ export function createBrowserViews(
     )!;
     proceed.hidden = !fallback;
     proceed.dataset.offer = fallback?.id ?? "";
+    failure.querySelector<HTMLButtonElement>(
+      "[data-browser-system-browser]",
+    )!.hidden = !certificate;
     failure.querySelector<HTMLButtonElement>("[data-browser-retry]")!.hidden =
       Boolean(fallback);
     const title = fallback
       ? "Secure connection unavailable"
-      : "Page could not load";
+      : certificate
+        ? "Certificate not trusted"
+        : "Page could not load";
     failure.setAttribute("aria-label", title);
     failure.querySelector("h2")!.textContent = title;
     const error = record.error ?? "";
     failure.querySelector("p")!.textContent = fallback
       ? "Opening this site over HTTP would leave your connection unencrypted."
-      : error.includes("ERR_TOO_MANY_REDIRECTS")
-        ? "The site redirected too many times."
-        : error.includes("ERR_NAME_NOT_RESOLVED")
-          ? "The site's address could not be found."
-          : error.includes("ERR_INTERNET_DISCONNECTED")
-            ? "There is no internet connection."
-            : error.includes("ERR_CONNECTION_REFUSED")
-              ? "The site refused the connection."
-              : error.includes("ERR_TIMED_OUT") ||
-                  error.includes("ERR_CONNECTION_TIMED_OUT")
-                ? "The site took too long to respond."
-                : error.includes("ERR_CERT_")
-                  ? "A secure connection to this site could not be established."
-                  : "The page could not be opened. You can retry or enter another address.";
+      : certificate
+        ? "Cod doesn't trust this site's certificate issuer. Your system browser can show the warning and available options."
+        : error.includes("ERR_TOO_MANY_REDIRECTS")
+          ? "The site redirected too many times."
+          : error.includes("ERR_NAME_NOT_RESOLVED")
+            ? "The site's address could not be found."
+            : error.includes("ERR_INTERNET_DISCONNECTED")
+              ? "There is no internet connection."
+              : error.includes("ERR_CONNECTION_REFUSED")
+                ? "The site refused the connection."
+                : error.includes("ERR_TIMED_OUT") ||
+                    error.includes("ERR_CONNECTION_TIMED_OUT")
+                  ? "The site took too long to respond."
+                  : error.includes("ERR_CERT_")
+                    ? "A secure connection to this site could not be established."
+                    : "The page could not be opened. You can retry or enter another address.";
     let displayUrl = "Requested page";
     try {
       const url = new URL(fallback?.url ?? record.url);
@@ -610,6 +630,11 @@ export function createBrowserViews(
     const recover = paneButton("Return to previous page", () =>
       invoke("browser.recover", { id: record.id }),
     );
+    const systemBrowser = paneButton("Open in system browser", async () => {
+      const current = getState().browsers.find(({ id }) => id === record.id);
+      if (current && untrustedCertificate(current))
+        await invoke("browser.open-external", { url: current.url });
+    });
     const proceed = paneButton("Open over HTTP", () =>
       invoke("browser.http-fallback", {
         id: record.id,
@@ -618,12 +643,13 @@ export function createBrowserViews(
     );
     retry.dataset.browserRetry = "";
     recover.dataset.browserRecover = "";
+    systemBrowser.dataset.browserSystemBrowser = "";
     proceed.dataset.browserHttp = "";
     failure.append(
       failureTitle,
       error,
       url,
-      actionRow(retry, recover, proceed),
+      actionRow(retry, recover, systemBrowser, proceed),
     );
     const home = createBrowserHome(getState, invoke, (url) => {
       void invoke("browser.navigate", { id: record.id, url });
