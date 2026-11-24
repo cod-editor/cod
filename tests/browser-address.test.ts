@@ -12,7 +12,23 @@ test("Address input recognizes websites and local development servers", () => {
     ["about:blank", "about:blank"],
     ["пример.рф", "https://xn--e1afmkfd.xn--p1ai/"],
   ])
-    assert.equal(resolveAddress(input), expected);
+    assert.equal(resolveAddress(input).url, expected);
+});
+
+test("Only a bare non-loopback host gets an HTTP fallback destination", () => {
+  assert.deepEqual(resolveAddress(" example.com:443/path?q=x#fragment "), {
+    url: "https://example.com/path?q=x#fragment",
+    httpFallbackUrl: "http://example.com:443/path?q=x#fragment",
+  });
+  for (const input of [
+    "https://example.com/",
+    "http://example.com/",
+    "localhost:3000/",
+    "[::1]:8080",
+    "a search query",
+    "file:///tmp/demo.html",
+  ])
+    assert.equal(resolveAddress(input).httpFallbackUrl, undefined);
 });
 
 test("Search encodes text and operators without navigating or executing them", () => {
@@ -22,7 +38,10 @@ test("Search encodes text and operators without navigating or executing them", (
     "a & b # c",
     "weather",
   ])
-    assert.equal(new URL(resolveAddress(query)).searchParams.get("q"), query);
+    assert.equal(
+      new URL(resolveAddress(query).url).searchParams.get("q"),
+      query,
+    );
   for (const input of [
     "",
     "  ",
@@ -40,7 +59,7 @@ test("Local file addresses preserve native filename punctuation", () => {
     "file:///tmp/%D0%BE%D1%82%D1%87%D1%91%D1%82%20%231%25%3F.html",
   );
   assert.equal(
-    resolveAddress("file:///tmp/report%20one.html"),
+    resolveAddress("file:///tmp/report%20one.html").url,
     "file:///tmp/report%20one.html",
   );
   assert.equal(

@@ -192,6 +192,7 @@ export const commands = {
   "browser.forward": ["id"],
   "browser.reload": ["id"],
   "browser.recover": ["id"],
+  "browser.http-fallback": ["id", "offer"],
   "browser.inspect": ["id"],
   "browser.close": ["id", "include-pinned?"],
   "terminal.quick-open": ["workspace"],

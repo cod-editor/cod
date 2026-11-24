@@ -14,6 +14,7 @@ interface BrowserRecord {
   visible: boolean;
   loading: boolean;
   error?: string;
+  httpFallback?: { id: string; url: string };
 }
 let brokenPage = true;
 let requests: string[] = [];
@@ -254,6 +255,9 @@ test.beforeEach(async () => {
   if (!address || typeof address === "string")
     throw new Error("Fixture server unavailable");
   origin = `http://127.0.0.1:${address.port}`;
+  shell.launchArguments.push(
+    "--host-resolver-rules=MAP cleartext.example.test 127.0.0.1",
+  );
   await shell.start();
 });
 test.afterEach(async () => {
@@ -1102,6 +1106,104 @@ test("Browser failed page-driven navigation stays inspectable and reload recover
   await shell.page.screenshot({
     path: info.outputPath("page-load-recovered.png"),
   });
+});
+
+test("Inferred HTTPS failure offers one explicit HTTP visit for its own tab", async ({}, info) => {
+  const workspace = await shell.create("Invented HTTP fallback");
+  const tab = await open(workspace);
+  const host = `cleartext.example.test:${new URL(origin).port}`;
+  const fallbackPath = "/http-only?fixture=hidden";
+  const destination = host + fallbackPath + "#selected";
+  const pane = shell.pane(tab.paneId);
+  const address = pane.getByRole("combobox", { name: "Address", exact: true });
+  const proceed = pane.getByRole("button", { name: "Open over HTTP" });
+  const submit = async (value: string) => {
+    await address.fill(value);
+    await address.press("Enter");
+  };
+  await submit("https://" + destination);
+  await expect(
+    pane.getByRole("heading", { name: "Page could not load" }),
+  ).toBeVisible();
+  await expect(proceed).toBeHidden();
+  expect(requests).not.toContain(fallbackPath);
+  await shell.page.screenshot({
+    path: info.outputPath("explicit-https-failure.png"),
+  });
+  await submit(destination);
+  await expect(
+    pane.getByRole("heading", { name: "Secure connection unavailable" }),
+  ).toBeVisible();
+  await expect(pane.locator(".browser-failure code")).toHaveText(
+    "http://" + host,
+  );
+  await expect(pane.locator(".browser-failure")).not.toContainText(
+    "fixture=hidden",
+  );
+  await expect(proceed).toBeVisible();
+  expect(requests).not.toContain(fallbackPath);
+  const firstOffer = (await inspect(tab.id)).httpFallback!.id;
+
+  const other = await open(workspace, "/other");
+  await expect(
+    shell.pane(other.paneId).locator(".browser-failure"),
+  ).toBeHidden();
+  await expect(
+    shell.pane(other.paneId).getByRole("button", { name: "Open over HTTP" }),
+  ).toBeHidden();
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    tab.paneId,
+  );
+  const cancel = pane.getByRole("button", { name: "Return to previous page" });
+  await expect(cancel).toBeVisible();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await shell.page.screenshot({
+    path: info.outputPath("http-fallback-warning.png"),
+  });
+  await cancel.press("Enter");
+  await expect
+    .poll(async () => (await inspect(tab.id)).url)
+    .toBe(origin + "/one");
+  await expect(proceed).toBeHidden();
+  expect(requests).not.toContain(fallbackPath);
+  await submit(destination);
+  await expect(proceed).toBeVisible();
+  await expect(
+    shell.cli(
+      "browser",
+      "http-fallback",
+      "--id",
+      tab.id,
+      "--offer",
+      firstOffer,
+    ),
+  ).rejects.toThrow("This HTTP option is no longer available");
+  expect(requests).not.toContain(fallbackPath);
+  await proceed.click();
+  const http = "http://" + destination;
+  await expect.poll(async () => (await inspect(tab.id)).url).toBe(http);
+  await expect(pane.locator(".browser-failure")).toBeHidden();
+  await expect(address).toHaveAccessibleDescription("Not secure");
+  await shell.page.screenshot({
+    path: info.outputPath("http-page-not-secure.png"),
+  });
+  await expect
+    .poll(() => requests.filter((route) => route === fallbackPath))
+    .toHaveLength(1);
+  expect((await inspect(tab.id)).httpFallback).toBeUndefined();
+
+  await pane.getByRole("button", { name: "Back", exact: true }).click();
+  await expect
+    .poll(async () => (await inspect(tab.id)).url)
+    .toBe(origin + "/one");
+  await expect(proceed).toBeHidden();
+  await expect(address).not.toHaveAccessibleDescription("Not secure");
 });
 
 test("Browser authentication popup follows redirects and retains its opener", async () => {
