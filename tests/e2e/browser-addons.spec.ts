@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "node:http";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { WorkspaceApp } from "./helpers/workspace-app";
 
 // Cache cases start two sandboxed Electron processes; individual assertions stay bounded.
@@ -131,6 +133,162 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   await shell?.cleanup();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
+});
+
+test("Extension toolbar popup stays inside the owning display after opening and resizing", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "The positioned window fixture uses X11",
+  );
+  const extension = path.join(shell.temporary, "toolbar-popup-extension");
+  await mkdir(extension);
+  await writeFile(
+    path.join(extension, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "Invented toolbar popup",
+      version: "2026.10.2",
+      permissions: ["tabs"],
+      action: { default_title: "Invented vault", default_popup: "popup.html" },
+    }),
+  );
+  await writeFile(
+    path.join(extension, "popup.html"),
+    '<!doctype html><title>Invented vault</title><body style="margin:0"><main style="box-sizing:border-box;width:400px;height:450px;padding:16px"><h1>Invented vault</h1><output></output><p><label>Filter <input></label></p><button>Expand contents</button></main><script src="popup.js"></script>',
+  );
+  await writeFile(
+    path.join(extension, "popup.js"),
+    `chrome.tabs.query({active:true,currentWindow:true}).then(([tab]) => {
+      document.querySelector("output").textContent = tab?.url || "";
+    });
+    document.querySelector("button").onclick = () => {
+      const main = document.querySelector("main");
+      main.style.width = "560px";
+      main.style.height = "580px";
+    };`,
+  );
+  shell.environment.COD_BITWARDEN_EXTENSION_PATH = extension;
+  await shell.start();
+  const workspace = await shell.create("Extension popup placement");
+  const target = await shell.cli<{ groupId: string; paneId: string }>(
+    "group",
+    "ensure",
+    "--workspace",
+    workspace,
+    "--side",
+    "right",
+  );
+  const browser = await shell.cli<AddonBrowser>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    base + "/page",
+    "--group",
+    target.groupId,
+    "--source-pane",
+    target.paneId,
+    "--focus",
+    "true",
+  );
+  expect((await inspect(browser.id)).addons.bitwarden.status).toBe("ready");
+  const toolbarAction = shell
+    .pane(browser.paneId)
+    .locator("browser-action-list button.action");
+  await expect(toolbarAction).toBeVisible();
+  const placeOwner = (corner: boolean) =>
+    shell.app!.evaluate(({ BrowserWindow, screen }, corner) => {
+      const owner = BrowserWindow.getAllWindows()[0]!;
+      const area = screen.getPrimaryDisplay().workArea;
+      owner.setBounds(
+        corner
+          ? {
+              x: area.x - 620,
+              y: area.y + area.height - 200,
+              width: 760,
+              height: 480,
+            }
+          : area,
+      );
+      owner.focus();
+      return area;
+    }, corner);
+  for (const corner of [false, true]) {
+    const area = await placeOwner(corner);
+    const anchor = (await toolbarAction.boundingBox())!;
+    await toolbarAction.click();
+    const findPopup = () =>
+      shell.app!.windows().find((item) => item.url().endsWith("/popup.html"));
+    await expect.poll(() => Boolean(findPopup())).toBe(true);
+    const popup = findPopup()!;
+    const window = await shell.app!.browserWindow(popup);
+    await expect(
+      popup.getByText(base + "/page", { exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() => window.evaluate((win) => win.isVisible() && win.isFocused()))
+      .toBe(true);
+    const geometry = () => window.evaluate((win) => win.getBounds());
+    const fitting = (bounds: Electron.Rectangle) =>
+      bounds.x >= area.x &&
+      bounds.y >= area.y &&
+      bounds.x + bounds.width <= area.x + area.width &&
+      bounds.y + bounds.height <= area.y + area.height;
+    const capture = async (name: string) => {
+      const image = await shell.app!.evaluate(
+        async ({ desktopCapturer, screen }) => {
+          const { width, height } = screen.getPrimaryDisplay().size;
+          const [source] = await desktopCapturer.getSources({
+            types: ["screen"],
+            thumbnailSize: { width, height },
+          });
+          return source?.thumbnail.toPNG().toString("base64");
+        },
+      );
+      if (!image) throw new Error("Isolated display screenshot unavailable");
+      await writeFile(info.outputPath(name), Buffer.from(image, "base64"));
+    };
+    if (!corner) await capture("toolbar-popup.png");
+    const opened = await geometry();
+    await info.attach(corner ? "corner geometry" : "right edge geometry", {
+      body: JSON.stringify({ opened, anchor, area }),
+      contentType: "application/json",
+    });
+    if (!corner)
+      expect
+        .soft(
+          Math.abs(
+            opened.x + opened.width - (area.x + anchor.x + anchor.width),
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+    expect.soft(fitting(opened)).toBe(true);
+    await popup
+      .getByRole("textbox", { name: "Filter" })
+      .fill("invented filter");
+    await expect(popup.getByRole("textbox", { name: "Filter" })).toBeFocused();
+    await popup.getByRole("button", { name: "Expand contents" }).click();
+    // Headless X11 does not deliver the preferred-size notification for this
+    // fixture. Send it through the real WebContents and PopupView path.
+    await window.evaluate((win) =>
+      win.webContents.emit(
+        "preferred-size-changed",
+        {},
+        { width: 560, height: 580 },
+      ),
+    );
+    await expect.poll(async () => (await geometry()).width).toBe(560);
+    if (!corner) await capture("toolbar-popup-resized.png");
+    expect.soft(fitting(await geometry())).toBe(true);
+    if (!corner) {
+      await shell.page.bringToFront();
+      await shell.page
+        .locator(".app-header")
+        .click({ position: { x: 350, y: 16 } });
+      await expect.poll(() => popup.isClosed()).toBe(true);
+    }
+  }
 });
 
 test("Add-ons AC1 real engine blocks requests and cosmetic elements, with per-host UI/CLI toggle retained across restart", async ({}, info) => {

@@ -534,7 +534,6 @@ export function createBrowserViews(
       },
     );
     actions.setAttribute("partition", "persist:cod-browser");
-    actions.setAttribute("alignment", "bottom right");
     navigation.append(actions);
     navigation.addEventListener("submit", (event) => {
       event.preventDefault();
