@@ -3895,3 +3895,150 @@ test("Google autocomplete supplements local rows and cancels on edits or dismiss
     await new Promise<void>((resolve) => fixture.close(() => resolve()));
   }
 });
+
+test("Browser page zoom follows its site and keeps the surrounding workspace unchanged", async ({}, info) => {
+  const workspace = await shell.create("Page zoom fixture");
+  const sameSite = await open(workspace, "/zoom-same-site");
+  await remote("/zoom-same-site", "window.identity");
+  const otherOrigin = origin.replace("127.0.0.1", "localhost");
+  const otherSite = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    otherOrigin + "/zoom-other-site",
+  );
+  await remote("/zoom-other-site", "window.identity", otherOrigin);
+  const browser = await open(workspace, "/zoom-current");
+  await remote("/zoom-current", "window.identity");
+
+  const zoom = (url: string) =>
+    shell.app!.evaluate(
+      ({ webContents }, target) =>
+        webContents
+          .getAllWebContents()
+          .find((item) => item.getURL() === target)
+          ?.getZoomFactor(),
+      url,
+    );
+  const nativeFocus = () =>
+    shell.app!.evaluate(
+      ({ webContents }, target) =>
+        Boolean(
+          webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === target)
+            ?.isFocused(),
+        ),
+      origin + "/zoom-current",
+    );
+  const pane = () => shell.pane(browser.paneId);
+  const address = () =>
+    pane().getByRole("combobox", { name: "Address", exact: true });
+  const notice = () => pane().locator('output[aria-label="Page zoom"]');
+  await expect(notice()).toBeHidden();
+  const chat = shell.page.getByRole("textbox", {
+    name: "Message",
+    exact: true,
+  });
+  await expect(chat).toBeVisible();
+  const appSettings = await shell.cli("settings", "get");
+  const shellFont = await chat.evaluate(
+    (element) => getComputedStyle(element).fontSize,
+  );
+  const currentRatio = (await remote(
+    "/zoom-current",
+    "window.devicePixelRatio",
+  )) as number;
+  await shell.page.screenshot({ path: info.outputPath("zoom-default.png") });
+  await expect(notice()).toHaveCount(1);
+
+  await pageKey("/zoom-current", "=", [
+    process.platform === "darwin" ? "meta" : "control",
+  ]);
+  await expect(notice()).toHaveText("110%");
+  await shell.page.screenshot({
+    path: info.outputPath("zoom-adjusted-native.png"),
+  });
+  await expect.poll(nativeFocus).toBe(true);
+  await expect.poll(() => zoom(origin + "/zoom-current")).toBeCloseTo(1.1);
+  await expect.poll(() => zoom(origin + "/zoom-same-site")).toBeCloseTo(1.1);
+  expect(await zoom(otherOrigin + "/zoom-other-site")).toBeCloseTo(1);
+  await expect
+    .poll(
+      async () =>
+        Number(await remote("/zoom-current", "window.devicePixelRatio")) /
+        currentRatio,
+    )
+    .toBeCloseTo(1.1);
+  expect(
+    await chat.evaluate((element) => getComputedStyle(element).fontSize),
+  ).toBe(shellFont);
+  expect(await shell.cli("settings", "get")).toEqual(appSettings);
+
+  await expect(notice()).toBeHidden();
+
+  await address().fill("keep this address draft");
+  await address().press(`${modifier}+Minus`);
+  await expect(notice()).toHaveText("100%");
+  await expect(address()).toHaveValue("keep this address draft");
+  await expect(address()).toBeFocused();
+  await address().press(`${modifier}+Shift+Equal`);
+  await expect(notice()).toHaveText("110%");
+  await shell.page.screenshot({
+    path: info.outputPath("zoom-adjusted-address.png"),
+  });
+
+  await address().press(`${modifier}+Shift+P`);
+  await shell.page
+    .getByRole("button", { name: "Zoom browser page in", exact: true })
+    .click();
+  await expect(notice()).toHaveText("125%");
+  await expect.poll(() => zoom(origin + "/zoom-same-site")).toBeCloseTo(1.25);
+
+  await shell.stop();
+  await shell.start();
+  await remote("/zoom-current", "window.identity");
+  await expect.poll(() => zoom(origin + "/zoom-current")).toBeCloseTo(1.25);
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    sameSite.paneId,
+  );
+  await remote("/zoom-same-site", "window.identity");
+  expect(await zoom(origin + "/zoom-same-site")).toBeCloseTo(1.25);
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    otherSite.paneId,
+  );
+  await remote("/zoom-other-site", "window.identity", otherOrigin);
+  expect(await zoom(otherOrigin + "/zoom-other-site")).toBeCloseTo(1);
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    browser.paneId,
+  );
+  await address().press(`${modifier}+0`);
+  await expect(notice()).toHaveText("100%");
+  await expect.poll(() => zoom(origin + "/zoom-same-site")).toBeCloseTo(1);
+  expect(await shell.cli("settings", "get")).toEqual(appSettings);
+  expect(
+    await shell.cli("browser", "zoom", "--id", sameSite.id, "--action", "out"),
+  ).toEqual({ zoomPercent: 90 });
+  await expect.poll(() => zoom(origin + "/zoom-current")).toBeCloseTo(0.9);
+  expect(await zoom(otherOrigin + "/zoom-other-site")).toBeCloseTo(1);
+  expect((await inspect(otherSite.id)).url).toBe(
+    otherOrigin + "/zoom-other-site",
+  );
+});

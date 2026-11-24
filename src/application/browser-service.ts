@@ -38,6 +38,10 @@ import type {
 } from "../types";
 import { ApplicationStateStore } from "./state";
 import { requiredString } from "./request";
+const siteZoomSteps = [
+  25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500,
+];
+
 export interface BrowserConversationPort {
   isActive(id: string): boolean;
   send(request: OperationRequest): Promise<{ id: string; status: string }>;
@@ -550,9 +554,10 @@ export class BrowserApplicationService {
       // Hiding a pane chooses its replacement after layout is committed. Moving
       // native focus first can revive a stale editor and echo pane.focus back,
       // racing the hide and reopening the pane that was just hidden.
-      // Reload keeps focus in its native web view.
+      // Reload and page zoom keep focus in the native web view.
       if (
         match.command !== "browser.reload" &&
+        !match.command.startsWith("browser.zoom") &&
         match.command !== "pane.toggleLeft" &&
         match.command !== "pane.toggleRight" &&
         match.command !== "pane.zoom"
@@ -1580,6 +1585,33 @@ export class BrowserApplicationService {
           }
           return structuredClone(sites);
         });
+
+      case "browser.zoom": {
+        const browser = this.browser(requiredString(request, "id"));
+        const contents = this.browserService?.getWebContents(browser.id);
+        if (
+          browser.agentPage ||
+          browser.error ||
+          !contents ||
+          contents.isDestroyed() ||
+          !/^https?:\/\//i.test(contents.getURL())
+        )
+          throw new Error("Select a website to change its page zoom");
+        const action = requiredString(request, "action");
+        if (action !== "in" && action !== "out" && action !== "reset")
+          throw new Error("Zoom action must be in, out or reset");
+        const current = Math.round(contents.getZoomFactor() * 100);
+        const zoomPercent =
+          action === "reset"
+            ? 100
+            : action === "in"
+              ? (siteZoomSteps.find((step) => step > current) ??
+                siteZoomSteps.at(-1)!)
+              : ([...siteZoomSteps].reverse().find((step) => step < current) ??
+                siteZoomSteps[0]!);
+        contents.setZoomFactor(zoomPercent / 100);
+        return { zoomPercent: Math.round(contents.getZoomFactor() * 100) };
+      }
 
       case "browser.navigate":
         return this.navigateBrowser(

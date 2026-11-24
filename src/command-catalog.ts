@@ -173,6 +173,7 @@ export const commands = {
     "focus?",
   ],
   "browser.navigate": ["id", "url"],
+  "browser.zoom": ["id", "action"],
   "browser.bookmarks": ["query?"],
   "browser.bookmark": ["url", "title?", "id?"],
   "browser.bookmark-delete": ["id"],

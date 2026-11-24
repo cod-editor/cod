@@ -609,6 +609,12 @@ dialog.quick-terminal {
   color: var(--muted);
   font-size: calc(var(--ui-font-size) - 1px);
 }
+.browser-zoom-notice {
+  flex: none;
+  padding-inline: var(--space-1);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 .browser-navigation input {
   min-width: 0;
   flex: 1;

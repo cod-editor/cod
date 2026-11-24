@@ -63,6 +63,8 @@ const cod: readonly KeyboardSurface[] = [
   "review",
 ];
 const host: readonly KeyboardSurface[] = [...cod, "terminal"];
+const browserSurfaces = ["browser", "browser-controls"] as const;
+const textSurfaces = host.filter((surface) => surface !== "browser-controls");
 const key = (
   code: string,
   options: Omit<KeyBinding, "code" | "surfaces"> = {},
@@ -215,19 +217,29 @@ export const commands = [
   entry("browser.reload", "Reload browser page", "Browser", [
     key("KeyR", { mod: true }, ["browser", "browser-controls"]),
   ]),
+  entry("browser.zoomIn", "Zoom browser page in", "Browser", [
+    key("Equal", { mod: true, repeat: true }, browserSurfaces),
+    key("Equal", { mod: true, shift: true, repeat: true }, browserSurfaces),
+  ]),
+  entry("browser.zoomOut", "Zoom browser page out", "Browser", [
+    key("Minus", { mod: true, repeat: true }, browserSurfaces),
+  ]),
+  entry("browser.zoomReset", "Reset browser page zoom", "Browser", [
+    key("Digit0", { mod: true }, browserSurfaces),
+  ]),
   entry("chat.send", "Send message", "Conversation", [
     key("Enter", {}, ["composer"]),
     key("Enter", { mod: true }, ["composer"]),
   ]),
   entry("text.inc", "Increase text size", "Appearance", [
-    key("Equal", { mod: true, repeat: true }, host),
-    key("Equal", { mod: true, shift: true, repeat: true }, host),
+    key("Equal", { mod: true, repeat: true }, textSurfaces),
+    key("Equal", { mod: true, shift: true, repeat: true }, textSurfaces),
   ]),
   entry("text.dec", "Decrease text size", "Appearance", [
-    key("Minus", { mod: true, repeat: true }, host),
+    key("Minus", { mod: true, repeat: true }, textSurfaces),
   ]),
   entry("text.reset", "Reset text size", "Appearance", [
-    key("Digit0", { mod: true }, host),
+    key("Digit0", { mod: true }, textSurfaces),
   ]),
   entry("focus.files", "Focus files / return", "Navigation", [
     key("KeyE", { mod: true, shift: true }),

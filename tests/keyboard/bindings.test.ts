@@ -747,3 +747,38 @@ test("Shortcut labels follow the command's effective platform and content scope"
     configureKeymap({}, "linux");
   }
 });
+
+test("Page zoom shortcuts target browser content and controls without changing other surfaces", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    configureKeymap({}, platform);
+    const mod = platform === "darwin" ? { metaKey: true } : { ctrlKey: true };
+    for (const surface of ["browser", "browser-controls"] as const) {
+      for (const [key, action] of [
+        ["=", "browser.zoomIn"],
+        ["-", "browser.zoomOut"],
+        ["0", "browser.zoomReset"],
+      ])
+        assert.equal(
+          resolveKeybinding(input(key, mod), platform, surface)?.command,
+          action,
+        );
+      assert.equal(
+        resolveKeybinding(
+          input("+", { ...mod, shiftKey: true }),
+          platform,
+          surface,
+        )?.command,
+        "browser.zoomIn",
+      );
+    }
+    for (const surface of ["composer", "editor", "shell", "terminal"] as const)
+      assert.equal(
+        resolveKeybinding(input("=", mod), platform, surface)?.command,
+        "text.inc",
+      );
+    assert.equal(
+      resolveKeybinding(input("=", mod), platform, "agent-page"),
+      undefined,
+    );
+  }
+});

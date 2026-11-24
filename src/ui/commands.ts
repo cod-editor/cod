@@ -102,6 +102,7 @@ interface CommandFeatures {
   navigation: ReturnType<typeof createWorkspaceNavigation>;
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
+  showBrowserZoom: (id: string, zoomPercent: number) => void;
   stageBrowserBackdrop: (dialog: HTMLDialogElement) => Promise<void>;
   quickTerminal: Pick<
     ReturnType<typeof import("./quick-terminal").createQuickTerminal>,
@@ -1134,6 +1135,19 @@ export function createCommands(
       return "Select a browser tab first";
     if (id === "browser.reload" && !isOrdinaryBrowserPane(pane))
       return "Select a web browser tab first";
+    if (id.startsWith("browser.zoom")) {
+      const browser =
+        pane?.kind === "browser"
+          ? getState().browsers.find((item) => item.id === pane.browserId)
+          : undefined;
+      if (
+        !browser ||
+        browser.agentPage ||
+        browser.error ||
+        !/^https?:\/\//i.test(browser.url)
+      )
+        return "Select a website to change its page zoom";
+    }
     if (id === "pane.focusRight" && !layout.sidePane("right", w))
       return "Right pane is not open";
     if (
@@ -1473,6 +1487,23 @@ export function createCommands(
         case "browser.reload":
           if (pane?.kind === "browser")
             await invoke("browser.reload", { id: pane.browserId });
+          break;
+        case "browser.zoomIn":
+        case "browser.zoomOut":
+        case "browser.zoomReset":
+          if (pane?.kind === "browser") {
+            const action =
+              id === "browser.zoomIn"
+                ? "in"
+                : id === "browser.zoomOut"
+                  ? "out"
+                  : "reset";
+            const { zoomPercent } = await invoke<{ zoomPercent: number }>(
+              "browser.zoom",
+              { id: pane.browserId, action },
+            );
+            features.showBrowserZoom(pane.browserId, zoomPercent);
+          }
           break;
         case "browser.address": {
           const input = panes.querySelector<HTMLInputElement>(
