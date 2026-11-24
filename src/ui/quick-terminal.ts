@@ -1,3 +1,4 @@
+import { isPlainEscape } from "../keyboard";
 import { dialogSurface, iconButton, selectField, uiButton } from "../ui-kit";
 import type { AppState, TerminalProcessState } from "../types";
 import type { DesktopOperationName, Invoke } from "./contracts";
@@ -265,7 +266,21 @@ export function createQuickTerminal(
       }
     }
 
-    dialog.addEventListener("cancel", (event) => event.preventDefault());
+    // Claim plain Escape before xterm can consume the key.
+    dialog.addEventListener(
+      "keydown",
+      (event) => {
+        if (!isPlainEscape(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) hide(true);
+      },
+      true,
+    );
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      hide(true);
+    });
     dialog.addEventListener("click", (event) => {
       if (event.target !== dialog) return;
       const rect = dialog.getBoundingClientRect();

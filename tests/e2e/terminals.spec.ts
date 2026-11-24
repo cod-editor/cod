@@ -700,6 +700,12 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await quickInput.press("Enter");
   await output(first.id, /QUICK_RAW_READY/);
   await quickInput.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(input(ordinary.paneId)).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  await expect(quickInput).toBeFocused();
+  await quickInput.press("Control+[");
   await output(first.id, /QUICK_RAW_READY[\s\S]*?\s27\r?\n/);
   await expect(dialog).toBeVisible();
   await write(first.id, "sleep .1; printf 'QUICK_HIDDEN_OUTPUT\\n'\n");
