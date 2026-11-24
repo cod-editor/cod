@@ -38,6 +38,9 @@ export interface BrowserPane {
   browserId: string;
 }
 export interface BrowserState {
+  certificateOffer?: string;
+  temporaryCertificate?: boolean;
+  temporaryNavigationBlocked?: boolean;
   httpFallback?: { id: string; url: string };
   navigation?: import("./browser/navigation").BrowserNavigation;
   permissionRequests?: import("./browser/permission-types").SiteRequest[];

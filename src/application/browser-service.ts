@@ -28,6 +28,7 @@ import path from "node:path";
 import { realpath } from "node:fs/promises";
 import { app, shell, type BrowserWindow, type Session } from "electron";
 import { BrowserService, type BrowserEvent } from "../browser";
+import type { CertificateIdentity } from "../browser/temporary-certificate";
 import { faviconOrigin } from "../browser/favicon-origin";
 import { AgentPageService } from "../agent-pages";
 import { BrowserAddons } from "../browser-addons";
@@ -390,7 +391,8 @@ export class BrowserApplicationService {
         this.browserService!.setVisible(id, false);
         this.synchronizingBrowserSelection = true;
         try {
-          this.browserAddons!.register(contents);
+          if (contents.session === session)
+            this.browserAddons!.register(contents);
         } finally {
           this.synchronizingBrowserSelection = false;
         }
@@ -857,7 +859,8 @@ export class BrowserApplicationService {
   selectBrowserContents(contents: import("electron").WebContents): void {
     this.synchronizingBrowserSelection = true;
     try {
-      this.browserAddons?.select(contents);
+      if (!this.browserService?.isTemporaryContents(contents.id))
+        this.browserAddons?.select(contents);
       this.selectedBrowserContents = contents.id;
     } finally {
       this.synchronizingBrowserSelection = false;
@@ -909,7 +912,13 @@ export class BrowserApplicationService {
       extension = false,
       source,
       focusHome = false,
-    }: { extension?: boolean; source?: BrowserState; focusHome?: boolean } = {},
+      certificate,
+    }: {
+      extension?: boolean;
+      source?: BrowserState;
+      focusHome?: boolean;
+      certificate?: CertificateIdentity;
+    } = {},
   ): Promise<BrowserState> {
     const requested = requiredString(request, "url");
     const url =
@@ -979,12 +988,13 @@ export class BrowserApplicationService {
         canGoBack: false,
         canGoForward: false,
         visible: false,
-        addons: this.browserAddons?.status(url),
+        addons: certificate ? undefined : this.browserAddons?.status(url),
+        temporaryCertificate: certificate ? true : undefined,
       };
       this.store.data.browsers.push(record);
       return record;
     });
-    const ready = this.loadBrowser(record, url);
+    const ready = this.loadBrowser(record, url, { certificate });
     // Home's address exists once the pane is admitted. Keep native loading
     // independent so only that foreground intent can focus the address.
     if (focusHome && url === "about:blank") void ready.catch(() => {});
@@ -1100,13 +1110,16 @@ export class BrowserApplicationService {
       navigation,
       httpFallbackUrl,
       replaceFailure,
+      certificate,
     }: {
       navigation?: import("../browser/navigation").BrowserNavigation;
       httpFallbackUrl?: string;
       replaceFailure?: string;
+      certificate?: CertificateIdentity;
     } = {},
   ): Promise<void> {
     const service = this.requireBrowserService();
+    service.checkTemporaryNavigation(record.id, url);
     const savedNavigation = normalizeNavigation(navigation);
     const restore =
       savedNavigation?.entries[savedNavigation.index]?.url === url &&
@@ -1123,6 +1136,7 @@ export class BrowserApplicationService {
     record.loading = true;
     record.error = undefined;
     record.httpFallback = undefined;
+    record.certificateOffer = undefined;
     record.permissionDenied = undefined;
     record.url = url;
     record.favicon = undefined;
@@ -1141,7 +1155,8 @@ export class BrowserApplicationService {
           id: record.id,
           workspaceId: record.workspaceId,
           url: "about:blank",
-          deferNavigation: Boolean(restore),
+          deferNavigation: Boolean(restore || certificate),
+          certificate,
         });
         this.browserInitializations.set(record.id, initialization);
         void initialization
@@ -1170,6 +1185,7 @@ export class BrowserApplicationService {
         target.error = error instanceof Error ? error.message : String(error);
         if (
           !restore &&
+          !target.temporaryCertificate &&
           httpFallbackUrl &&
           service.httpsUnavailable(record.id, url)
         )
@@ -1287,6 +1303,7 @@ export class BrowserApplicationService {
       const key = `${url}\n${record.title}`;
       if (
         !record.agentPage &&
+        !record.temporaryCertificate &&
         !record.loading &&
         !record.error &&
         /^https?:/.test(url) &&
@@ -1307,7 +1324,9 @@ export class BrowserApplicationService {
 
   synchronizeNativeViews(): void {
     for (const browser of this.store.data.browsers)
-      browser.addons = this.browserAddons?.status(browser.url);
+      browser.addons = browser.temporaryCertificate
+        ? undefined
+        : this.browserAddons?.status(browser.url);
     if (this.browserService)
       for (const item of this.browserService.list()) {
         if (
@@ -1633,6 +1652,28 @@ export class BrowserApplicationService {
           replaceFailure: record.url,
         });
         return { id: record.id };
+      }
+
+      case "browser.continue-certificate": {
+        if (!trustedUi) throw new Error("Confirm this action in Cod");
+        const record = this.browser(requiredString(request, "id"));
+        if (record.workspaceId !== this.store.data.activeWorkspaceId)
+          throw new Error("Select the failed browser tab first");
+        const certificate = this.requireBrowserService().takeCertificateOffer(
+          record.id,
+          record.url,
+          requiredString(request, "offer"),
+        );
+        return this.openBrowser(
+          {
+            op: "browser.open",
+            workspace: record.workspaceId,
+            sourcePane: record.paneId,
+            focus: true,
+            url: record.url,
+          },
+          { certificate },
+        );
       }
 
       case "browser.diagnostics": {

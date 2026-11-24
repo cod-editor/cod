@@ -439,9 +439,14 @@ test("Native keyboard context handoff and current-page Commands use the exact va
   );
 });
 
-test("Untrusted HTTPS explains the certificate error and offers an explicit handoff", async ({}, info) => {
-  const keyPath = path.join(app.data, "untrusted-key.pem");
-  const certPath = path.join(app.data, "untrusted-cert.pem");
+async function makeCertificate(
+  name: string,
+  hostname: string,
+  san: string,
+  expired = false,
+) {
+  const keyPath = path.join(app.data, `${name}-key.pem`);
+  const certPath = path.join(app.data, `${name}-cert.pem`);
   await execute("openssl", [
     "req",
     "-x509",
@@ -455,14 +460,29 @@ test("Untrusted HTTPS explains the certificate error and offers an explicit hand
     "-out",
     certPath,
     "-subj",
-    "/CN=127.0.0.1",
+    `/CN=${hostname}`,
     "-addext",
-    "subjectAltName=IP:127.0.0.1",
+    `subjectAltName=${san}`,
   ]);
+  if (!expired)
+    return { key: await readFile(keyPath), cert: await readFile(certPath) };
+  const { stdout } = await execute("openssl", [
+    "x509",
+    "-signkey",
+    keyPath,
+    "-days",
+    "-1",
+    "-in",
+    certPath,
+  ]);
+  return { key: await readFile(keyPath), cert: stdout };
+}
+
+test("Untrusted HTTPS domain explains the certificate error and offers an explicit handoff", async ({}, info) => {
   let pageRequests = 0;
   let cleartextRequests = 0;
   const tls = createHttpsServer(
-    { key: await readFile(keyPath), cert: await readFile(certPath) },
+    await makeCertificate("untrusted", "localhost", "DNS:localhost"),
     (_request, response) => {
       pageRequests++;
       response.end("Invented untrusted page");
@@ -477,7 +497,7 @@ test("Untrusted HTTPS explains the certificate error and offers an explicit hand
     const tlsAddress = tls.address();
     if (!tlsAddress || typeof tlsAddress === "string")
       throw Error("TLS fixture unavailable");
-    const destination = `https://127.0.0.1:${tlsAddress.port}/fixture?state=invented#test`;
+    const destination = `https://localhost:${tlsAddress.port}/fixture?state=invented#test`;
     const record = await openBrowser();
     await app.app!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(1000, 680),
@@ -509,7 +529,7 @@ test("Untrusted HTTPS explains the certificate error and offers an explicit hand
     ).toBeVisible();
     await expect(failure).toContainText("certificate issuer");
     await expect(failure.locator("code")).toHaveText(
-      `https://127.0.0.1:${tlsAddress.port}/fixture`,
+      `https://localhost:${tlsAddress.port}/fixture`,
     );
     await expect(
       failure.getByRole("button", { name: "Open over HTTP" }),
@@ -545,6 +565,238 @@ test("Untrusted HTTPS explains the certificate error and offers an explicit hand
       )
       .toBe(origin + "/source");
     expect(await handoffs()).toEqual([destination]);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      tls.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("Untrusted local HTTPS opens only an isolated temporary Cod tab", async ({}, info) => {
+  const originalCert = await makeCertificate(
+    "local-one",
+    "127.0.0.1",
+    "IP:127.0.0.1",
+  );
+  let visits = 0;
+  let foreignRequests = 0;
+  const receivedCookies: string[] = [];
+  server.on("request", (request) => {
+    if (request.url === "/isolated-escape") foreignRequests++;
+  });
+  const tls = createHttpsServer(originalCert, (request, response) => {
+    response.setHeader("Connection", "close");
+    if (request.url === "/fixture") {
+      visits++;
+      receivedCookies.push(request.headers.cookie ?? "");
+    }
+    response.setHeader("Content-Type", "text/html");
+    response.setHeader("Set-Cookie", "temporary=yes; Secure");
+    response.end(
+      `<title>Invented local HTTPS</title><h1>Invented local HTTPS</h1><a href="${origin}/isolated-escape">Another origin</a>`,
+    );
+  });
+  await new Promise<void>((resolve) => tls.listen(0, "127.0.0.1", resolve));
+  try {
+    const tlsAddress = tls.address();
+    if (!tlsAddress || typeof tlsAddress === "string")
+      throw Error("TLS fixture unavailable");
+    const target = `https://127.0.0.1:${tlsAddress.port}/fixture`;
+    const record = await openBrowser();
+    await app.app!.evaluate(async ({ BrowserWindow, session }, url) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(1000, 680);
+      await session
+        .fromPartition("persist:cod-browser")
+        .cookies.set({ url, name: "regular", value: "invented", secure: true });
+    }, target);
+    const pane = app.pane(record.paneId);
+    const address = pane.getByRole("combobox", {
+      name: "Address",
+      exact: true,
+    });
+    const failure = pane.locator(".browser-failure");
+    const proceed = failure.getByRole("button", {
+      name: "Open in temporary tab",
+    });
+    await address.fill(target);
+    await address.press("Enter");
+    await expect(failure).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("local-certificate-warning.png"),
+    });
+    await expect(proceed).toBeVisible();
+    await expect(
+      failure.getByRole("button", { name: "Open in system browser" }),
+    ).toHaveCount(0);
+    expect(visits).toBe(0);
+    expect(await handoffs()).toEqual([]);
+    await proceed.focus();
+    await expect(proceed).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("local-certificate-warning-focus.png"),
+    });
+    await proceed.press("Enter");
+    await expect.poll(() => visits).toBe(1);
+    expect(receivedCookies).toEqual([""]);
+    const temporary = (await browserRecords()).find(
+      (item) => item.temporaryCertificate,
+    )!;
+    const temporaryPane = app.pane(temporary.paneId);
+    await expect(
+      temporaryPane.getByText("Certificate not verified", { exact: true }),
+    ).toBeVisible();
+    await expect(temporaryPane.locator(".browser-content")).toBeVisible();
+    const nativePage = await app.app!.evaluate(
+      async ({ desktopCapturer, screen, webContents }, id) => {
+        const contents = webContents.fromId(id)!;
+        await contents.executeJavaScript(
+          "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        );
+        const [source] = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: screen.getPrimaryDisplay().size,
+        });
+        return source.thumbnail.toPNG().toString("base64");
+      },
+      temporary.nativeTabId!,
+    );
+    await writeFile(
+      info.outputPath("local-certificate-active.png"),
+      Buffer.from(nativePage, "base64"),
+    );
+    expect(await handoffs()).toEqual([]);
+    await app.app!.evaluate(
+      async ({ session, webContents }, { id, url, foreign }) => {
+        const contents = webContents.fromId(id)!;
+        const shared = session.fromPartition("persist:cod-browser");
+        const prefs = (
+          contents as Electron.WebContents & {
+            getLastWebPreferences(): Electron.WebPreferences;
+          }
+        ).getLastWebPreferences();
+        if (
+          contents.session === shared ||
+          !prefs.sandbox ||
+          !prefs.contextIsolation ||
+          prefs.nodeIntegration ||
+          prefs.preload
+        )
+          throw Error("Temporary tab isolation unavailable");
+        await contents.executeJavaScript(
+          `fetch(${JSON.stringify(foreign)}).catch(() => undefined)`,
+        );
+        const cookies = await shared.cookies.get({ url });
+        if (cookies.some(({ name }) => name === "temporary"))
+          throw Error("Temporary cookie escaped");
+      },
+      {
+        id: temporary.nativeTabId!,
+        url: target,
+        foreign: origin + "/isolated-escape",
+      },
+    );
+    expect(foreignRequests).toBe(0);
+    await app.app!.evaluate(({ webContents }, id) => {
+      return webContents
+        .fromId(id)!
+        .executeJavaScript("document.querySelector('a').click()");
+    }, temporary.nativeTabId!);
+    await expect(
+      temporaryPane
+        .getByRole("status")
+        .filter({ hasText: "Open a regular tab" }),
+    ).toBeVisible();
+    expect(foreignRequests).toBe(0);
+    await app.cli("browser", "reload", "--id", temporary.id);
+    await expect.poll(() => visits).toBe(2);
+    expect(receivedCookies[1]).toContain("temporary=yes");
+
+    const ordinary = await openBrowser();
+    const ordinaryPane = app.pane(ordinary.paneId);
+    const ordinaryAddress = ordinaryPane.getByRole("combobox", {
+      name: "Address",
+      exact: true,
+    });
+    await ordinaryAddress.fill(target);
+    await ordinaryAddress.press("Enter");
+    await expect(
+      ordinaryPane.getByRole("button", { name: "Open in temporary tab" }),
+    ).toBeVisible();
+    expect(visits).toBe(2);
+
+    tls.setSecureContext(
+      await makeCertificate("local-two", "127.0.0.1", "IP:127.0.0.1"),
+    );
+    await app.cli("browser", "reload", "--id", temporary.id);
+    await expect
+      .poll(
+        async () =>
+          (await browserRecords()).find(({ id }) => id === temporary.id)?.error,
+      )
+      .toContain("ERR_CERT_AUTHORITY_INVALID");
+    expect(visits).toBe(2);
+    await app.cli("browser", "close", "--id", temporary.id);
+    expect((await browserRecords()).some(({ id }) => id === temporary.id)).toBe(
+      false,
+    );
+    const currentOffer = async () =>
+      (await browserRecords()).find(({ id }) => id === ordinary.id)
+        ?.certificateOffer;
+    const firstOffer = await currentOffer();
+    await app.cli("browser", "reload", "--id", ordinary.id);
+    const nextOffer = ordinaryPane.getByRole("button", {
+      name: "Open in temporary tab",
+    });
+    // Native state may have the replacement token before the next UI batch.
+    await expect
+      .poll(async () => {
+        const token = await nextOffer.getAttribute("data-offer");
+        return Boolean(
+          token && token !== firstOffer && token === (await currentOffer()),
+        );
+      })
+      .toBe(true);
+    await nextOffer.click();
+    await expect.poll(() => visits).toBe(3);
+    expect(receivedCookies[2]).toBe("");
+    const activeTemporary = (await browserRecords()).find(
+      ({ temporaryCertificate }) => temporaryCertificate,
+    )!;
+    await app.stop();
+    await app.start();
+    expect(
+      (await browserRecords()).find(({ id }) => id === activeTemporary.id)
+        ?.temporaryCertificate,
+    ).toBeUndefined();
+    await app.cli("browser", "reload", "--id", activeTemporary.id);
+    await expect(
+      app
+        .pane(activeTemporary.paneId)
+        .getByRole("heading", { name: "Certificate not trusted" }),
+    ).toBeVisible();
+    expect(visits).toBe(3);
+
+    const ineligible = [
+      await makeCertificate("local-mismatch", "127.0.0.2", "IP:127.0.0.2"),
+      await makeCertificate("local-expired", "127.0.0.1", "IP:127.0.0.1", true),
+    ];
+    for (const certificate of ineligible) {
+      tls.setSecureContext(certificate);
+      await app.cli("browser", "reload", "--id", activeTemporary.id);
+      await expect
+        .poll(
+          async () =>
+            (await browserRecords()).find(({ id }) => id === activeTemporary.id)
+              ?.error,
+        )
+        .toContain("ERR_CERT_");
+      await expect(
+        app
+          .pane(activeTemporary.paneId)
+          .getByRole("button", { name: "Open in temporary tab" }),
+      ).toBeHidden();
+      expect(visits).toBe(3);
+    }
   } finally {
     await new Promise<void>((resolve, reject) =>
       tls.close((error) => (error ? reject(error) : resolve())),
