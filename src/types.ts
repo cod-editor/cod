@@ -54,6 +54,7 @@ export interface BrowserState {
   };
   lastSuccessfulUrl?: string;
   nativeTabId?: number;
+  favicon?: string;
   addons?: import("./browser-addons").AddonStatus;
   id: string;
   paneId: string;
@@ -309,7 +310,7 @@ export interface WorkspaceState {
 export interface AppState {
   browserDownloads?: import("./browser/download-types").BrowserDownload[];
   sitePermissions?: import("./browser/permission-types").SitePolicy[];
-  pinnedSites?: Array<{ url: string; title: string }>;
+  pinnedSites?: Array<{ url: string; title: string; favicon?: string }>;
   closedWorkspaces?: Array<{
     workspace: WorkspaceState;
     conversations: ConversationState[];

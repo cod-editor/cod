@@ -263,6 +263,9 @@ body {
 .tab-select > .icon {
   flex: none;
 }
+.site-favicon {
+  object-fit: contain;
+}
 .tab:has(> .tab-select:focus-visible) {
   outline: 1px solid var(--focus);
   outline-offset: -2px;
@@ -1573,6 +1576,10 @@ browser-action-list::part(action):focus-visible {
   border-radius: 15px;
   font-size: 32px;
   color: #fff;
+}
+.browser-home-monogram > .site-favicon {
+  width: 32px;
+  height: 32px;
 }
 .browser-home-add {
   justify-content: center;

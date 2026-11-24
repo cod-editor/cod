@@ -19,6 +19,41 @@ interface BrowserRecord {
 let brokenPage = true;
 let requests: string[] = [];
 let slowResponse: import("node:http").ServerResponse | undefined;
+let delayedIcons: import("node:http").ServerResponse[] = [];
+let fixtureJpeg: Buffer | undefined;
+const fixtureIcon = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGN4O0+TJMQwqmFUw/DVAACONLQQCHI4yQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const delayedIcon = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGOQrjlFEmIY1TCqYfhqAAD7pWEQU6IliAAAAABJRU5ErkJggg==",
+  "base64",
+);
+const iconHeader = Buffer.from([
+  0,
+  0,
+  1,
+  0,
+  1,
+  0,
+  16,
+  16,
+  0,
+  0,
+  1,
+  0,
+  32,
+  0,
+  fixtureIcon.length,
+  0,
+  0,
+  0,
+  22,
+  0,
+  0,
+  0,
+]);
+const fixtureIco = Buffer.concat([iconHeader, fixtureIcon]);
 let shell: WorkspaceApp,
   server: Server,
   origin: string,
@@ -128,11 +163,58 @@ test.beforeEach(async () => {
   brokenPage = true;
   requests = [];
   slowResponse = undefined;
+  delayedIcons = [];
+  fixtureJpeg = undefined;
   server = createServer((request, response) => {
     requests.push(request.url!);
     // Network-count assertions must observe loads rather than HTTP cache hits.
     response.setHeader("Cache-Control", "no-store");
     const route = new URL(request.url!, "http://fixture").pathname;
+    if (route === "/fixture-icon.png") {
+      response.setHeader("Content-Type", "image/png");
+      response.end(fixtureIcon);
+      return;
+    }
+    if (route === "/fixture-icon.ico") {
+      response.setHeader("Content-Type", "image/x-icon");
+      response.end(fixtureIco);
+      return;
+    }
+    if (route === "/fixture-icon.jpg") {
+      response.setHeader("Content-Type", "image/jpeg");
+      response.end(fixtureJpeg);
+      return;
+    }
+    if (route === "/delayed-icon.png") {
+      delayedIcons.push(response);
+      return;
+    }
+    if (route === "/fixture-icon.svg") {
+      response.setHeader("Content-Type", "image/svg+xml");
+      response.end(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="green"/></svg>',
+      );
+      return;
+    }
+    const siteIcon = new Map([
+      ["/site-with-icon", "/fixture-icon.png"],
+      ["/site-with-ico", "/fixture-icon.ico"],
+      ["/site-with-jpeg", "/fixture-icon.jpg"],
+      ["/site-with-delayed-icon", "/delayed-icon.png"],
+      [
+        "/site-with-cross-origin-icon",
+        `${origin.replace("127.0.0.1", "localhost")}/fixture-icon.png`,
+      ],
+      ["/site-with-svg-icon", "/fixture-icon.svg"],
+    ]);
+    const href = siteIcon.get(route);
+    if (href) {
+      response.setHeader("Content-Type", "text/html");
+      response.end(
+        `<!doctype html><title>Invented site</title><link rel="icon" href="${href}"><h1>Invented site</h1>`,
+      );
+      return;
+    }
     if (route === "/new-tab-post") {
       const chunks: Buffer[] = [];
       request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -354,6 +436,136 @@ test("Address bar searches text and opens bare addresses without sending address
       ),
     )
     .toBe(true);
+});
+
+test("Site favicons follow the loaded tab and survive in Home pins without a fetch", async ({}, info) => {
+  const workspace = await shell.create("Site icon fixture");
+  const record = await open(workspace, "/site-with-icon");
+  const tab = shell.page.getByRole("tab", {
+    name: "Invented site",
+    exact: true,
+  });
+  await expect(tab).toBeVisible();
+  const tabIcon = tab.locator("img.site-favicon");
+  await expect.soft(tabIcon).toHaveJSProperty("naturalWidth", 16);
+  await shell.page.screenshot({
+    path: info.outputPath("browser-favicon-tab.png"),
+  });
+
+  await shell.cli(
+    "browser",
+    "pin",
+    "--url",
+    record.url,
+    "--title",
+    "Invented docs",
+  );
+  const otherOrigin = origin.replace("127.0.0.1", "localhost");
+  await shell.cli(
+    "browser",
+    "pin",
+    "--url",
+    otherOrigin + "/one",
+    "--title",
+    "Other site",
+  );
+  requests = [];
+  await shell.page.keyboard.press(`${modifier}+t`);
+  const home = shell.page.getByRole("region", { name: "Browser home" });
+  await expect(home).toBeVisible();
+  const pin = home.getByRole("button", { name: "Invented docs" });
+  const pinIcon = pin.locator("img.site-favicon");
+  await expect.soft(pinIcon).toHaveJSProperty("naturalWidth", 16);
+  await expect(
+    home.getByRole("button", { name: "Other site" }).locator("img"),
+  ).toHaveCount(0);
+  expect(requests).toEqual([]);
+  await shell.page.screenshot({
+    path: info.outputPath("browser-favicon-home.png"),
+  });
+
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    record.paneId,
+  );
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  const restoredHome = shell.page.getByRole("region", { name: "Browser home" });
+  await expect(restoredHome).toBeVisible();
+  await expect(
+    restoredHome
+      .getByRole("button", { name: "Invented docs" })
+      .locator("img.site-favicon"),
+  ).toHaveJSProperty("naturalWidth", 16);
+  expect(requests).toEqual([]);
+});
+
+test("Site favicon accepts JPEG and a PNG embedded in an ICO", async () => {
+  fixtureJpeg = Buffer.from(
+    await shell.app!.evaluate(
+      ({ nativeImage }, encoded) =>
+        nativeImage
+          .createFromBuffer(Buffer.from(encoded, "base64"))
+          .resize({ width: 12 })
+          .toJPEG(80)
+          .toString("base64"),
+      fixtureIcon.toString("base64"),
+    ),
+    "base64",
+  );
+  const workspace = await shell.create("Site icon formats");
+  const record = await open(workspace, "/site-with-ico");
+  const icon = shell.page
+    .getByRole("tab", { name: "Invented site", exact: true })
+    .locator("img.site-favicon");
+  await expect(icon).toHaveJSProperty("naturalWidth", 16);
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    origin + "/site-with-jpeg",
+  );
+  await expect(icon).toHaveJSProperty("naturalWidth", 12);
+  await shell.cli("browser", "reload", "--id", record.id);
+  await expect(icon).toHaveJSProperty("naturalWidth", 12);
+});
+
+test("Site favicon cannot follow a superseded navigation or come from a different origin or SVG", async () => {
+  const workspace = await shell.create("Site icon navigation fixture");
+  const record = await open(workspace, "/site-with-icon");
+  const tab = shell.page.locator(
+    `[role="tab"][data-tab-id="${record.paneId}"]`,
+  );
+  const favicon = tab.locator("img.site-favicon");
+  await expect(favicon).toHaveJSProperty("naturalWidth", 16);
+  const navigate = (url: string) =>
+    shell.cli("browser", "navigate", "--id", record.id, "--url", url);
+  try {
+    await navigate(origin + "/site-with-delayed-icon");
+    await expect.poll(() => delayedIcons.length).toBeGreaterThan(0);
+    const next = origin.replace("127.0.0.1", "localhost") + "/two";
+    await navigate(next);
+    for (const response of delayedIcons)
+      if (!response.destroyed) response.end(delayedIcon);
+    await expect(favicon).toHaveCount(0);
+    await expect(tab).toHaveAccessibleName("Fixture /two");
+    expect((await inspect(record.id)).url).toBe(next);
+  } finally {
+    for (const response of delayedIcons)
+      if (!response.destroyed && !response.writableEnded) response.end();
+  }
+  for (const route of ["/site-with-cross-origin-icon", "/site-with-svg-icon"]) {
+    await navigate(origin + route);
+    await expect(favicon).toHaveCount(0);
+    await expect(tab).toHaveAccessibleName("Invented site");
+  }
 });
 
 test("Browser home keeps shared pinned sites through editing and restart", async ({}, info) => {

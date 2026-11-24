@@ -28,6 +28,7 @@ import path from "node:path";
 import { realpath } from "node:fs/promises";
 import { app, shell, type BrowserWindow, type Session } from "electron";
 import { BrowserService, type BrowserEvent } from "../browser";
+import { faviconOrigin } from "../browser/favicon-origin";
 import { AgentPageService } from "../agent-pages";
 import { BrowserAddons } from "../browser-addons";
 import type {
@@ -1119,6 +1120,7 @@ export class BrowserApplicationService {
     record.httpFallback = undefined;
     record.permissionDenied = undefined;
     record.url = url;
+    record.favicon = undefined;
     this.store.notify();
     const current = () =>
       this.store.data.browsers.some((item) => item.id === record.id) &&
@@ -1270,6 +1272,13 @@ export class BrowserApplicationService {
       if (!event.snapshot.error || url !== record.url)
         record.httpFallback = undefined;
       Object.assign(record, event.snapshot, { url });
+      if (record.favicon && url === event.snapshot.url) {
+        const origin = faviconOrigin(url);
+        for (const site of this.store.data.pinnedSites ?? []) {
+          if (origin && faviconOrigin(site.url) === origin)
+            site.favicon = record.favicon;
+        }
+      }
       const key = `${url}\n${record.title}`;
       if (
         !record.agentPage &&
@@ -1487,11 +1496,13 @@ export class BrowserApplicationService {
       case "browser.suggest": {
         const query =
           typeof request.query === "string" ? request.query.trim() : "";
-        const matches = (this.store.data.pinnedSites ?? []).filter((item) =>
-          `${item.title} ${item.url}`
-            .toLocaleLowerCase()
-            .includes(query.toLocaleLowerCase()),
-        );
+        const matches = (this.store.data.pinnedSites ?? [])
+          .filter((item) =>
+            `${item.title} ${item.url}`
+              .toLocaleLowerCase()
+              .includes(query.toLocaleLowerCase()),
+          )
+          .map(({ title, url }) => ({ title, url }));
         const bookmarks = await this.library.bookmarks(query);
         for (const item of bookmarks)
           if (!matches.some((pin) => pin.url === item.url)) matches.push(item);
@@ -1561,7 +1572,9 @@ export class BrowserApplicationService {
               typeof request.title === "string" && request.title.trim()
                 ? request.title.trim()
                 : new URL(url).hostname;
-            const site = { url, title };
+            const favicon =
+              this.browserService?.cachedFavicon(url) ?? sites[index]?.favicon;
+            const site = { url, title, favicon };
             if (index >= 0) sites[index] = site;
             else sites.push(site);
           }
