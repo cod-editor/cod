@@ -820,7 +820,10 @@ function receive(message, external = false) {
     };
     active.turn.items.push(item);
     const turnId = active.turnId;
-    notify("item/started", { threadId: nativeId, turnId, item });
+    const quietBeforeOutput = configuration().pauseLatencyAfter === 0;
+    const announce = () =>
+      notify("item/started", { threadId: nativeId, turnId, item });
+    if (!quietBeforeOutput) announce();
     const finish = () => {
       if (configuration().holdLatencyCompletion) {
         later(finish, 30);
@@ -835,6 +838,7 @@ function receive(message, external = false) {
         later(tick, 30);
         return;
       }
+      if (quietBeforeOutput && step === 0) announce();
       const delta = `inventedstream-${++step}-${Date.now()}; `;
       item.text += delta;
       notify("item/agentMessage/delta", {

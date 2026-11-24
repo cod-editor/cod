@@ -359,9 +359,13 @@ export class DetachedProviderAdapter implements ProviderAdapter {
             frame.sequence === this.cursor.sequence + 1
           ) {
             this.cursor.sequence = frame.sequence;
-            this.state.activeTurnId = frame.activeTurnId;
-            if (frame.event.nativeId !== null)
-              this.state.nativeId = frame.event.nativeId;
+            // The ready frame already describes the owner's state through
+            // this replay cursor. Only newer events may update that state.
+            if (attached) {
+              this.state.activeTurnId = frame.activeTurnId;
+              if (frame.event.nativeId !== null)
+                this.state.nativeId = frame.event.nativeId;
+            }
             this.emit(frame.event, frame.at);
             for (const wake of this.waiting) wake();
           } else return connection.destroy();

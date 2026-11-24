@@ -2324,6 +2324,24 @@ export class ConversationApplicationService {
     }
   }
 
+  private trackDetachedTurn(conversation: ConversationState): void {
+    this.activeTurns.add(conversation.id);
+    this.externalTurns.add(conversation.id);
+    const turn = conversation.turns?.at(-1);
+    if (!turn || turn.finishedAt) return;
+    const start =
+      performance.now() - Math.max(0, Date.now() - Date.parse(turn.startedAt));
+    this.turnClocks.set(conversation.id, {
+      id: turn.id,
+      start,
+      worked: turn.durationMs ?? 0,
+      workingStart:
+        conversation.status === "working"
+          ? start + (turn.elapsedMs ?? 0)
+          : undefined,
+    });
+  }
+
   async restoreInterrupted(): Promise<void> {
     await Promise.all(
       this.store.data.conversations.map(async (conversation) => {
@@ -2338,22 +2356,8 @@ export class ConversationApplicationService {
         const cursor = conversation.detachedOwner;
         if (cursor && this.detached) {
           const turn = conversation.turns?.at(-1);
-          if (active && turn && !turn.finishedAt) {
-            this.activeTurns.add(conversation.id);
-            this.externalTurns.add(conversation.id);
-            const start =
-              performance.now() -
-              Math.max(0, Date.now() - Date.parse(turn.startedAt));
-            this.turnClocks.set(conversation.id, {
-              id: turn.id,
-              start,
-              worked: turn.durationMs ?? 0,
-              workingStart:
-                conversation.status === "working"
-                  ? start + (turn.elapsedMs ?? 0)
-                  : undefined,
-            });
-          }
+          if (active && turn && !turn.finishedAt)
+            this.trackDetachedTurn(conversation);
           try {
             const adapter = await this.detached.owner.reconnect(
               conversation.id,
@@ -2367,6 +2371,24 @@ export class ConversationApplicationService {
               },
             );
             this.controllers.set(conversation.id, adapter);
+            if (
+              adapter.activeTurnIdentity() &&
+              (!this.activeTurns.has(conversation.id) ||
+                !["working", "waiting"].includes(conversation.status) ||
+                conversation.error !== undefined)
+            ) {
+              // The connected owner can have a live turn after the saved
+              // desktop turn ended. Preserve completed history and track the
+              // recovered turn without releasing or replacing its controller.
+              if (conversation.status !== "waiting")
+                conversation.status = conversation.pendingPermissions.length
+                  ? "waiting"
+                  : "working";
+              if (!this.activeTurns.has(conversation.id))
+                this.trackDetachedTurn(conversation);
+              conversation.error = undefined;
+              this.store.schedulePersist(true);
+            }
             return;
           } catch (error) {
             if (error instanceof LocalOwnerUnavailable)

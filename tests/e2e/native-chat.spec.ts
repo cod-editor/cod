@@ -523,6 +523,119 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
   }
 });
 
+for (const output of ["streaming", "quiet"] as const) {
+  test(`Detached recovery keeps the live owner with a failed checkpoint and ${output} turn`, async () => {
+    const owner = new LocalProviderOwner(shell.data);
+    const inspect = (id: string) =>
+      shell.cli<ConversationState>("conversation", "inspect", "--id", id);
+    try {
+      const workspace = await shell.create("Detached recovery fixture");
+      await shell.cli(
+        "settings",
+        "update",
+        "--values",
+        '{"chat.detachedSessions":true}',
+      );
+      await shell.configure({
+        codex: {
+          latencyChunks: 4,
+          pauseLatencyAfter: output === "quiet" ? 0 : 1,
+        },
+      });
+      const chat = await shell.newChat(workspace, "codex");
+      await shell.send(chat.id, "[latency-fixture] active across restart");
+      if (output === "quiet") {
+        await expect.poll(() => status(chat.id)).toBe("working");
+        await expect.poll(async () => (await shell.prompts()).length).toBe(1);
+      } else {
+        await expect(transcript(chat)).toContainText(/inventedstream-1/);
+      }
+      const draft = () =>
+        shell.pane(chat.paneId).getByRole("textbox", {
+          name: "Message",
+          exact: true,
+        });
+      await draft().fill("Invented retry draft");
+      const original = await inspect(chat.id);
+      const starts = await shell.prompts();
+      await shell.quitWithChoice("Leave Running");
+
+      const stateFile = path.join(shell.data, "state.json");
+      const saved = JSON.parse(await readFile(stateFile, "utf8")) as AppState;
+      const savedChat = saved.conversations.find(
+        (item) => item.id === chat.id,
+      )!;
+      if (output === "quiet") {
+        const cursor = savedChat.detachedOwner!;
+        const probe = await owner.reconnect(
+          chat.id,
+          "codex",
+          chat.nativeId,
+          cursor,
+          () => undefined,
+        );
+        const nativeTurn = probe.activeTurnIdentity();
+        probe.detach();
+        expect(nativeTurn).toBeDefined();
+        // Replay the working event from before the provider acknowledged the turn.
+        cursor.sequence--;
+      }
+      savedChat.status = "failed";
+      savedChat.error = "Invented session already has an active writer";
+      const interrupted = savedChat.turns!.at(-1)!;
+      interrupted.outcome = "failed";
+      interrupted.finishedAt = new Date().toISOString();
+      await writeFile(stateFile, JSON.stringify(saved));
+
+      await shell.start();
+      const restored = await inspect(chat.id);
+      expect(restored.status).toBe("working");
+      expect(restored.error).toBeUndefined();
+      expect(restored.turns?.at(-1)).toEqual(interrupted);
+      expect(restored.nativeId).toBe(original.nativeId);
+      expect(restored.detachedOwner?.generation).toBe(
+        original.detachedOwner?.generation,
+      );
+      await expect(draft()).toHaveValue("Invented retry draft");
+      const inspection = await shell.cli<{ nativeId: string }>(
+        "conversation",
+        "native-inspect",
+        "--id",
+        chat.id,
+        "--section",
+        "status",
+      );
+      expect(inspection.nativeId).toBe(original.nativeId);
+      expect(await shell.prompts()).toEqual(starts);
+
+      await shell.configure({ codex: { latencyChunks: 4 } });
+      await expect(transcript(chat)).toContainText(/inventedstream-4/);
+      await expect.poll(() => status(chat.id)).toBe("ready");
+      expect(
+        text(await shell.inspect(chat.id)).match(/inventedstream-[1-4]-/g),
+      ).toHaveLength(4);
+      await expect(draft()).toHaveValue("Invented retry draft");
+      await draft().press("Enter");
+      await expect(transcript(chat)).toContainText("DONE Invented retry draft");
+      const records = await shell.records();
+      expect(
+        records.filter((record) => record.message?.method === "thread/resume"),
+      ).toEqual([]);
+      const prompts = await shell.prompts();
+      expect(prompts).toHaveLength(starts.length + 1);
+      expect(prompts.every((record) => record.pid === starts[0].pid)).toBe(
+        true,
+      );
+      const finished = await inspect(chat.id);
+      expect(finished.detachedOwner?.generation).toBe(
+        original.detachedOwner?.generation,
+      );
+    } finally {
+      await owner.stop();
+    }
+  });
+}
+
 test("Detached owner upgrade retains a running turn and opens saved chats on the current build", async () => {
   const owner = new LocalProviderOwner(shell.data);
   const currentRoot = shell.root;
