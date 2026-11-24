@@ -1349,3 +1349,213 @@ test("Image files open in Cod preview from CLI, tree and external chat paths wit
   await app.start();
   await imageView(external);
 });
+
+function pythonFixture(wrap: boolean): string {
+  return (
+    Array.from(
+      { length: 170 },
+      (_, index) =>
+        "field_" +
+        (index + 1) +
+        " = " +
+        (wrap && index % 4 === 1
+          ? '"' + "word alpha beta ".repeat(13) + '"'
+          : index + 1),
+    ).join("\n") + "\n"
+  );
+}
+
+async function sourceGlyph(pane: Locator, text: string) {
+  return pane.locator(".editor-colors").evaluate((node, text) => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let token = walker.nextNode(); token; token = walker.nextNode()) {
+      const offset = token.textContent?.indexOf(text) ?? -1;
+      if (offset < 0) continue;
+      const range = document.createRange();
+      range.setStart(token, offset);
+      range.setEnd(token, offset + text.length);
+      const { x, y, width, height } = range.getBoundingClientRect();
+      return { x, y, width, height };
+    }
+    throw new Error("Fixture token was not displayed");
+  }, text);
+}
+
+test("S3 caret and line numbers match source rows after scroll and wrapping", async ({}, info) => {
+  const file = path.join(app.folders[0], "sample.py");
+  const plain = pythonFixture(false);
+  await writeFile(file, plain);
+  git(app.folders[0], "add", "sample.py");
+  git(app.folders[0], "commit", "-m", "Invented source file");
+  const marked = plain.replace("field_143 = 143", "field_143 = 200");
+  await writeFile(file, marked);
+  const pane = await open(file);
+  const source = editor(pane);
+  await expect(source).toHaveValue(marked);
+  await source.focus();
+  await source.evaluate((editor: HTMLTextAreaElement) => {
+    const lineHeight = parseFloat(getComputedStyle(editor).lineHeight);
+    editor.scrollTop = 135 * lineHeight;
+    editor.dispatchEvent(new Event("scroll"));
+  });
+  const target = await sourceGlyph(pane, "field_143");
+  await app.page.mouse.click(target.x + 1, target.y + target.height / 2);
+  await source.evaluate((editor) =>
+    editor.style.setProperty("caret-animation", "manual"),
+  );
+  await app.page.screenshot({
+    path: info.outputPath("editor-number-caret-default.png"),
+    caret: "initial",
+  });
+  const selectedLine = () =>
+    source.evaluate(
+      (editor: HTMLTextAreaElement) =>
+        editor.value.slice(0, editor.selectionStart).split("\n").length,
+    );
+  expect(await selectedLine()).toBe(143);
+  const markedRow = pane.locator('[data-line-number="143"]');
+  await expect(markedRow).toHaveAttribute("data-changed-line", "143");
+  const labelTop = await markedRow.evaluate((row) => {
+    const range = document.createRange();
+    range.selectNodeContents(row);
+    return range.getBoundingClientRect().top;
+  });
+  expect(Math.abs(labelTop - target.y)).toBeLessThanOrEqual(1);
+
+  const wrapped = pythonFixture(true);
+  await source.fill(wrapped);
+  await app.cli(
+    "settings",
+    "update",
+    "--values",
+    '{"editor.fontSize":21,"editor.wordWrap":true}',
+  );
+  await expect(source).toHaveCSS("font-size", "21px");
+  await expect(source).toHaveCSS("white-space", "pre-wrap");
+  await expect(pane.locator(".editor-colors")).toContainText("word alpha beta");
+  const targetTop = (await sourceGlyph(pane, "field_15 ")).y;
+  await source.evaluate((editor: HTMLTextAreaElement, targetTop) => {
+    editor.scrollTop += targetTop - editor.getBoundingClientRect().top - 250;
+    editor.dispatchEvent(new Event("scroll"));
+  }, targetTop);
+  const wrappedLine = pane.locator('[data-line-number="15"]');
+  const continuation = pane.locator('[data-line-number="14"]');
+  await expect(wrappedLine).toHaveText("15");
+  await expect(continuation).toHaveText("14");
+  const glyph = await sourceGlyph(pane, "field_15 ");
+  const before = await continuation.boundingBox();
+  const next = await wrappedLine.boundingBox();
+  expect(next!.y - before!.y).toBeGreaterThan(next!.height * 1.9);
+  await app.page.mouse.click(glyph.x + 1, glyph.y + glyph.height / 2);
+  expect(await selectedLine()).toBe(15);
+  await source.press("Home");
+  await source.press("X");
+  await expect(source).toHaveValue(
+    wrapped.replace("field_15 = ", "Xfield_15 = "),
+  );
+  await expect(wrappedLine).toBeVisible();
+  await app.page.screenshot({
+    path: info.outputPath("editor-number-caret-wrapped.png"),
+    caret: "initial",
+  });
+});
+
+test("S3 chat references reveal a wrapped target every time and preserve the editor draft", async ({}, info) => {
+  const file = path.join(app.folders[0], "sample.py");
+  const fixture = pythonFixture(true);
+  await writeFile(file, fixture);
+  await app.stop();
+  const recording = path.join(app.temporary, "line-reference-provider.jsonl");
+  await writeFile(recording, "");
+  app.environment.COD_CODEX_EXECUTABLE = process.execPath;
+  app.environment.COD_CODEX_ARGS = JSON.stringify([
+    path.join(app.root, "tests/e2e/helpers/chat-fixture/provider.mjs"),
+    "codex",
+    recording,
+  ]);
+  await app.start();
+  await app.cli(
+    "settings",
+    "update",
+    "--values",
+    '{"editor.fontSize":21,"editor.wordWrap":true}',
+  );
+  const chat = await app.cli<{ id: string; paneId: string }>(
+    "conversation",
+    "create",
+    "--workspace",
+    workspace,
+    "--provider",
+    "codex",
+    "--cwd",
+    app.folders[0],
+  );
+  await app.cli(
+    "conversation",
+    "send",
+    "--id",
+    chat.id,
+    "--text",
+    "Open `sample.py:142`, `sample.py:73`, or `sample.py`.",
+  );
+  const transcript = app
+    .pane(chat.paneId)
+    .getByRole("region", { name: "Conversation transcript" });
+  const reference = (text: string) =>
+    transcript
+      .locator(".file-reference:visible")
+      .filter({ hasText: text })
+      .last();
+  await reference("sample.py:142").click();
+  const target = app.page.getByRole("textbox", { name: "File contents" });
+  const expectLine = async (line: number) => {
+    await expect(target).toBeFocused();
+    await expect
+      .poll(() =>
+        target.evaluate((editor: HTMLTextAreaElement) => {
+          const selection = editor.selectionStart;
+          return {
+            line: editor.value.slice(0, selection).split("\n").length,
+            column:
+              selection - editor.value.lastIndexOf("\n", selection - 1) - 1,
+          };
+        }),
+      )
+      .toEqual({ line, column: 0 });
+    const sourcePane = target.locator("xpath=ancestor::*[@data-pane-id][1]");
+    const glyph = await sourceGlyph(sourcePane, "field_" + line + " ");
+    const viewport = await target.boundingBox();
+    expect(glyph.y).toBeGreaterThanOrEqual(viewport!.y);
+    expect(glyph.y + glyph.height).toBeLessThanOrEqual(
+      viewport!.y + viewport!.height,
+    );
+  };
+  await expect(target).toHaveValue(fixture);
+  await expectLine(142);
+  const draft = fixture.replace("field_50 =", "edited_50 =");
+  await target.fill(draft);
+  await target.evaluate((editor: HTMLTextAreaElement) => {
+    editor.setSelectionRange(0, 0);
+    editor.scrollTop = 0;
+  });
+  await reference("sample.py:142").click();
+  await expectLine(142);
+  await expect(target).toHaveValue(draft);
+  await reference("sample.py:73").click();
+  await expectLine(73);
+  await target.evaluate((editor) =>
+    editor.style.setProperty("caret-animation", "manual"),
+  );
+  await app.page.screenshot({
+    path: info.outputPath("chat-reference-editor-line.png"),
+    caret: "initial",
+  });
+  await transcript
+    .locator(".file-reference:visible")
+    .filter({ hasText: /^sample\.py$/ })
+    .last()
+    .click();
+  await expectLine(73);
+  await expect(target).toHaveValue(draft);
+  expect(await readFile(file, "utf8")).toBe(fixture);
+});

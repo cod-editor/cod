@@ -1,6 +1,11 @@
 import { uiButton } from "../ui-kit";
 import { confirmAction } from "./dialogs";
-import { highlightedEditor, setChangedLines } from "../editor-highlight";
+import {
+  disposeHighlightedEditor,
+  highlightedEditor,
+  selectEditorLine,
+  updateHighlightedEditor,
+} from "../editor-highlight";
 import { reconcileView } from "./view-reconcile";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
@@ -45,7 +50,8 @@ export function createDocumentViews(
   const failedLoads = new Set<string>();
   const lineCache = new Map<string, number[]>();
   const lineLoading = new Set<string>();
-  const lineJumped = new Set<string>();
+  const revealedLines = new Map<string, string | number>();
+  const noChangedLines: readonly number[] = [];
   const savingFiles = new Set<string>();
   const draftWrites = new Map<string, Promise<unknown>>();
   const failedDraftWrites = new Set<string>();
@@ -84,7 +90,7 @@ export function createDocumentViews(
         paneKeys.delete(id);
         messages.delete(id);
         lineCache.delete(id);
-        lineJumped.delete(id);
+        revealedLines.delete(id);
         failedLoads.delete(id);
       }
   }
@@ -416,13 +422,8 @@ export function createDocumentViews(
             sourceKey: currentKey,
           });
       });
-      const highlighted = highlightedEditor(
-        editor,
-        pane.kind === "document" ? (pane.filePath ?? "") : "",
-      );
-      if (lineCache.has(pane.id))
-        setChangedLines(highlighted, lineCache.get(pane.id)!);
-      else if (!lineLoading.has(pane.id)) {
+      const highlighted = highlightedEditor(editor);
+      if (!lineCache.has(pane.id) && !lineLoading.has(pane.id)) {
         lineLoading.add(pane.id);
         void invoke<{ lines: number[] }>("file.lines", {
           workspace: workspace.id,
@@ -431,10 +432,15 @@ export function createDocumentViews(
           .then((result) => {
             if (fileKey(pane.id) !== key) return;
             lineCache.set(pane.id, result.lines);
-            const current = panes.querySelector<HTMLElement>(
-              `[data-pane-id="${pane.id}"] .highlighted-editor`,
-            );
-            if (current) setChangedLines(current, result.lines);
+            const current = views
+              .get(pane.id)
+              ?.querySelector<HTMLElement>(".highlighted-editor");
+            if (current)
+              updateHighlightedEditor(
+                current,
+                pane.kind === "document" ? (pane.filePath ?? "") : "",
+                result.lines,
+              );
           })
           .catch(() => {
             lineCache.set(pane.id, []);
@@ -445,29 +451,6 @@ export function createDocumentViews(
           });
       }
       body.append(highlighted);
-      if (
-        pane.kind === "document" &&
-        pane.line &&
-        originals.has(key) &&
-        !lineJumped.has(pane.id)
-      ) {
-        lineJumped.add(pane.id);
-        const position = editor.value
-          .split("\n")
-          .slice(0, pane.line - 1)
-          .reduce((length, line) => length + line.length + 1, 0);
-        requestAnimationFrame(() => {
-          if (editor.isConnected) {
-            editor.setSelectionRange(position, position);
-            editor.scrollTop = Math.max(
-              0,
-              (pane.line! - 2) *
-                parseFloat(getComputedStyle(editor).lineHeight),
-            );
-            editor.dispatchEvent(new Event("scroll"));
-          }
-        });
-      }
       if (
         !originals.has(key) &&
         !loading.has(pane.id) &&
@@ -597,6 +580,36 @@ export function createDocumentViews(
   window.addEventListener("focus", refreshOnFocus);
   panes.addEventListener("focusin", refreshOnFocus);
   const views = new Map<string, HTMLElement>();
+  function disposeView(view: HTMLElement): void {
+    const wrapper = view.querySelector<HTMLElement>(".highlighted-editor");
+    if (wrapper) disposeHighlightedEditor(wrapper);
+  }
+  function updateView(view: HTMLElement, pane: PaneState): void {
+    const wrapper = view.querySelector<HTMLElement>(".highlighted-editor");
+    const editor = wrapper?.querySelector("textarea");
+    if (!wrapper || !editor) return;
+    updateHighlightedEditor(
+      wrapper,
+      pane.kind === "document" ? (pane.filePath ?? "") : "",
+      lineCache.get(pane.id) ?? noChangedLines,
+    );
+    if (pane.kind !== "document" || !pane.line || editor.disabled) return;
+    const lineRequest = pane.lineRequestId ?? pane.line;
+    if (revealedLines.get(pane.id) === lineRequest) return;
+    requestAnimationFrame(() => {
+      const latest = getState()
+        .workspaces.flatMap(({ panes }) => panes)
+        .find(({ id }) => id === pane.id);
+      if (
+        latest?.kind === "document" &&
+        (latest.lineRequestId ?? latest.line) === lineRequest &&
+        revealedLines.get(pane.id) !== lineRequest &&
+        selectEditorLine(editor, pane.line!)
+      )
+        revealedLines.set(pane.id, lineRequest);
+    });
+  }
+
   return {
     save: saveFile,
     modified(pane: PaneState) {
@@ -609,23 +622,43 @@ export function createDocumentViews(
       clearInterval(refreshTimer);
       window.removeEventListener("focus", refreshOnFocus);
       panes.removeEventListener("focusin", refreshOnFocus);
+      for (const view of views.values()) disposeView(view);
     },
     view(workspace: WorkspaceState, pane: PaneState) {
-      const next = renderDocument(workspace, pane),
-        current = views.get(pane.id);
+      const next = renderDocument(workspace, pane);
+      const current = views.get(pane.id);
       if (current) {
-        reconcileView(current, next);
+        const oldWrapper = current.querySelector<HTMLElement>(
+          ".highlighted-editor",
+        );
+        const newWrapper = next.querySelector<HTMLElement>(
+          ".highlighted-editor",
+        );
+        if (oldWrapper && newWrapper) {
+          reconcileView(
+            oldWrapper.querySelector("textarea")!,
+            newWrapper.querySelector("textarea")!,
+          );
+          reconcileView(current, next, new Map([[newWrapper, oldWrapper]]));
+        } else {
+          disposeView(current);
+          reconcileView(current, next);
+        }
+        updateView(current, pane);
         return current;
       }
       views.set(pane.id, next);
+      updateView(next, pane);
       return next;
     },
     reconcile() {
-      for (const id of views.keys())
+      for (const [id, view] of views)
         if (
           !getState().workspaces.some((w) => w.panes.some((p) => p.id === id))
-        )
+        ) {
+          disposeView(view);
           views.delete(id);
+        }
       pruneBuffers();
     },
   };

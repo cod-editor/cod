@@ -189,94 +189,279 @@ export function highlight(value: string, language: string): string {
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
 }
-export function highlightedEditor(
-  editor: HTMLTextAreaElement,
-  path: string,
-): HTMLElement {
+interface EditorLayout {
+  editor: HTMLTextAreaElement;
+  code: HTMLPreElement;
+  gutter: HTMLElement;
+  changed: readonly number[];
+  starts: number[];
+  text?: string;
+  mirrorText?: string;
+  language?: string;
+  wrap: boolean;
+  nodes: { start: number; node: Text }[];
+  tops: Map<number, number>;
+  height: number;
+  padding: number;
+  frame?: number;
+  visible?: string;
+  sizing?: string;
+}
+
+const layouts = new WeakMap<HTMLElement, EditorLayout>();
+const observer = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    const layout = layouts.get(target as HTMLElement);
+    if (layout) scheduleLayout(layout);
+  }
+});
+
+window.addEventListener("resize", () => {
+  for (const wrapper of document.querySelectorAll<HTMLElement>(
+    ".highlighted-editor",
+  )) {
+    const layout = layouts.get(wrapper);
+    if (layout) scheduleLayout(layout);
+  }
+});
+
+export function highlightedEditor(editor: HTMLTextAreaElement): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "highlighted-editor";
-  const language = languageFor(path);
-  wrapper.dataset.language = language;
   const code = document.createElement("pre");
   code.className = "editor-colors";
   code.setAttribute("aria-hidden", "true");
-  const markers = document.createElement("div");
-  markers.className = "changed-lines";
-  markers.setAttribute("aria-hidden", "true");
+  const gutter = document.createElement("div");
+  gutter.className = "editor-gutter";
+  gutter.setAttribute("aria-hidden", "true");
   editor.wrap = "off";
   editor.classList.add("highlight-overlay");
-  const paint = () => {
-    // Large single-line HTML can exceed Chromium's preformatted text painting
-    // limits. Let the native editor draw it instead of hiding its text under an
-    // empty overlay; also avoid a second full-size DOM copy.
-    const highlighted = editor.value.length <= 200_000;
-    wrapper.dataset.highlighted = String(highlighted);
-    code.hidden = !highlighted;
-    code.innerHTML = highlighted
-      ? highlight(editor.value, wrapper.dataset.language ?? "plaintext") + "\n"
-      : "";
-    for (const token of code.querySelectorAll("span"))
-      token.setAttribute("data-syntax-token", token.className);
-    sync();
-    positionChangedLines(wrapper);
+  const layout: EditorLayout = {
+    editor,
+    code,
+    gutter,
+    changed: [],
+    starts: [0],
+    wrap: false,
+    nodes: [],
+    tops: new Map(),
+    height: 0,
+    padding: 0,
   };
-  const sync = () => {
-    code.scrollTop = editor.scrollTop;
-    code.scrollLeft = editor.scrollLeft;
-    markers.style.transform = `translateY(${-editor.scrollTop}px)`;
-  };
-  editor.addEventListener("input", paint);
-  editor.addEventListener("cod-editor-sync", paint);
-  editor.addEventListener("scroll", sync);
-  wrapper.append(code, markers, editor);
-  paint();
+  layouts.set(wrapper, layout);
+  const schedule = () => scheduleLayout(layout);
+  editor.addEventListener("input", schedule);
+  editor.addEventListener("cod-editor-sync", schedule);
+  editor.addEventListener("scroll", () => syncScroll(layout));
+  wrapper.append(code, gutter, editor);
   return wrapper;
 }
-export function setChangedLines(wrapper: HTMLElement, lines: number[]): void {
-  const markers = wrapper.querySelector(".changed-lines")!;
-  markers.replaceChildren();
-  for (const line of lines) {
-    const marker = document.createElement("span");
-    marker.dataset.changedLine = String(line);
-    marker.style.top = `calc(20px + ${line - 1} * var(--editor-font-size) * var(--editor-line-height, 1.65))`;
-    marker.title = `Changed line ${line}`;
-    markers.append(marker);
+
+export function updateHighlightedEditor(
+  wrapper: HTMLElement,
+  path: string,
+  changed: readonly number[],
+): void {
+  const layout = layouts.get(wrapper)!;
+  wrapper.dataset.language = languageFor(path);
+  if (layout.changed !== changed) {
+    layout.changed = changed;
+    layout.visible = undefined;
   }
-  positionChangedLines(wrapper);
+  observer.observe(wrapper);
+  scheduleLayout(layout);
 }
 
-function positionChangedLines(wrapper: HTMLElement): void {
-  const code = wrapper.querySelector<HTMLElement>(".editor-colors");
-  if (!code || !wrapper.isConnected) return;
-  const text = code.textContent ?? "";
-  const starts = [0];
-  for (let i = 0; i < text.length; i++)
-    if (text[i] === "\n") starts.push(i + 1);
-  for (const marker of wrapper.querySelectorAll<HTMLElement>(
-    "[data-changed-line]",
-  )) {
-    let offset = starts[Number(marker.dataset.changedLine) - 1];
-    if (offset === undefined) continue;
-    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      const length = node.textContent?.length ?? 0;
-      if (offset < length) {
-        const range = document.createRange();
-        range.setStart(node, offset);
-        range.setEnd(node, Math.min(offset + 1, length));
-        marker.style.top = `${range.getBoundingClientRect().top - code.getBoundingClientRect().top + code.scrollTop}px`;
-        break;
-      }
-      offset -= length;
-    }
-  }
+export function disposeHighlightedEditor(wrapper: HTMLElement): void {
+  observer.unobserve(wrapper);
+  const frame = layouts.get(wrapper)?.frame;
+  if (frame !== undefined) cancelAnimationFrame(frame);
 }
-const repositionEditors = () => {
-  requestAnimationFrame(() =>
-    document
-      .querySelectorAll<HTMLElement>(".highlighted-editor")
-      .forEach(positionChangedLines),
+
+function scheduleLayout(layout: EditorLayout): void {
+  if (layout.frame !== undefined) return;
+  layout.frame = requestAnimationFrame(() => {
+    layout.frame = undefined;
+    prepareLayout(layout);
+  });
+}
+
+function prepareLayout(layout: EditorLayout): boolean {
+  const { editor, code } = layout;
+  const wrapper = editor.parentElement!;
+  if (!editor.isConnected || !editor.clientHeight) return false;
+  const value = editor.value;
+  const changedText = layout.text !== value;
+  if (changedText) {
+    layout.text = value;
+    layout.starts = [0];
+    for (let i = 0; i < value.length; i++)
+      if (value[i] === "\n") layout.starts.push(i + 1);
+    wrapper.style.setProperty(
+      "--editor-line-digits",
+      String(String(layout.starts.length).length),
+    );
+  }
+  const style = getComputedStyle(editor);
+  const wrap = style.whiteSpace !== "pre";
+  const language = wrapper.dataset.language ?? "plaintext";
+  const highlighted = value.length <= 200_000;
+  const mirrorText = highlighted || wrap ? value : undefined;
+  const repaint =
+    mirrorText !== layout.mirrorText || language !== layout.language;
+  if (repaint) {
+    if (highlighted) {
+      code.innerHTML = highlight(value, language) + "\n";
+      for (const token of code.querySelectorAll("span"))
+        token.dataset.syntaxToken = token.className;
+    } else code.textContent = mirrorText === undefined ? "" : mirrorText + "\n";
+    layout.nodes = [];
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    let offset = 0;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      layout.nodes.push({ start: offset, node: node as Text });
+      offset += node.textContent!.length;
+    }
+    layout.mirrorText = mirrorText;
+    layout.language = language;
+  }
+  wrapper.dataset.highlighted = String(highlighted);
+  const width = editor.clientWidth + "px";
+  const height = editor.clientHeight + "px";
+  const sizing = [
+    width,
+    height,
+    style.fontFamily,
+    style.fontSize,
+    style.lineHeight,
+    style.tabSize,
+    style.whiteSpace,
+  ].join(":");
+  if (repaint || changedText || layout.sizing !== sizing) {
+    layout.wrap = wrap;
+    layout.height = parseFloat(style.lineHeight);
+    layout.padding = parseFloat(style.paddingTop);
+    layout.tops.clear();
+    layout.visible = undefined;
+    layout.sizing = sizing;
+    code.style.width = width;
+    code.style.height = height;
+  }
+  syncScroll(layout);
+  return true;
+}
+
+// Match the native editor's wrap width and use the syntax mirror's real text
+// positions for both the gutter and navigation. Only measure visible lines.
+function textRect(layout: EditorLayout, offset: number): DOMRect | undefined {
+  const index = precedingIndex(layout.nodes, ({ start }) => start <= offset);
+  const token = layout.nodes[index];
+  if (!token) return;
+  const range = document.createRange();
+  range.setStart(token.node, offset - token.start);
+  range.setEnd(
+    token.node,
+    Math.min(offset - token.start + 1, token.node.length),
   );
-};
-window.addEventListener("resize", repositionEditors);
+  return range.getBoundingClientRect();
+}
+
+function precedingIndex<T>(
+  values: readonly T[],
+  matches: (value: T, index: number) => boolean,
+): number {
+  let first = 0,
+    end = values.length;
+  while (first < end) {
+    const middle = (first + end) >>> 1;
+    if (matches(values[middle], middle)) first = middle + 1;
+    else end = middle;
+  }
+  return first - 1;
+}
+
+function lineTop(layout: EditorLayout, index: number): number {
+  if (!layout.wrap || index === 0)
+    return layout.padding + index * layout.height;
+  const cached = layout.tops.get(index);
+  if (cached !== undefined) return cached;
+  const top =
+    layout.padding +
+    (textRect(layout, layout.starts[index])!.top - textRect(layout, 0)!.top);
+  layout.tops.set(index, top);
+  return top;
+}
+
+function syncScroll(layout: EditorLayout): void {
+  const { editor, code, gutter, starts } = layout;
+  if (!layout.height || !editor.clientHeight) return;
+  code.scrollTop = editor.scrollTop;
+  code.scrollLeft = editor.scrollLeft;
+  const first = Math.max(
+    0,
+    precedingIndex(
+      starts,
+      (_, index) => lineTop(layout, index) <= editor.scrollTop,
+    ),
+  );
+  let end = first;
+  while (
+    end < starts.length &&
+    lineTop(layout, end) < editor.scrollTop + editor.clientHeight
+  )
+    end++;
+  const visible = first + ":" + end;
+  if (layout.visible !== visible) {
+    const rows: HTMLElement[] = [];
+    for (let index = first; index < end; index++) {
+      const line = index + 1;
+      const row = document.createElement("div");
+      row.dataset.lineNumber = String(line);
+      row.textContent = String(line);
+      row.style.top = lineTop(layout, index) + "px";
+      if (layout.changed.includes(line)) {
+        row.dataset.changedLine = String(line);
+        row.title = "Changed line " + line;
+      }
+      rows.push(row);
+    }
+    gutter.replaceChildren(...rows);
+    layout.visible = visible;
+  }
+  gutter.style.transform = `translateY(${-editor.scrollTop}px)`;
+}
+
+export function selectEditorLine(
+  editor: HTMLTextAreaElement,
+  line: number,
+): boolean {
+  const layout = layouts.get(editor.parentElement!);
+  if (!layout || !prepareLayout(layout)) return false;
+  const index = Math.min(line - 1, layout.starts.length - 1);
+  const offset = layout.starts[index];
+  editor.setSelectionRange(offset, offset);
+  editor.scrollLeft = 0;
+  editor.scrollTop = Math.max(
+    0,
+    lineTop(layout, index) - editor.clientHeight / 3,
+  );
+  syncScroll(layout);
+  return true;
+}
+
+export function revealEditorOffset(
+  editor: HTMLTextAreaElement,
+  offset: number,
+): void {
+  const layout = layouts.get(editor.parentElement!);
+  if (!layout || !prepareLayout(layout)) return;
+  const index = Math.max(
+    0,
+    precedingIndex(layout.starts, (start) => start <= offset),
+  );
+  const top = layout.wrap
+    ? layout.padding + textRect(layout, offset)!.top - textRect(layout, 0)!.top
+    : lineTop(layout, index);
+  editor.scrollTop = Math.max(0, top - editor.clientHeight / 3);
+  syncScroll(layout);
+}
