@@ -673,6 +673,75 @@ for (const mode of ["large", "unicode", "overlong"])
     }
   });
 
+for (const mode of ["attachments", "text", "tool", "malformed", "over cap"]) {
+  test(`Codex large notification framing bounds ${mode}`, async () => {
+    const notices: string[] = [];
+    const transport = new RpcTransport(
+      {
+        cwd: process.cwd(),
+        executable: process.execPath,
+        args: [
+          "--input-type=module",
+          "-e",
+          `
+        import { createInterface } from 'node:readline';
+        createInterface({input:process.stdin}).on('line', line => {
+          const {id, params: {mode}} = JSON.parse(line);
+          const notify = (method, item) => JSON.stringify({
+            method, params: {item, threadId: 'fixture-thread', turnId: 'fixture-turn'}
+          });
+          const frame = (payload) => process.stdout.write(payload + '\\n');
+          const item = { type: 'userMessage', id: 'fixture-user', clientId: null, content: [] };
+          if (mode === 'tool') {
+            frame(notify('item/completed', {type: 'commandExecution', aggregatedOutput: 'x'.repeat(4 * 1024 * 1024)}));
+          } else if (mode === 'text') {
+            item.content.push({type: 'text', text: 'x'.repeat(4 * 1024 * 1024)});
+            frame(notify('item/completed', item));
+          } else {
+            const imageSize = (mode === 'over cap' ? 25 : mode === 'malformed' ? 4 : 20) * 1024 * 1024;
+            const url = 'data:image/png;base64,' + Buffer.alloc(imageSize).toString('base64');
+            item.content.push({type: 'text', text: 'x'.repeat(1_000_000)}, {type: 'image', url});
+            const wire = notify('item/started', item);
+            if (mode === 'over cap') process.stdout.write(wire);
+            else if (mode === 'malformed') frame(wire.slice(0, -1));
+            else {
+              process.stdout.write(wire.slice(0, 12));
+              frame(wire.slice(12));
+              frame(notify('item/completed', item));
+              frame(JSON.stringify({id, result: 'fixture response'}));
+            }
+          }
+        });
+      `,
+        ],
+        requestTimeoutMs: 5000,
+      },
+      "codex",
+      [],
+      (message) => notices.push(message.method),
+      () => {},
+      () => {},
+    );
+    try {
+      const request = transport.request("fixture/framing", { mode });
+      if (mode === "attachments") {
+        assert.equal(await request, "fixture response");
+        assert.deepEqual(notices, ["item/started", "item/completed"]);
+      } else {
+        await assert.rejects(
+          request,
+          mode === "malformed"
+            ? /Malformed provider protocol JSON/
+            : /line exceeded size limit/,
+        );
+        assert.deepEqual(notices, []);
+      }
+    } finally {
+      await transport.close();
+    }
+  });
+}
+
 test("An oversized Codex history reply leaves a parallel response and following notification intact", async () => {
   const notices: string[] = [];
   const failures: Error[] = [];

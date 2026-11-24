@@ -1386,6 +1386,124 @@ test("Chat Codex earlier native pages preserve focus, retry and render overlappi
 });
 
 for (const detached of [false, true]) {
+  test(`Chat Codex large pasted images survive native echoes in ${detached ? "detached" : "direct"} chat`, async () => {
+    await shell.configure({
+      codex: {
+        echoUserInput: true,
+        steeringReply: true,
+        finishSteeringReply: true,
+      },
+    });
+    const owner = new LocalProviderOwner(shell.data);
+    try {
+      if (detached)
+        await shell.cli(
+          "settings",
+          "update",
+          "--values",
+          '{"chat.detachedSessions":true}',
+        );
+      const workspace = await shell.create("Image notification fixture");
+      const chat = await shell.newChat(workspace, "codex");
+      const pane = shell.pane(chat.paneId);
+      const composer = pane.getByRole("textbox", {
+        name: "Message",
+        exact: true,
+      });
+      const paste = async (prompt: string) => {
+        await composer.fill(prompt);
+        const bytes = await composer.evaluate(async (input) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 1600;
+          canvas.height = 900;
+          const context = canvas.getContext("2d")!;
+          const pixels = context.createImageData(canvas.width, canvas.height);
+          // Deterministic opaque noise is a valid PNG above the frame threshold.
+          let seed = 42817;
+          for (let i = 0; i < pixels.data.length; i += 4) {
+            seed ^= seed << 13;
+            seed ^= seed >>> 17;
+            seed ^= seed << 5;
+            pixels.data[i] = seed & 255;
+            pixels.data[i + 1] = (seed >>> 8) & 255;
+            pixels.data[i + 2] = (seed >>> 16) & 255;
+            pixels.data[i + 3] = 255;
+          }
+          context.putImageData(pixels, 0, 0);
+          const png = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((value) => {
+              if (value) resolve(value);
+              else reject(new Error("Could not encode fixture PNG"));
+            });
+          });
+          const transfer = new DataTransfer();
+          transfer.items.add(
+            new File([png], "fixture.png", { type: png.type }),
+          );
+          input.dispatchEvent(
+            new ClipboardEvent("paste", {
+              clipboardData: transfer,
+              bubbles: true,
+            }),
+          );
+          return png.size;
+        });
+        expect(Math.ceil(bytes / 3) * 4).toBeGreaterThan(4 * 1024 * 1024);
+        await expect(pane.locator(".composer-images img")).toHaveCount(1);
+        await composer.press(`${modifier}+Enter`);
+        await expect(composer).toHaveValue("");
+      };
+      await paste("First image [hold]");
+      await expect(transcript(chat)).toContainText("STREAM First image");
+      await paste("Live image");
+      await expect(transcript(chat)).toContainText(
+        "Export verified. The file is ready.",
+      );
+      await expect.poll(() => status(chat.id)).toBe("ready");
+      const saved = await inspectQueuedChat(chat.id);
+      expect(saved.turns).toHaveLength(1);
+      expect(
+        saved.messages
+          .filter((message) => message.role === "user")
+          .map((message) => ({
+            text: message.text,
+            images: message.images?.length,
+          })),
+      ).toEqual([
+        { text: "First image [hold][Image 1]", images: 1 },
+        { text: "Live image[Image 1]", images: 1 },
+      ]);
+      expect(
+        (await shell.records())
+          .filter((record) =>
+            ["turn/start", "turn/steer"].includes(record.message?.method ?? ""),
+          )
+          .map((record) => record.message?.method),
+      ).toEqual(["turn/start", "turn/steer"]);
+      if (detached) {
+        await shell.send(chat.id, "[crash] in the same detached chat");
+        await expect.poll(() => status(chat.id)).toBe("failed");
+        await shell.send(chat.id, "Explicit recovery after failure");
+        await expect(transcript(chat)).toContainText(
+          "DONE Explicit recovery after failure",
+        );
+        await expect.poll(() => status(chat.id)).toBe("ready");
+        expect((await shell.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+        const records = await shell.records();
+        const resume = records.find(
+          (record) => record.message?.method === "thread/resume",
+        );
+        expect(resume?.message?.params?.threadId).toBe(chat.nativeId);
+        expect(resume?.pid).not.toBe(
+          records.find((record) => record.message?.method === "turn/start")
+            ?.pid,
+        );
+      }
+    } finally {
+      if (detached) await owner.stop();
+    }
+  });
+
   test(`Chat Codex oversized native history opens in ${detached ? "detached" : "direct"} chat after writer release`, async () => {
     const owner = new LocalProviderOwner(shell.data);
     try {

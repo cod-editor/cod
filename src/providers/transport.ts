@@ -39,6 +39,38 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
   history: boolean;
 }
+
+const standardFrameLimit = 4 * 1024 * 1024;
+const maximumFrameLimit = 32 * 1024 * 1024;
+// Codex echoes the encoded image in both user item lifecycle notifications.
+// Match the native header before retaining a frame above the ordinary ceiling.
+const codexUserItemHeader =
+  /^\s*\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"method"\s*:\s*"item\/(?:started|completed)"\s*,\s*"params"\s*:\s*\{\s*"item"\s*:\s*\{\s*"type"\s*:\s*"userMessage"/;
+
+function isLargeUserImageNotification(
+  message: Record<string, unknown>,
+  length: number,
+): boolean {
+  if (
+    message.id !== undefined ||
+    (message.method !== "item/started" && message.method !== "item/completed")
+  )
+    return false;
+  const item = object(object(message.params).item);
+  if (item.type !== "userMessage" || !Array.isArray(item.content)) return false;
+  let remaining = length;
+  for (const entry of item.content) {
+    const part = object(entry);
+    if (
+      part.type === "image" &&
+      typeof part.url === "string" &&
+      /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(part.url)
+    )
+      remaining -= part.url.length;
+  }
+  return remaining <= standardFrameLimit;
+}
+
 /** One JSON-lines protocol, owned by one child process. Never mixes stderr into JSON. */
 export class RpcTransport {
   readonly child: ChildProcessWithoutNullStreams;
@@ -97,11 +129,15 @@ export class RpcTransport {
       do {
         const end = decoded.indexOf("\n", start);
         const part = decoded.slice(start, end < 0 ? undefined : end);
+        const previousLength = this.bufferedLength;
         this.bufferedLength += part.length;
         this.framePrefix += part.slice(0, 128 - this.framePrefix.length);
         if (
-          this.bufferedLength > 4 * 1024 * 1024 &&
-          this.oversizedHistoryId === undefined
+          previousLength <= standardFrameLimit &&
+          this.bufferedLength > standardFrameLimit &&
+          !(
+            executable === "codex" && codexUserItemHeader.test(this.framePrefix)
+          )
         ) {
           const id = Number(
             /^\s*\{\s*(?:"jsonrpc"\s*:\s*"2.0"\s*,\s*)?"id"\s*:\s*(\d+)\s*,\s*"result"\s*:/.exec(
@@ -115,7 +151,7 @@ export class RpcTransport {
           this.oversizedHistoryId = id;
           this.buffer = [];
         }
-        if (this.bufferedLength > 32 * 1024 * 1024) {
+        if (this.bufferedLength > maximumFrameLimit) {
           this.fail(new Error("Provider protocol line exceeded size limit"));
           return;
         }
@@ -165,6 +201,13 @@ export class RpcTransport {
       return;
     }
     const message = object(value);
+    if (
+      this.bufferedLength > standardFrameLimit &&
+      !isLargeUserImageNotification(message, this.bufferedLength)
+    ) {
+      this.fail(new Error("Provider protocol line exceeded size limit"));
+      return;
+    }
     if (!Object.keys(message).length) {
       this.fail(new Error("Invalid provider protocol frame"));
       return;
