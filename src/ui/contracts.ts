@@ -1,6 +1,7 @@
 import type { OperationName } from "../command-catalog";
 export type DesktopOperationName =
   | OperationName
+  | "browser.search-suggestions"
   | "remote.target"
   | "remote.disconnect"
   | "remote.cancel"

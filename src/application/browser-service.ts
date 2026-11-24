@@ -9,7 +9,14 @@ import {
 import { BrowserLibrary } from "../browser/library";
 import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
-import { resolveAddress, webUrl, contextLinkUrl } from "../browser/address";
+import {
+  resolveAddress,
+  searchAddress,
+  webUrl,
+  contextLinkUrl,
+} from "../browser/address";
+import { eligibleSearchPhrase } from "../browser/search-query";
+import { googleSearchSuggestions } from "../browser/search-suggestions";
 import {
   findFocusWorld,
   captureFindFocus,
@@ -37,6 +44,7 @@ export interface BrowserConversationPort {
 export class BrowserApplicationService {
   private sitePermissions?: SitePermissions;
   private readonly library: BrowserLibrary;
+  private suggestionRequest?: AbortController;
   private readonly recordedPages = new Map<string, string>();
   private libraryError?: Error;
   private browserService?: BrowserService;
@@ -72,6 +80,7 @@ export class BrowserApplicationService {
     if (service.list().some((view) => view.id === id)) service.reload(id);
   }
   async shutdown(): Promise<void> {
+    this.suggestionRequest?.abort();
     for (const controller of this.browserAdmissions.values())
       controller.abort();
     this.browserAdmissions.clear();
@@ -1061,14 +1070,18 @@ export class BrowserApplicationService {
         this.browserInitializations.delete(record.id);
     }
   }
-  async navigateBrowser(id: string, url: string): Promise<BrowserState> {
+  async navigateBrowser(
+    id: string,
+    url: string,
+    search = false,
+  ): Promise<BrowserState> {
     const record = this.browser(id);
     if (record.agentPage)
       throw new Error("Registered agent pages cannot navigate to other sites");
-    const target = resolveAddress(
-      url,
-      (await this.library.settings()).searchEngine,
-    );
+    const { searchEngine } = await this.library.settings();
+    const target = search
+      ? { url: searchAddress(url, searchEngine) }
+      : resolveAddress(url, searchEngine);
     await this.loadBrowser(record, this.browserUrl(target.url), {
       httpFallbackUrl: target.httpFallbackUrl,
     });
@@ -1334,6 +1347,24 @@ export class BrowserApplicationService {
       else policies.push(policy);
     });
   }
+  private async searchSuggestions(query: unknown): Promise<string[]> {
+    this.suggestionRequest?.abort();
+    this.suggestionRequest = undefined;
+    if (typeof query !== "string" || !eligibleSearchPhrase(query)) return [];
+    const pending = new AbortController();
+    this.suggestionRequest = pending;
+    try {
+      const { searchEngine } = await this.library.settings();
+      if (searchEngine !== "google" || pending.signal.aborted) return [];
+      const terms = await googleSearchSuggestions(query, pending.signal);
+      return pending.signal.aborted ? [] : terms;
+    } catch {
+      return [];
+    } finally {
+      if (this.suggestionRequest === pending)
+        this.suggestionRequest = undefined;
+    }
+  }
   async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {
     switch (request.op) {
       case "browser.downloads":
@@ -1434,9 +1465,15 @@ export class BrowserApplicationService {
       case "browser.bookmark-delete":
         return this.library.removeBookmark(requiredString(request, "id"));
       case "browser.settings":
-        return typeof request.searchEngine === "string"
-          ? this.library.configure(request.searchEngine)
-          : this.library.settings();
+        if (typeof request.searchEngine === "string") {
+          this.suggestionRequest?.abort();
+          return this.library.configure(request.searchEngine);
+        }
+        return this.library.settings();
+      case "browser.search-suggestions":
+        if (!trustedUi)
+          throw new Error("Search suggestions require the desktop address bar");
+        return this.searchSuggestions(request.query);
       case "browser.history":
         if (this.libraryError) throw this.libraryError;
         return this.library.history(
@@ -1535,6 +1572,7 @@ export class BrowserApplicationService {
         return this.navigateBrowser(
           requiredString(request, "id"),
           requiredString(request, "url"),
+          trustedUi && request.search === true,
         );
 
       case "browser.http-fallback": {

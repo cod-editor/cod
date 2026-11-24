@@ -1,9 +1,12 @@
 import { isPlainEscape } from "../keyboard";
+import { eligibleSearchPhrase } from "../browser/search-query";
 import type { Invoke } from "./contracts";
+
+type Suggestion = { title: string; url?: string };
 export function addressSuggestions(
   input: HTMLInputElement,
   invoke: Invoke,
-  navigate: (url: string) => void,
+  navigate: (value: string, search: boolean) => void,
   layout: () => void,
   currentUrl: () => string,
 ) {
@@ -23,9 +26,21 @@ export function addressSuggestions(
     pending = false,
     selectFirst = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let networkPending = false;
   function cancelRefresh() {
     revision++;
     clearTimeout(timer);
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+    if (networkPending) {
+      networkPending = false;
+      void invoke(
+        "browser.search-suggestions",
+        {},
+        { reportError: false },
+      ).catch(() => undefined);
+    }
     pending = false;
     selectFirst = false;
   }
@@ -50,6 +65,71 @@ export function addressSuggestions(
       rows[index].scrollIntoView({ block: "nearest" });
     } else input.removeAttribute("aria-activedescendant");
   }
+  function appendRows(items: Suggestion[], generation: number) {
+    const rows = document.createDocumentFragment();
+    items.forEach((item, i) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.tabIndex = -1;
+      button.id = `${list.id}-${list.childElementCount + i}`;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", "false");
+      const title = document.createElement("span"),
+        detail = document.createElement("small");
+      title.textContent = item.title;
+      detail.textContent = item.url ?? "Search";
+      button.append(title, detail);
+      button.onmousedown = (event) => event.preventDefault();
+      button.onclick = () => {
+        if (generation !== revision) return;
+        const value = item.url ?? item.title;
+        input.value = value;
+        close();
+        navigate(value, item.url === undefined);
+      };
+      rows.append(button);
+    });
+    list.append(rows);
+  }
+  function updateVisibility() {
+    const wasOpen = !list.hidden;
+    list.hidden = !list.childElementCount;
+    input.setAttribute("aria-expanded", String(!list.hidden));
+    if (wasOpen || !list.hidden) layout();
+  }
+  function current(generation: number) {
+    return (
+      generation === revision &&
+      document.activeElement === input &&
+      input.isConnected
+    );
+  }
+  async function refreshSearch(query: string, generation: number) {
+    searchTimer = undefined;
+    if (!current(generation)) return;
+    networkPending = true;
+    try {
+      const terms = await invoke<string[]>(
+        "browser.search-suggestions",
+        { query },
+        { reportError: false },
+      );
+      if (!current(generation) || !terms.length) return;
+      appendRows(
+        terms.map((title) => ({ title })),
+        generation,
+      );
+      updateVisibility();
+      if (selectFirst && selected < 0) select(0);
+    } catch {
+      // Search requests are optional. Local results stay usable during failure.
+    } finally {
+      if (generation === revision) {
+        networkPending = false;
+        selectFirst = false;
+      }
+    }
+  }
   async function refresh(explicit = false) {
     if (composing) return;
     const query = input.value.trim();
@@ -66,42 +146,19 @@ export function addressSuggestions(
         { query: unchanged ? "" : query },
         { reportError: false },
       );
-      if (
-        generation !== revision ||
-        document.activeElement !== input ||
-        !input.isConnected
-      )
-        return;
+      if (!current(generation)) return;
       const items = results.filter((item) => item.url !== currentUrl());
-      const wasOpen = !list.hidden;
-      const rows = document.createDocumentFragment();
-      items.forEach((item, i) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.tabIndex = -1;
-        button.id = `${list.id}-${i}`;
-        button.setAttribute("role", "option");
-        button.setAttribute("aria-selected", "false");
-        const title = document.createElement("span"),
-          url = document.createElement("small");
-        title.textContent = item.title;
-        url.textContent = item.url;
-        button.append(title, url);
-        button.onmousedown = (event) => event.preventDefault();
-        button.onclick = () => {
-          if (generation !== revision) return;
-          input.value = item.url;
-          close();
-          navigate(item.url);
-        };
-        rows.append(button);
-      });
-      list.replaceChildren(rows);
-      list.hidden = !items.length;
-      input.setAttribute("aria-expanded", String(!!items.length));
+      list.replaceChildren();
+      appendRows(items, generation);
+      updateVisibility();
       select((explicit || selectFirst) && items.length ? 0 : -1);
-      selectFirst = false;
-      if (wasOpen || items.length) layout();
+      if (items.length) selectFirst = false;
+      if (!unchanged && eligibleSearchPhrase(query))
+        searchTimer = setTimeout(
+          () => void refreshSearch(query, generation),
+          220,
+        );
+      else selectFirst = false;
     } catch {
       if (generation === revision) close();
     } finally {
@@ -136,7 +193,7 @@ export function addressSuggestions(
     const rows = list.querySelectorAll<HTMLButtonElement>("button");
     if (event.key === "ArrowDown" && (pending || list.hidden)) {
       event.preventDefault();
-      if (pending) selectFirst = true;
+      if (pending || searchTimer || networkPending) selectFirst = true;
       else void refresh(true);
     } else if (
       (event.key === "ArrowDown" || event.key === "ArrowUp") &&
@@ -156,7 +213,10 @@ export function addressSuggestions(
     } else if (event.key === "Enter" && selected >= 0 && !list.hidden) {
       event.preventDefault();
       rows[selected]?.click();
-    } else if (isPlainEscape(event) && (pending || !list.hidden)) {
+    } else if (
+      isPlainEscape(event) &&
+      (pending || searchTimer || networkPending || !list.hidden)
+    ) {
       event.preventDefault();
       if (!event.repeat) close();
     }

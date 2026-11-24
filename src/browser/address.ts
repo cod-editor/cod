@@ -46,13 +46,18 @@ export function resolveAddress(
     )
   )
     throw new Error("Only HTTP, HTTPS and local file addresses are supported");
+  return { url: searchAddress(value, engine) };
+}
+
+/** Encode a submitted search literally, even when it resembles an address. */
+export function searchAddress(value: string, engine: SearchEngine): string {
   const prefix = {
     google: "https://www.google.com/search?q=",
     duckduckgo: "https://duckduckgo.com/?q=",
     bing: "https://www.bing.com/search?q=",
     yandex: "https://yandex.ru/search/?text=",
   }[engine];
-  return { url: prefix + encodeURIComponent(value) };
+  return prefix + encodeURIComponent(value);
 }
 
 /** Encode a resolved native path without treating filename punctuation as URL syntax. */

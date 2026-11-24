@@ -1,19 +1,14 @@
 ---
 name: cod-feasibility
-description: Investigate and prove Cod's browser, ad-blocking and native agent integration gates before product implementation. Use when starting the restart or resolving an unproven integration.
+description: Verify an unproven Cod browser, native provider, extension or remote-host integration before depending on it.
 ---
 
-# Prove Cod's foundation
+# Verify an integration
 
-Read AGENTS.md, docs/vision.md and the compatibility acceptance boundaries in docs/specs/implementation.md.
+Read `AGENTS.md` and the issue's acceptance. Consult current primary documentation, installed help and source, then use the smallest disposable native probe. Keep profiles and evidence local. Use invented data and a dedicated account when authentication is necessary.
 
-1. Select an unfinished gate. Record the exact platforms and versions being tested.
-2. Consult current primary documentation, installed CLI help and relevant source. Distinguish a documented claim from an observed result.
-3. Build the smallest executable probe needed. Keep exploratory probes under ignored artifacts/. Promote reusable verification helpers into tests/support/ with reproduction commands in tests/README.md. Do not build the product around an unverified adapter.
-4. Run the gate's acceptance scenarios. Use invented data and dedicated test accounts; never export a personal password vault or print authentication material.
-5. Record PASS, FAIL or BLOCKED per platform/provider case, with reproducible commands and evidence. Mocks cannot pass a live-compatibility gate.
-6. Summarize material compatibility limitations in the existing README or contracts. Keep detailed run evidence in ignored artifacts, not a new tracked report.
+Record exact versions, commands and PASS, FAIL or BLOCKED. A fixture proves Cod behavior, not compatibility with a real provider or extension. Continue independent checks if access is missing. Make the blocker explicit before dependent work.
 
-Continue independent checks when access is missing. Do not ask the stakeholder to do the team's debugging.
-If a requirement cannot be met without substantial compatibility maintenance, report the concrete obstacle and options. Do not silently drop the requirement or substitute a raw model API for a coding agent.
-Do not proceed to dependent product work until the required gates pass or the stakeholder revises the scope.
+For official Bitwarden use the pinned archive and disposable local Vaultwarden. The fixtures live in `tests/support/bitwarden`; provision with `prepare-vault.mjs`, its Compose file, `create-account.mjs` and `check-vault.mjs`. Run `scripts/verify-integrated-browser-linux.sh FROZEN_INPUT` using an isolated runner's `input/` directory. Keep certificate exceptions limited to the disposable fixture's SPKI. Never use a personal vault.
+
+For plugin installation and hook policy use `npm run test:integration` with temporary profiles. Preview and back up profile edits. Provider hook trust is a native user action.
