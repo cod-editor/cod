@@ -2353,6 +2353,141 @@ test("Composer options align in a draft and an existing chat at both interface s
   await check(shell.pane(chat.paneId), "chat");
 });
 
+test("Active composer aligns choice labels, glyphs and adjacent controls", async ({}, info) => {
+  const codex = {
+    options: true,
+    multipleModels: true,
+    reasoningOptions: true,
+    modelDisplayName: "GPT-6.2-Sol",
+  };
+  await shell.configure({ codex: { ...codex, backgroundActivity: true } });
+  await shell.cli("settings", "update", "--values", '{"ui.fontSize":13}');
+  const workspace = await shell.create("Composer alignment fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = shell.pane(chat.paneId);
+  const row = pane.locator(".composer-actions");
+  const model = row.getByRole("button", { name: "Model", exact: true });
+  const effort = row.getByRole("button", {
+    name: "Reasoning effort",
+    exact: true,
+  });
+  const agents = row.getByRole("button", {
+    name: "Agents, 1 running",
+    exact: true,
+  });
+  const shells = row.getByRole("button", {
+    name: "Shells, 1 running",
+    exact: true,
+  });
+  const stop = row.getByRole("button", { name: "Stop", exact: true });
+  await expect(model).toHaveText("GPT-6.2-Sol");
+  await expect(effort).toHaveText("Medium");
+  await shell.send(chat.id, "Start one invented background agent");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(agents).toBeVisible();
+  await expect(shells).toBeVisible();
+  await backgroundFixture(chat, "composer-shell-finished", [
+    {
+      method: "item/completed",
+      params: {
+        threadId: "invented-child",
+        turnId: "child-turn",
+        item: {
+          type: "commandExecution",
+          id: "invented-shell",
+          status: "completed",
+          exitCode: 0,
+        },
+      },
+    },
+  ]);
+  await expect(shells).toHaveCount(0);
+
+  await shell.configure({ codex });
+  await shell.send(chat.id, "Show active controls [hold]");
+  await expect(stop).toBeVisible();
+  await expect(agents).toHaveText("1 agent");
+  await expect(model).toBeDisabled();
+  await expect(effort).toBeDisabled();
+  await expect(row).toHaveCSS("font-size", "11px");
+  await shell.page.screenshot({
+    path: info.outputPath("active-composer-full.png"),
+  });
+  await row.screenshot({
+    path: info.outputPath("active-composer-toolbar.png"),
+  });
+  const measured = await row.evaluate((toolbar) => {
+    const canvas = document.createElement("canvas");
+    const metrics = canvas.getContext("2d")!;
+    const top = toolbar.getBoundingClientRect().top;
+    const baseline = (text: Element) => {
+      const font = getComputedStyle(text);
+      metrics.font = `${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
+      const range = document.createRange();
+      range.selectNode(text.firstChild!);
+      return (
+        range.getBoundingClientRect().top -
+        top +
+        metrics.measureText(text.textContent ?? "").fontBoundingBoxAscent
+      );
+    };
+    const paintedCenter = (shape: SVGGraphicsElement) => {
+      const box = shape.getBBox();
+      return (
+        new DOMPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        ).matrixTransform(shape.getScreenCTM()!).y - top
+      );
+    };
+    const label = (selector: string) => toolbar.querySelector(selector)!;
+    const glyph = (selector: string) =>
+      paintedCenter(toolbar.querySelector<SVGGraphicsElement>(selector)!);
+    return {
+      baselines: {
+        provider: baseline(label(":scope > span:first-child")),
+        model: baseline(label(".composer-choice-model .ui-button-label")),
+        effort: baseline(label(".composer-choice-reasoning .ui-button-label")),
+        agents: baseline(label('[data-focus-key="background:agent"]')),
+      },
+      centers: {
+        model: glyph(".composer-choice-model svg > path"),
+        effort: glyph(".composer-choice-reasoning svg > path"),
+        stop: glyph('button[aria-label="Stop"] svg > rect'),
+      },
+      cssPixels: window.devicePixelRatio,
+    };
+  });
+  await writeFile(
+    info.outputPath("active-composer-geometry.json"),
+    JSON.stringify(measured, null, 2),
+  );
+  const spread = (measure: Record<string, number>) => {
+    const values = Object.values(measure);
+    return Math.max(...values) - Math.min(...values);
+  };
+
+  await stop.focus();
+  await stop.press("Enter");
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  for (const [trigger, name] of [
+    [model, "model"],
+    [effort, "effort"],
+  ] as const) {
+    await trigger.focus();
+    await trigger.press("Enter");
+    const menu = shell.page.getByRole("dialog", { name: "Actions" });
+    await expect(menu).toBeVisible();
+    await shell.page.screenshot({
+      path: info.outputPath(`composer-${name}-menu.png`),
+    });
+    await shell.page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+  }
+  expect(spread(measured.baselines)).toBeLessThanOrEqual(0.5);
+  expect(spread(measured.centers)).toBeLessThanOrEqual(0.5);
+});
+
 test("Codex late background results preserve the parent reply, composer and native continuation", async () => {
   const modelLabel = "Fixture model with a deliberately long readable name";
   await shell.configure({

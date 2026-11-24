@@ -436,7 +436,8 @@ body {
   padding: 0 8px 6px;
   flex-wrap: nowrap;
   color: var(--muted);
-  font-size: calc(var(--ui-font-size) - 2px);
+  font-size: var(--font-small);
+  line-height: var(--ui-line-height);
 }
 .conversation-status {
   flex: none;
