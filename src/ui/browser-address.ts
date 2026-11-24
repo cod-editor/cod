@@ -20,18 +20,24 @@ export function addressSuggestions(
   let revision = 0,
     selected = -1,
     composing = false,
-    pending = false;
+    pending = false,
+    selectFirst = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  function close() {
+  function cancelRefresh() {
     revision++;
     clearTimeout(timer);
     pending = false;
+    selectFirst = false;
+  }
+  function close() {
+    cancelRefresh();
+    const wasOpen = !list.hidden;
     list.hidden = true;
     list.replaceChildren();
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
     selected = -1;
-    layout();
+    if (wasOpen) layout();
   }
   function select(index: number) {
     const rows = [...list.querySelectorAll<HTMLButtonElement>("button")];
@@ -67,8 +73,8 @@ export function addressSuggestions(
       )
         return;
       const items = results.filter((item) => item.url !== currentUrl());
-      list.replaceChildren();
-      selected = -1;
+      const wasOpen = !list.hidden;
+      const rows = document.createDocumentFragment();
       items.forEach((item, i) => {
         const button = document.createElement("button");
         button.type = "button";
@@ -83,17 +89,19 @@ export function addressSuggestions(
         button.append(title, url);
         button.onmousedown = (event) => event.preventDefault();
         button.onclick = () => {
+          if (generation !== revision) return;
           input.value = item.url;
           close();
           navigate(item.url);
         };
-        list.append(button);
+        rows.append(button);
       });
+      list.replaceChildren(rows);
       list.hidden = !items.length;
       input.setAttribute("aria-expanded", String(!!items.length));
-      input.removeAttribute("aria-activedescendant");
-      if (explicit && items.length) select(0);
-      layout();
+      select((explicit || selectFirst) && items.length ? 0 : -1);
+      selectFirst = false;
+      if (wasOpen || items.length) layout();
     } catch {
       if (generation === revision) close();
     } finally {
@@ -101,11 +109,16 @@ export function addressSuggestions(
     }
   }
   function edited() {
-    close();
-    if (!composing && input.value.trim() !== currentUrl()) {
-      pending = true;
-      timer = setTimeout(() => void refresh(), 80);
+    if (composing || input.value.trim() === currentUrl()) {
+      close();
+      return;
     }
+    cancelRefresh();
+    select(-1);
+    for (const row of list.querySelectorAll("button"))
+      row.setAttribute("aria-disabled", "true");
+    pending = true;
+    timer = setTimeout(() => void refresh(), 80);
   }
   input.addEventListener("input", edited);
   input.addEventListener("compositionstart", () => {
@@ -121,13 +134,14 @@ export function addressSuggestions(
   input.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     const rows = list.querySelectorAll<HTMLButtonElement>("button");
-    if (event.key === "ArrowDown" && list.hidden) {
+    if (event.key === "ArrowDown" && (pending || list.hidden)) {
       event.preventDefault();
-      clearTimeout(timer);
-      void refresh(true);
+      if (pending) selectFirst = true;
+      else void refresh(true);
     } else if (
       (event.key === "ArrowDown" || event.key === "ArrowUp") &&
       rows.length &&
+      !pending &&
       !list.hidden
     ) {
       event.preventDefault();
