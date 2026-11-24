@@ -3220,7 +3220,7 @@ test("Address selection uses current navigation state before a pending render an
   ).toEqual([0, "An unfinished address edit".length]);
 });
 
-test("Address suggestions discard dismissed and superseded replies and wait for committed composition", async () => {
+test("Address suggestions discard dismissed and superseded replies and wait for committed composition", async ({}, info) => {
   const workspace = await shell.create("Delayed address fixture");
   await open(workspace, "/delayed-alternative");
   await remote("/delayed-alternative", "document.title");
@@ -3246,7 +3246,11 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
       };
       state.suggestionQueries.push(request.query);
       const response = await original(event, request);
-      if (request.query === "delayed")
+      if (
+        request.query === "delayed" ||
+        request.query === "delayed-alternativ" ||
+        request.query.endsWith("/delayed-submit")
+      )
         await new Promise<void>((resolve) => {
           state.releaseSuggestion = resolve;
         });
@@ -3265,12 +3269,25 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
         (globalThis as unknown as { suggestionQueries: string[] })
           .suggestionQueries,
     );
-  const release = () =>
-    shell.app!.evaluate(() =>
-      (
-        globalThis as unknown as { releaseSuggestion?: () => void }
-      ).releaseSuggestion?.(),
-    );
+  const release = async () => {
+    await expect
+      .poll(() =>
+        shell.app!.evaluate(
+          () =>
+            typeof (globalThis as unknown as { releaseSuggestion?: () => void })
+              .releaseSuggestion,
+        ),
+      )
+      .toBe("function");
+    await shell.app!.evaluate(() => {
+      const fixture = globalThis as unknown as {
+        releaseSuggestion?: () => void;
+      };
+      const resolve = fixture.releaseSuggestion;
+      fixture.releaseSuggestion = undefined;
+      resolve?.();
+    });
+  };
   await address.focus();
   await shell.page.waitForTimeout(160);
   expect(await queries()).toEqual([]);
@@ -3287,6 +3304,53 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
   await release();
   await shell.page.waitForTimeout(120);
   await expect(results).toBeHidden();
+
+  await address.fill("delayed-alternative");
+  const previous = results.getByRole("option", { name: /delayed-alternative/ });
+  await expect(previous).toBeVisible();
+  await address.press("ArrowDown");
+  await expect(previous).toHaveAttribute("aria-selected", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("suggestions-before-edit.png"),
+  });
+  const submit = origin + "/delayed-submit";
+  await address.fill(submit);
+  await expect.poll(() => queries()).toContain(submit);
+  await shell.page.screenshot({
+    path: info.outputPath("suggestions-pending.png"),
+  });
+  await expect(results).toBeVisible();
+  await expect(address).toHaveAttribute("aria-expanded", "true");
+  await expect(previous).toHaveAttribute("aria-disabled", "true");
+  await expect(address).not.toHaveAttribute("aria-activedescendant");
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue(submit);
+  const point = await previous.boundingBox();
+  expect(point).not.toBeNull();
+  await shell.page.mouse.click(point!.x + 6, point!.y + 6);
+  await expect(address).toBeFocused();
+  await expect(address).toHaveValue(submit);
+  expect((await inspect(current.id)).url).toBe(origin + "/delayed-current");
+  await address.press("Enter");
+  await expect.poll(async () => (await inspect(current.id)).url).toBe(submit);
+  await release();
+  await expect(results).toBeHidden();
+
+  await address.focus();
+  await address.fill("delayed-alternative");
+  await expect(previous).toBeVisible();
+  const beforeRefresh = (await queries()).length;
+  await address.fill("delayed-alternativ");
+  await expect.poll(() => queries()).toHaveLength(beforeRefresh + 1);
+  await address.press("ArrowDown");
+  await release();
+  await expect(previous).toHaveAttribute("aria-selected", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("suggestions-refreshed.png"),
+  });
+  await address.press("Escape");
+  await expect(results).toBeHidden();
+
   const before = (await queries()).length;
   await address.dispatchEvent("compositionstart");
   await address.fill("delayed-alternative");
