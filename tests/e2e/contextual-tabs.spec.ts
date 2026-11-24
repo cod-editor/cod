@@ -528,11 +528,21 @@ for (const scenario of ["browser content", "other pane", "newer selection"]) {
       expect(
         model.groups!.find((g) => g.id === sourceGroup.id)!.paneIds,
       ).toEqual([...sourceGroup.paneIds, id]);
+      const address = app
+        .pane(id)
+        .getByRole("combobox", { name: "Address", exact: true });
+      await expect(address).toBeFocused();
+      await expect(address).toHaveValue("");
+      await expect(address).toHaveAttribute("aria-expanded", "false");
+      await expect(tab(id)).toHaveAccessibleName("Home");
       if (laterSelection) {
         await tab(chat.paneId).click();
         await expect
           .poll(async () => (await active()).activePaneId)
           .toBe(chat.paneId);
+      } else {
+        await address.pressSequentially("example.test");
+        await expect(address).toHaveValue("example.test");
       }
     } finally {
       await app.app!.evaluate(() => (globalThis as any).releaseBlankBrowser());
@@ -545,7 +555,7 @@ for (const scenario of ["browser content", "other pane", "newer selection"]) {
         .pane(id)
         .getByRole("combobox", { name: "Address", exact: true });
       await expect(address).toBeFocused();
-      await expect(address).toHaveValue("");
+      await expect(address).toHaveValue("example.test");
     }
   });
 }

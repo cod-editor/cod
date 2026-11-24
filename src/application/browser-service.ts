@@ -282,7 +282,7 @@ export class BrowserApplicationService {
           throw new Error("No active workspace for extension tab");
         const record = await this.openBrowser(
           { op: "browser.open", workspace, url },
-          true,
+          { extension: true },
         );
         return this.requireBrowserService().getWebContents(record.id);
       },
@@ -884,15 +884,17 @@ export class BrowserApplicationService {
     const url = contextLinkUrl(value, source.url);
     return this.openBrowser(
       { op: "browser.open", workspace: source.workspaceId, url },
-      false,
-      source,
+      { source },
     );
   }
 
   async openBrowser(
     request: OperationRequest,
-    extension = false,
-    source?: BrowserState,
+    {
+      extension = false,
+      source,
+      focusHome = false,
+    }: { extension?: boolean; source?: BrowserState; focusHome?: boolean } = {},
   ): Promise<BrowserState> {
     const requested = requiredString(request, "url");
     const url =
@@ -967,7 +969,11 @@ export class BrowserApplicationService {
       this.store.data.browsers.push(record);
       return record;
     });
-    await this.loadBrowser(record, url);
+    const ready = this.loadBrowser(record, url);
+    // Home's address exists once the pane is admitted. Keep native loading
+    // independent so only that foreground intent can focus the address.
+    if (focusHome && url === "about:blank") void ready.catch(() => {});
+    else await ready;
     return structuredClone(this.browser(record.id));
   }
   async withReopenedBrowser<T>(
@@ -1305,10 +1311,7 @@ export class BrowserApplicationService {
       else policies.push(policy);
     });
   }
-  async handle(
-    request: OperationRequest,
-    _trustedUi = false,
-  ): Promise<unknown> {
+  async handle(request: OperationRequest, trustedUi = false): Promise<unknown> {
     switch (request.op) {
       case "browser.downloads":
         return structuredClone(this.store.data.browserDownloads ?? []);
@@ -1480,7 +1483,9 @@ export class BrowserApplicationService {
           requiredString(request, "url"),
         );
       case "browser.open":
-        return this.openBrowser(request);
+        return this.openBrowser(request, {
+          focusHome: trustedUi && request.focus === true,
+        });
 
       case "browser.pin":
       case "browser.unpin":

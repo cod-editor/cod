@@ -690,21 +690,11 @@ export function createCommands(
       ? getState().workspaces.find((item) => item.id === target.workspace)
       : activeWorkspace();
     if (!workspace) return;
-    void invoke<{ paneId: string }>("browser.open", {
+    void createTab("browser.open", {
       workspace: workspace.id,
       url: "about:blank",
       ...(target ? { replacePane: target.pane } : {}),
-    })
-      .then((browser) => {
-        requestAnimationFrame(() => {
-          const address = panes.querySelector<HTMLInputElement>(
-            `[data-pane-id="${browser.paneId}"] input[aria-label="Address"]`,
-          );
-          address?.focus();
-          address?.select();
-        });
-      })
-      .catch(() => {});
+    }).catch(() => {});
   }
 
   function resumeConversationDialog(): void {
