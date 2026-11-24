@@ -82,6 +82,11 @@ const write = (message) =>
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const reply = (message, result) => write({ id: message.id, result });
 const notify = (method, params) => write({ method, params });
+const notifyUserItem = (item, turnId) => {
+  // Match the native Codex serialization of the live user item envelope.
+  for (const method of ["item/started", "item/completed"])
+    notify(method, { item, threadId: nativeId, turnId });
+};
 const later = (callback, delay) => {
   const timer = setTimeout(() => {
     timers.delete(timer);
@@ -620,8 +625,8 @@ function receive(message, external = false) {
     }
     const turn = active.turn;
     const item = {
-      id: `steered-${turn.id}-${turn.items.length}`,
       type: "userMessage",
+      id: `steered-${turn.id}-${turn.items.length}`,
       clientId: params.clientUserMessageId,
       content: params.input,
     };
@@ -631,8 +636,7 @@ function receive(message, external = false) {
     }
     reply(message, { turnId: turn.id });
     if (mode !== "silent" && mode !== "absent") {
-      for (const method of ["item/started", "item/completed"])
-        notify(method, { threadId: nativeId, turnId: turn.id, item });
+      notifyUserItem(item, turn.id);
       if (configuration().steeringReply) {
         const turnId = turn.id;
         const event = (method, payload) =>
@@ -731,9 +735,12 @@ function receive(message, external = false) {
       ? []
       : [
           {
-            id: `user-${active.turnId}`,
             type: "userMessage",
-            content: [{ type: "text", text: prompt }],
+            id: `user-${active.turnId}`,
+            content:
+              provider === "codex" && configuration().echoUserInput
+                ? params.input
+                : [{ type: "text", text: prompt }],
           },
         ],
   };
@@ -757,16 +764,7 @@ function receive(message, external = false) {
       }, 100);
       return;
     }
-    notify("item/started", {
-      threadId: nativeId,
-      turnId: active.turnId,
-      item: active.turn.items[0],
-    });
-    notify("item/completed", {
-      threadId: nativeId,
-      turnId: active.turnId,
-      item: active.turn.items[0],
-    });
+    notifyUserItem(active.turn.items[0], active.turnId);
   }
   if (provider === "codex" && prompt.startsWith("[async-question]")) {
     const turnId = active.turnId;
