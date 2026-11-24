@@ -16,12 +16,20 @@ import { BrowserDiagnostics } from "./diagnostics";
 import { loadFavicon } from "./favicon";
 import { faviconOrigin } from "./favicon-origin";
 import {
+  certificateSession,
+  localCertificate,
+  type CertificateIdentity,
+} from "./temporary-certificate";
+import {
   navigationWindow,
   normalizeNavigation,
   type BrowserNavigation,
 } from "./navigation";
 
 export interface BrowserSnapshot {
+  certificateOffer?: string;
+  temporaryCertificate?: boolean;
+  temporaryNavigationBlocked?: boolean;
   navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
@@ -50,6 +58,13 @@ export type BrowserEvent =
       download: BrowserDownload;
     };
 interface Resource {
+  certificateOffer?: CertificateIdentity & {
+    id: string;
+    url: string;
+    expires: number;
+  };
+  temporary?: ReturnType<typeof certificateSession>;
+  temporaryNavigationBlocked?: boolean;
   navigation?: BrowserNavigation;
   id: string;
   workspaceId: string;
@@ -164,6 +179,9 @@ export class BrowserService {
   owner(contentsId: number): string | undefined {
     return this.owners.get(contentsId)?.id;
   }
+  isTemporaryContents(contentsId: number): boolean {
+    return Boolean(this.owners.get(contentsId)?.temporary);
+  }
   onEvent(listener: (event: BrowserEvent) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -200,7 +218,8 @@ export class BrowserService {
     return origin ? this.favicons.get(origin) : undefined;
   }
   private readFavicon(resource: Resource, candidates: string[]) {
-    if (resource.awaitingDocument || resource.error) return;
+    if (resource.awaitingDocument || resource.error || resource.temporary)
+      return;
     const origin = faviconOrigin(resource.contents.getURL());
     if (!origin) return;
     const key = JSON.stringify(
@@ -246,14 +265,52 @@ export class BrowserService {
     });
     this.owners.set(contents.id, resource);
     contents.once("destroyed", () => this.owners.delete(contents.id));
+    contents.on(
+      "certificate-error",
+      (event, url, error, certificate, reply, mainFrame) => {
+        if (!mainFrame || contents !== resource.contents) return;
+        const identity = localCertificate(url, error, certificate.data);
+        if (!identity) return;
+        const temporary = resource.temporary;
+        if (temporary) {
+          if (
+            temporary.allows(url) &&
+            identity.fingerprint === temporary.identity.fingerprint
+          ) {
+            event.preventDefault();
+            reply(true);
+          }
+          return;
+        }
+        resource.certificateOffer = {
+          ...identity,
+          url,
+          id: randomUUID(),
+          expires: Date.now() + 120_000,
+        };
+      },
+    );
     const navigable = (url: string) =>
-      allowed(url, this.options.isAllowedExtensionUrl) &&
-      (!/^file:/i.test(url) || /^file:/i.test(contents.getURL()));
+      resource.temporary
+        ? resource.temporary.allows(url)
+        : allowed(url, this.options.isAllowedExtensionUrl) &&
+          (!/^file:/i.test(url) || /^file:/i.test(contents.getURL()));
+    const navigationBlocked = () => {
+      if (!resource.temporary) return;
+      resource.temporaryNavigationBlocked = true;
+      this.changed(resource);
+    };
     contents.on("will-navigate", (event, url) => {
-      if (!navigable(url)) event.preventDefault();
+      if (!navigable(url)) {
+        event.preventDefault();
+        navigationBlocked();
+      }
     });
     contents.on("will-redirect", (event, url) => {
-      if (!navigable(url)) event.preventDefault();
+      if (!navigable(url)) {
+        event.preventDefault();
+        navigationBlocked();
+      }
     });
     contents.on("will-frame-navigate", (event) => {
       // Chromium renders PDF streams in its built-in component extension frame.
@@ -263,10 +320,17 @@ export class BrowserService {
         event.url.startsWith(
           "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/",
         );
-      if (!pdfFrame && !navigable(event.url)) event.preventDefault();
+      if ((!pdfFrame || resource.temporary) && !navigable(event.url)) {
+        event.preventDefault();
+        if (event.isMainFrame) navigationBlocked();
+      }
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.setWindowOpenHandler((details) => {
+      if (resource.temporary) {
+        navigationBlocked();
+        return { action: "deny" };
+      }
       if (!navigable(details.url)) return { action: "deny" };
       const webPreferences = {
         session: this.options.session,
@@ -313,7 +377,11 @@ export class BrowserService {
     this.options.onViewCreated?.(contents, resource.id);
   }
   private createResource(
-    input: { id: string; workspaceId: string },
+    input: {
+      id: string;
+      workspaceId: string;
+      certificate?: CertificateIdentity;
+    },
     options?: Electron.WebContentsViewConstructorOptions,
   ): Resource {
     if (this.disposed) throw new Error("Browser service is closed");
@@ -323,11 +391,13 @@ export class BrowserService {
       throw new Error("Browser view ID already exists");
     // createWindow supplies an existing WebContents: adopt it so Chromium can
     // complete window.open with its original opener and pending POST request.
+    const temporary =
+      input.certificate && certificateSession(input.certificate);
     const view = new WebContentsView({
       ...options,
       webPreferences: {
         ...options?.webPreferences,
-        session: this.options.session,
+        session: temporary?.network ?? this.options.session,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -343,6 +413,7 @@ export class BrowserService {
       contents: view.webContents,
       visible: false,
       popups: new Set(),
+      temporary,
     };
     this.resources.set(input.id, resource);
     resource.contents.once("destroyed", () =>
@@ -378,6 +449,8 @@ export class BrowserService {
           resource.restoredFailure = false;
           resource.error = undefined;
           resource.failedUrl = undefined;
+          resource.certificateOffer = undefined;
+          resource.temporaryNavigationBlocked = undefined;
           resource.unavailableHttps = false;
           resource.redirected = false;
           changed();
@@ -390,6 +463,11 @@ export class BrowserService {
           if (!mainFrame || code === -3) return;
           resource.error = `Page could not load (${description || `network error ${code}`}). Reload to try again.`;
           resource.failedUrl = failedUrl;
+          if (
+            resource.certificateOffer?.url.split("#")[0] !==
+            failedUrl.split("#")[0]
+          )
+            resource.certificateOffer = undefined;
           // Chromium ERR_CONNECTION_REFUSED and ERR_SSL_PROTOCOL_ERROR.
           resource.unavailableHttps =
             !resource.redirected && (code === -102 || code === -107);
@@ -399,6 +477,7 @@ export class BrowserService {
       view.webContents.on("render-process-gone", (_event, details) => {
         resource.error = `Page stopped (${details.reason}). Reload to try again.`;
         resource.failedUrl = view.webContents.getURL();
+        resource.certificateOffer = undefined;
         resource.unavailableHttps = false;
         changed();
       });
@@ -443,6 +522,7 @@ export class BrowserService {
     id: string;
     workspaceId: string;
     url: string;
+    certificate?: CertificateIdentity;
     deferNavigation?: boolean;
     navigation?: BrowserNavigation;
     beforeNavigation?: () => Promise<void>;
@@ -557,6 +637,31 @@ export class BrowserService {
       this.updateNavigation(resource);
     return this.snapshot(id);
   }
+  checkTemporaryNavigation(id: string, url: string): void {
+    const temporary = this.resources.get(id)?.temporary;
+    if (temporary && !temporary.allows(url))
+      throw new Error("Open a regular tab to visit another site");
+  }
+  takeCertificateOffer(
+    id: string,
+    url: string,
+    offer: string,
+  ): CertificateIdentity {
+    const resource = this.resource(id);
+    const certificate = resource.certificateOffer;
+    if (
+      resource.temporary ||
+      !resource.error ||
+      resource.failedUrl !== url ||
+      !certificate ||
+      certificate.id !== offer ||
+      certificate.expires < Date.now()
+    )
+      throw new Error("Reload the page to check its certificate again");
+    resource.certificateOffer = undefined;
+    this.changed(resource);
+    return { origin: certificate.origin, fingerprint: certificate.fingerprint };
+  }
   httpsUnavailable(id: string, url: string): boolean {
     const resource = this.resources.get(id);
     return !!(resource?.unavailableHttps && resource.failedUrl === url);
@@ -608,6 +713,11 @@ export class BrowserService {
         : wc.getTitle(),
       loading: !resource.error && wc.isLoading(),
       error: resource.error,
+      certificateOffer: resource.error
+        ? resource.certificateOffer?.id
+        : undefined,
+      temporaryCertificate: resource.temporary ? true : undefined,
+      temporaryNavigationBlocked: resource.temporaryNavigationBlocked,
       lastSuccessfulUrl: resource.lastSuccessfulUrl,
       navigation: resource.navigation,
       favicon: resource.error ? undefined : resource.favicon,
@@ -745,6 +855,7 @@ export class BrowserService {
     if (!resource || (contents && contents !== resource.contents)) return;
     resource.diagnostics?.dispose();
     resource.pendingFavicon?.abort();
+    resource.temporary?.close();
     this.resources.delete(id);
     for (const popup of resource.popups)
       if (!popup.isDestroyed()) popup.destroy();

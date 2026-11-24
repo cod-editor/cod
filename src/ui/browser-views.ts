@@ -278,11 +278,16 @@ export function createBrowserViews(
       'button[aria-label="Forward"]',
     )!.disabled = !record.canGoForward;
     const browserActions = container.querySelector("browser-action-list");
+    browserActions?.toggleAttribute(
+      "hidden",
+      Boolean(record.temporaryCertificate),
+    );
     if (record.nativeTabId)
       browserActions?.setAttribute("tab", String(record.nativeTabId));
     const blocking = container.querySelector<HTMLButtonElement>(
       '[aria-label="Ad blocking"]',
     )!;
+    blocking.hidden = Boolean(record.temporaryCertificate);
     const warning = !!(
       record.addons?.adblock.error || record.addons?.bitwarden.error
     );
@@ -299,10 +304,12 @@ export function createBrowserViews(
     );
     const failed = !!record.error && !record.agentPage;
     const insecure = container.querySelector<HTMLElement>(".browser-insecure")!;
+    insecure.textContent = record.temporaryCertificate
+      ? "Certificate not verified"
+      : "Not secure";
     insecure.hidden = !(
       !record.agentPage &&
-      !failed &&
-      isInsecureSite(record.url)
+      (record.temporaryCertificate || (!failed && isInsecureSite(record.url)))
     );
     if (insecure.hidden) address.removeAttribute("aria-describedby");
     else address.setAttribute("aria-describedby", insecure.id);
@@ -316,6 +323,7 @@ export function createBrowserViews(
     failure.hidden = !failed;
     const fallback = failed ? record.httpFallback : undefined;
     const certificate = untrustedCertificate(record);
+    const certificateOffer = certificate ? record.certificateOffer : undefined;
     const previous =
       record.lastSuccessfulUrl && record.lastSuccessfulUrl !== record.url;
     const recover = failure.querySelector<HTMLButtonElement>(
@@ -332,7 +340,15 @@ export function createBrowserViews(
     proceed.dataset.offer = fallback?.id ?? "";
     failure.querySelector<HTMLButtonElement>(
       "[data-browser-system-browser]",
-    )!.hidden = !certificate;
+    )!.hidden =
+      !certificate ||
+      Boolean(certificateOffer) ||
+      Boolean(record.temporaryCertificate);
+    const continueCertificate = failure.querySelector<HTMLButtonElement>(
+      "[data-browser-continue-certificate]",
+    )!;
+    continueCertificate.hidden = !certificateOffer;
+    continueCertificate.dataset.offer = certificateOffer ?? "";
     failure.querySelector<HTMLButtonElement>("[data-browser-retry]")!.hidden =
       Boolean(fallback);
     const title = fallback
@@ -346,7 +362,11 @@ export function createBrowserViews(
     failure.querySelector("p")!.textContent = fallback
       ? "Opening this site over HTTP would leave your connection unencrypted."
       : certificate
-        ? "Cod doesn't trust this site's certificate issuer. Your system browser can show the warning and available options."
+        ? certificateOffer
+          ? "Cod doesn't trust this site's certificate issuer. If you trust the site, open a temporary tab with separate cookies. Closing the tab removes the exception."
+          : record.temporaryCertificate
+            ? "This certificate could not be accepted in the temporary tab."
+            : "Cod doesn't trust this site's certificate issuer. Your system browser can show the warning and available options."
         : error.includes("ERR_TOO_MANY_REDIRECTS")
           ? "The site redirected too many times."
           : error.includes("ERR_NAME_NOT_RESOLVED")
@@ -385,6 +405,9 @@ export function createBrowserViews(
     container.querySelector<HTMLElement>(".browser-status")!.textContent = [
       record.agentPage ? (record.error ?? "") : "",
       record.permissionDenied ?? "",
+      record.temporaryNavigationBlocked
+        ? "Open a regular tab to visit another site."
+        : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -635,6 +658,12 @@ export function createBrowserViews(
       if (current && untrustedCertificate(current))
         await invoke("browser.open-external", { url: current.url });
     });
+    const continueCertificate = paneButton("Open in temporary tab", () =>
+      invoke("browser.continue-certificate", {
+        id: record.id,
+        offer: continueCertificate.dataset.offer,
+      }),
+    );
     const proceed = paneButton("Open over HTTP", () =>
       invoke("browser.http-fallback", {
         id: record.id,
@@ -644,12 +673,13 @@ export function createBrowserViews(
     retry.dataset.browserRetry = "";
     recover.dataset.browserRecover = "";
     systemBrowser.dataset.browserSystemBrowser = "";
+    continueCertificate.dataset.browserContinueCertificate = "";
     proceed.dataset.browserHttp = "";
     failure.append(
       failureTitle,
       error,
       url,
-      actionRow(retry, recover, systemBrowser, proceed),
+      actionRow(retry, recover, continueCertificate, systemBrowser, proceed),
     );
     const home = createBrowserHome(getState, invoke, (url) => {
       void invoke("browser.navigate", { id: record.id, url });
