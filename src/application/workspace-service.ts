@@ -925,16 +925,11 @@ export class WorkspaceApplicationService {
         });
 
       case "workspace.focus":
-        return this.store.change(
-          () => {
-            const workspace = this.store.workspace(
-              requiredString(request, "id"),
-            );
-            this.store.data.activeWorkspaceId = workspace.id;
-            return { id: workspace.id };
-          },
-          { publishBeforePersist: true },
-        );
+        return this.store.changeLayout(() => {
+          const workspace = this.store.workspace(requiredString(request, "id"));
+          this.store.data.activeWorkspaceId = workspace.id;
+          return { id: workspace.id };
+        });
 
       case "workspace.add-folder":
         return this.store.change(async () => {
@@ -955,51 +950,54 @@ export class WorkspaceApplicationService {
           return { id: workspace.id, folders: workspace.folders };
         });
 
-      case "workspace.settings":
-        return this.store.change(() => {
+      case "workspace.settings": {
+        if (
+          !request.settings ||
+          typeof request.settings !== "object" ||
+          Array.isArray(request.settings)
+        )
+          throw new Error("settings must be an object");
+        const settings = object(request.settings);
+        if (
+          settings.filesVisible !== undefined &&
+          typeof settings.filesVisible !== "boolean"
+        )
+          throw new Error("filesVisible must be boolean");
+        const allowed = ["filesVisible", "chatMaxWidth", "filesWidth"];
+        if (Object.keys(settings).some((key) => !allowed.includes(key)))
+          throw new Error("Unknown workspace setting");
+        if (
+          settings.chatMaxWidth !== undefined &&
+          (typeof settings.chatMaxWidth !== "number" ||
+            !Number.isFinite(settings.chatMaxWidth) ||
+            settings.chatMaxWidth < 320 ||
+            settings.chatMaxWidth > 10000)
+        )
+          throw new Error("chatMaxWidth must be between 320 and 10000");
+        const width = settings.filesWidth;
+        if (
+          width !== undefined &&
+          (typeof width !== "number" ||
+            !Number.isFinite(width) ||
+            width < 160 ||
+            width > 800)
+        )
+          throw new Error("filesWidth must be between 160 and 800");
+        const update = () => {
           const workspace = this.store.workspace(requiredString(request, "id"));
-          if (
-            !request.settings ||
-            typeof request.settings !== "object" ||
-            Array.isArray(request.settings)
-          )
-            throw new Error("settings must be an object");
-          const settings = object(request.settings);
-          if (
-            settings.filesVisible !== undefined &&
-            typeof settings.filesVisible !== "boolean"
-          )
-            throw new Error("filesVisible must be boolean");
-          const allowed = ["filesVisible", "chatMaxWidth", "filesWidth"];
-          if (Object.keys(settings).some((key) => !allowed.includes(key)))
-            throw new Error("Unknown workspace setting");
-          if (
-            settings.chatMaxWidth !== undefined &&
-            (typeof settings.chatMaxWidth !== "number" ||
-              !Number.isFinite(settings.chatMaxWidth) ||
-              settings.chatMaxWidth < 320 ||
-              settings.chatMaxWidth > 10000)
-          )
-            throw new Error("chatMaxWidth must be between 320 and 10000");
-          const width = settings.filesWidth;
-          if (
-            width !== undefined &&
-            (typeof width !== "number" ||
-              !Number.isFinite(width) ||
-              width < 160 ||
-              width > 800)
-          )
-            throw new Error("filesWidth must be between 160 and 800");
           workspace.settings = { ...workspace.settings, ...settings };
           return workspace.settings;
-        });
+        };
+        return settings.filesVisible !== undefined &&
+          Object.keys(settings).length === 1
+          ? this.store.changeLayout(update)
+          : this.store.change(update);
+      }
 
       case "group.focus":
       case "group.visibility":
       case "group.toggle-split":
-        return this.store.change(() => this.groupOperation(request), {
-          publishBeforePersist: true,
-        });
+        return this.store.changeLayout(() => this.groupOperation(request));
 
       case "group.split":
       case "group.resize":
@@ -1198,23 +1196,20 @@ export class WorkspaceApplicationService {
         return this.store.change(() => this.splitPane(request));
 
       case "pane.focus":
-        return this.store.change(
-          () => {
-            const workspace = this.store.workspace(
-              requiredString(request, "workspace"),
-            );
-            const pane = this.store.pane(
-              workspace,
-              requiredString(request, "id"),
-            );
-            workspace.activePaneId = pane.id;
-            normalizeGroups(workspace);
-            if (pane.kind === "conversation")
-              workspace.lastConversationId = pane.conversationId;
-            return { paneId: pane.id };
-          },
-          { publishBeforePersist: true },
-        );
+        return this.store.changeLayout(() => {
+          const workspace = this.store.workspace(
+            requiredString(request, "workspace"),
+          );
+          const pane = this.store.pane(
+            workspace,
+            requiredString(request, "id"),
+          );
+          workspace.activePaneId = pane.id;
+          normalizeGroups(workspace);
+          if (pane.kind === "conversation")
+            workspace.lastConversationId = pane.conversationId;
+          return { paneId: pane.id };
+        });
 
       case "pane.reopen":
         return this.reopenPane(request);

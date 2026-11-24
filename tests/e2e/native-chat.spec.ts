@@ -56,6 +56,176 @@ const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
 const text = (chat: Chat) =>
   chat.messages.map((message) => message.text).join("\n");
 
+test("Assistant visualization links open sandboxed HTML beside the chat", async ({}, info) => {
+  await shell.configure({ codex: { finalOnly: true } });
+  const source = await shell.create("Original visualization workspace");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    source,
+    "--path",
+    shell.folders[1],
+  );
+  const chat = await shell.newChat(source, "codex");
+  const file = path.join(shell.folders[0], "interactive card.html");
+  const alias = path.join(shell.folders[0], "outside.html");
+  const external = path.join(shell.temporary, "private fixture.html");
+  const missing = path.join(shell.folders[0], "missing.html");
+  await writeFile(
+    file,
+    '<h1>Invented visualization</h1><button id="update">Update tally</button><output id="tally">0</output><script>document.getElementById("update").onclick=()=>document.getElementById("tally").textContent="1"</script>',
+  );
+  await writeFile(external, "<h1>Outside the target workspace</h1>");
+  await symlink(external, alias);
+  const reference = (file: string, title?: string) =>
+    `visualize${JSON.stringify({ path: file, title })}`;
+  const marker = reference(file);
+  await shell.send(
+    chat.id,
+    [
+      "I prepared an interactive tally.",
+      marker,
+      "The tally opens in a tab.",
+      reference(alias, "linked tally"),
+      reference(missing, "missing tally"),
+      "\\" + marker,
+      "```text\n" + marker + "\n```",
+      "`" + marker + "`",
+      "> " + marker,
+      marker.slice(0, -1),
+      "[Documentation](https://example.invalid/guide)",
+    ].join("\n\n"),
+  );
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  const assistantReply = () =>
+    transcript(chat).locator(".chat-message.assistant");
+  const reply = assistantReply();
+  await expect(reply).toContainText("The tally opens in a tab.");
+  await reply.screenshot({ path: info.outputPath("visualization-reply.png") });
+  await shell.page.screenshot({
+    path: info.outputPath("visualization-reply-window.png"),
+  });
+  const openVisualization = () =>
+    assistantReply().getByRole("button", {
+      name: "Open visualization",
+      exact: true,
+    });
+  await expect(reply.getByRole("button")).toHaveText([
+    "Open visualization",
+    "Open linked tally",
+    "Open missing tally",
+  ]);
+  await expect(reply.locator("pre")).toHaveText(marker);
+  await expect(reply.locator("p > code")).toHaveText(marker);
+  await expect(reply.locator("blockquote")).toHaveText(marker);
+  await expect(
+    reply.getByRole("link", { name: "Documentation" }),
+  ).toHaveAttribute("href", "https://example.invalid/guide");
+  expect((await shell.cli<AppState>("state")).browsers).toHaveLength(0);
+  await openVisualization().focus();
+  await expect(openVisualization()).toBeFocused();
+  await shell.page.keyboard.press("Enter");
+  const error = shell.pane(chat.paneId).getByRole("alert");
+  await expect(error).toHaveText(
+    "Visualization HTML was not found in this workspace.",
+  );
+  expect((await shell.cli<AppState>("state")).browsers).toHaveLength(0);
+
+  const destination = await shell.create("Visualization destination");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    destination,
+    "--path",
+    shell.folders[0],
+  );
+  await shell.cli(
+    "conversation",
+    "move",
+    "--id",
+    chat.id,
+    "--workspace",
+    destination,
+    "--follow",
+    "true",
+  );
+  for (const name of ["Open linked tally", "Open missing tally"]) {
+    await reply.getByRole("button", { name, exact: true }).click();
+    await expect(error).toHaveText(
+      "Visualization HTML was not found in this workspace.",
+    );
+    expect((await shell.cli<AppState>("state")).browsers).toHaveLength(0);
+  }
+  await openVisualization().click();
+  await expect(
+    shell.page.getByRole("combobox", { name: "Address", exact: true }),
+  ).toHaveValue(/interactive%20card\.html$/);
+  const browserPage = () =>
+    shell
+      .app!.context()
+      .pages()
+      .find((page) => page.url().endsWith("/interactive%20card.html"));
+  await expect.poll(() => !!browserPage()).toBe(true);
+  const content = browserPage()!;
+  await expect(
+    content.getByRole("heading", { name: "Invented visualization" }),
+  ).toBeVisible();
+  await content.getByRole("button", { name: "Update tally" }).click();
+  await expect(content.locator("#tally")).toHaveText("1");
+  expect(
+    await content.evaluate(() =>
+      ["cod", "codPage", "require"].map(
+        (name) => typeof Reflect.get(window, name),
+      ),
+    ),
+  ).toEqual(["undefined", "undefined", "undefined"]);
+  expect((await shell.cli<AppState>("state")).browsers[0].workspaceId).toBe(
+    destination,
+  );
+  const browserPreferences = await shell.app!.evaluate(
+    ({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === url)! as unknown as {
+        getLastWebPreferences(): Electron.WebPreferences;
+      };
+      const preferences = contents.getLastWebPreferences();
+      return {
+        sandbox: preferences.sandbox,
+        contextIsolation: preferences.contextIsolation,
+        nodeIntegration: preferences.nodeIntegration,
+        preload: preferences.preload ?? "",
+      };
+    },
+    content.url(),
+  );
+  expect(browserPreferences).toEqual({
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    preload: "",
+  });
+  await expect(reply).toBeVisible();
+  await shell.page.screenshot({
+    path: info.outputPath("visualization-browser-and-chat.png"),
+  });
+
+  await content.screenshot({
+    path: info.outputPath("visualization-browser-content.png"),
+  });
+
+  await shell.stop();
+  await shell.start();
+  await expect(openVisualization()).toBeVisible();
+  await expect(assistantReply()).toContainText("The tally opens in a tab.");
+  await openVisualization().click();
+  await expect(
+    shell.page.getByRole("combobox", { name: "Address", exact: true }),
+  ).toHaveValue(/interactive%20card\.html$/);
+});
+
 test("Collapsed tool history does not materialize output until expanded", async () => {
   await shell.configure({ codex: { reasoningOptions: true } });
   const workspace = await shell.create("Long tool history");

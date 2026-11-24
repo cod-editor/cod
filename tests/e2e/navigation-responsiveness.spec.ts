@@ -162,6 +162,15 @@ test("Layout selection renders during the state checkpoint and rolls back a fail
         },
         { action, reject },
       );
+    const files = () =>
+      app.page.getByRole("button", {
+        name: "Toggle files",
+        exact: true,
+      });
+    const filesVisible = async () =>
+      (await saved()).workspaces.find((w) => w.id === main)?.settings
+        ?.filesVisible === true;
+    const initialFiles = await filesVisible();
     try {
       await app.overview();
       await checkpoint("arm");
@@ -192,6 +201,17 @@ test("Layout selection renders during the state checkpoint and rolls back a fail
       await checkpoint("finish");
       await expect.poll(collapsed).toBe(true);
 
+      await checkpoint("arm");
+      await files().click();
+      await expect.poll(() => checkpoint("waiting")).toBe(true);
+      await expect(files()).toHaveAttribute(
+        "aria-pressed",
+        String(!initialFiles),
+      );
+      expect(await filesVisible()).toBe(initialFiles);
+      await checkpoint("finish");
+      await expect.poll(filesVisible).toBe(!initialFiles);
+
       const tab = (id: string) =>
         app.page.locator(`[role="tab"][data-tab-id="${id}"]`);
       await checkpoint("arm");
@@ -216,6 +236,10 @@ test("Layout selection renders during the state checkpoint and rolls back a fail
       app.page.getByRole("button", { name: "Overview", exact: true }),
     ).toHaveText("Invented main task");
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(files()).toHaveAttribute(
+      "aria-pressed",
+      String(!initialFiles),
+    );
     await expect(app.pane(initial.activePaneId)).toBeVisible();
   } finally {
     await app.cleanup();

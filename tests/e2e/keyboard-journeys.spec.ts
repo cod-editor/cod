@@ -361,7 +361,7 @@ test("Native website keys stay on the page and palette cancellation restores its
     server = createServer((_request, response) => {
       response.setHeader("Content-Type", "text/html");
       response.end(
-        `<!doctype html><title>Invented keyboard page</title><label>First<input id="first" autofocus value="first field"></label><label>Second<input id="second" value="second field"></label><p>Closing marker</p><script>window.keys=[];document.addEventListener('keydown',e=>{window.keys.push({key:e.key,code:e.code,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey});if((e.ctrlKey||e.metaKey)&&['b','p','f'].includes(e.key.toLowerCase()))e.preventDefault()});</script>`,
+        `<!doctype html><title>Invented keyboard page</title><label>First<input id="first" autofocus value="first field"></label><label>Second<input id="second" value="second field"></label><div id="rich" contenteditable>Invented rich text</div><p>Closing marker</p><script>window.keys=[];document.addEventListener('keydown',e=>{window.keys.push({key:e.key,code:e.code,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey});if((e.ctrlKey||e.metaKey)&&e.target instanceof HTMLInputElement&&['b','p','f'].includes(e.key.toLowerCase()))e.preventDefault()});</script>`,
       );
     });
     await new Promise<void>((resolve) =>
@@ -418,20 +418,52 @@ test("Native website keys stay on the page and palette cancellation restores its
     await key("Home");
     await key("Right");
     await key("Right", ["shift"]);
-    const selected = await inspect();
-    expect(selected.field).toBe("second");
-    expect(selected.start).toBe(1);
-    expect(selected.end).toBe(2);
+    await expect.poll(inspect).toMatchObject({
+      focused: true,
+      field: "second",
+      start: 1,
+      end: 2,
+    });
     const mod = process.platform === "darwin" ? "meta" : "control";
     for (const letter of ["B", "P"]) await key(letter, [mod]);
-    const observed = await inspect();
-    for (const letter of ["b", "p"])
-      expect(
-        observed.keys.filter(
-          (item: { key: string }) => item.key.toLowerCase() === letter,
-        ),
-      ).toHaveLength(1);
+    await expect
+      .poll(async () => {
+        const keys: Array<{ key: string }> = (await inspect())?.keys ?? [];
+        return ["b", "p"].map(
+          (letter) =>
+            keys.filter((item) => item.key.toLowerCase() === letter).length,
+        );
+      })
+      .toEqual([1, 1]);
     await expect(app.page.getByRole("dialog")).toHaveCount(0);
+    const toggleFiles = app.page.getByRole("button", { name: "Toggle files" });
+    const runPageScript = (script: string) =>
+      app.app!.evaluate(
+        ({ webContents }, { url, script }) =>
+          webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === url)!
+            .executeJavaScript(script),
+        { url, script },
+      );
+    await expect(toggleFiles).toHaveAttribute("aria-pressed", "false");
+    await runPageScript("document.querySelector('#rich').focus()");
+    await key("B", [mod]);
+    await expect
+      .poll(() => runPageScript("document.queryCommandState('bold')"))
+      .toBe(true);
+    await expect(toggleFiles).toHaveAttribute("aria-pressed", "false");
+
+    await runPageScript("document.activeElement.blur()");
+    await key("B", [mod]);
+    await expect(toggleFiles).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    await key("B", [mod]);
+    await expect(toggleFiles).toHaveAttribute("aria-pressed", "false");
+    await expect.poll(async () => (await inspect())?.focused).toBe(true);
+    await runPageScript(
+      "document.querySelector('#second').focus(); document.querySelector('#second').setSelectionRange(1, 2)",
+    );
     await key("P", [mod, "shift"]);
     await expect(
       app.page.getByRole("dialog", { name: "Command palette" }),

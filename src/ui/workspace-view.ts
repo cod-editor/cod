@@ -391,18 +391,35 @@ export function createWorkspaceView(
     workspace: string,
     reference: string,
     conversation?: string,
+    kind?: "visualization",
   ): Promise<void> {
+    if (
+      kind === "visualization" &&
+      getState().remoteWorkspace?.ids.includes(workspace)
+    )
+      throw new Error("Visualizations need a local workspace.");
     const chat = conversation
       ? views.chatOpen(workspace, conversation)
       : undefined;
-    if (chat && /^https?:\/\//i.test(reference)) {
+    if (chat && !kind && /^https?:\/\//i.test(reference)) {
       await chat.open("browser.open", { url: reference });
       return;
     }
     const result = await invoke<{
       candidates: Array<{ path: string }>;
       line?: number;
-    }>("file.resolve", { workspace, path: reference });
+    }>("file.resolve", {
+      workspace,
+      path: reference,
+      ...(kind === "visualization" && { workspaceOnly: true }),
+    });
+    if (kind === "visualization") {
+      const path = result.candidates[0]?.path;
+      if (!chat || !path || !/\.html?$/i.test(path) || result.line)
+        throw new Error("Visualization HTML was not found in this workspace.");
+      await chat.open("browser.open", { url: localFileAddress(path) });
+      return;
+    }
     const open = (path: string, target = chat) => {
       if (
         /\.html?$/i.test(path) &&

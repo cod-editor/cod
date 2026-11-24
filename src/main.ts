@@ -13,6 +13,7 @@ import {
   resolveKeybinding,
   formatShortcut,
   configureKeymap,
+  type CommandId,
   type KeymapState,
 } from "./keyboard";
 import { registerAgentPageScheme } from "./agent-pages";
@@ -27,6 +28,7 @@ import {
   dialog,
   shell,
   webContents,
+  WebContentsView,
   type WebContents,
 } from "electron";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
@@ -80,9 +82,9 @@ const keyboardPlatform = process.platform === "darwin" ? "darwin" : "linux";
 const keymapPath = path.join(dataDirectory, "keymap.json");
 let keymapState: KeymapState = { path: keymapPath, overrides: {} };
 let refreshKeyboardMenu = () => {};
-function settingsAccelerator(): string | undefined {
+function menuAccelerator(command: CommandId): string | undefined {
   return (
-    formatShortcut("settings", keyboardPlatform)
+    formatShortcut(command, keyboardPlatform)
       .replaceAll("⌘", "Command+")
       .replaceAll("⌃", "Ctrl+")
       .replaceAll("⌥", "Alt+")
@@ -976,7 +978,7 @@ async function start(): Promise<void> {
     const settingsItem: Electron.MenuItemConstructorOptions = {
       id: "settings",
       label: "Settings...",
-      accelerator: settingsAccelerator(),
+      accelerator: menuAccelerator("settings"),
       click: () =>
         mainWindow?.webContents.send("cod:command", { command: "settings" }),
     };
@@ -1000,6 +1002,31 @@ async function start(): Promise<void> {
         });
       },
     };
+    // Unlike the before-input route, the menu receives keys Chromium leaves
+    // unhandled. Website editors and their shortcuts get the first response.
+    const toggleFilesItem: Electron.MenuItemConstructorOptions = {
+      label: "Toggle files",
+      id: "navigation.toggleFiles",
+      visible: false,
+      acceleratorWorksWhenHidden: true,
+      click: () => {
+        const window = mainWindow;
+        const contents = webContents.getFocusedWebContents();
+        if (
+          !window?.isFocused() ||
+          !contents ||
+          operations.diagnosticContext(contents.id)?.role !== "browser" ||
+          !window.contentView.children.some(
+            (view) =>
+              view instanceof WebContentsView && view.webContents === contents,
+          )
+        )
+          return;
+        window.webContents.send("cod:command", {
+          command: "navigation.toggleFiles",
+        });
+      },
+    };
     const template: Electron.MenuItemConstructorOptions[] =
       process.platform === "darwin"
         ? [
@@ -1008,6 +1035,7 @@ async function start(): Promise<void> {
               submenu: [
                 settingsItem,
                 quickTerminalItem,
+                toggleFilesItem,
                 { type: "separator" },
                 { role: "quit" },
               ],
@@ -1017,7 +1045,12 @@ async function start(): Promise<void> {
         : [
             {
               label: "File",
-              submenu: [settingsItem, { type: "separator" }, { role: "quit" }],
+              submenu: [
+                settingsItem,
+                toggleFilesItem,
+                { type: "separator" },
+                { role: "quit" },
+              ],
             },
             {
               label: "Edit",
@@ -1028,7 +1061,8 @@ async function start(): Promise<void> {
             },
           ];
     refreshKeyboardMenu = () => {
-      settingsItem.accelerator = settingsAccelerator();
+      settingsItem.accelerator = menuAccelerator("settings");
+      toggleFilesItem.accelerator = menuAccelerator("navigation.toggleFiles");
       // AppKit can claim Command+Backquote before it reaches a view. Only an
       // explicit binding for it in Cod may take precedence over window cycling.
       quickTerminalItem.accelerator =
