@@ -127,6 +127,7 @@ const commands = createCommands(() => state, invoke, panes, setStatus, {
   navigation,
   saveFile: documents.save,
   focusNativeView: browsers.focusNative,
+  showBrowserZoom: browsers.showZoom,
   quickTerminal,
   stageBrowserBackdrop: browsers.stageBrowserBackdrop,
   find: finder,

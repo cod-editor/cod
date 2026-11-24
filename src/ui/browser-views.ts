@@ -17,6 +17,10 @@ export function createBrowserViews(
   ) => HTMLButtonElement,
 ) {
   const browserPanes = new Map<string, HTMLElement>();
+  const zoomTimers = new WeakMap<
+    HTMLOutputElement,
+    ReturnType<typeof setTimeout>
+  >();
   const homes = new Map<string, ReturnType<typeof createBrowserHome>>();
   let browserLayoutPending = false;
   function scheduleBrowserLayout(): void {
@@ -412,7 +416,11 @@ export function createBrowserViews(
     insecure.className = "browser-insecure";
     insecure.textContent = "Not secure";
     insecure.hidden = true;
-    navigation.append(insecure, address);
+    const zoom = document.createElement("output");
+    zoom.className = "browser-zoom-notice";
+    zoom.setAttribute("aria-label", "Page zoom");
+    zoom.hidden = true;
+    navigation.append(insecure, address, zoom);
     const suggestions = addressSuggestions(
       address,
       invoke,
@@ -647,6 +655,22 @@ export function createBrowserViews(
         updateBrowserPane(view, record);
       }
       return view;
+    },
+    showZoom(id: string, zoomPercent: number) {
+      const zoom = browserPanes
+        .get(id)
+        ?.querySelector<HTMLOutputElement>(".browser-zoom-notice");
+      if (!zoom) return;
+      clearTimeout(zoomTimers.get(zoom));
+      zoom.hidden = false;
+      zoom.value = `${zoomPercent}%`;
+      zoomTimers.set(
+        zoom,
+        setTimeout(() => {
+          zoom.hidden = true;
+          zoom.value = "";
+        }, 1800),
+      );
     },
     focusAddress(id: string) {
       const input = browserPanes
