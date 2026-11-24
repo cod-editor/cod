@@ -819,14 +819,16 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
   }
 });
 
-test("Completed turns fold commentary and tools while final answers and decisions remain visible", async ({}, info) => {
+test("Agent messages stay visible between collapsed tool groups while working and after completion", async ({}, info) => {
   const app = new ChatApp();
+  const instruction = "Choose Keep Open to continue.";
   await app.prepare();
   await app.configure({
     codex: {
       extraTools: 3,
+      commentaryBetweenTools: instruction,
       interactiveQuestion: true,
-      finalDelayMs: 2000,
+      finalDelayMs: 4000,
       options: true,
       reasoningOptions: true,
       narrative:
@@ -838,56 +840,77 @@ test("Completed turns fold commentary and tools while final answers and decision
     const composer = app.page.locator(".composer textarea");
     await composer.fill("Search and inspect the invented files.");
     await composer.press(`${modifier}+Enter`);
-    await expect(
-      app.page.getByText("STREAM Search and inspect the invented files.", {
-        exact: true,
-      }),
-    ).toBeAttached();
-    const working = app.page.getByRole("status", { name: "Turn activity" });
+    const transcript = app.page.locator(".transcript");
+    const progressText = transcript.getByText(instruction, { exact: true });
+    await expect(progressText).toBeAttached();
+    const working = transcript.getByRole("status", { name: "Turn activity" });
     await expect(working).toHaveText(/Working · \d+s/);
-    const liveActivity = app.page.locator("details.turn-activity").first();
-    await expect(liveActivity.locator(".current-tool")).toHaveText("Run echo");
-    await expect(liveActivity.locator(".tool-activity")).toHaveCount(4);
-    await expect(liveActivity.locator(".tool-activity").last()).toHaveAttribute(
-      "data-tool-phase",
-      "completed",
-    );
-    expect(await working.evaluate((node) => !!node.closest("summary"))).toBe(
-      false,
-    );
-    await expect(liveActivity.locator(".assistant").first()).toBeHidden();
-    await liveActivity.locator(":scope > summary").click();
-    await expect(liveActivity.locator(".assistant").first()).toBeVisible();
-    await expect(working).toHaveText(/Working · [1-9]\d*s/);
-    await expect(liveActivity).toHaveAttribute("open", "");
-    await liveActivity.locator(":scope > summary").click();
-    await expect(app.page.locator(".transcript > .tool-activity")).toHaveCount(
-      0,
-    );
-    await expect(app.page.locator(".transcript > .turn-activity")).toHaveCount(
-      1,
-    );
-    await expect(
-      app.page.locator(".chat-body > .conversation-status"),
-    ).toBeHidden();
     await app.page.screenshot({
       path: info.outputPath("working-in-turn-activity.png"),
     });
+    const groups = transcript.locator(":scope > details.turn-activity");
+    await expect(groups).toHaveCount(2);
+    const earlier = groups
+      .filter({ has: app.page.locator('summary[title="echo invented-tool"]') })
+      .first();
+    const current = groups
+      .filter({
+        has: app.page.locator('summary[title="echo invented-extra-0"]'),
+      })
+      .first();
+    await expect(progressText).toBeVisible();
+    await expect(
+      transcript.locator(":scope > .assistant").filter({
+        hasText: instruction,
+      }),
+    ).toHaveCount(1);
+    const order = await progressText.evaluate((text) => {
+      const row = text.closest(".chat-message")!;
+      return [...row.parentElement!.children].indexOf(row);
+    });
+    await expect(earlier).not.toHaveAttribute("open", "");
+    expect(
+      await earlier.evaluate((row) =>
+        [...row.parentElement!.children].indexOf(row),
+      ),
+    ).toBeLessThan(order);
+    await expect(current.locator(".current-tool")).toHaveText("Run echo");
+    await expect(current.locator(".tool-activity")).toHaveCount(3);
+    expect(
+      await current.evaluate((row) =>
+        [...row.parentElement!.children].indexOf(row),
+      ),
+    ).toBeGreaterThan(order);
+    await expect(working).toHaveCount(1);
+    expect(await working.evaluate((node) => !!node.closest("summary"))).toBe(
+      false,
+    );
+    const currentSummary = current.locator(":scope > summary");
+    await currentSummary.press("Enter");
+    await expect(current).toHaveAttribute("open", "");
+    await expect(currentSummary).toBeFocused();
+    await expect(progressText).toBeVisible();
+    await expect(working).toHaveText(/Working · [1-9]\d*s/);
+    await currentSummary.press("Enter");
+    await expect(current).not.toHaveAttribute("open", "");
+    await expect(transcript.locator(":scope > .tool-activity")).toHaveCount(0);
+    await expect(
+      app.page.locator(".chat-body > .conversation-status"),
+    ).toBeHidden();
     const liveState = await app.cli<AppState>("state");
     const conversationId = liveState.conversations[0].id;
-    await expect(app.page.locator(".turn-activity")).toHaveCount(1);
-    const first = app.page.locator(".turn-activity").first();
-    await expect(first.locator(":scope > summary")).toHaveAttribute(
+    await expect(current.locator(":scope > summary")).toHaveAttribute(
       "aria-label",
       /Worked for \d+s/,
     );
     await expect(working).toHaveCount(0);
     await expect(
-      app.page.getByText("DONE Search and inspect the invented files.", {
+      transcript.getByText("DONE Search and inspect the invented files.", {
         exact: true,
       }),
     ).toBeVisible();
-    expect(await first.getAttribute("open")).toBeNull();
+    await expect(current).not.toHaveAttribute("open", "");
+    await expect(progressText).toBeVisible();
     const question = app.page.getByText(
       "Should the report include archived rows?",
       { exact: true },
@@ -899,14 +922,14 @@ test("Completed turns fold commentary and tools while final answers and decision
     await app.page.screenshot({
       path: info.outputPath("populated-collapsed-turn.png"),
     });
-    await expect(first.locator(".assistant").first()).toContainText(
-      "I checked how report exports are assembled",
-    );
+    await expect(
+      transcript.locator(":scope > .assistant").first(),
+    ).toContainText("I checked how report exports are assembled");
     await expect(
       app.page.getByText("STREAM Search and inspect the invented files.", {
         exact: true,
       }),
-    ).toBeHidden();
+    ).toBeVisible();
     const reasoning = app.page.getByRole("button", {
       name: "Reasoning effort",
       exact: true,
@@ -929,13 +952,14 @@ test("Completed turns fold commentary and tools while final answers and decision
       BrowserWindow.getAllWindows()[0].setContentSize(1280, 800),
     );
 
-    await first.locator(":scope > summary").click();
-    await expect(first.locator(".tool-activity")).toHaveCount(4);
-    await first.locator('summary[title*="invented-extra-0"]').click();
-    await expect(first).toContainText("Fixture detail 0");
+    await current.locator(":scope > summary").click();
+    await expect(current.locator(".tool-activity")).toHaveCount(3);
+    await current.locator('summary[title*="invented-extra-0"]').click();
+    await expect(current).toContainText("Fixture detail 0");
     await app.page.screenshot({
       path: info.outputPath("completed-expanded-commentary-tools.png"),
     });
+    await app.configure({ codex: {} });
     await composer.fill("Ask before the next command. [approve]");
     await composer.press(`${modifier}+Enter`);
     await expect(
@@ -945,7 +969,7 @@ test("Completed turns fold commentary and tools while final answers and decision
     await expect(
       app.page.locator(".chat-body > .conversation-status"),
     ).toBeHidden();
-    await expect(first).toHaveAttribute("open", "");
+    await expect(current).toHaveAttribute("open", "");
     expect(
       await app.page
         .getByRole("button", { name: /Allow once/ })
@@ -1048,6 +1072,31 @@ test("Completed turns fold commentary and tools while final answers and decision
     const knownTurns = observed.turns;
     await app.stop();
     await app.start();
+    await app.cli("conversation", "show", "--id", conversationId);
+    const reopened = app
+      .pane(liveState.conversations[0].paneId)
+      .locator(".transcript");
+    const reopenedInstruction = reopened.getByText(instruction, {
+      exact: true,
+    });
+    await expect(reopenedInstruction).toBeVisible();
+    const reopenedTools = reopened
+      .locator(":scope > details.turn-activity")
+      .filter({
+        has: app.page.locator('summary[title="echo invented-extra-0"]'),
+      })
+      .first();
+    await expect(reopenedTools).toBeAttached();
+    await expect(reopenedTools).not.toHaveAttribute("open", "");
+    await expect(
+      reopened.getByText("DONE Search and inspect the invented files.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await reopenedInstruction.scrollIntoViewIfNeeded();
+    await app.page.screenshot({
+      path: info.outputPath("reopened-in-turn-activity.png"),
+    });
     expect(
       (
         await app.cli<import("../../src/types").ConversationState>(
@@ -1221,6 +1270,11 @@ test("Imported native history does not invent duration and final-only live repli
             aggregatedOutput: "Old fixture output",
           },
           {
+            id: "old-reasoning",
+            type: "reasoning",
+            summary: ["Technical fixture summary"],
+          },
+          {
             id: "old-final",
             type: "agentMessage",
             phase: "final_answer",
@@ -1253,7 +1307,12 @@ test("Imported native history does not invent duration and final-only live repli
     ).toBeVisible();
     await expect(
       pane.getByText("I inspected the old fixture files.", { exact: true }),
-    ).toBeHidden();
+    ).toBeVisible();
+    const reasoning = activity.locator(".tool-activity").filter({
+      has: app.page.locator('summary[title="Reasoning"]'),
+    });
+    await expect(reasoning).toBeAttached();
+    await expect(reasoning).toBeHidden();
     expect(
       (
         await app.cli<import("../../src/types").ConversationState>(

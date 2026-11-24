@@ -20,33 +20,11 @@ type RecordedTurn = NonNullable<Conversation["turns"]>[number];
 interface TurnSection {
   key: string;
   user?: HTMLElement;
-  followUp: boolean;
   nodes: HTMLElement[];
 }
 
-function turnSections(
-  transcript: HTMLElement,
-  messages: Conversation["messages"],
-) {
+function turnSections(transcript: HTMLElement) {
   const rows = [...transcript.children] as HTMLElement[];
-  const visibleUserTurns = new Set(
-    rows
-      .filter((node) => node.classList.contains("user"))
-      .map((node) => node.dataset.turnId),
-  );
-  const firstUsers = new Map<string, { id: string; order: number }>();
-  for (const message of messages) {
-    if (
-      message.role !== "user" ||
-      !message.turnId ||
-      !visibleUserTurns.has(message.turnId)
-    )
-      continue;
-    const first = firstUsers.get(message.turnId);
-    if (!first || message.order < first.order)
-      firstUsers.set(message.turnId, message);
-  }
-
   const turns = new Map<string, TurnSection[]>();
   let fallback = "initial";
   let current: { id: string; section: TurnSection } | undefined;
@@ -58,13 +36,11 @@ function turnSections(
     const id = node.dataset.turnId ?? fallback;
     if (user || current?.id !== id) {
       const sections = turns.get(id) ?? [];
-      const first = firstUsers.get(id);
       const section: TurnSection = {
         key: sections.length
           ? `${id}:${node.dataset.messageId ?? node.dataset.toolId}`
           : id,
         user: user ? node : undefined,
-        followUp: user && !!first && first.id !== node.dataset.messageId,
         nodes: [],
       };
       sections.push(section);
@@ -81,23 +57,23 @@ function hasAssistantText(node: HTMLElement): boolean {
 }
 
 /** Fold activity in consecutive runs so no collapsed block crosses a visible message. */
-function orderedRuns(
-  nodes: HTMLElement[],
-  isActivity: (node: HTMLElement, index: number) => boolean,
-): HTMLElement[][] {
+function orderedRuns(nodes: HTMLElement[]): HTMLElement[][] {
   const runs: HTMLElement[][] = [];
   let current: HTMLElement[] | undefined;
-  nodes.forEach((node, index) => {
-    if (!isActivity(node, index)) {
+  for (const node of nodes) {
+    if (
+      !node.classList.contains("tool-activity") ||
+      node.hasAttribute("data-action-required")
+    ) {
       current = undefined;
-      return;
+      continue;
     }
     if (!current) {
       current = [];
       runs.push(current);
     }
     current.push(node);
-  });
+  }
   return runs;
 }
 
@@ -138,11 +114,8 @@ function activityDetails(
   summary.dataset.focusKey = `turn-summary:${key}`;
   const label = document.createElement("span");
   if (live) {
-    const tool = [...activity]
-      .reverse()
-      .find((node) => node.classList.contains("tool-activity"));
     label.className = "current-tool";
-    label.textContent = tool?.dataset.compactCaption ?? "Preparing response";
+    label.textContent = activity.at(-1)?.dataset.compactCaption ?? "Tool";
     summary.append(label, icon("chevron"));
     details.classList.add("live-activity");
   } else {
@@ -161,9 +134,9 @@ export function groupTurnActivity(
   conversation: Conversation,
 ): void {
   const running = ["working", "waiting"].includes(conversation.status);
-  const turns = turnSections(transcript, conversation.messages);
+  const turns = turnSections(transcript);
   if (!turns.size && running)
-    turns.set("initial", [{ key: "initial", followUp: false, nodes: [] }]);
+    turns.set("initial", [{ key: "initial", nodes: [] }]);
   const last = [...turns.keys()].at(-1);
   const recordedTurns = new Map(
     conversation.turns?.map((turn) => [turn.id, turn]),
@@ -176,12 +149,10 @@ export function groupTurnActivity(
     const live = !completed && id === last && running;
     if (!completed && !live) continue;
     const lastSection = sections.at(-1)!;
-    const lastAssistant = sections
-      .flatMap((section) => section.nodes)
-      .reverse()
-      .find(hasAssistantText);
-    const segmented = sections.some((section) => section.followUp);
-    if (recorded?.outcome === "completed" && !lastAssistant) {
+    if (
+      recorded?.outcome === "completed" &&
+      !sections.some(({ nodes }) => nodes.some(hasAssistantText))
+    ) {
       const warning = document.createElement("div");
       warning.className = "turn-reply-missing";
       warning.textContent = "Agent finished without a text reply.";
@@ -191,26 +162,6 @@ export function groupTurnActivity(
     for (const section of sections) {
       const { nodes } = section;
       const sectionLive = live && section === lastSection;
-      const firstResponse = section.followUp
-        ? nodes.find(hasAssistantText)
-        : undefined;
-      const lastTool = nodes.reduce(
-        (last, node, index) =>
-          node.classList.contains("tool-activity") ? index : last,
-        -1,
-      );
-      const isActivity = (node: HTMLElement, index: number) => {
-        if (node.hasAttribute("data-action-required") || node === firstResponse)
-          return false;
-        if (node.classList.contains("tool-activity")) return true;
-        if (!node.classList.contains("assistant")) return false;
-        if (node.dataset.phase === "commentary") return true;
-        if (live && node.dataset.phase !== "final") return true;
-        // Preserve the last assistant block of unknown imported history.
-        return (
-          !node.dataset.phase && node !== lastAssistant && index < lastTool
-        );
-      };
       const duration = recorded?.durationMs;
       const caption =
         completed &&
@@ -219,69 +170,41 @@ export function groupTurnActivity(
         Number.isFinite(duration)
           ? workedDuration(duration, recorded?.outcome)
           : "Activity";
-      if (!segmented) {
-        const activity = nodes.filter(isActivity);
-        if (activity.length || sectionLive) {
-          const before = nodes[0] ?? section.user?.nextSibling ?? null;
-          if (sectionLive)
-            activityProgress(
-              transcript,
-              before,
-              conversation,
-              recorded,
-              section.key,
-            );
-          activityDetails(
-            transcript,
-            before,
-            activity,
-            section.key,
-            caption,
-            sectionLive,
-          );
-          continue;
-        }
-      } else {
-        const runs = orderedRuns(nodes, isActivity);
-        const trailing = runs.at(-1);
-        const liveRun =
-          sectionLive && trailing?.at(-1) === nodes.at(-1)
-            ? trailing
-            : undefined;
-        runs.forEach((run, index) => {
-          const key =
-            index === 0
-              ? section.key
-              : `${section.key}:${run[0].dataset.messageId ?? run[0].dataset.toolId}`;
-          if (run === liveRun)
-            activityProgress(
-              transcript,
-              run[0],
-              conversation,
-              recorded,
-              section.key,
-            );
-          activityDetails(
-            transcript,
-            run[0],
-            run,
-            key,
-            run === trailing ? caption : "Activity",
-            run === liveRun,
-          );
-        });
-        if (sectionLive && !liveRun) {
-          const preceding = nodes.at(-1) ?? section.user;
+      const runs = orderedRuns(nodes);
+      const trailing = runs.at(-1);
+      const liveRun =
+        sectionLive && trailing?.at(-1) === nodes.at(-1) ? trailing : undefined;
+      runs.forEach((run, index) => {
+        const key =
+          index === 0 ? section.key : `${section.key}:${run[0].dataset.toolId}`;
+        if (run === liveRun)
           activityProgress(
             transcript,
-            preceding?.nextSibling ?? null,
+            run[0],
             conversation,
             recorded,
             section.key,
           );
-        }
-        if (runs.length) continue;
+        activityDetails(
+          transcript,
+          run[0],
+          run,
+          key,
+          run === trailing ? caption : "Activity",
+          run === liveRun,
+        );
+      });
+      if (sectionLive && !liveRun) {
+        const preceding = nodes.at(-1) ?? section.user;
+        activityProgress(
+          transcript,
+          preceding?.nextSibling ?? null,
+          conversation,
+          recorded,
+          section.key,
+        );
       }
+      if (runs.length) continue;
       if (caption !== "Activity" && nodes.length) {
         const header = document.createElement("div");
         header.className = "turn-activity";

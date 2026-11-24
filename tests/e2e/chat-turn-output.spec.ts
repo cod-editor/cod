@@ -76,7 +76,7 @@ test("Kimi empty completion shows an error and old empty completed turns show a 
   ).toBeVisible();
 });
 
-test("Streaming reuses unchanged Markdown and keeps the final answer when its activity row closes", async () => {
+test("Streaming keeps unmarked assistant text visible and reuses its Markdown when the turn completes", async () => {
   await shell.configure({
     codex: { latencyChunks: 14, holdLatencyCompletion: true },
   });
@@ -129,9 +129,9 @@ test("Streaming reuses unchanged Markdown and keeps the final answer when its ac
     };
   });
   await shell.send(chat.id, "[latency-fixture] move-to-final");
-  const liveText = transcript.locator(
-    ".live-activity .assistant .message-text",
-  );
+  const liveText = transcript
+    .locator(":scope > .assistant .message-text")
+    .last();
   await expect(liveText).toContainText(/inventedstream-14-/);
   await expect(link).toBeFocused();
   await liveText.evaluate((text) =>
@@ -190,7 +190,9 @@ test("An accepted in-flight follow-up keeps the next streamed reply between its 
   const rows = transcript.locator(":scope > .chat-message");
   const reply = rows.filter({ hasText: partial }).locator(".message-text");
   const activity = transcript.locator(":scope > details.turn-activity");
-  const original = activity.filter({ hasText: "STREAM Run the demo export" });
+  const original = activity.filter({
+    has: shell.page.locator('[title="echo invented-tool"]'),
+  });
   const before = activity.filter({
     has: shell.page.locator('[title="echo before-follow-up-reply"]'),
   });
@@ -234,6 +236,7 @@ test("An accepted in-flight follow-up keeps the next streamed reply between its 
   await expect(before).not.toHaveAttribute("open", "");
   await expectOrder([
     "STREAM Run the demo export",
+    "echo invented-tool",
     user,
     "echo before-follow-up-reply",
     partial,
@@ -253,10 +256,19 @@ test("An accepted in-flight follow-up keeps the next streamed reply between its 
   await input.press("End");
   await shell.configure({ codex: { steeringReply: true } });
   await expect(reply).toHaveText(full);
-  await expect(after).toContainText("Inspecting the generated sample.");
+  await expect(
+    rows.getByText("Inspecting the generated sample.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(after).not.toHaveAttribute("open", "");
   await expect(original).toHaveAttribute("open", "");
-  await expectOrder([user, partial, "Inspecting the generated sample."]);
+  await expectOrder([
+    user,
+    partial,
+    "Inspecting the generated sample.",
+    "node examples/export.mjs",
+  ]);
   await expect(progress).toHaveCount(1);
   await expect
     .poll(async () => (await shell.inspect(chat.id)).status)
@@ -321,7 +333,10 @@ test("An accepted in-flight follow-up keeps the next streamed reply between its 
   await expect(
     reopened.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue("Invented unsent draft");
-  await expectOrder([user, partial, "Worked for", final], reopenedTranscript);
+  await expectOrder(
+    [user, partial, "Inspecting the generated sample.", "Worked for", final],
+    reopenedTranscript,
+  );
   await shell.page.screenshot({
     path: info.outputPath("accepted-follow-up-reopened.png"),
   });

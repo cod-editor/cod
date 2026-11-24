@@ -968,6 +968,9 @@ function receive(message, external = false) {
         },
       });
     if (provider === "codex") {
+      const { commentaryBetweenTools } = configuration();
+      if (commentaryBetweenTools)
+        text(commentaryBetweenTools, false, "commentary");
       for (let index = 0; index < (configuration().extraTools ?? 0); index++) {
         const extra = {
           id: `fixture-extra-${active.turnId}-${index}`,

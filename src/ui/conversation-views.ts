@@ -1250,7 +1250,6 @@ export function createConversationViews({
         row.className = `chat-message ${entry.message.role}`;
         row.dataset.messageId = entry.message.id;
         if (entry.message.turnId) row.dataset.turnId = entry.message.turnId;
-        if (entry.message.phase) row.dataset.phase = entry.message.phase;
         if (entry.message.interactive) row.dataset.actionRequired = "true";
         const role = document.createElement("div");
         role.className = "message-role";

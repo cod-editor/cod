@@ -1280,7 +1280,6 @@ button[aria-busy="true"] {
 .turn-activity > summary:hover {
   color: var(--text-primary);
 }
-.turn-activity > .chat-message,
 .turn-activity > .tool-activity {
   margin: 8px 0 8px 17px;
 }
@@ -1525,8 +1524,7 @@ browser-action-list::part(action):focus-visible {
 .live-activity > summary .current-tool {
   flex: 0 1 auto;
 }
-.live-activity > .tool-activity,
-.live-activity > .chat-message {
+.live-activity > .tool-activity {
   border-left: 1px solid var(--line);
   padding-left: 14px;
   margin-left: 8px;
