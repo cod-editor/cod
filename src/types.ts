@@ -12,6 +12,7 @@ export interface DocumentPane {
   filePath?: string;
   canonicalPath?: string;
   line?: number;
+  lineRequestId?: string;
 }
 
 export interface UntitledPane {

@@ -149,6 +149,10 @@ export class FileApplicationService {
     const line = request.line === undefined ? undefined : Number(request.line);
     if (line !== undefined && (!Number.isInteger(line) || line < 1))
       throw new Error("line must be a positive integer");
+    const location = {
+      line,
+      lineRequestId: line === undefined ? undefined : randomUUID(),
+    };
     if (!(await stat(filePath)).isFile())
       throw new Error("File path is not a regular file");
     await readTextFile(filePath);
@@ -165,17 +169,18 @@ export class FileApplicationService {
       };
       if (
         pane.kind === "document" &&
-        (pane.id !== workspace.activePaneId ||
+        (line !== undefined ||
+          pane.id !== workspace.activePaneId ||
           request.focus === true ||
           request.focus === "true")
       )
-        pane.line = line;
+        Object.assign(pane, location);
       this.store.presentBesideConversation(workspace, request, pane);
       return { paneId: pane.id };
     }
     const opening = this.store.openingPane(workspace, request);
     if (existing && existing.kind === "document") {
-      existing.line = line;
+      Object.assign(existing, location);
       if (opening.kind === "empty" && opening.launcher) {
         if (opening.pinned) existing.pinned = true;
         workspace.panes = workspace.panes.filter(
@@ -199,7 +204,7 @@ export class FileApplicationService {
           kind: "document",
           filePath,
           canonicalPath,
-          ...(line ? { line } : {}),
+          ...location,
         },
         request,
       );
@@ -213,7 +218,7 @@ export class FileApplicationService {
         kind: "document",
         filePath,
         canonicalPath,
-        ...(line ? { line } : {}),
+        ...location,
       };
       workspace.panes[workspace.panes.indexOf(pane)] = document;
       pane = document;
@@ -223,14 +228,14 @@ export class FileApplicationService {
         kind: "document",
         filePath,
         canonicalPath,
-        ...(line ? { line } : {}),
+        ...location,
       };
       workspace.panes.push(document);
       pane = document;
     } else {
       pane.filePath = filePath;
       pane.canonicalPath = canonicalPath;
-      pane.line = line;
+      Object.assign(pane, location);
     }
     workspace.activePaneId = pane.id;
     return { paneId: pane.id };

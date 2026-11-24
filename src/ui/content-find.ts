@@ -1,3 +1,4 @@
+import { revealEditorOffset } from "../editor-highlight";
 import { isPlainEscape } from "../keyboard";
 import { reviewTextPoint } from "./review-source";
 import type { AppState, PaneState } from "../types";
@@ -231,17 +232,11 @@ export function createContentFind(
     if (!match) return;
     if (editor) {
       editor.setSelectionRange(match.start, match.end);
+      revealEditorOffset(editor, match.start);
       const mirror = editor
         .closest(".highlighted-editor")
         ?.querySelector(".editor-colors");
       if (mirror) highlightRange(mirror, match.start, match.end);
-      const line = editor.value.slice(0, match.start).split("\n").length - 1;
-      editor.scrollTop = Math.max(
-        0,
-        line * parseFloat(getComputedStyle(editor).lineHeight) -
-          editor.clientHeight / 3,
-      );
-      editor.dispatchEvent(new Event("scroll"));
     } else {
       const first = match.line
         ? reviewTextPoint(match.line, match.start)

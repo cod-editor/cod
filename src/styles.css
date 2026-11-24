@@ -707,20 +707,29 @@ a {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  --editor-row-height: round(
+    calc(var(--editor-font-size) * var(--editor-line-height, 1.65)),
+    1px
+  );
+  --editor-gutter-width: calc(
+    20px + max(2, var(--editor-line-digits, 2)) * 1ch
+  );
+  font: var(--editor-font-size)/var(--editor-row-height)
+    var(--editor-font-family, ui-monospace, monospace);
 }
 .editor-colors,
 .highlighted-editor .file-editor {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--editor-gutter-width);
   margin: 0;
-  width: 100%;
+  width: calc(100% - var(--editor-gutter-width));
   height: 100%;
-  padding: 20px;
+  padding: 20px 20px 20px 12px;
   white-space: var(--editor-white-space, pre);
   overflow-wrap: anywhere;
   overflow: auto;
-  font: var(--editor-font-size)/var(--editor-line-height, 1.65)
-    var(--editor-font-family, ui-monospace, monospace);
+  font: inherit;
+  font-variant-ligatures: none;
   tab-size: var(--editor-tab-size, 8);
   letter-spacing: normal;
 }
@@ -737,6 +746,9 @@ a {
 .highlighted-editor .highlight-overlay::selection {
   background: #85b7ff55;
   color: transparent;
+}
+.highlighted-editor[data-highlighted="false"] .editor-colors {
+  visibility: hidden;
 }
 .highlighted-editor[data-highlighted="false"] .highlight-overlay,
 .highlighted-editor[data-highlighted="false"] .highlight-overlay::selection {
@@ -765,16 +777,25 @@ a {
 .hljs-type {
   color: #61afef;
 }
-.changed-lines {
+.editor-gutter {
   position: absolute;
-  inset: 0;
+  inset: 0 auto 0 0;
+  width: var(--editor-gutter-width);
   pointer-events: none;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
 }
-.changed-lines span {
+.editor-gutter [data-line-number] {
   position: absolute;
-  left: 4px;
+  inset-inline: 0;
+  padding-inline-end: 8px;
+}
+.editor-gutter [data-changed-line]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 4px;
   width: 3px;
-  height: calc(var(--editor-font-size) * 1.65);
   background: #a9c9a4;
 }
 .markdown-preview iframe {
