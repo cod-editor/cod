@@ -1,18 +1,14 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  rename,
-  rm,
-  rmdir,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+} from "../support/workspace-state.ts";
 
 // Bundle the same application classes as Electron: their UI-side imports use
 // extensionless module paths that the native TypeScript runner cannot resolve.
@@ -25,6 +21,9 @@ const { outputFiles } = await build({
   bundle: true,
   platform: "node",
   format: "esm",
+  define: {
+    "import.meta.dirname": JSON.stringify(path.resolve("src/application")),
+  },
   write: false,
 });
 const moduleDirectory = await mkdtemp(
@@ -54,13 +53,14 @@ async function fixture() {
     tools: [],
     pendingPermissions: [],
   });
+  await store.persist();
   let snapshots = 0;
   let persists = 0;
   store.onDidChange = () => snapshots++;
   const persist = store.persist.bind(store);
-  store.persist = async () => {
+  store.persist = async (...args) => {
     persists++;
-    await persist();
+    await persist(...args);
   };
   const service = new ConversationApplicationService(store, {}, {});
   const event = (body) =>
@@ -75,6 +75,7 @@ async function fixture() {
     counters: () => ({ snapshots, persists }),
     async close() {
       store.beginShutdown();
+      await store.close();
       await rm(directory, { recursive: true, force: true });
     },
   };
@@ -104,19 +105,16 @@ test("Stream deltas checkpoint on a fixed deadline and completion absorbs pendin
     t.mock.timers.tick(1);
     await app.store.serialize(() => undefined);
     assert.equal(app.counters().persists, 1);
-    const restart = async () => {
-      const store = new ApplicationStateStore(app.store.directory);
-      await store.load();
-      return store.data.conversations[0];
-    };
-    assert.equal((await restart()).messages[0].text, "one two three");
+    const restart = () =>
+      readWorkspaceState(app.store.directory).conversations[0];
+    assert.equal(restart().messages[0].text, "one two three");
 
     emit(" four");
     app.event({ type: "completed", outcome: { status: "completed" } });
     t.mock.timers.tick(1);
     await app.store.serialize(() => undefined);
     assert.equal(app.counters().persists, 2);
-    assert.equal((await restart()).messages[0].text, "one two three four");
+    assert.equal(restart().messages[0].text, "one two three four");
     t.mock.timers.tick(2_000);
     await app.store.serialize(() => undefined);
     assert.equal(app.counters().persists, 2);
@@ -146,15 +144,17 @@ test("A delta arriving while a full snapshot is writing reaches the next checkpo
       return pending;
     };
     await app.store.change(() => {}, { notify: false });
-    const first = new ApplicationStateStore(app.store.directory);
-    await first.load();
-    assert.equal(first.data.conversations[0].messages[0].text, "first");
+    assert.equal(
+      readWorkspaceState(app.store.directory).conversations[0].messages[0].text,
+      "first",
+    );
 
     t.mock.timers.tick(2_000);
     await app.store.serialize(() => undefined);
-    const second = new ApplicationStateStore(app.store.directory);
-    await second.load();
-    assert.equal(second.data.conversations[0].messages[0].text, "first next");
+    assert.equal(
+      readWorkspaceState(app.store.directory).conversations[0].messages[0].text,
+      "first next",
+    );
     assert.equal(app.counters().persists, 2);
   } finally {
     await app.close();
@@ -166,31 +166,32 @@ test("A failed durable checkpoint leaves passive progress eligible for another s
   t.mock.timers.enable({ apis: ["setTimeout"] });
   try {
     await app.store.persist();
-    const state = path.join(app.store.directory, "state.json");
-    const previous = state + ".previous";
-    await rename(state, previous);
-    await mkdir(state);
+    using db = openWorkspaceState(app.store.directory);
+    db.exec(`
+      CREATE TRIGGER fail_checkpoint BEFORE UPDATE ON records
+      WHEN NEW.kind = 'conversation'
+      BEGIN SELECT RAISE(ABORT, 'Invented checkpoint failure'); END;
+    `);
     app.event({
       type: "text",
       text: "Invented checkpoint retry",
       role: "assistant",
       replay: false,
     });
-    await assert.rejects(app.store.change(() => {}, { notify: false }));
-    assert.ok(
-      (await readdir(app.store.directory)).every(
-        (file) => !file.endsWith(".tmp"),
-      ),
+    await assert.rejects(
+      app.store.change(() => {}, { notify: false }),
+      /Invented checkpoint failure/,
     );
-    await rmdir(state);
-    await rename(previous, state);
+    assert.deepEqual(
+      readWorkspaceState(app.store.directory).conversations[0].messages,
+      [],
+    );
+    db.exec("DROP TRIGGER fail_checkpoint");
 
     t.mock.timers.tick(2_000);
     await app.store.serialize(() => undefined);
-    const recovered = new ApplicationStateStore(app.store.directory);
-    await recovered.load();
     assert.equal(
-      recovered.data.conversations[0].messages[0].text,
+      readWorkspaceState(app.store.directory).conversations[0].messages[0].text,
       "Invented checkpoint retry",
     );
   } finally {

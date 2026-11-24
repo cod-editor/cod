@@ -1,3 +1,9 @@
+import { readWorkspaceChatDraftBody } from "./helpers/workspace-state";
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect, type Locator } from "@playwright/test";
 import type { AppState, ConversationState } from "../../src/types";
 import { execFile } from "node:child_process";
@@ -231,11 +237,10 @@ test("Collapsed tool history does not materialize output until expanded", async 
   const workspace = await shell.create("Long tool history");
   const chat = await shell.newChat(workspace, "codex");
   await shell.stop();
-  const stateFile = path.join(shell.data, "state.json");
-  const saved = JSON.parse(await readFile(stateFile, "utf8")) as AppState;
+  const saved = readWorkspaceState(shell.data);
   const importedId = "codex-fixture-large-import";
   saved.conversations.find((c) => c.id === chat.id)!.nativeId = importedId;
-  await writeFile(stateFile, JSON.stringify(saved));
+  writeWorkspaceState(shell.data, saved);
   await writeFile(
     path.join(shell.recording + ".sessions", importedId + ".json"),
     JSON.stringify([
@@ -650,9 +655,7 @@ test("Detached local chat finishes while Cod is closed and restores the same nat
     await expect(transcript(chat)).not.toContainText(/inventedstream-2/);
     await expect
       .poll(async () => {
-        const saved = JSON.parse(
-          await readFile(path.join(shell.data, "state.json"), "utf8"),
-        ) as AppState;
+        const saved = readWorkspaceState(shell.data);
         const pending = saved.conversations.find(
           (candidate) => candidate.id === chat.id,
         );
@@ -730,8 +733,7 @@ for (const output of ["streaming", "quiet"] as const) {
       const starts = await shell.prompts();
       await shell.quitWithChoice("Leave Running");
 
-      const stateFile = path.join(shell.data, "state.json");
-      const saved = JSON.parse(await readFile(stateFile, "utf8")) as AppState;
+      const saved = readWorkspaceState(shell.data);
       const savedChat = saved.conversations.find(
         (item) => item.id === chat.id,
       )!;
@@ -755,7 +757,7 @@ for (const output of ["streaming", "quiet"] as const) {
       const interrupted = savedChat.turns!.at(-1)!;
       interrupted.outcome = "failed";
       interrupted.finishedAt = new Date().toISOString();
-      await writeFile(stateFile, JSON.stringify(saved));
+      writeWorkspaceState(shell.data, saved);
 
       await shell.start();
       const restored = await inspect(chat.id);
@@ -2378,15 +2380,12 @@ test("Repeated Backspace saves the chat draft without echoing full state on ever
   await expect
     .poll(async () => {
       try {
-        const saved = JSON.parse(
-          await readFile(path.join(shell.data, "composer-text.json"), "utf8"),
+        const body = readWorkspaceChatDraftBody(
+          shell.data,
+          workspace,
+          chat.paneId,
         );
-        return (
-          Object.values(saved.drafts) as Array<{
-            pane: string;
-            draft: { text: string };
-          }>
-        ).find((entry) => entry.pane === chat.paneId)?.draft.text;
+        return body && JSON.parse(body).text;
       } catch {
         return undefined;
       }
@@ -3920,14 +3919,22 @@ test("Overview opens a selected workspace and renames chats with the platform ch
 });
 
 test("Short composer input with 25 MB state writes only small draft data", async ({}, info) => {
+  const background = await shell.create("Retained history");
+  const retained = await shell.newChat(background, "codex");
   const workspace = await shell.create("Input responsiveness");
   const chat = await shell.newChat(workspace, "codex");
   await shell.stop();
-  const file = path.join(shell.data, "state.json");
-  const saved = JSON.parse(await readFile(file, "utf8"));
-  // Invented inert history load; it must not be cloned or serialized by typing.
-  saved.fixtureHistory = "invented history ".repeat(1_600_000);
-  await writeFile(file, JSON.stringify(saved));
+  const saved = readWorkspaceState(shell.data);
+  // A retained conversation is persisted but must not be serialized by typing.
+  const history = saved.conversations.find((item) => item.id === retained.id)!;
+  history.messages = Array.from({ length: 125 }, (_, index) => ({
+    id: `invented-retained-message-${index}`,
+    role: "assistant",
+    origin: "application",
+    order: index,
+    text: "invented history ".repeat(12_500),
+  }));
+  writeWorkspaceState(shell.data, saved);
   await shell.start();
   const input = shell
     .pane(chat.paneId)
@@ -3941,16 +3948,13 @@ test("Short composer input with 25 MB state writes only small draft data", async
   await expect
     .poll(async () => {
       try {
-        const data = await readFile(
-          path.join(shell.data, "composer-text.json"),
-          "utf8",
+        const body = readWorkspaceChatDraftBody(
+          shell.data,
+          workspace,
+          chat.paneId,
         );
-        const entries = Object.values(JSON.parse(data).drafts) as Array<{
-          draft: { text: string };
-        }>;
         return (
-          entries.some((entry) => entry.draft.text === expected) &&
-          data.length < 2048
+          !!body && JSON.parse(body).text === expected && body.length < 2048
         );
       } catch {
         return false;
@@ -3961,11 +3965,13 @@ test("Short composer input with 25 MB state writes only small draft data", async
     type: "input-duration-ms",
     description: String(Math.round(performance.now() - start)),
   });
-  const disk = JSON.parse(await readFile(file, "utf8")) as AppState;
-  expect(
-    disk.workspaces.find((w) => w.id === workspace)?.chatDrafts?.[chat.paneId]
-      ?.text ?? "",
-  ).toBe("");
+  {
+    using db = openWorkspaceState(shell.data, true);
+    const layout = db
+      .prepare("SELECT body FROM records WHERE kind = 'workspace' AND id = ?")
+      .get(workspace);
+    expect(JSON.parse(String(layout?.body))).not.toHaveProperty("chatDrafts");
+  }
   await shell.stop();
   await shell.start();
   await expect(

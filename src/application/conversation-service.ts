@@ -582,17 +582,20 @@ export class ConversationApplicationService {
         nativeId: conversation.nativeId,
       };
     } catch (error) {
-      this.removeConversationRecord(
-        conversation,
-        restoreDraft,
-        previousConversationId,
-      );
-      if (workspace.lastConversationId === id)
-        workspace.lastConversationId = previousConversationId;
-      await this.disposeController(id);
-      await adapter?.dispose();
-      this.store.notify();
-      this.store.schedulePersist(true);
+      try {
+        await this.store.serialize(() =>
+          this.removeConversationRecord(
+            conversation,
+            restoreDraft,
+            previousConversationId,
+          ),
+        );
+      } finally {
+        await this.disposeController(id);
+        await adapter?.dispose();
+        this.store.notify();
+        this.store.schedulePersist(true);
+      }
       throw error;
     } finally {
       this.resumeContexts.delete(id);
@@ -683,26 +686,33 @@ export class ConversationApplicationService {
     });
   }
 
-  removeConversationRecord(
+  private async removeConversationRecord(
     conversation: ConversationState,
     restoreDraft?: import("../types").DocumentPane,
     previousConversationId?: string,
-  ): void {
+  ): Promise<void> {
+    const open = this.store.data.workspaces.find(
+      (item) => item.id === conversation.workspaceId,
+    );
+    const archive = open
+      ? undefined
+      : await this.store.archivedWorkspace(conversation.workspaceId);
     this.store.data.conversations = this.store.data.conversations.filter(
       (item) => item.id !== conversation.id,
     );
-    const archive = this.store.data.closedWorkspaces?.find(
-      (item) => item.workspace.id === conversation.workspaceId,
-    );
-    if (archive)
+    if (archive) {
       archive.conversations = archive.conversations.filter(
         (item) => item.id !== conversation.id,
       );
-    const workspace =
-      this.store.data.workspaces.find(
-        (item) => item.id === conversation.workspaceId,
-      ) ?? archive?.workspace;
+      this.store.data.closedWorkspaces = this.store.data.closedWorkspaces?.map(
+        (item) =>
+          item.workspace.id === conversation.workspaceId ? archive : item,
+      );
+    }
+    const workspace = open ?? archive?.workspace;
     if (!workspace || !conversation.paneId) return;
+    if (workspace.lastConversationId === conversation.id)
+      workspace.lastConversationId = previousConversationId;
     workspace.panes = workspace.panes.filter(
       (pane) => pane.id !== conversation.paneId,
     );
@@ -710,8 +720,6 @@ export class ConversationApplicationService {
       workspace.panes.push({ ...restoreDraft, draftChat: true });
       if (workspace.activePaneId === conversation.paneId)
         workspace.activePaneId = restoreDraft.id;
-      if (workspace.lastConversationId === conversation.id)
-        workspace.lastConversationId = previousConversationId;
       return;
     }
     if (!workspace.panes.length) {
@@ -1695,7 +1703,7 @@ export class ConversationApplicationService {
       conversation.backgroundActivities = next.slice(-64);
       this.store.notify(true);
       if (event.activity.state === "running")
-        this.store.scheduleConversationCheckpoint();
+        this.store.scheduleConversationCheckpoint(id);
       else this.store.schedulePersist(true);
       return;
     }
@@ -1883,7 +1891,7 @@ export class ConversationApplicationService {
       event.type === "tool" ||
       (event.type === "text" && event.role === "assistant")
     ) {
-      this.store.scheduleConversationCheckpoint();
+      this.store.scheduleConversationCheckpoint(id);
       return;
     }
     this.store.schedulePersist(

@@ -406,7 +406,9 @@ export class ApplicationOperations {
         };
       }
       case "state":
-        return this.snapshot(trustedUi);
+        return trustedUi
+          ? this.snapshot(true)
+          : this.withQuickTerminals(await this.store.fullSnapshot());
 
       default:
         throw new Error(`Unknown operation: ${request.op}`);
@@ -423,6 +425,10 @@ export class ApplicationOperations {
     await this.reviews.shutdown();
     await this.browserHost?.shutdown();
     await this.terminals.shutdown();
-    await this.store.serialize(() => this.store.persist());
+    try {
+      await this.store.serialize(() => this.store.persist());
+    } finally {
+      await this.store.close();
+    }
   }
 }

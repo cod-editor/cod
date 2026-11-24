@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, access } from "node:fs/promises";
+import { readFile, access, mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 const execute = promisify(execFile);
 const artifact = path.resolve(process.argv[2] ?? "");
@@ -82,6 +83,30 @@ await execute(executable, ["-e", ptyScript], {
   env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
   timeout: 10000,
 });
+const profile = await mkdtemp(path.join(tmpdir(), "cod-package-state-"));
+try {
+  const file = path.join(profile, "workspace.sqlite");
+  const worker = path.join(app, "dist/sqlite-state-worker.cjs");
+  const sqliteScript = `
+const { Worker } = require('node:worker_threads');
+const db = new Worker(${JSON.stringify(worker)}, { workerData: ${JSON.stringify(file)} });
+db.postMessage({ id: 1, request: { operation: 'load' } });
+db.on('message', ({ value, error }) => {
+  if (error || !Array.isArray(value) || value.length) throw new Error(error || 'Invalid state');
+  void db.terminate();
+});
+`;
+  await execute(executable, ["-e", sqliteScript], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    timeout: 10000,
+  });
+  if ((await readFile(file)).subarray(0, 16).toString() !== "SQLite format 3\0")
+    throw new Error(
+      "Packaged workspace worker did not create a SQLite database",
+    );
+} finally {
+  await rm(profile, { recursive: true, force: true });
+}
 console.log(
   JSON.stringify(
     {
@@ -89,6 +114,7 @@ console.log(
       signature: "PASS local ad-hoc codesign --verify --deep --strict",
       cli: "PASS real packaged Electron-as-Node CLI help",
       pty: "PASS packaged native PTY with three TTY descriptors",
+      workspaceState: "PASS packaged SQLite worker opens a workspace profile",
       originalLogoSha256: logoHash,
       agentPlugin: "PASS included",
       macOSGui: "BLOCKED: active desktop must not be used",

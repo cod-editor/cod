@@ -1,3 +1,8 @@
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { pathToFileURL } from "node:url";
 import { test, expect, type Locator } from "@playwright/test";
 import { createServer, type Server } from "node:http";
@@ -1030,9 +1035,7 @@ test("Closing the main window retains browser tabs and navigation for restart", 
   });
   await closed;
   shell.app = undefined;
-  const saved = JSON.parse(
-    await readFile(path.join(shell.data, "state.json"), "utf8"),
-  );
+  const saved = readWorkspaceState(shell.data);
   expect(saved.browsers.map((item: BrowserRecord) => item.id)).toEqual([
     first.id,
     second.id,
@@ -1040,8 +1043,8 @@ test("Closing the main window retains browser tabs and navigation for restart", 
   ]);
   expect(
     saved.workspaces
-      .find((item: any) => item.id === inactiveWorkspace)
-      .panes.find((item: any) => item.id === pinned.paneId).pinned,
+      .find((item) => item.id === inactiveWorkspace)
+      ?.panes.find((item) => item.id === pinned.paneId)?.pinned,
   ).toBe(true);
   await shell.start();
   expect((await inspect(pinned.id)).url).toBe(origin + "/inactive-pinned");
@@ -2323,8 +2326,7 @@ test("Downloads survive tab closure and retain history across restart", async ()
   );
   const completed = (await entries())[0]!;
   await shell.stop();
-  const stateFile = path.join(shell.data, "state.json");
-  const state = JSON.parse(await readFile(stateFile, "utf8"));
+  const state = readWorkspaceState(shell.data);
   state.browserDownloads = [
     ...Array.from({ length: 14 }, (_, index) => ({
       ...completed,
@@ -2335,11 +2337,11 @@ test("Downloads survive tab closure and retain history across restart", async ()
           : `fixture-archive-${index}.zip`,
       path: undefined,
       receivedBytes: 0,
-      status: "cancelled",
+      status: "cancelled" as const,
     })),
     completed,
   ];
-  await writeFile(stateFile, JSON.stringify(state));
+  writeWorkspaceState(shell.data, state);
   await shell.start();
   await expect
     .poll(
@@ -2810,10 +2812,8 @@ test("Quitting while a page-close decision is pending preserves its tab for rest
     )
     .toBe(true);
   await shell.stop();
-  const saved = JSON.parse(
-    await readFile(path.join(shell.data, "state.json"), "utf8"),
-  );
-  expect(saved.browsers.some((item: any) => item.id === browser.id)).toBe(true);
+  const saved = readWorkspaceState(shell.data);
+  expect(saved.browsers.some((item) => item.id === browser.id)).toBe(true);
   await shell.start();
   expect((await inspect(browser.id)).paneId).toBe(browser.paneId);
 });
@@ -3220,9 +3220,16 @@ test("Restoring tab history never resubmits a POST form", async () => {
     "--id",
     record.paneId,
   );
-  const saved = await readFile(path.join(shell.data, "state.json"), "utf8");
-  expect(saved).not.toContain("private-form-value");
-  expect(saved).not.toContain('"pageState"');
+  {
+    using db = openWorkspaceState(shell.data, true);
+    const saved = db.prepare("SELECT body FROM records").all();
+    expect(
+      saved.some(({ body }) => String(body).includes("private-form-value")),
+    ).toBe(false);
+    expect(saved.some(({ body }) => String(body).includes('"pageState"'))).toBe(
+      false,
+    );
+  }
   await shell.cli("pane", "reopen", "--workspace", workspace);
   await expect
     .poll(() => remote("/new-tab-post", "document.body.textContent"))

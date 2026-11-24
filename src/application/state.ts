@@ -1,6 +1,5 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type {
   AppState,
   WorkspaceState,
@@ -16,6 +15,18 @@ import {
 } from "../workspace-layout.ts";
 import { rollbackState } from "../state-rollback.ts";
 import { requiredString } from "./request.ts";
+import { WorkspaceDatabase } from "./sqlite-state.ts";
+import {
+  archiveSummary,
+  workspacePaneRowId,
+  chatDraftRows,
+  workspaceLayout,
+  workspaceRows,
+  workspaceState,
+  type ArchivedWorkspace,
+  type ClosedTab,
+  type WorkspaceRow,
+} from "./sqlite-state-rows.ts";
 
 /** Single owner of application state, transaction ordering and durable snapshots. */
 export class ApplicationStateStore {
@@ -32,15 +43,8 @@ export class ApplicationStateStore {
     pendingCodexImports: {},
     completedCodexImports: {},
   };
-  private composerCheckpoint = "initial";
-  private draftOverlays: Record<
-    string,
-    {
-      workspace: string;
-      pane: string;
-      draft: Omit<NonNullable<WorkspaceState["chatDrafts"]>[string], "images">;
-    }
-  > = {};
+  private readonly database: WorkspaceDatabase;
+  private readonly unloadedArchives = new WeakSet<ArchivedWorkspace>();
   private queue: Promise<unknown> = Promise.resolve();
   private pendingDrafts = new Map<
     string,
@@ -48,6 +52,7 @@ export class ApplicationStateStore {
   >();
   private timer?: NodeJS.Timeout;
   private conversationCheckpoint?: NodeJS.Timeout;
+  private pendingConversations = new Set<string>();
   private notificationTimer?: NodeJS.Timeout;
   private reviewPresentation?: AppState["reviewPresentation"];
   closing = false;
@@ -56,134 +61,142 @@ export class ApplicationStateStore {
   readonly directory: string;
   constructor(directory: string) {
     this.directory = directory;
+    this.database = new WorkspaceDatabase(directory);
   }
   async load(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    try {
-      const saved = JSON.parse(
-        await readFile(path.join(this.directory, "state.json"), "utf8"),
-      ) as AppState & { composerCheckpoint?: string };
-      if (!Array.isArray(saved.workspaces))
-        throw new Error("Invalid saved state");
-      saved.workspaces.forEach(assertWorkspaceLayout);
-      this.composerCheckpoint = saved.composerCheckpoint ?? "initial";
-      delete saved.composerCheckpoint;
-      Object.assign(this.data, saved, {
-        conversations: saved.conversations ?? [],
-        drafts: saved.drafts ?? {},
-        pinnedSites: saved.pinnedSites ?? [],
-        browserDownloads: (saved.browserDownloads ?? []).map((item) => ({
-          ...item,
-          canResume: false,
-          status: ["progressing", "paused"].includes(item.status)
-            ? "interrupted"
-            : item.status,
-        })),
-        terminals: saved.terminals ?? [],
-        browsers: (saved.browsers ?? []).map((browser) => ({
-          ...browser,
-          nativeTabId: undefined,
-          httpFallback: undefined,
-          certificateOffer: undefined,
-          temporaryCertificate: undefined,
-          temporaryNavigationBlocked: undefined,
-          permissionRequests: undefined,
-          addons: undefined,
-          visible: false,
-          loading: false,
-          canGoBack: false,
-          canGoForward: false,
-        })),
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await this.restoreComposerText();
+    const saved = workspaceState(
+      await this.database.request<WorkspaceRow[]>({ operation: "load" }),
+    );
+    saved.workspaces?.forEach(assertWorkspaceLayout);
+    for (const archive of saved.closedWorkspaces ?? [])
+      this.unloadedArchives.add(archive);
+    Object.assign(this.data, saved, {
+      browserDownloads: (saved.browserDownloads ?? []).map((item) => ({
+        ...item,
+        canResume: false,
+        status: ["progressing", "paused"].includes(item.status)
+          ? "interrupted"
+          : item.status,
+      })),
+      browsers: (saved.browsers ?? []).map((browser) => ({
+        ...browser,
+        nativeTabId: undefined,
+        httpFallback: undefined,
+        certificateOffer: undefined,
+        temporaryCertificate: undefined,
+        temporaryNavigationBlocked: undefined,
+        permissionRequests: undefined,
+        addons: undefined,
+        visible: false,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      })),
+    });
   }
-  private async restoreComposerText(): Promise<void> {
-    try {
-      const saved = JSON.parse(
-        await readFile(path.join(this.directory, "composer-text.json"), "utf8"),
-      );
-      if (saved.checkpoint !== this.composerCheckpoint) return;
-      for (const entry of Object.values(
-        saved.drafts,
-      ) as (typeof this.draftOverlays)[string][]) {
-        const workspace = this.data.workspaces.find(
-          (w) => w.id === entry.workspace,
-        );
-        if (
-          !workspace?.panes.some((p) => p.id === entry.pane) ||
-          typeof entry.draft?.text !== "string"
-        )
-          continue;
-        workspace.chatDrafts ??= {};
-        workspace.chatDrafts[entry.pane] = {
-          ...entry.draft,
-          ...(entry.draft.localDraft
-            ? {
-                localDraft: {
-                  ...entry.draft.localDraft,
-                  images:
-                    workspace.chatDrafts[entry.pane]?.localDraft?.images ?? [],
-                },
-              }
-            : {}),
-          ...(workspace.chatDrafts[entry.pane]?.images
-            ? { images: workspace.chatDrafts[entry.pane].images }
-            : {}),
-        };
-      }
-      this.draftOverlays = saved.drafts;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-        throw new Error(
-          "Could not restore composer text; draft file retained",
-          { cause: error },
-        );
-    }
+
+  private async readArchive(
+    record: ArchivedWorkspace,
+  ): Promise<ArchivedWorkspace> {
+    if (!this.unloadedArchives.has(record)) return structuredClone(record);
+    const archive = await this.database.request<ArchivedWorkspace | undefined>({
+      operation: "read",
+      kind: "archive",
+      id: record.workspace.id,
+    });
+    if (!archive) throw new Error("Workspace archive is missing");
+    return archive;
   }
+
+  async closedTab(workspaceId: string, tab: ClosedTab): Promise<ClosedTab> {
+    if (tab.pane.kind !== "conversation" || tab.conversation) return tab;
+    const conversation = await this.database.request<
+      ConversationState | undefined
+    >({
+      operation: "read",
+      kind: "closed-chat",
+      id: workspacePaneRowId(workspaceId, tab.pane.id),
+    });
+    return conversation ? { ...tab, conversation } : tab;
+  }
+
+  async workspaceWithClosedChats(
+    workspace: WorkspaceState,
+  ): Promise<WorkspaceState> {
+    if (!workspace.closedTabs?.some(({ pane }) => pane.kind === "conversation"))
+      return workspace;
+    return {
+      ...workspace,
+      closedTabs: await Promise.all(
+        workspace.closedTabs.map((tab) => this.closedTab(workspace.id, tab)),
+      ),
+    };
+  }
+
+  async archivedWorkspace(id?: string): Promise<ArchivedWorkspace | undefined> {
+    const archive =
+      id === undefined
+        ? this.data.closedWorkspaces?.at(-1)
+        : this.data.closedWorkspaces?.find(
+            ({ workspace }) => workspace.id === id,
+          );
+    return archive && this.readArchive(archive);
+  }
+
+  async fullSnapshot(): Promise<AppState> {
+    return this.serialize(async () => {
+      const state = this.snapshot();
+      const [workspaces, archives] = await Promise.all([
+        Promise.all(
+          state.workspaces.map((workspace) =>
+            this.workspaceWithClosedChats(workspace),
+          ),
+        ),
+        Promise.all(
+          (this.data.closedWorkspaces ?? []).map((archive) =>
+            this.readArchive(archive),
+          ),
+        ),
+      ]);
+      return { ...state, workspaces, closedWorkspaces: archives };
+    });
+  }
+
   private async commitDraft(
     mutation: () => unknown | Promise<unknown>,
   ): Promise<unknown> {
-    // Only chatDrafts may change here. Keep shallow originals for rollback instead
-    // of cloning histories/images for each edit.
+    // Draft edits replace the draft value. The current layout and large
+    // attachments are shared with rollback until the write succeeds.
     const before = this.data.workspaces.map((workspace) => ({
       workspace,
       drafts: workspace.chatDrafts ? { ...workspace.chatDrafts } : undefined,
     }));
-    const overlays = { ...this.draftOverlays };
     try {
       const result = await mutation();
+      const rows: WorkspaceRow[] = [];
       for (const { workspace, drafts } of before) {
-        for (const [pane, draft] of Object.entries(
-          workspace.chatDrafts ?? {},
-        )) {
-          if (draft === drafts?.[pane]) continue;
-          const { images: _images, localDraft, ...text } = draft;
-          if (localDraft) {
-            const { images: _localImages, ...localText } = localDraft;
-            Object.assign(text, { localDraft: localText });
-          }
-          overlays[`${workspace.id}:${pane}`] = {
-            workspace: workspace.id,
-            pane,
-            draft: text,
-          };
+        const current = workspace.chatDrafts ?? {};
+        for (const pane of new Set([
+          ...Object.keys(drafts ?? {}),
+          ...Object.keys(current),
+        ])) {
+          if (current[pane] === drafts?.[pane]) continue;
+          rows.push(
+            ...chatDraftRows(
+              workspacePaneRowId(workspace.id, pane),
+              current[pane],
+              drafts?.[pane],
+            ),
+          );
         }
       }
-      const file = path.join(this.directory, "composer-text.json");
-      const temporary = `${file}.${randomUUID()}.tmp`;
-      await writeFile(
-        temporary,
-        JSON.stringify({
-          checkpoint: this.composerCheckpoint,
-          drafts: overlays,
-        }),
-        { mode: 0o600 },
-      );
-      await rename(temporary, file);
-      this.draftOverlays = overlays;
+      if (rows.length)
+        await this.database.request({
+          operation: "save",
+          scope: "partial",
+          rows,
+        });
       return result;
     } catch (error) {
       for (const { workspace, drafts } of before) workspace.chatDrafts = drafts;
@@ -244,10 +257,7 @@ export class ApplicationStateStore {
       }),
       // Closed workspaces are restored by an operation; the renderer only needs
       // their identity for the reopen menu.
-      closedWorkspaces: this.data.closedWorkspaces?.map((record) => ({
-        ...record,
-        conversations: [],
-      })),
+      closedWorkspaces: this.data.closedWorkspaces?.map(archiveSummary),
     });
   }
   workspace(id: string): WorkspaceState {
@@ -442,9 +452,17 @@ export class ApplicationStateStore {
     // rollbackState deliberately preserves live provider fields. Copying those
     // transcripts here cannot help rollback and multiplies allocation on every
     // unrelated pane, browser or workspace mutation.
-    const before = structuredClone({
+    const before: AppState = structuredClone({
       ...this.data,
-      closedWorkspaces: layoutOnly ? undefined : this.data.closedWorkspaces,
+      workspaces: layoutOnly
+        ? this.data.workspaces.map(workspaceLayout)
+        : this.data.workspaces,
+      closedWorkspaces: undefined,
+      drafts: layoutOnly ? {} : this.data.drafts,
+      terminals: this.data.terminals.map((terminal) => ({
+        ...terminal,
+        output: "",
+      })),
       conversations: this.data.conversations.map((conversation) => ({
         ...conversation,
         messages: [],
@@ -454,7 +472,16 @@ export class ApplicationStateStore {
         metadata: undefined,
       })),
     });
-    if (layoutOnly) before.closedWorkspaces = this.data.closedWorkspaces;
+    // Archive mutations replace the record. Copy only the list so rollback
+    // retains unloaded summaries rather than materializing archived payloads.
+    before.closedWorkspaces = this.data.closedWorkspaces?.slice();
+    if (layoutOnly) {
+      before.drafts = this.data.drafts;
+      before.workspaces.forEach((workspace, index) => {
+        workspace.chatDrafts = this.data.workspaces[index]?.chatDrafts;
+        workspace.closedTabs = this.data.workspaces[index]?.closedTabs;
+      });
+    }
     const original = {
       ...this.data,
       workspaces: [...this.data.workspaces],
@@ -468,7 +495,7 @@ export class ApplicationStateStore {
       // Display layout selections while the existing checkpoint is saved.
       // The operation and subsequent mutations still wait for that checkpoint.
       if (notify && layoutOnly) this.notify();
-      await this.persist();
+      await this.persist(layoutOnly ? "layout" : "all");
       if (notify && !layoutOnly) this.notify();
       return result;
     } catch (error) {
@@ -513,15 +540,18 @@ export class ApplicationStateStore {
       immediate ? 0 : 100,
     );
   }
-  scheduleConversationCheckpoint(): void {
+  scheduleConversationCheckpoint(id: string): void {
+    this.pendingConversations.add(id);
+    this.armConversationCheckpoint();
+  }
+  private armConversationCheckpoint(): void {
     if (this.closing || this.conversationCheckpoint) return;
-    // Stream deltas can contain gaps without marking a durable operation.
-    // Use one deadline for all chats, even if new deltas keep arriving.
+    // Use one deadline for all changed chats, even as deltas keep arriving.
     const checkpoint = setTimeout(() => {
       void this.serialize(() => {
         if (this.conversationCheckpoint !== checkpoint) return;
         this.conversationCheckpoint = undefined;
-        return this.persist();
+        return this.persist("conversation");
       }).catch((error) => console.error(error));
     }, 2_000);
     this.conversationCheckpoint = checkpoint;
@@ -536,39 +566,91 @@ export class ApplicationStateStore {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
-  async persist(): Promise<void> {
-    // Every full checkpoint includes the accumulated conversation progress.
-    // Deltas emitted after this snapshot arrange the next checkpoint.
-    const includesPendingProgress = !!this.conversationCheckpoint;
-    this.cancelConversationCheckpoint();
-    // JSON.stringify captures this shallow view synchronously before the first
-    // await; a second deep clone of every transcript and image is unnecessary.
-    const checkpoint = randomUUID();
-    const saved = {
-      ...this.data,
-      composerCheckpoint: checkpoint,
-      terminals: this.data.terminals.map((terminal) => ({
-        ...terminal,
-        status: "starting",
-        pid: 0,
-        output: "",
-        sequence: 0,
-        exitCode: undefined,
-        error: undefined,
-      })),
-    };
-    const statePath = path.join(this.directory, "state.json");
-    const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
+  async persist(
+    scope: "all" | "layout" | "conversation" = "all",
+  ): Promise<void> {
+    const captured =
+      scope === "layout" ? new Set<string>() : this.pendingConversations;
+    if (scope !== "layout") {
+      this.pendingConversations = new Set();
+      this.cancelConversationCheckpoint();
+    }
     try {
-      await writeFile(temporary, JSON.stringify(saved), "utf8");
-      await rename(temporary, statePath);
+      if (scope === "conversation") {
+        const rows = this.data.conversations.flatMap(
+          (conversation, position) =>
+            captured.has(conversation.id)
+              ? [
+                  {
+                    kind: "conversation",
+                    id: conversation.id,
+                    position,
+                    body: conversation,
+                  },
+                ]
+              : [],
+        );
+        if (rows.length)
+          await this.database.request({
+            operation: "save",
+            scope: "partial",
+            rows,
+          });
+        return;
+      }
+      await this.saveWorkspace(scope);
     } catch (error) {
-      await unlink(temporary).catch(() => undefined);
-      // A failed transaction did not absorb the passive progress it captured.
-      if (includesPendingProgress) this.scheduleConversationCheckpoint();
+      for (const id of captured) this.scheduleConversationCheckpoint(id);
       throw error;
     }
-    this.composerCheckpoint = checkpoint;
-    this.draftOverlays = {};
+  }
+  private async saveWorkspace(scope: "all" | "layout"): Promise<void> {
+    const pendingArchives =
+      scope === "all"
+        ? (this.data.closedWorkspaces?.filter(
+            (archive) => !this.unloadedArchives.has(archive),
+          ) ?? [])
+        : [];
+    const rows = workspaceRows(
+      scope === "layout"
+        ? this.data
+        : {
+            ...this.data,
+            terminals: this.data.terminals.map((terminal) => ({
+              ...terminal,
+              status: "starting",
+              pid: 0,
+              output: "",
+              sequence: 0,
+              exitCode: undefined,
+              error: undefined,
+            })),
+          },
+      scope,
+    );
+    for (const archive of pendingArchives)
+      rows.push({
+        kind: "archive",
+        id: archive.workspace.id,
+        position: 0,
+        body: archive,
+      });
+    await this.database.request({ operation: "save", scope, rows });
+    if (scope === "layout") return;
+    for (const workspace of this.data.workspaces)
+      for (const tab of workspace.closedTabs ?? []) delete tab.conversation;
+    if (pendingArchives.length)
+      this.data.closedWorkspaces = this.data.closedWorkspaces?.map(
+        (archive) => {
+          if (!pendingArchives.includes(archive)) return archive;
+          const summary = archiveSummary(archive);
+          this.unloadedArchives.add(summary);
+          return summary;
+        },
+      );
+  }
+
+  async close(): Promise<void> {
+    await this.database.close();
   }
 }

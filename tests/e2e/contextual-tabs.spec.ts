@@ -1,3 +1,8 @@
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { test, expect } from "@playwright/test";
@@ -1111,14 +1116,13 @@ test("Large recoverable buffers stay out of navigation snapshots and do not dela
   // Recover a real large buffer; native multi-megabyte insertion is a separate
   // measured Chromium limitation (#187), not this navigation/storage check.
   await app.stop();
-  const statePath = path.join(app.data, "state.json");
-  const saved = JSON.parse(await readFile(statePath, "utf8")) as AppState;
+  const saved = readWorkspaceState(app.data);
   saved.drafts[`untitled:${source}`] = {
     content: text,
     expectedContent: "",
     version: "large-recovery-fixture",
   };
-  await writeFile(statePath, JSON.stringify(saved));
+  writeWorkspaceState(app.data, saved);
   await app.start();
   await expect
     .poll(() =>
@@ -1186,64 +1190,80 @@ test("Large recoverable buffers stay out of navigation snapshots and do not dela
 });
 
 test("Failed Save As metadata commit restores the observed untitled view and its newer text", async () => {
-  const id = await untitled(),
-    target = path.join(app.folders[0], "failed-commit.txt"),
-    statePath = path.join(app.data, "state.json");
+  const id = await untitled();
+  const target = path.join(app.folders[0], "failed-commit.txt");
   await editor(id).fill("Retained before failure");
+  const projected = await state();
+  projected.drafts = {};
+
+  using db = openWorkspaceState(app.data);
+  db.exec(`
+    CREATE TRIGGER fail_save_as_checkpoint BEFORE UPDATE ON records
+    WHEN NEW.kind = 'workspace' AND EXISTS (
+      SELECT 1 FROM json_each(NEW.body, '$.panes')
+      WHERE json_extract(value, '$.id') = '${id}'
+        AND json_extract(value, '$.kind') = 'document'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'Invented metadata commit failure');
+    END;
+  `);
   await app.app!.evaluate(
-    async ({ dialog, BrowserWindow }, args) => {
+    ({ dialog, BrowserWindow }, { target, projected, id }) => {
       dialog.showSaveDialog = async () => ({
         canceled: false,
-        filePath: args.target,
+        filePath: target,
       });
-      const fs = process.getBuiltinModule("node:fs/promises")!,
-        rename = fs.rename;
-      Object.assign(globalThis, {
-        pendingFileCommit: false,
-        releaseFileCommit: false,
-      });
-      let fail = true;
-      fs.rename = async (from, to) => {
-        if (
-          fail &&
-          String(to) === args.statePath &&
-          (await fs.stat(args.target).then(
-            () => true,
-            () => false,
-          ))
-        ) {
-          fail = false;
-          const saved = JSON.parse(await fs.readFile(from, "utf8"));
-          // A native event can publish an in-flight state while persistence waits.
-          BrowserWindow.getAllWindows()[0].webContents.send("cod:state", {
-            ...saved,
-            drafts: {},
-          });
-          (globalThis as any).pendingFileCommit = true;
-          while (!(globalThis as any).releaseFileCommit)
-            await new Promise((r) => setTimeout(r, 5));
-          throw new Error("Invented metadata commit failure");
+      const { Worker } = process.getBuiltinModule("node:worker_threads")!;
+      const post = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (
+        ...args: Parameters<typeof post>
+      ) {
+        const [message] = args;
+        const layout = message.request?.rows?.find(
+          (row: {
+            kind: string;
+            body: { panes?: AppState["workspaces"][number]["panes"] };
+          }) =>
+            row.kind === "workspace" &&
+            row.body?.panes?.some(
+              (pane) => pane.id === id && pane.kind === "document",
+            ),
+        )?.body as AppState["workspaces"][number] | undefined;
+        if (!layout) {
+          post.apply(this, args);
+          return;
         }
-        return rename(from, to);
+        Worker.prototype.postMessage = post;
+        // Reproduce a native event exposing the changed view before SQLite
+        // rejects its metadata. Hold this single write to allow another edit.
+        projected.workspaces = projected.workspaces.map((workspace) =>
+          workspace.id === layout.id ? { ...workspace, ...layout } : workspace,
+        );
+        Object.assign(globalThis, {
+          releaseFileCommit: () => post.apply(this, args),
+        });
+        BrowserWindow.getAllWindows()[0].webContents.send(
+          "cod:state",
+          projected,
+        );
       };
     },
-    { target, statePath },
+    { target, projected, id },
   );
   try {
     await editor(id).press(`${modifier}+s`);
-    await expect
-      .poll(() =>
-        app.app!.evaluate(() => (globalThis as any).pendingFileCommit),
-      )
-      .toBe(true);
     await expect(
       app.page.locator(`[role="tab"][data-tab-id="${id}"]`),
     ).toContainText("failed-commit.txt");
+    await expect(editor(id)).toHaveValue("Retained before failure");
     await editor(id).press("End");
     await editor(id).pressSequentially(" and newer");
   } finally {
     await app.app!.evaluate(() => {
-      (globalThis as any).releaseFileCommit = true;
+      (
+        globalThis as typeof globalThis & { releaseFileCommit?: () => void }
+      ).releaseFileCommit?.();
     });
   }
   await expect(app.pane(id).getByRole("status")).toContainText(
@@ -1256,6 +1276,7 @@ test("Failed Save As metadata commit restores the observed untitled view and its
     app.page.locator(`[role="tab"][data-tab-id="${id}"]`),
   ).toContainText("Untitled 1");
   await expect(editor(id)).toHaveValue("Retained before failure and newer");
+  db.exec("DROP TRIGGER fail_save_as_checkpoint");
   await app.stop();
   await app.start();
   await expect(editor(id)).toHaveValue("Retained before failure and newer");

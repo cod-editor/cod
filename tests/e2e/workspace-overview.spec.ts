@@ -1,5 +1,10 @@
+import {
+  openWorkspaceState,
+  readWorkspaceState,
+  writeWorkspaceState,
+} from "../support/workspace-state";
 import { test, expect } from "@playwright/test";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
@@ -1428,16 +1433,27 @@ test("A failed Overview rename retains the edit and query and supports a success
     exact: true,
   });
   await name.fill("Invented rename recovered");
+  using db = openWorkspaceState(app.data);
+  db.exec(`
+    CREATE TRIGGER fail_workspace_rename BEFORE UPDATE ON records
+    WHEN NEW.kind = 'workspace'
+      AND OLD.id = '${workspace}'
+      AND json_extract(NEW.body, '$.name') = 'Invented rename recovered'
+    BEGIN SELECT RAISE(ABORT, 'Invented rename rejected'); END;
+  `);
   try {
-    await chmod(app.data, 0o500);
     await name.press("Enter");
     await expect(overview().getByRole("alert")).toContainText(
-      /EACCES|permission denied/i,
+      "Invented rename rejected",
     );
     await expect(name).toHaveValue("Invented rename recovered");
     await expect(search()).toHaveValue("Invented");
+    expect(
+      readWorkspaceState(app.data).workspaces.find(({ id }) => id === workspace)
+        ?.name,
+    ).toBe("Invented rename source");
   } finally {
-    await chmod(app.data, 0o700);
+    db.exec("DROP TRIGGER fail_workspace_rename");
   }
   await name.press("Enter");
   await expect(search()).toBeFocused();
@@ -1653,8 +1669,7 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
       .toString("base64");
   });
   await app.stop();
-  const stateFile = path.join(app.data, "state.json");
-  const state: AppState = JSON.parse(await readFile(stateFile, "utf8"));
+  const state = readWorkspaceState(app.data);
   const original = state.conversations.find((c) => c.id === chat.id)!;
   const streaming = state.conversations.find((c) => c.id === stream.id)!;
   const template = state.workspaces.find((w) => w.id === first)!;
@@ -1734,7 +1749,7 @@ test("Overview search stays responsive with 1000 rows, retained history and atta
     reference: index + 1,
   }));
   state.activeWorkspaceId = first;
-  await writeFile(stateFile, JSON.stringify(state));
+  writeWorkspaceState(app.data, state);
   await app.configure({
     codex: { extraTools: 50, streamDelayMs: 500, finalDelayMs: 2000 },
   });
