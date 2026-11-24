@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppState } from "../../src/types";
+import type { AppState, ConversationState } from "../../src/types";
 import { ChatApp } from "./helpers/chat-fixture/harness";
 let shell: ChatApp;
 test.beforeEach(async () => {
@@ -512,6 +512,87 @@ for (const { fails, addsImage } of [
       shell.pane(chat.paneId).locator(".composer-images img"),
     ).toHaveCount((fails ? 1 : 0) + (addsImage ? 1 : 0));
   });
+
+test("Composer keeps native composition when the last queued message disappears", async () => {
+  const workspace = await shell.create("Composition fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "First test turn [hold]");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("working");
+  await shell.send(chat.id, "Second test turn");
+  const pane = shell.pane(chat.paneId);
+  const queue = pane.getByRole("region", { name: "Queued messages" });
+  await expect(queue).toBeVisible();
+  const conversation = await shell.cli<ConversationState>(
+    "conversation",
+    "inspect",
+    "--id",
+    chat.id,
+  );
+  const input = pane.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("left right");
+  await input.evaluate((field: HTMLTextAreaElement) => {
+    field.setSelectionRange(5, 5);
+    const evidence = { blurs: 0 };
+    Object.assign(field, { compositionEvidence: evidence });
+    field.addEventListener("blur", () => evidence.blurs++);
+  });
+
+  await shell.app!.evaluate(async ({ BrowserWindow }) => {
+    const { debugger: connection } =
+      BrowserWindow.getAllWindows()[0].webContents;
+    connection.attach("1.3");
+    await connection.sendCommand("Input.imeSetComposition", {
+      text: "preedit",
+      selectionStart: 7,
+      selectionEnd: 7,
+    });
+  });
+  try {
+    await expect(input).toHaveValue("left preeditright");
+    await shell.cli(
+      "conversation",
+      "queue-remove",
+      "--id",
+      chat.id,
+      "--message-id",
+      conversation.queuedMessages![0].id,
+    );
+    await expect(queue).toHaveCount(0);
+    await expect(input).toBeFocused();
+    await shell.app!.evaluate(async ({ BrowserWindow }) => {
+      await BrowserWindow.getAllWindows()[0].webContents.debugger.sendCommand(
+        "Input.insertText",
+        { text: "COMMIT" },
+      );
+    });
+    await expect(input).toHaveValue("left COMMITright");
+    expect(
+      await input.evaluate(
+        (
+          field: HTMLTextAreaElement & {
+            compositionEvidence?: { blurs: number };
+          },
+        ) => field.compositionEvidence?.blurs,
+      ),
+    ).toBe(0);
+    expect(
+      await input.evaluate((field: HTMLTextAreaElement) => [
+        field.selectionStart,
+        field.selectionEnd,
+      ]),
+    ).toEqual([11, 11]);
+    await expect
+      .poll(async () => (await draft(workspace, chat.paneId))?.text)
+      .toBe("left COMMITright");
+    expect(await shell.prompts()).toHaveLength(1);
+  } finally {
+    await shell.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.debugger.detach();
+    });
+  }
+});
 
 test("Composer typing stays responsive with large history and an attachment", async ({}, info) => {
   const backgroundWorkspace = await shell.create("Retained history fixture");

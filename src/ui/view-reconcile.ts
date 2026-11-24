@@ -60,7 +60,13 @@ export function reconcileView(
       current.removeChild(match);
     }
     if (resolved === child && retained?.size) restoreRetained(child, retained);
-    if (resolved !== cursor) current.insertBefore(resolved, cursor);
+    if (resolved !== cursor) {
+      // Removing an obsolete sibling can reorder a retained control. Keep its
+      // native focus and IME composition during that move.
+      if (resolved instanceof HTMLElement && resolved.parentNode === current)
+        current.moveBefore(resolved, cursor);
+      else current.insertBefore(resolved, cursor);
+    }
     cursor = resolved.nextSibling;
   }
   for (const old of oldChildren)
