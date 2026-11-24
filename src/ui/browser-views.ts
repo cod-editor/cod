@@ -416,8 +416,10 @@ export function createBrowserViews(
     const suggestions = addressSuggestions(
       address,
       invoke,
-      (url) => {
-        void invoke("browser.navigate", { id: record.id, url }).catch(() => {});
+      (url, search) => {
+        void invoke("browser.navigate", { id: record.id, url, search }).catch(
+          () => {},
+        );
       },
       scheduleBrowserLayout,
       () => {

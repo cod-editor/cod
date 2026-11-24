@@ -3504,3 +3504,182 @@ test("Address suggestions discard dismissed and superseded replies and wait for 
   await expect(find).toBeHidden();
   await expect(address).toBeFocused();
 });
+
+test("Google autocomplete supplements local rows and cancels on edits or dismissal", async ({}, info) => {
+  const workspace = await shell.create("Search suggestions fixture");
+  const record = await open(workspace, "/suggestions-start");
+  await remote("/suggestions-start", "document.title");
+  await expect
+    .poll(async () => {
+      const browser = await shell.cli<{
+        addons?: { adblock: { status: string } };
+      }>("browser", "inspect", "--id", record.id);
+      return browser.addons?.adblock.status;
+    })
+    .toBe("ready");
+  const localTitle = "Grow basil in the local guide";
+  await shell.cli(
+    "browser",
+    "pin",
+    "--url",
+    origin + "/basil-guide",
+    "--title",
+    localTitle,
+  );
+
+  const requestsSeen: Array<{ query: string; credentialed: boolean }> = [];
+  const disconnected: string[] = [];
+  const held = new Map<string, () => void>();
+  const literal = "http://example.test/path";
+  const fixture = createServer((request, response) => {
+    const query = new URL(request.url!, "http://fixture").searchParams.get(
+      "q",
+    )!;
+    requestsSeen.push({
+      query,
+      credentialed: Boolean(
+        request.headers.cookie ||
+        request.headers.authorization ||
+        request.headers.referer,
+      ),
+    });
+    response.on("close", () => {
+      if (!response.writableEnded) disconnected.push(query);
+    });
+    held.set(query, () =>
+      response.end(JSON.stringify([query, [literal, "basil in pots"]])),
+    );
+  });
+  await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
+  const fixtureAddress = fixture.address();
+  if (!fixtureAddress || typeof fixtureAddress === "string")
+    throw new Error("Autocomplete fixture could not open a loopback socket");
+  try {
+    await shell.app!.evaluate(
+      ({ session }, { completionOrigin, pageOrigin }) => {
+        const request = globalThis.fetch;
+        const cancellations: Array<[string, string]> = [];
+        Object.assign(globalThis, { autocompleteCancellations: cancellations });
+        globalThis.fetch = (target, options) => {
+          const url = new URL(String(target));
+          if (
+            url.origin === "https://www.google.com" &&
+            url.pathname === "/complete/search"
+          ) {
+            const signal = options?.signal;
+            signal?.addEventListener(
+              "abort",
+              () => {
+                cancellations.push([
+                  url.searchParams.get("q")!,
+                  signal.reason.name,
+                ]);
+              },
+              { once: true },
+            );
+            return request(completionOrigin + url.search, options);
+          }
+          return request(target, options);
+        };
+        session
+          .fromPartition("persist:cod-browser")
+          .webRequest.onBeforeRequest(
+            { urls: ["https://duckduckgo.com/*"] },
+            (details, callback) =>
+              callback({
+                redirectURL:
+                  pageOrigin +
+                  "/fixture-engine-result" +
+                  new URL(details.url).search,
+              }),
+          );
+      },
+      {
+        completionOrigin: `http://127.0.0.1:${fixtureAddress.port}`,
+        pageOrigin: origin,
+      },
+    );
+
+    const pane = shell.pane(record.paneId);
+    const address = pane.getByRole("combobox", {
+      name: "Address",
+      exact: true,
+    });
+    const results = pane.getByRole("listbox", { name: "Address suggestions" });
+    const search = results.getByRole("option", {
+      name: /example\.test\/path Search/,
+    });
+    await address.fill("grow basil");
+    const guide = results.getByRole("option", { name: new RegExp(localTitle) });
+    await expect(guide).toBeVisible();
+    await address.press("ArrowDown");
+    await expect(guide).toHaveAttribute("aria-selected", "true");
+    await shell.page.screenshot({
+      path: info.outputPath("suggestions-local.png"),
+    });
+    await expect
+      .poll(() => requestsSeen)
+      .toEqual([{ query: "grow basil", credentialed: false }]);
+    held.get("grow basil")!();
+    await expect(search).toBeVisible();
+    await expect(guide).toHaveAttribute("aria-selected", "true");
+    await expect(address).toHaveValue("grow basil");
+    await expect(address).toBeFocused();
+    await shell.page.screenshot({
+      path: info.outputPath("suggestions-combined.png"),
+    });
+
+    await address.fill("plant basil");
+    await expect.poll(() => held.has("plant basil")).toBe(true);
+    await address.fill("plant thyme");
+    await expect.poll(() => disconnected).toContain("plant basil");
+    await expect.poll(() => held.has("plant thyme")).toBe(true);
+    await address.press("Escape");
+    await expect.poll(() => disconnected).toContain("plant thyme");
+    const cancellations = await shell.app!.evaluate(
+      () =>
+        (
+          globalThis as unknown as {
+            autocompleteCancellations: Array<[string, string]>;
+          }
+        ).autocompleteCancellations,
+    );
+    expect(cancellations).toContainEqual(["plant basil", "AbortError"]);
+    expect(cancellations).toContainEqual(["plant thyme", "AbortError"]);
+    await expect(results).toBeHidden();
+    await expect(address).toHaveValue("plant thyme");
+    await address.fill("example.test path");
+    await shell.page.waitForTimeout(380);
+    expect(requestsSeen.map(({ query }) => query)).toEqual([
+      "grow basil",
+      "plant basil",
+      "plant thyme",
+    ]);
+
+    await address.fill("grow basil");
+    await expect.poll(() => requestsSeen).toHaveLength(4);
+    held.get("grow basil")!();
+    await expect(search).toBeVisible();
+    await shell.cli("browser", "settings", "--search-engine", "duckduckgo");
+    await address.press("ArrowDown");
+    await address.press("ArrowDown");
+    await address.press("Enter");
+    await expect
+      .poll(() =>
+        requests.some((value) => {
+          const url = new URL(value, origin);
+          return (
+            url.pathname === "/fixture-engine-result" &&
+            url.searchParams.get("q") === literal
+          );
+        }),
+      )
+      .toBe(true);
+    await address.fill("find garden");
+    await shell.page.waitForTimeout(380);
+    expect(requestsSeen).toHaveLength(4);
+  } finally {
+    fixture.closeAllConnections();
+    await new Promise<void>((resolve) => fixture.close(() => resolve()));
+  }
+});

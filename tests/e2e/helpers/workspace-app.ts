@@ -126,6 +126,14 @@ export class WorkspaceApp {
       chromiumSandbox: true,
     });
     await this.app.evaluate(({ dialog }) => {
+      // Tests that exercise autocomplete replace this handler with a local fixture.
+      const request = globalThis.fetch;
+      globalThis.fetch = (target, options) => {
+        const address = target instanceof Request ? target.url : String(target);
+        if (address.startsWith("https://www.google.com/complete/search?"))
+          return Promise.resolve(new Response(null, { status: 503 }));
+        return request(target, options);
+      };
       const show = dialog.showMessageBox.bind(dialog);
       dialog.showMessageBox = (...arguments_: any[]) => {
         const options = arguments_.at(-1);
