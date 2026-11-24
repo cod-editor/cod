@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { codexQuestions } from "./codex-questions.ts";
 import type { ProviderEvent } from "./providers/types";
 import type {
@@ -14,6 +15,7 @@ export interface StagedHistory {
   lastRole?: "user" | "assistant";
   turnId?: string;
   turnCount?: number;
+  imageDigests?: Map<string, string[]>;
 }
 
 export function emptyHistory(): StagedHistory {
@@ -60,6 +62,12 @@ export function stageCodexSnapshot(
       const historyTurnId = `codex/${nativeId}/${turnId}`;
       if (item.type === "userMessage") {
         const content = Array.isArray(item.content) ? item.content : [];
+        const images = content
+          .map(object)
+          .filter((entry) => entry.type === "image");
+        const digests = images.map((entry) => text(entry.historyDigest));
+        if (digests.length && digests.every((digest) => digest !== undefined))
+          (staged.imageDigests ??= new Map()).set(id, digests);
         const parts = content.map((entryValue) => {
           const entry = object(entryValue);
           return (
@@ -171,10 +179,6 @@ export function stageKimiEvent(
     });
     staged.lastRole = undefined;
   }
-}
-
-export function codexItemsCursor(metadata: unknown): string | undefined {
-  return text(object(metadata).itemsBackwardsCursor) || undefined;
 }
 
 export function codexHistoryTurns(entries: unknown[]) {
@@ -365,6 +369,20 @@ export function commitHistory(
       }
     }
   }
+  const cachedImageDigests = new Map<string, string[]>();
+  const imageDigests = (message: ConversationMessage) => {
+    let digests = cachedImageDigests.get(message.id);
+    if (!digests) {
+      digests = (message.images ?? []).map(({ mimeType, data }) =>
+        createHash("sha256")
+          .update(`data:${mimeType};base64,`)
+          .update(data)
+          .digest("hex"),
+      );
+      cachedImageDigests.set(message.id, digests);
+    }
+    return digests;
+  };
   for (const message of native) {
     const linkedTurn =
       message.turnId && !ambiguous.has(message.turnId)
@@ -383,6 +401,34 @@ export function commitHistory(
             linkedTurn &&
             cached.turnId === linkedTurn)),
     );
+    // A provider failure can leave an image prompt as the sole row of the turn.
+    // Without sibling item identities, its exact image payload distinguishes
+    // it from other cached prompts that have the same text.
+    const digests = staged.imageDigests?.get(message.id);
+    const equalDigests = (other: string[] | undefined) =>
+      digests !== undefined &&
+      other?.length === digests.length &&
+      other.every((digest, index) => digest === digests[index]);
+    const imageMatches =
+      staged.partial && !earlier && !byItem && !linkedTurn && digests
+        ? conversation.messages.filter(
+            (other) =>
+              other.images?.length === digests.length &&
+              samePrompt(other) &&
+              equalDigests(imageDigests(other)),
+          )
+        : [];
+    const imageMatch = imageMatches[0];
+    const uniquelyIdentifiedImage =
+      imageMatch &&
+      imageMatches.length === 1 &&
+      !imageMatch.id.includes("/") &&
+      native.filter(
+        (other) =>
+          samePrompt(other) && equalDigests(staged.imageDigests?.get(other.id)),
+      ).length === 1
+        ? imageMatch
+        : undefined;
     const cached = byItem
       ? cachedMessages.get(byItem)
       : sameText.length === 1 &&
@@ -392,7 +438,7 @@ export function commitHistory(
               (!staged.partial || other.turnId === message.turnId),
           ).length === 1
         ? sameText[0]
-        : undefined;
+        : uniquelyIdentifiedImage;
     if (cached) {
       link(message.turnId, cached.turnId);
       matches.set(message.id, cached.id);

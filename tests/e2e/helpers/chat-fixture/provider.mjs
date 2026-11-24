@@ -413,7 +413,10 @@ function receive(message, external = false) {
         ? turn.items.slice().reverse()
         : turn.items;
     const limit = isPaged
-      ? (configuration().historyPageSize ?? 2)
+      ? Math.min(
+          params.limit ?? items.length,
+          configuration().historyPageSize ?? 2,
+        )
       : (params.limit ?? items.length);
     const data = items.slice(offset, offset + limit).map((item) => {
       const outputDeferred =

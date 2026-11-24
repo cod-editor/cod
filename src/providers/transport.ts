@@ -38,6 +38,7 @@ interface Pending {
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
   history: boolean;
+  historyImageMethod?: string;
 }
 
 const standardFrameLimit = 4 * 1024 * 1024;
@@ -56,19 +57,46 @@ function isLargeUserImageNotification(
     (message.method !== "item/started" && message.method !== "item/completed")
   )
     return false;
-  const item = object(object(message.params).item);
-  if (item.type !== "userMessage" || !Array.isArray(item.content)) return false;
-  let remaining = length;
-  for (const entry of item.content) {
-    const part = object(entry);
-    if (
-      part.type === "image" &&
-      typeof part.url === "string" &&
-      /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(part.url)
-    )
-      remaining -= part.url.length;
-  }
-  return remaining <= standardFrameLimit;
+  return (
+    length - inlineUserImageLength(object(message.params).item) <=
+    standardFrameLimit
+  );
+}
+
+export function inlineImageUrl(value: unknown): string | undefined {
+  const part = object(value);
+  return part.type === "image" &&
+    typeof part.url === "string" &&
+    /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(part.url)
+    ? part.url
+    : undefined;
+}
+
+function inlineUserImageLength(value: unknown): number {
+  const item = object(value);
+  return item.type === "userMessage" && Array.isArray(item.content)
+    ? item.content.reduce(
+        (length, part) => length + (inlineImageUrl(part)?.length ?? 0),
+        0,
+      )
+    : 0;
+}
+
+function isLargeImageHistoryReply(
+  method: string,
+  result: unknown,
+  length: number,
+): boolean {
+  const { data } = object(result);
+  if (!Array.isArray(data) || data.length !== 1) return false;
+  const row = object(data[0]);
+  const items = method === "thread/turns/list" ? row.items : [row.item];
+  return (
+    Array.isArray(items) &&
+    length -
+      items.reduce((size, item) => size + inlineUserImageLength(item), 0) <=
+      standardFrameLimit
+  );
 }
 
 /** One JSON-lines protocol, owned by one child process. Never mixes stderr into JSON. */
@@ -144,12 +172,15 @@ export class RpcTransport {
               this.framePrefix,
             )?.[1],
           );
-          if (!this.pending.get(id)?.history) {
+          const pending = this.pending.get(id);
+          if (!pending?.history) {
             this.fail(new Error("Provider protocol line exceeded size limit"));
             return;
           }
-          this.oversizedHistoryId = id;
-          this.buffer = [];
+          if (!pending.historyImageMethod) {
+            this.oversizedHistoryId = id;
+            this.buffer = [];
+          }
         }
         if (this.bufferedLength > maximumFrameLimit) {
           this.fail(new Error("Provider protocol line exceeded size limit"));
@@ -201,12 +232,30 @@ export class RpcTransport {
       return;
     }
     const message = object(value);
-    if (
-      this.bufferedLength > standardFrameLimit &&
-      !isLargeUserImageNotification(message, this.bufferedLength)
-    ) {
-      this.fail(new Error("Provider protocol line exceeded size limit"));
-      return;
+    const pending =
+      typeof message.id === "number" ? this.pending.get(message.id) : undefined;
+    if (this.bufferedLength > standardFrameLimit) {
+      if (
+        pending?.historyImageMethod &&
+        !("method" in message) &&
+        "result" in message
+      ) {
+        if (
+          !isLargeImageHistoryReply(
+            pending.historyImageMethod,
+            message.result,
+            this.bufferedLength,
+          )
+        ) {
+          this.pending.delete(message.id as number);
+          clearTimeout(pending.timer);
+          pending.reject(new ProviderHistoryFrameTooLarge());
+          return;
+        }
+      } else if (!isLargeUserImageNotification(message, this.bufferedLength)) {
+        this.fail(new Error("Provider protocol line exceeded size limit"));
+        return;
+      }
     }
     if (!Object.keys(message).length) {
       this.fail(new Error("Invalid provider protocol frame"));
@@ -229,8 +278,6 @@ export class RpcTransport {
       return;
     }
     // A response can only settle an outstanding request from this exact transport.
-    const pending =
-      typeof message.id === "number" ? this.pending.get(message.id) : undefined;
     if (!pending) {
       this.diagnostic("Ignored unmatched provider response");
       return;
@@ -281,7 +328,7 @@ export class RpcTransport {
     method: string,
     params: unknown,
     timeout = this.timeout,
-    mode?: "read-only" | "reconcile" | "history",
+    mode?: "read-only" | "reconcile" | "history" | "history-with-images",
   ): Promise<unknown> {
     if (this.closing || this.closed || this.failure)
       return Promise.reject(
@@ -300,7 +347,8 @@ export class RpcTransport {
         resolve,
         reject,
         timer,
-        history: mode === "history",
+        history: mode === "history" || mode === "history-with-images",
+        historyImageMethod: mode === "history-with-images" ? method : undefined,
       });
       try {
         this.write({ jsonrpc: "2.0", id, method, params });

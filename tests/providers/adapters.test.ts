@@ -6,6 +6,7 @@ import {
   createCodexAdapter,
   createKimiAdapter,
 } from "../../src/providers/index.ts";
+import { codexHistoryPage } from "../../src/providers/codex-history.ts";
 import { RpcTransport } from "../../src/providers/transport.ts";
 import type {
   AdapterOptions,
@@ -790,6 +791,58 @@ test("An oversized Codex history reply leaves a parallel response and following 
     await assert.rejects(history, /saved Codex history item exceeds/);
     assert.equal(await parallel, "fixture response");
     await until(() => notices.includes("fixture/notice"));
+    assert.deepEqual(failures, []);
+  } finally {
+    await transport.close();
+  }
+});
+
+test("Codex history reduces pages, projects oversized images, and keeps unrelated output bounded", async () => {
+  const failures: Error[] = [];
+  const transport = new RpcTransport(
+    {
+      cwd: process.cwd(),
+      executable: process.execPath,
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+          import { createInterface } from 'node:readline';
+          createInterface({input: process.stdin}).on('line', line => {
+            const {id, method, params} = JSON.parse(line);
+            const turnId = 'fixture-turn';
+            const img = 'data:image/png;base64,' + Buffer.alloc(20 * 1024 * 1024).toString('base64');
+            const user = {id:'user-item', type:'userMessage', content:[{type:'image', url:img}]};
+            const tool = {id:'tool-item', type:'commandExecution', aggregatedOutput:'x'.repeat(4 * 1024 * 1024)};
+            const item = params.threadId === 'exceptional-tool' ? tool : user;
+            const data = method === 'thread/turns/list'
+              ? [{id:turnId, items:params.itemsView === 'full' ? [item] : []}]
+              : [{turnId, item}];
+            process.stdout.write(JSON.stringify({id, result:{data, nextCursor:null}}) + '\\n');
+          });
+        `,
+      ],
+      requestTimeoutMs: 5000,
+    },
+    "codex",
+    [],
+    () => {},
+    (error) => failures.push(error),
+    () => {},
+  );
+  try {
+    for (const paginated of [true, false]) {
+      const history = await codexHistoryPage(transport, "fixture", paginated);
+      assert.equal(history.items.length, 1);
+      const compact = JSON.stringify(history.items[0]);
+      assert.match(compact, /"user-item"/);
+      assert.match(compact, /"historyDigest":"[a-f0-9]{64}"/);
+      assert.ok(compact.length < 256);
+      await assert.rejects(
+        codexHistoryPage(transport, "exceptional-tool", paginated),
+        /saved Codex history item exceeds/,
+      );
+    }
     assert.deepEqual(failures, []);
   } finally {
     await transport.close();

@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import {
+  inlineImageUrl,
   object,
   ProviderHistoryFrameTooLarge,
   string,
@@ -15,7 +17,7 @@ type HistoryPage = {
   nextCursor?: string;
 };
 
-async function readPage(
+export async function readCodexHistoryPage(
   rpc: RpcTransport,
   method: "thread/turns/list" | "thread/items/list",
   params: Record<string, unknown>,
@@ -25,7 +27,12 @@ async function readPage(
   for (;;) {
     try {
       return object(
-        await rpc.request(method, { ...params, limit }, undefined, "history"),
+        await rpc.request(
+          method,
+          { ...params, limit },
+          undefined,
+          limit === 1 ? "history-with-images" : "history",
+        ),
       );
     } catch (error) {
       if (!(error instanceof ProviderHistoryFrameTooLarge) || limit === 1)
@@ -33,6 +40,25 @@ async function readPage(
       limit = Math.floor(limit / 2);
     }
   }
+}
+
+// The chat already owns locally attached bytes. Native replay needs only the
+// input kind, and forwarding data URLs would overflow detached owner frames.
+function compactHistoryItem(value: unknown): unknown {
+  const item = object(value);
+  if (item.type !== "userMessage" || !Array.isArray(item.content)) return value;
+  return {
+    ...item,
+    content: item.content.map((entry) => {
+      const url = inlineImageUrl(entry);
+      return url
+        ? {
+            type: "image",
+            historyDigest: createHash("sha256").update(url).digest("hex"),
+          }
+        : entry;
+    }),
+  };
 }
 
 export async function codexHistoryPage(
@@ -45,7 +71,7 @@ export async function codexHistoryPage(
   let turn = position.turn;
   let items = position.items;
   if (!items) {
-    const page = await readPage(
+    const page = await readCodexHistoryPage(
       rpc,
       "thread/turns/list",
       {
@@ -66,7 +92,10 @@ export async function codexHistoryPage(
         items: turns.flatMap(({ id, items }) => {
           if (typeof id !== "string" || !Array.isArray(items))
             throw new Error("Codex returned an invalid history turn");
-          return [...items].reverse().map((item) => ({ turnId: id, item }));
+          return [...items].reverse().map((item) => ({
+            turnId: id,
+            item: compactHistoryItem(item),
+          }));
         }),
         nextCursor: turn ? JSON.stringify({ turn }) : undefined,
       };
@@ -75,7 +104,7 @@ export async function codexHistoryPage(
       throw new Error("Codex returned a history turn without identity");
     items = { turnId, cursor: "" };
   }
-  const page = await readPage(
+  const page = await readCodexHistoryPage(
     rpc,
     "thread/items/list",
     {
@@ -91,7 +120,10 @@ export async function codexHistoryPage(
   if (!Array.isArray(page.data) || (nextItems && nextItems === items.cursor))
     throw new Error("Codex returned an invalid item history page");
   return {
-    items: page.data,
+    items: page.data.map((value) => {
+      const entry = object(value);
+      return { ...entry, item: compactHistoryItem(entry.item) };
+    }),
     nextCursor:
       turn || nextItems
         ? JSON.stringify({

@@ -38,7 +38,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { structuredMessageLabel } from "./message-label";
 import { menu } from "./controls";
-import { codexItemsCursor } from "../conversation-history";
+import { codexItemsCursor } from "../conversation-history-cursor";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
 import { readPreference, writePreference } from "./preferences";
 import { confirmAction } from "./dialogs";
