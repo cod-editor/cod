@@ -1,7 +1,9 @@
 import { prepareExtension } from "./extension-install";
 import {
   BrowserWindow,
+  screen,
   webContents,
+  type Rectangle,
   type Session,
   type WebContents,
 } from "electron";
@@ -155,12 +157,58 @@ export class BrowserAddons {
       },
     });
     this.extensions.on("browser-action-popup-created", (popup) => {
+      const window = popup.browserWindow;
+      if (!window) return;
+      const workArea = () =>
+        screen.getDisplayMatching(options.window.getBounds()).workArea;
+      // The pinned PopupView exposes its toolbar rectangle at runtime but
+      // does not publish a getter. It may finish loading before it emits a move.
+      const candidate = (popup as unknown as { anchorRect?: Rectangle })
+        .anchorRect;
+      const anchor =
+        candidate &&
+        [candidate.x, candidate.y, candidate.width, candidate.height].every(
+          Number.isFinite,
+        ) &&
+        candidate.width > 0 &&
+        candidate.height > 0
+          ? candidate
+          : undefined;
+      const fit = (point?: Pick<Rectangle, "x" | "y">) => {
+        const area = workArea();
+        const bounds = window.getBounds();
+        const owner = options.window.getContentBounds();
+        const x = anchor
+          ? Math.floor(owner.x + anchor.x + anchor.width - bounds.width)
+          : (point ?? bounds).x;
+        const y = anchor
+          ? Math.floor(owner.y + anchor.y + anchor.height + 5)
+          : (point ?? bounds).y;
+        return {
+          x: Math.max(area.x, Math.min(x, area.x + area.width - bounds.width)),
+          y: Math.max(
+            area.y,
+            Math.min(y, area.y + area.height - bounds.height),
+          ),
+        };
+      };
+      // PopupView emits mutable geometry before applying it, including when
+      // extension content changes its preferred size.
+      popup.on("will-resize", (size: Pick<Rectangle, "width" | "height">) => {
+        const area = workArea();
+        size.width = Math.min(size.width, area.width);
+        size.height = Math.min(size.height, area.height);
+      });
+      popup.on("will-move", (point: Pick<Rectangle, "x" | "y">) => {
+        Object.assign(point, fit(point));
+      });
       void popup
         .whenReady()
         .then(() => {
           if (popup.isDestroyed()) return;
           popup.setSize({ width: 480, height: 600 });
-          popup.browserWindow?.show();
+          window.setBounds(fit());
+          window.show();
         })
         .catch(() => {});
     });
