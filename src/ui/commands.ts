@@ -1777,7 +1777,8 @@ export function createCommands(
     const list = document.createElement("div");
     list.className = "command-list";
     const definitions = commandDefinitions.filter(
-      (command) => command.id !== "palette",
+      (command) =>
+        command.id !== "palette" && command.id !== "terminal.interrupt",
     );
     let recent = validCommandHistory(
       readPreference<unknown>("recent-commands", []),
@@ -2087,7 +2088,8 @@ export function createCommands(
         keyboardPlatform,
         shortcutSurface(),
       );
-      if (!match) return;
+      // The focused xterm owns interrupt, including inside Quick Terminal.
+      if (!match || match.command === "terminal.interrupt") return;
       if (
         openDialog &&
         match.command !==
