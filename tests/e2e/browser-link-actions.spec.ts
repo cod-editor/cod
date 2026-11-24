@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "node:http";
-import { writeFile } from "node:fs/promises";
+import { createServer as createHttpsServer } from "node:https";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -436,6 +437,119 @@ test("Native keyboard context handoff and current-page Commands use the exact va
   expect(await pageValue("document.querySelector('#field').value")).toBe(
     "Retain this form",
   );
+});
+
+test("Untrusted HTTPS explains the certificate error and offers an explicit handoff", async ({}, info) => {
+  const keyPath = path.join(app.data, "untrusted-key.pem");
+  const certPath = path.join(app.data, "untrusted-cert.pem");
+  await execute("openssl", [
+    "req",
+    "-x509",
+    "-newkey",
+    "rsa:2048",
+    "-nodes",
+    "-days",
+    "2",
+    "-keyout",
+    keyPath,
+    "-out",
+    certPath,
+    "-subj",
+    "/CN=127.0.0.1",
+    "-addext",
+    "subjectAltName=IP:127.0.0.1",
+  ]);
+  let pageRequests = 0;
+  let cleartextRequests = 0;
+  const tls = createHttpsServer(
+    { key: await readFile(keyPath), cert: await readFile(certPath) },
+    (_request, response) => {
+      pageRequests++;
+      response.end("Invented untrusted page");
+    },
+  );
+  tls.on("tlsClientError", (error) => {
+    if ((error as NodeJS.ErrnoException).code === "ERR_SSL_HTTP_REQUEST")
+      cleartextRequests++;
+  });
+  await new Promise<void>((resolve) => tls.listen(0, "127.0.0.1", resolve));
+  try {
+    const tlsAddress = tls.address();
+    if (!tlsAddress || typeof tlsAddress === "string")
+      throw Error("TLS fixture unavailable");
+    const destination = `https://127.0.0.1:${tlsAddress.port}/fixture?state=invented#test`;
+    const record = await openBrowser();
+    await app.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(1000, 680),
+    );
+    const pane = app.pane(record.paneId);
+    const address = pane.getByRole("combobox", {
+      name: "Address",
+      exact: true,
+    });
+    const failure = pane.locator(".browser-failure");
+    const handoff = failure.getByRole("button", {
+      name: "Open in system browser",
+    });
+    const retry = failure.getByRole("button", { name: "Reload page" });
+    await address.fill(destination);
+    await address.press("Enter");
+    await expect(failure).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await browserRecords()).find(({ id }) => id === record.id)?.error,
+      )
+      .toContain("ERR_CERT_AUTHORITY_INVALID");
+    await app.page.screenshot({
+      path: info.outputPath("untrusted-https-page.png"),
+    });
+    await expect(
+      failure.getByRole("heading", { name: "Certificate not trusted" }),
+    ).toBeVisible();
+    await expect(failure).toContainText("certificate issuer");
+    await expect(failure.locator("code")).toHaveText(
+      `https://127.0.0.1:${tlsAddress.port}/fixture`,
+    );
+    await expect(
+      failure.getByRole("button", { name: "Open over HTTP" }),
+    ).toHaveCount(0);
+    await expect(retry).toBeVisible();
+    expect(await handoffs()).toEqual([]);
+    await retry.focus();
+    await retry.press("Enter");
+    await expect(
+      failure.getByRole("heading", { name: "Certificate not trusted" }),
+    ).toBeVisible();
+    expect(await handoffs()).toEqual([]);
+    expect(pageRequests).toBe(0);
+    expect(cleartextRequests).toBe(0);
+    await handoff.focus();
+    await expect(handoff).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("untrusted-https-handoff-focus.png"),
+    });
+    await handoff.press("Enter");
+    await expect.poll(() => handoffs()).toEqual([destination]);
+    await expect(failure).toBeVisible();
+    expect(pageRequests).toBe(0);
+    expect(cleartextRequests).toBe(0);
+    await failure
+      .getByRole("button", { name: "Return to previous page" })
+      .click();
+    await expect(failure).toBeHidden();
+    await expect
+      .poll(
+        async () =>
+          (await browserRecords()).find(({ id }) => id === record.id)?.url,
+      )
+      .toBe(origin + "/source");
+    expect(await handoffs()).toEqual([destination]);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      tls.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("Native keyboard handoff waits for deferred popup presentation before selecting the requested action", async () => {
