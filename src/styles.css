@@ -599,6 +599,12 @@ dialog.quick-terminal {
   padding: 5px 8px;
   border-bottom: 1px solid var(--line);
 }
+.browser-insecure {
+  flex: none;
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
 .browser-navigation input {
   min-width: 0;
   flex: 1;
@@ -1367,6 +1373,9 @@ browser-action-list::part(action):focus-visible {
   padding: 24px;
   overflow: auto;
   line-height: 1.5;
+}
+.browser-failure .ui-actions {
+  justify-content: flex-start;
 }
 .browser-failure h2 {
   margin: 0 0 8px;

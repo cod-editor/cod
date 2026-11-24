@@ -55,6 +55,8 @@ interface Resource {
   visible: boolean;
   error?: string;
   failedUrl?: string;
+  unavailableHttps?: boolean;
+  redirected?: boolean;
   restoredFailure?: boolean;
   restoredTitle?: string;
   lastSuccessfulUrl?: string;
@@ -313,6 +315,9 @@ export class BrowserService {
       if (this.options.scrollbarCSS)
         installScrollbarStyle(view.webContents, this.options.scrollbarCSS);
       const changed = () => this.changed(resource);
+      view.webContents.on("will-redirect", (event) => {
+        if (event.isMainFrame) resource.redirected = true;
+      });
       view.webContents.on(
         "did-start-navigation",
         (_event, _url, inPlace, mainFrame) => {
@@ -320,6 +325,8 @@ export class BrowserService {
           resource.restoredFailure = false;
           resource.error = undefined;
           resource.failedUrl = undefined;
+          resource.unavailableHttps = false;
+          resource.redirected = false;
           changed();
         },
       );
@@ -330,31 +337,21 @@ export class BrowserService {
           if (!mainFrame || code === -3) return;
           resource.error = `Page could not load (${description || `network error ${code}`}). Reload to try again.`;
           resource.failedUrl = failedUrl;
+          // Chromium ERR_CONNECTION_REFUSED and ERR_SSL_PROTOCOL_ERROR.
+          resource.unavailableHttps =
+            !resource.redirected && (code === -102 || code === -107);
           changed();
         },
       );
       view.webContents.on("render-process-gone", (_event, details) => {
         resource.error = `Page stopped (${details.reason}). Reload to try again.`;
         resource.failedUrl = view.webContents.getURL();
+        resource.unavailableHttps = false;
         changed();
       });
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
-      const committed = (_event: Electron.Event, _committedUrl: string) => {
-        const history = resource.contents.navigationHistory;
-        const index = history.getActiveIndex();
-        const { start, end } = navigationWindow(history.length(), index);
-        const entries = [];
-        for (let i = start; i < end; i++) {
-          const entry = history.getEntryAtIndex(i);
-          entries.push({ url: entry.url, title: entry.title });
-        }
-        resource.navigation = normalizeNavigation({
-          entries,
-          index: index - start,
-        });
-        changed();
-      };
+      const committed = () => this.updateNavigation(resource);
       view.webContents.on("did-navigate", committed);
       view.webContents.on("did-finish-load", () => {
         const url = resource.contents.getURL();
@@ -364,7 +361,7 @@ export class BrowserService {
       });
       view.webContents.on(
         "did-navigate-in-page",
-        (event, committedUrl, mainFrame) => {
+        (_event, committedUrl, mainFrame) => {
           if (mainFrame) {
             if (
               !resource.error &&
@@ -372,7 +369,7 @@ export class BrowserService {
               /^https?:\/\//.test(committedUrl)
             )
               resource.lastSuccessfulUrl = committedUrl;
-            committed(event, committedUrl);
+            committed();
           }
         },
       );
@@ -467,10 +464,43 @@ export class BrowserService {
     if (this.resources.get(resource.id) !== resource)
       throw new Error("Browser view closed during navigation");
   }
-  async navigate(id: string, url: string) {
+  private updateNavigation(resource: Resource): void {
+    const history = resource.contents.navigationHistory;
+    const index = history.getActiveIndex();
+    const { start, end } = navigationWindow(history.length(), index);
+    const entries = [];
+    for (let i = start; i < end; i++) {
+      const entry = history.getEntryAtIndex(i);
+      entries.push({ url: entry.url, title: entry.title });
+    }
+    resource.navigation = normalizeNavigation({
+      entries,
+      index: index - start,
+    });
+    this.changed(resource);
+  }
+  async navigate(id: string, url: string, replaceFailure?: string) {
     const resource = this.resource(id);
+    const history = resource.contents.navigationHistory;
+    const index = history.getActiveIndex();
+    const replace =
+      !!replaceFailure &&
+      resource.failedUrl === replaceFailure &&
+      history.getEntryAtIndex(index)?.url === replaceFailure;
     await this.load(resource, safeUrl(url, this.options.isAllowedExtensionUrl));
+    // Only remove the exact failed predecessor that this successful load replaced.
+    if (
+      replace &&
+      history.getActiveIndex() === index + 1 &&
+      history.getEntryAtIndex(index)?.url === replaceFailure &&
+      history.removeEntryAtIndex(index)
+    )
+      this.updateNavigation(resource);
     return this.snapshot(id);
+  }
+  httpsUnavailable(id: string, url: string): boolean {
+    const resource = this.resources.get(id);
+    return !!(resource?.unavailableHttps && resource.failedUrl === url);
   }
   async restoreNavigation(id: string, value: BrowserNavigation) {
     const resource = this.resource(id);

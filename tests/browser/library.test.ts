@@ -31,11 +31,11 @@ test("Local history, deletion and search settings persist without retaining auth
     const restored = new BrowserLibrary(dir);
     assert.equal((await restored.settings()).searchEngine, "duckduckgo");
     assert.equal(
-      resolveAddress("two words", "duckduckgo"),
+      resolveAddress("two words", "duckduckgo").url,
       "https://duckduckgo.com/?q=two%20words",
     );
     assert.equal(
-      resolveAddress("example.invalid", "yandex"),
+      resolveAddress("example.invalid", "yandex").url,
       "https://example.invalid/",
     );
     await assert.rejects(restored.configure("invalid"));

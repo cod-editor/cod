@@ -1014,6 +1014,7 @@ export class BrowserApplicationService {
         ...snapshot,
         url: snapshot.url || saved.url,
         nativeTabId: service.getWebContents(id).id,
+        httpFallback: undefined,
         permissionRequests: undefined,
         permissionDenied: undefined,
       });
@@ -1033,7 +1034,9 @@ export class BrowserApplicationService {
       return;
     }
     if (!record.error)
-      return this.loadBrowser(record, record.url, record.navigation);
+      return this.loadBrowser(record, record.url, {
+        navigation: record.navigation,
+      });
     const restoredFailure = {
       url: record.url,
       error: record.error,
@@ -1062,18 +1065,27 @@ export class BrowserApplicationService {
     const record = this.browser(id);
     if (record.agentPage)
       throw new Error("Registered agent pages cannot navigate to other sites");
-    await this.loadBrowser(
-      record,
-      this.browserUrl(
-        resolveAddress(url, (await this.library.settings()).searchEngine),
-      ),
+    const target = resolveAddress(
+      url,
+      (await this.library.settings()).searchEngine,
     );
+    await this.loadBrowser(record, this.browserUrl(target.url), {
+      httpFallbackUrl: target.httpFallbackUrl,
+    });
     return structuredClone(this.browser(id));
   }
   async loadBrowser(
     record: BrowserState,
     url: string,
-    navigation?: import("../browser/navigation").BrowserNavigation,
+    {
+      navigation,
+      httpFallbackUrl,
+      replaceFailure,
+    }: {
+      navigation?: import("../browser/navigation").BrowserNavigation;
+      httpFallbackUrl?: string;
+      replaceFailure?: string;
+    } = {},
   ): Promise<void> {
     const service = this.requireBrowserService();
     const savedNavigation = normalizeNavigation(navigation);
@@ -1091,6 +1103,7 @@ export class BrowserApplicationService {
     this.browserAdmissions.set(record.id, admission);
     record.loading = true;
     record.error = undefined;
+    record.httpFallback = undefined;
     record.permissionDenied = undefined;
     record.url = url;
     this.store.notify();
@@ -1124,7 +1137,7 @@ export class BrowserApplicationService {
         throw new Error("Browser navigation superseded or closed");
       const snapshot = restore
         ? await service.restoreNavigation(record.id, restore)
-        : await service.navigate(record.id, url);
+        : await service.navigate(record.id, url, replaceFailure);
       if (!current())
         throw new Error("Browser navigation superseded or closed");
       Object.assign(this.browser(record.id), snapshot);
@@ -1135,8 +1148,15 @@ export class BrowserApplicationService {
         const target = this.browser(record.id);
         target.loading = false;
         target.error = error instanceof Error ? error.message : String(error);
+        if (
+          !restore &&
+          httpFallbackUrl &&
+          service.httpsUnavailable(record.id, url)
+        )
+          target.httpFallback = { id: randomUUID(), url: httpFallbackUrl };
         this.store.schedulePersist();
         this.store.notify();
+        if (target.httpFallback) return;
       }
       throw error;
     }
@@ -1210,6 +1230,7 @@ export class BrowserApplicationService {
             if (this.isPinned(record)) {
               record.visible = false;
               record.loading = false;
+              record.httpFallback = undefined;
               record.error =
                 "The page closed itself. Reload to open this pinned tab again.";
             } else this.removeBrowser(record);
@@ -1233,6 +1254,8 @@ export class BrowserApplicationService {
         )
           ? event.snapshot.url
           : record.url;
+      if (!event.snapshot.error || url !== record.url)
+        record.httpFallback = undefined;
       Object.assign(record, event.snapshot, { url });
       const key = `${url}\n${record.title}`;
       if (
@@ -1514,6 +1537,21 @@ export class BrowserApplicationService {
           requiredString(request, "url"),
         );
 
+      case "browser.http-fallback": {
+        const record = this.browser(requiredString(request, "id"));
+        const offer = record.httpFallback;
+        if (
+          !record.error ||
+          !offer ||
+          offer.id !== requiredString(request, "offer")
+        )
+          throw new Error("This HTTP option is no longer available");
+        await this.loadBrowser(record, offer.url, {
+          replaceFailure: record.url,
+        });
+        return { id: record.id };
+      }
+
       case "browser.diagnostics": {
         const id = requiredString(request, "id");
         const record = this.browser(id);
@@ -1560,10 +1598,19 @@ export class BrowserApplicationService {
       case "browser.recover": {
         const id = requiredString(request, "id");
         await this.browserInitializations.get(id);
-        if (this.browser(id).agentPage)
+        const record = this.browser(id);
+        if (record.agentPage)
           throw new Error(
             "Registered agent pages cannot recover browser navigation",
           );
+        if (
+          record.error &&
+          record.httpFallback &&
+          (!record.lastSuccessfulUrl || record.lastSuccessfulUrl === record.url)
+        ) {
+          await this.loadBrowser(record, "about:blank");
+          return { id };
+        }
         if (
           !this.requireBrowserService()
             .list()

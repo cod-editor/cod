@@ -25,6 +25,8 @@ Use `codctl workspace prepare --name NAME --folders '["/absolute/host/path"]'` t
 
 Use `codctl context` to identify your current `location`. To move your existing session when it is already hosted at the requested location, add `--conversation "$COD_CONVERSATION_ID"` to workspace preparation. The native controller, history, and cwd are preserved. On Linux, the connected desktop follows when it is viewing the source workspace. If a creation reply was lost, rerun the same name and folders on the same host. Preparation checks the persisted name before creating anything, and refuses ambiguous or closed matches. If the host was changed or the workspace may have been renamed, confirm the destination state first.
 
+For a failed inferred HTTPS navigation, `browser inspect` can expose a one-use `httpFallback` offer. Use `browser http-fallback --id ID --offer OFFER_ID` only when the user chooses to make that unencrypted visit. The offer expires when that tab navigates or Cod restarts.
+
 ## Native conversation workflow
 
 1. Create a workspace and note its opaque `id` from the JSON result.

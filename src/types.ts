@@ -38,6 +38,7 @@ export interface BrowserPane {
   browserId: string;
 }
 export interface BrowserState {
+  httpFallback?: { id: string; url: string };
   navigation?: import("./browser/navigation").BrowserNavigation;
   permissionRequests?: import("./browser/permission-types").SiteRequest[];
   permissionDenied?: string;

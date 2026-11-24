@@ -1,5 +1,6 @@
 import { browserLabel, isBrowserHome } from "./browser-label";
-import { uiSwitch, icon } from "../ui-kit";
+import { actionRow, uiSwitch, icon } from "../ui-kit";
+import { isInsecureSite } from "../browser/address";
 import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
@@ -281,6 +282,14 @@ export function createBrowserViews(
       ),
     );
     const failed = !!record.error && !record.agentPage;
+    const insecure = container.querySelector<HTMLElement>(".browser-insecure")!;
+    insecure.hidden = !(
+      !record.agentPage &&
+      !failed &&
+      isInsecureSite(record.url)
+    );
+    if (insecure.hidden) address.removeAttribute("aria-describedby");
+    else address.setAttribute("aria-describedby", insecure.id);
     const atHome = isBrowserHome(record);
     const home = homes.get(record.id)!;
     home.element.hidden = !atHome;
@@ -289,31 +298,50 @@ export function createBrowserViews(
       failed || atHome;
     const failure = container.querySelector<HTMLElement>(".browser-failure")!;
     failure.hidden = !failed;
-    failure.querySelector<HTMLButtonElement>("[data-browser-recover]")!.hidden =
-      !failed ||
-      !record.lastSuccessfulUrl ||
-      record.lastSuccessfulUrl === record.url;
+    const fallback = failed ? record.httpFallback : undefined;
+    const previous =
+      record.lastSuccessfulUrl && record.lastSuccessfulUrl !== record.url;
+    const recover = failure.querySelector<HTMLButtonElement>(
+      "[data-browser-recover]",
+    )!;
+    recover.hidden = !failed || !(previous || fallback);
+    recover.textContent = previous
+      ? "Return to previous page"
+      : "Return to Home";
+    const proceed = failure.querySelector<HTMLButtonElement>(
+      "[data-browser-http]",
+    )!;
+    proceed.hidden = !fallback;
+    proceed.dataset.offer = fallback?.id ?? "";
+    failure.querySelector<HTMLButtonElement>("[data-browser-retry]")!.hidden =
+      Boolean(fallback);
+    const title = fallback
+      ? "Secure connection unavailable"
+      : "Page could not load";
+    failure.setAttribute("aria-label", title);
+    failure.querySelector("h2")!.textContent = title;
     const error = record.error ?? "";
-    failure.querySelector("p")!.textContent = error.includes(
-      "ERR_TOO_MANY_REDIRECTS",
-    )
-      ? "The site redirected too many times."
-      : error.includes("ERR_NAME_NOT_RESOLVED")
-        ? "The site's address could not be found."
-        : error.includes("ERR_INTERNET_DISCONNECTED")
-          ? "There is no internet connection."
-          : error.includes("ERR_CONNECTION_REFUSED")
-            ? "The site refused the connection."
-            : error.includes("ERR_TIMED_OUT") ||
-                error.includes("ERR_CONNECTION_TIMED_OUT")
-              ? "The site took too long to respond."
-              : error.includes("ERR_CERT_")
-                ? "A secure connection to this site could not be established."
-                : "The page could not be opened. You can retry or enter another address.";
+    failure.querySelector("p")!.textContent = fallback
+      ? "Opening this site over HTTP would leave your connection unencrypted."
+      : error.includes("ERR_TOO_MANY_REDIRECTS")
+        ? "The site redirected too many times."
+        : error.includes("ERR_NAME_NOT_RESOLVED")
+          ? "The site's address could not be found."
+          : error.includes("ERR_INTERNET_DISCONNECTED")
+            ? "There is no internet connection."
+            : error.includes("ERR_CONNECTION_REFUSED")
+              ? "The site refused the connection."
+              : error.includes("ERR_TIMED_OUT") ||
+                  error.includes("ERR_CONNECTION_TIMED_OUT")
+                ? "The site took too long to respond."
+                : error.includes("ERR_CERT_")
+                  ? "A secure connection to this site could not be established."
+                  : "The page could not be opened. You can retry or enter another address.";
     let displayUrl = "Requested page";
     try {
-      const url = new URL(record.url);
-      if (url.protocol === "file:") displayUrl = decodeURI(url.pathname);
+      const url = new URL(fallback?.url ?? record.url);
+      if (fallback) displayUrl = url.origin;
+      else if (url.protocol === "file:") displayUrl = decodeURI(url.pathname);
       else if (url.protocol === "http:" || url.protocol === "https:")
         displayUrl = `${url.origin}${url.pathname === "/" ? "" : url.pathname}`;
     } catch {
@@ -379,7 +407,12 @@ export function createBrowserViews(
     address.value = record.url === "about:blank" ? "" : record.url;
     address.placeholder = "Search or enter address";
     address.spellcheck = false;
-    navigation.append(address);
+    const insecure = document.createElement("span");
+    insecure.id = `browser-insecure-${record.id}`;
+    insecure.className = "browser-insecure";
+    insecure.textContent = "Not secure";
+    insecure.hidden = true;
+    navigation.append(insecure, address);
     const suggestions = addressSuggestions(
       address,
       invoke,
@@ -537,6 +570,7 @@ export function createBrowserViews(
     navigation.append(actions);
     navigation.addEventListener("submit", (event) => {
       event.preventDefault();
+      container.querySelector(".action-error")?.remove();
       suggestions.close();
       void invoke("browser.navigate", {
         id: record.id,
@@ -566,8 +600,21 @@ export function createBrowserViews(
     const recover = paneButton("Return to previous page", () =>
       invoke("browser.recover", { id: record.id }),
     );
+    const proceed = paneButton("Open over HTTP", () =>
+      invoke("browser.http-fallback", {
+        id: record.id,
+        offer: proceed.dataset.offer,
+      }),
+    );
+    retry.dataset.browserRetry = "";
     recover.dataset.browserRecover = "";
-    failure.append(failureTitle, error, url, retry, " ", recover);
+    proceed.dataset.browserHttp = "";
+    failure.append(
+      failureTitle,
+      error,
+      url,
+      actionRow(retry, recover, proceed),
+    );
     const home = createBrowserHome(getState, invoke, (url) => {
       void invoke("browser.navigate", { id: record.id, url });
     });

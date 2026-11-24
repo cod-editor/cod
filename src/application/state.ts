@@ -83,6 +83,7 @@ export class ApplicationStateStore {
         browsers: (saved.browsers ?? []).map((browser) => ({
           ...browser,
           nativeTabId: undefined,
+          httpFallback: undefined,
           permissionRequests: undefined,
           addons: undefined,
           visible: false,
