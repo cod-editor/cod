@@ -254,7 +254,7 @@ test("Overview prefers siblings and the current workspace heading when a selecte
   });
 
   const filtered = await openBrowser(source);
-  await search().fill("about:blank");
+  await search().fill("Home");
   await row("browser", filtered.id).hover();
   await close("browser", filtered.id);
   await expect(row("workspace", source)).toHaveCount(0);
@@ -262,7 +262,7 @@ test("Overview prefers siblings and the current workspace heading when a selecte
     "aria-current",
     "true",
   );
-  await expect(search()).toHaveValue("about:blank");
+  await expect(search()).toHaveValue("Home");
 });
 
 test("Overview uses one compact selection surface with first-line controls at normal and narrow sizes", async ({}, info) => {

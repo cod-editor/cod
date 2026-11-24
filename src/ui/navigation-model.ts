@@ -1,6 +1,7 @@
 import { hasRunningBackground } from "../conversation-actions.ts";
 import type { AppState, ConversationState } from "../types";
 import { conversationLabel } from "./message-label.ts";
+import { browserLabel, isBrowserHome } from "./browser-label.ts";
 
 export type NavigationKind =
   "workspace" | "conversation" | "browser" | "terminal" | "review";
@@ -215,20 +216,18 @@ export function projectNavigation(
     for (const browser of state.browsers.filter(
       (b) => b.workspaceId === workspace.id,
     )) {
+      const address = isBrowserHome(browser) ? "" : browser.url;
       const row = item(
         "browser",
         browser.id,
-        browser.title ||
-          (browser.url === "about:blank" ? "New browser tab" : browser.url),
+        browserLabel(browser),
         root,
         browser.paneId,
         "",
         undefined,
-        browser.url,
+        address,
       );
-      row.hint = browser.error
-        ? `${row.label} - ${browser.error}`
-        : browser.url;
+      row.hint = browser.error ? `${row.label} - ${browser.error}` : address;
       result.push(row);
     }
     for (const terminal of state.terminals.filter(

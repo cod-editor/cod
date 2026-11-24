@@ -5,6 +5,7 @@ import { createTabDrag } from "./tab-drag";
 import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
+import { browserLabel } from "./browser-label";
 import { icon, iconButton } from "../ui-kit";
 import { menu, type MenuAction } from "./controls";
 import type {
@@ -277,7 +278,7 @@ export function createPaneLayout(
     }
     if (pane.kind === "browser") {
       const b = getState().browsers.find((b) => b.id === pane.browserId);
-      return b?.title || b?.url || "Browser";
+      return b ? browserLabel(b) : "Browser";
     }
     if (pane.kind === "terminal") return "Terminal";
     if (pane.kind === "diff")

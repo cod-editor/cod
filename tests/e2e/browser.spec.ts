@@ -261,7 +261,7 @@ test.afterEach(async () => {
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 
-test("Address bar searches text and opens bare addresses without sending addresses to search", async () => {
+test("Address bar searches text and opens bare addresses without sending addresses to search", async ({}, info) => {
   const workspace = await shell.create("Address input");
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   await shell.page
@@ -273,6 +273,24 @@ test("Address bar searches text and opens bare addresses without sending address
   });
   await expect(address).toBeFocused();
   await expect(address).toHaveValue("");
+  await shell.page.screenshot({ path: info.outputPath("browser-home.png") });
+  await expect
+    .soft(shell.page.getByRole("tab", { name: "Home", exact: true }))
+    .toBeVisible();
+  await address.press(`${modifier}+Shift+o`);
+  const overview = shell.page.getByRole("dialog", {
+    name: "Overview",
+    exact: true,
+  });
+  await expect(overview).toBeVisible();
+  await shell.page.screenshot({
+    path: info.outputPath("browser-home-overview.png"),
+  });
+  await expect.soft(overview.getByText("Home", { exact: true })).toBeVisible();
+  await overview
+    .getByRole("combobox", { name: "Search Overview" })
+    .press("Escape");
+  await expect(address).toBeFocused();
   await expect(address).toHaveAttribute(
     "placeholder",
     "Search or enter address",

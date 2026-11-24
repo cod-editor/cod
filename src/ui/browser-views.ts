@@ -1,3 +1,4 @@
+import { browserLabel, isBrowserHome } from "./browser-label";
 import { uiSwitch, icon } from "../ui-kit";
 import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
@@ -247,7 +248,7 @@ export function createBrowserViews(
     container: HTMLElement,
     record: BrowserState,
   ): void {
-    container.setAttribute("aria-label", record.title || record.url);
+    container.setAttribute("aria-label", browserLabel(record));
     const address = container.querySelector<HTMLInputElement>(
       'input[aria-label="Address"]',
     )!;
@@ -280,7 +281,7 @@ export function createBrowserViews(
       ),
     );
     const failed = !!record.error && !record.agentPage;
-    const atHome = record.url === "about:blank" && !record.agentPage && !failed;
+    const atHome = isBrowserHome(record);
     const home = homes.get(record.id)!;
     home.element.hidden = !atHome;
     if (atHome) home.update();
