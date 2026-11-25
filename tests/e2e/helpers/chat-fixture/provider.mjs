@@ -441,7 +441,8 @@ function receive(message, external = false) {
     return;
   }
   if (message.method === "thread/read" && portable()) {
-    const file = rolloutFile(params.threadId);
+    const file =
+      configuration().portableReadPath ?? rolloutFile(params.threadId);
     if (!existsSync(file))
       write({
         id: message.id,

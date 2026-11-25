@@ -4,6 +4,7 @@ import { conversationHandoffReason } from "../conversation-actions";
 import type { ConversationState, OperationRequest } from "../types";
 import {
   installCodexRollout,
+  preflightCodexRollout,
   readCodexRollout,
   type CodexRollout,
 } from "../providers/codex-rollout";
@@ -44,6 +45,20 @@ export class ConversationTransferService {
     private readonly workspaces: WorkspaceApplicationService,
   ) {}
 
+  private checkSourceReadiness(chat: ConversationState): void {
+    const blocked = conversationHandoffReason(this.store.data, chat);
+    if (blocked) throw new Error(blocked);
+    this.conversations.checkTransferReadiness(chat);
+    if (
+      chat.backgroundActivities?.some(
+        (activity) => activity.state === "unknown",
+      )
+    )
+      throw new Error(
+        "Confirm unknown background activity before moving this chat",
+      );
+  }
+
   async move(
     id: string,
     destination: TransferDestination,
@@ -56,11 +71,14 @@ export class ConversationTransferService {
       const original = this.store.conversation(id);
       if (original.provider !== "codex" || !original.nativeId)
         throw new Error("Only a saved Codex session can move to Linux");
+      const { nativeId, cwd } = original;
       if (!original.transfer) {
+        this.checkSourceReadiness(original);
+        await preflightCodexRollout(nativeId, cwd);
         const checked = (await receive({
           op: "conversation.accept-transfer",
           check: true,
-          nativeId: original.nativeId,
+          nativeId,
           workspace: destination.workspace,
           cwd: destination.cwd,
         })) as TransferReply | undefined;
@@ -75,6 +93,8 @@ export class ConversationTransferService {
         const chat = this.store.conversation(id);
         if (chat.provider !== "codex" || !chat.nativeId)
           throw new Error("Only a saved Codex session can move to Linux");
+        if (chat.nativeId !== nativeId || chat.cwd !== cwd)
+          throw new Error("The source chat changed while checking the move");
         if (this.store.data.transferredCodexSessions?.includes(chat.nativeId))
           throw new Error("This saved Codex session was moved to Linux");
         const existing = chat.transfer;
@@ -88,17 +108,7 @@ export class ConversationTransferService {
               "Reconnect to the original Linux workspace to finish this move",
             );
         } else {
-          const blocked = conversationHandoffReason(this.store.data, chat);
-          if (blocked) throw new Error(blocked);
-          this.conversations.checkTransferReadiness(chat);
-          if (
-            chat.backgroundActivities?.some(
-              (activity) => activity.state === "unknown",
-            )
-          )
-            throw new Error(
-              "Confirm unknown background activity before moving this chat",
-            );
+          this.checkSourceReadiness(chat);
         }
         const workspace = this.store.workspace(chat.workspaceId);
         const draft = workspace.chatDrafts?.[chat.paneId];
