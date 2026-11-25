@@ -1,8 +1,8 @@
 import { orderedGroups } from "../workspace-layout";
-import type { CommandId } from "../keyboard";
+import { formatShortcut, type CommandId } from "../keyboard";
 import { documentKey, isTextDocument } from "../text-document";
 import { createTabDrag } from "./tab-drag";
-import { shortcutTitle } from "./keyboard-ui";
+import { keyboardPlatform, shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "./message-label";
 import { browserLabel } from "./browser-label";
@@ -514,7 +514,14 @@ export function createPaneLayout(
       };
       tab.onkeydown = (e) => {
         if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.key === "Delete") {
+        if (
+          pane.kind === "browser" &&
+          (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey))
+        ) {
+          e.preventDefault();
+          const { left, bottom } = tab.getBoundingClientRect();
+          if (!e.repeat) showTabMenu({ x: left, y: bottom });
+        } else if (e.key === "Delete") {
           e.preventDefault();
           void closeAndReturnFocus().catch(() => undefined);
         } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -672,18 +679,55 @@ export function createPaneLayout(
             : []),
           null,
         );
-      item.oncontextmenu = (e) => {
-        e.preventDefault();
+      const showTabMenu = (anchor: { x: number; y: number }) => {
+        if (
+          pane.kind === "browser" &&
+          getState().browsers.some(
+            (browser) =>
+              browser.workspaceId === workspace.id && browser.visible,
+          )
+        ) {
+          // A native menu can cover a live WebContentsView without hiding it.
+          void window.cod
+            .browserTabMenu(
+              anchor,
+              actions.map((item) =>
+                item
+                  ? {
+                      label: item.label,
+                      disabled: !!item.disabled,
+                      shortcut:
+                        item.command && !item.disabled
+                          ? formatShortcut(
+                              item.command,
+                              keyboardPlatform,
+                              item.surface ?? "shell",
+                            )
+                          : "",
+                    }
+                  : null,
+              ),
+            )
+            .then((index) => {
+              if (index !== null && item.isConnected) actions[index]?.run();
+            })
+            .catch(() => undefined);
+          return;
+        }
         const conversation =
           pane.kind === "conversation"
             ? getState().conversations.find((c) => c.id === pane.conversationId)
             : undefined;
         menu(
-          { x: e.clientX, y: e.clientY },
+          anchor,
           conversation
             ? [...conversationActions(conversation), null, ...actions]
             : actions,
         );
+      };
+      item.oncontextmenu = (e) => {
+        e.preventDefault();
+        showTabMenu({ x: e.clientX, y: e.clientY });
       };
       if (tabs.children[tabIndex] !== item)
         tabs.insertBefore(item, tabs.children[tabIndex] ?? null);

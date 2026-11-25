@@ -117,18 +117,41 @@ export function createBrowserHome(
         const label = document.createElement("span");
         label.textContent = site.title;
         button.append(mark, label);
+        button.setAttribute("aria-haspopup", "dialog");
         button.onclick = () => navigate(site.url);
+        const actions = (anchor: HTMLElement | { x: number; y: number }) =>
+          menu(
+            anchor,
+            [
+              { label: "Rename", run: () => edit(button, site) },
+              {
+                label: "Unpin",
+                run: () => {
+                  void invoke("browser.unpin", { url: site.url });
+                },
+              },
+            ],
+            {
+              trigger: button,
+              restoreFocus: () => button.focus({ preventScroll: true }),
+            },
+          );
         button.oncontextmenu = (event) => {
           event.preventDefault();
-          menu(button, [
-            { label: "Rename", run: () => edit(button, site) },
-            {
-              label: "Unpin",
-              run: () => {
-                void invoke("browser.unpin", { url: site.url });
-              },
-            },
-          ]);
+          actions({ x: event.clientX, y: event.clientY });
+        };
+        button.onkeydown = (event) => {
+          if (
+            event.isComposing ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.altKey ||
+            (event.key !== "ContextMenu" &&
+              !(event.shiftKey && event.key === "F10"))
+          )
+            return;
+          event.preventDefault();
+          if (!event.repeat) actions(button);
         };
         grid.append(button);
       }

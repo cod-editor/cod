@@ -19,7 +19,11 @@ export type MenuAction =
 export function menu(
   anchor: HTMLElement | { x: number; y: number },
   items: MenuAction[],
-  options: { restoreFocus?: () => void; showCommands?: boolean } = {},
+  options: {
+    restoreFocus?: () => void;
+    trigger?: HTMLButtonElement;
+    showCommands?: boolean;
+  } = {},
 ) {
   const showCommands = options.showCommands !== false;
   openMenu(
@@ -39,6 +43,7 @@ export function menu(
     }),
     {
       restoreFocus: options.restoreFocus,
+      trigger: options.trigger,
       shortcutChangeEvent: showCommands ? "cod:keymap-changed" : undefined,
     },
   );

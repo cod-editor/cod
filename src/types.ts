@@ -79,6 +79,11 @@ export interface BrowserRectangle {
   width: number;
   height: number;
 }
+export type BrowserTabMenuItem = {
+  label: string;
+  shortcut: string;
+  disabled: boolean;
+} | null;
 export interface EmptyPane {
   id: string;
   kind: "empty";
@@ -369,6 +374,10 @@ export interface CodBridge {
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
   browserLayout(rectangles: BrowserRectangle[]): void;
+  browserTabMenu(
+    anchor: { x: number; y: number },
+    items: BrowserTabMenuItem[],
+  ): Promise<number | null>;
   browserHideForOverview(opening: number): Promise<boolean>;
   browserOverviewBackdrop(
     ids: string[],

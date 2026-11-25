@@ -44,7 +44,7 @@ import {
   type PreparedWorkspace,
 } from "./application/workspace-preparation";
 import { defaultDataDirectory, defaultSocketPath } from "./paths";
-import type { AppState, OperationRequest } from "./types";
+import type { AppState, BrowserTabMenuItem, OperationRequest } from "./types";
 import {
   canUsePairedDesktop,
   type WorkspaceHostSelection,
@@ -869,6 +869,62 @@ async function start(): Promise<void> {
       )
         operations.browserLayout(remoteView ? [] : rectangles, true);
     });
+    ipcMain.handle(
+      "cod:browser-tab-menu",
+      (
+        event,
+        anchor: { x: number; y: number },
+        items: BrowserTabMenuItem[],
+      ) => {
+        const window = mainWindow;
+        if (
+          !window ||
+          event.sender !== window.webContents ||
+          event.senderFrame !== event.sender.mainFrame ||
+          event.senderFrame.url !== rendererUrl ||
+          !anchor ||
+          !Number.isFinite(anchor.x) ||
+          !Number.isFinite(anchor.y) ||
+          !Array.isArray(items) ||
+          items.length > 16 ||
+          !items.every(
+            (item) =>
+              item === null ||
+              (item &&
+                typeof item.label === "string" &&
+                item.label.length <= 100 &&
+                typeof item.shortcut === "string" &&
+                item.shortcut.length <= 60 &&
+                typeof item.disabled === "boolean"),
+          )
+        )
+          return null;
+        const [width, height] = window.getContentSize();
+        const x = Math.round(Math.max(0, Math.min(width - 1, anchor.x)));
+        const y = Math.round(Math.max(0, Math.min(height - 1, anchor.y)));
+        return new Promise<number | null>((resolve) => {
+          const menu = Menu.buildFromTemplate(
+            items.map((item, index) =>
+              item
+                ? {
+                    label: item.shortcut
+                      ? `${item.label}    ${item.shortcut}`
+                      : item.label,
+                    enabled: !item.disabled,
+                    click: () => resolve(index),
+                  }
+                : { type: "separator" },
+            ),
+          );
+          menu.popup({
+            window,
+            x,
+            y,
+            callback: () => setImmediate(() => resolve(null)),
+          });
+        });
+      },
+    );
     ipcMain.handle(
       "cod:browser-hide-for-overview",
       (event, opening: unknown) => {

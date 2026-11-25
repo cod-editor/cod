@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   openWorkspaceState,
   readWorkspaceState,
@@ -141,6 +143,40 @@ async function nativeView(route: string) {
     { url: origin + route },
   );
 }
+const execute = promisify(execFile);
+async function nativeBrowserFrame(points: { x: number; y: number }[]) {
+  return shell.app!.evaluate(
+    async ({ BrowserWindow, desktopCapturer, screen }, points) => {
+      const bounds = BrowserWindow.getAllWindows()[0].getContentBounds();
+      const [display] = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: screen.getPrimaryDisplay().size,
+      });
+      const png = display.thumbnail.crop(bounds);
+      return {
+        colors: points.map(({ x, y }) => {
+          const pixel = png.crop({ x, y, width: 1, height: 1 }).toBitmap();
+          return [pixel[2], pixel[1], pixel[0]];
+        }),
+        image: png.toPNG().toString("base64"),
+      };
+    },
+    points,
+  );
+}
+async function rightClickNativeBrowser(x: number, y: number) {
+  const bounds = await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].getContentBounds(),
+  );
+  await execute("xdotool", [
+    "mousemove",
+    "--sync",
+    String(Math.round(x + bounds.x)),
+    String(Math.round(y + bounds.y)),
+    "click",
+    "3",
+  ]);
+}
 async function scrollManager(dialog: Locator, last: Locator) {
   const heading = dialog.getByRole("heading", { level: 2 });
   const done = dialog.getByRole("button", { name: "Done", exact: true });
@@ -248,6 +284,17 @@ test.beforeEach(async () => {
       response.end(
         `<!doctype html><title>Invented site</title><link rel="icon" href="${href}"><h1>Invented site</h1>`,
       );
+      return;
+    }
+    if (route === "/overlay-fixture") {
+      response.setHeader("Content-Type", "text/html");
+      response.end(`<!doctype html><title>Overlay fixture</title>
+        <style>
+          body { background: rgb(14, 122, 86); color: white; font: 20px sans-serif }
+          main { padding: 50px 12px; line-height: 2 }
+        </style>
+        <header>Invented browser page</header>
+        <main>Tab actions should leave this page in place.</main>`);
       return;
     }
     if (route === "/new-tab-post") {
@@ -710,12 +757,33 @@ test("Browser home keeps shared pinned sites through editing and restart", async
     .getByRole("textbox", { name: "Pinned site name" })
     .fill("Example workspace");
   await home.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(
-    home.getByRole("button", { name: "Example workspace", exact: true }),
-  ).toBeVisible();
-  await home
-    .getByRole("button", { name: "Example workspace", exact: true })
-    .click({ button: "right" });
+  const pin = home.getByRole("button", {
+    name: "Example workspace",
+    exact: true,
+  });
+  await expect(pin).toBeVisible();
+  const pinBounds = (await pin.boundingBox())!;
+  const menu = shell.page.getByRole("dialog", { name: "Actions" });
+  await pin.click({ button: "right", position: { x: 50, y: 50 } });
+  await expect(menu).toBeVisible();
+  await expect(pin).toHaveAttribute("aria-expanded", "true");
+  const pointerMenu = (await menu.boundingBox())!;
+  expect(Math.abs(pointerMenu.x - pinBounds.x - 50)).toBeLessThanOrEqual(1);
+  expect(Math.abs(pointerMenu.y - pinBounds.y - 50)).toBeLessThanOrEqual(1);
+  await shell.page.screenshot({
+    path: info.outputPath("home-pointer-menu.png"),
+  });
+  await shell.page.keyboard.press("Escape");
+  await expect(pin).toBeFocused();
+  await expect.poll(() => pin.getAttribute("aria-expanded")).toBeNull();
+  await pin.press("Shift+F10");
+  await expect(menu).toBeVisible();
+  const keyboardMenu = (await menu.boundingBox())!;
+  expect(keyboardMenu.x).toBeCloseTo(pinBounds.x, 0);
+  expect(keyboardMenu.y).toBeCloseTo(pinBounds.y + pinBounds.height, 0);
+  await shell.page.screenshot({
+    path: info.outputPath("home-keyboard-menu.png"),
+  });
   await shell.page.getByRole("button", { name: "Rename", exact: true }).click();
   await home
     .getByRole("textbox", { name: "Pinned site name" })
@@ -1725,6 +1793,73 @@ test("Browser default scrollbars match Cod while authored nested scrolling survi
   await shell.page.screenshot({
     path: info.outputPath("scrollbar-shell-and-page.png"),
   });
+});
+
+test("Browser tab actions keep the native page painted and preserve keyboard access", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Requires the isolated X11 desktop");
+  const workspace = await shell.create("Browser tab actions");
+  const route = "/overlay-fixture";
+  const record = await open(workspace, route);
+  await expect.poll(async () => (await inspect(record.id)).visible).toBe(true);
+  const tab = shell.page.getByRole("tab", {
+    name: "Overlay fixture",
+    exact: true,
+  });
+  const tabBox = (await tab.boundingBox())!;
+  const area = (await shell
+    .pane(record.paneId)
+    .getByRole("region", { name: "Browser content" })
+    .boundingBox())!;
+  const pagePoint = {
+    x: Math.floor(area.x + area.width / 2),
+    y: Math.ceil(area.y + area.height / 2),
+  };
+  const anchor = {
+    x: Math.ceil(tabBox.x + 44),
+    y: Math.ceil(tabBox.y + tabBox.height / 2),
+  };
+  const menuPoint = { x: anchor.x + 12, y: anchor.y + 100 };
+  const frame = () => nativeBrowserFrame([menuPoint, pagePoint]);
+  const pageColor = [14, 122, 86];
+  await expect
+    .poll(async () => (await frame()).colors)
+    .toEqual([pageColor, pageColor]);
+  await rightClickNativeBrowser(anchor.x, anchor.y);
+  await expect
+    .poll(async () => (await frame()).colors[0])
+    .not.toEqual(pageColor);
+  const opened = await frame();
+  expect(opened.colors[1]).toEqual(pageColor);
+  await expect(shell.page.locator("dialog[open]")).toHaveCount(0);
+  await writeFile(
+    info.outputPath("live-browser-tab-menu.png"),
+    Buffer.from(opened.image, "base64"),
+  );
+  await execute("xdotool", ["key", "Escape"]);
+  await expect
+    .poll(async () => (await frame()).colors)
+    .toEqual([pageColor, pageColor]);
+
+  await tab.focus();
+  await tab.press("Shift+F10");
+  await expect
+    .poll(async () => (await frame()).colors[0])
+    .not.toEqual(pageColor);
+  await execute("xdotool", ["key", "Escape"]);
+  await expect(tab).toBeFocused();
+  await tab.press("Shift+F10");
+  await expect
+    .poll(async () => (await frame()).colors[0])
+    .not.toEqual(pageColor);
+  await execute("xdotool", ["key", "Down"]);
+  await writeFile(
+    info.outputPath("live-browser-tab-menu-keyboard.png"),
+    Buffer.from((await frame()).image, "base64"),
+  );
+  await execute("xdotool", ["key", "Return"]);
+  await expect(tab).toHaveAttribute("data-pinned", "true");
+  const restored = await frame();
+  expect(restored.colors).toEqual([pageColor, pageColor]);
 });
 
 test("Local address suggestions, searchable history and search engine settings survive restart", async ({}, info) => {
