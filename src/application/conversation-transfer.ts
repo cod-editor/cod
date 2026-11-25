@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { conversationHandoffReason } from "../conversation-actions";
 import type { ConversationState, OperationRequest } from "../types";
@@ -6,8 +6,14 @@ import {
   installCodexRollout,
   preflightCodexRollout,
   readCodexRollout,
-  type CodexRollout,
 } from "../providers/codex-rollout";
+import {
+  appendCodexChunk,
+  beginCodexStage,
+  codexStageDigest,
+  readCodexStage,
+  removeCodexStage,
+} from "../providers/codex-rollout-staging";
 import type { ConversationApplicationService } from "./conversation-service";
 import type { WorkspaceApplicationService } from "./workspace-service";
 import type { ApplicationStateStore } from "./state";
@@ -15,7 +21,7 @@ import { requiredString } from "./request";
 
 export type TransferDestination = Omit<
   NonNullable<ConversationState["transfer"]>,
-  "id"
+  "id" | "committing"
 >;
 
 interface TransferReceipt {
@@ -25,7 +31,7 @@ interface TransferReceipt {
 }
 
 type TransferReply =
-  | { status: "ready" }
+  | { status: "ready"; chunkedTransfer?: true }
   | { status: "moved"; receipt: TransferReceipt }
   | { status: "rejected"; reason: string };
 
@@ -88,6 +94,10 @@ export class ConversationTransferService {
               ? checked.reason
               : "The Linux destination could not be verified",
           );
+        if (!checked.chunkedTransfer)
+          throw new Error(
+            "Update the Linux workspace host before moving this chat",
+          );
       }
       const prepared = await this.store.change(() => {
         const chat = this.store.conversation(id);
@@ -121,33 +131,102 @@ export class ConversationTransferService {
           Buffer.byteLength(JSON.stringify(draft.text)) > 1024 * 1024
         )
           throw new Error("This chat draft exceeds the 1 MiB transfer limit");
-        const transfer = existing ?? { id: randomUUID(), ...destination };
+        const transfer = existing ?? {
+          id: randomUUID(),
+          ...destination,
+          committing: false,
+        };
         chat.transfer = transfer;
-        return { chat, transfer, draft: draft?.text, existing: !!existing };
+        return { chat, transfer, draft: draft?.text };
       });
       const { chat, transfer } = prepared;
       const release = () =>
         this.store.change(() => {
-          if (chat.transfer?.id === transfer.id) delete chat.transfer;
+          const current = this.store.conversation(id);
+          if (current.transfer?.id === transfer.id) delete current.transfer;
         });
-      let rollout: CodexRollout;
-      try {
-        await this.conversations.disposeController(id);
-        rollout = await readCodexRollout(chat.nativeId, chat.cwd);
-      } catch (error) {
-        if (!prepared.existing) await release();
-        throw error;
-      }
-      const reply = (await receive({
+      const payload = {
         op: "conversation.accept-transfer",
         transferId: transfer.id,
         nativeId: chat.nativeId,
         workspace: transfer.workspace,
         cwd: transfer.cwd,
-        title: chat.displayName,
-        draft: prepared.draft,
-        rollout,
-      })) as TransferReply | undefined;
+      };
+      let staged: TransferReply | undefined;
+      let committing = transfer.committing;
+      try {
+        await this.conversations.disposeController(id);
+        if (committing) {
+          const status = (await receive({ ...payload, phase: "status" })) as
+            TransferReply | undefined;
+          if (
+            status?.status === "moved" &&
+            status.receipt.nativeId === chat.nativeId
+          ) {
+            await this.workspaces.finishTransfer(id, transfer.id);
+            return status.receipt;
+          }
+          if (status?.status !== "ready")
+            throw new Error(
+              status?.status === "rejected"
+                ? status.reason
+                : "The Linux host did not confirm the saved history transfer",
+            );
+        }
+        const rollout = await readCodexRollout(chat.nativeId, chat.cwd);
+        staged = (await receive({
+          ...payload,
+          phase: "stage",
+          manifest: rollout.manifest,
+        })) as TransferReply | undefined;
+        if (staged?.status === "ready") {
+          let offset = 0;
+          for await (const chunk of rollout.read()) {
+            const acknowledged = (await receive({
+              ...payload,
+              phase: "chunk",
+              offset,
+              bytes: chunk.toString("base64"),
+            })) as TransferReply | undefined;
+            if (acknowledged?.status !== "ready")
+              throw new Error(
+                "The Linux host did not acknowledge the saved history chunk",
+              );
+            offset += chunk.length;
+          }
+          await this.store.change(() => {
+            const current = this.store.conversation(id).transfer;
+            if (current?.id !== transfer.id)
+              throw new Error(
+                "The source chat changed while preparing the move",
+              );
+            current.committing = true;
+          });
+          committing = true;
+        } else if (staged?.status !== "moved") {
+          throw new Error(
+            staged?.status === "rejected"
+              ? staged.reason
+              : "The Linux host did not prepare the saved history",
+          );
+        }
+      } catch (error) {
+        if (!committing) {
+          await release();
+          await receive({ ...payload, phase: "discard" }).catch(
+            () => undefined,
+          );
+        }
+        throw error;
+      }
+      const reply =
+        staged.status === "moved"
+          ? staged
+          : ((await receive({
+              ...payload,
+              title: chat.displayName,
+              draft: prepared.draft,
+            })) as TransferReply | undefined);
       if (reply?.status === "rejected") {
         await release();
         throw new Error(reply.reason);
@@ -177,9 +256,13 @@ export class ConversationTransferService {
     for (const value of transferId ? [transferId, nativeId] : [nativeId])
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value))
         throw new Error("Invalid Codex transfer identity");
-    if (this.receiving.has(nativeId))
+    if (
+      this.receiving.has(nativeId) ||
+      (transferId && this.receiving.has(transferId))
+    )
       throw new Error("The destination is still receiving this Codex session");
     this.receiving.add(nativeId);
+    if (transferId) this.receiving.add(transferId);
     try {
       const completed = transferId
         ? this.store.data.completedCodexImports?.[transferId]
@@ -214,18 +297,48 @@ export class ConversationTransferService {
         if (pending) throw error;
         return { status: "rejected", reason: reason(error) };
       }
-      if (!transferId) return { status: "ready" };
-      const rollout = request.rollout as CodexRollout | undefined;
-      if (
-        typeof rollout?.filename !== "string" ||
-        typeof rollout.bytes !== "string"
-      )
-        throw new Error("The Linux host did not receive a saved Codex session");
-      const digest = createHash("sha256")
-        .update(rollout.filename)
-        .update("\0")
-        .update(rollout.bytes)
-        .digest("hex");
+      if (!transferId) return { status: "ready", chunkedTransfer: true };
+      if (request.rollout !== undefined && !pending)
+        return {
+          status: "rejected",
+          reason: "Update the desktop before moving this chat to Linux",
+        };
+      const binding = { nativeId, workspace: workspaceId, cwd: requestedCwd };
+      if (request.phase === "status") return { status: "ready" };
+      if (request.phase === "stage") {
+        const protectedTransfers = new Set(
+          Object.values(this.store.data.pendingCodexImports ?? {}).map(
+            (item) => item.id,
+          ),
+        );
+        await beginCodexStage(
+          transferId,
+          binding,
+          request.manifest,
+          protectedTransfers,
+        );
+        return { status: "ready" };
+      }
+      if (request.phase === "chunk") {
+        await appendCodexChunk(
+          transferId,
+          binding,
+          request.offset,
+          request.bytes,
+        );
+        return { status: "ready" };
+      }
+      if (request.phase === "discard") {
+        if (pending)
+          throw new Error("This Codex move may already be committed");
+        await removeCodexStage(transferId, binding);
+        return { status: "ready" };
+      }
+      if (request.phase !== undefined)
+        throw new Error("Invalid Codex transfer phase");
+      const { file, manifest } = await readCodexStage(transferId, binding);
+      const digest = codexStageDigest(manifest);
+      const discard = () => removeCodexStage(transferId, binding);
       if (
         pending &&
         (pending.digest !== digest ||
@@ -249,10 +362,16 @@ export class ConversationTransferService {
         });
       let installed: Awaited<ReturnType<typeof installCodexRollout>>;
       try {
-        installed = await installCodexRollout(nativeId, rollout, transferId);
+        installed = await installCodexRollout(
+          nativeId,
+          manifest,
+          file,
+          transferId,
+        );
       } catch (error) {
         if (pending) throw error;
         await clearPending();
+        await discard().catch(() => undefined);
         return { status: "rejected", reason: reason(error) };
       }
       let receipt: TransferReceipt;
@@ -277,12 +396,15 @@ export class ConversationTransferService {
       } catch (error) {
         await installed.finish(true);
         await clearPending();
+        await discard().catch(() => undefined);
         return { status: "rejected", reason: reason(error) };
       }
       await installed.finish();
+      await discard().catch(() => undefined);
       return { status: "moved", receipt };
     } finally {
       this.receiving.delete(nativeId);
+      if (transferId) this.receiving.delete(transferId);
     }
   }
 }

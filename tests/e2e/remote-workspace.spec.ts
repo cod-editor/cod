@@ -1,12 +1,15 @@
 import { openWorkspaceState } from "../support/workspace-state";
 import { expect, test } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
 import {
   mkdir,
+  open,
   readdir,
   readFile,
+  rename,
   rm,
   symlink,
   truncate,
@@ -332,6 +335,19 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await expectPreflightRefusal("saved Codex session is incomplete");
     await writeFile(localRollout, sourceBytes);
 
+    await writeFile(dropReply, "conversation.accept-transfer:chunk");
+    expect((await desktop.raw(...move(linux.folders[0]))).stderr).toContain(
+      "did not confirm",
+    );
+    const afterUploadInterrupt = await desktop.cli<AppState>("state");
+    expect(afterUploadInterrupt.conversations[0].transfer).toBeUndefined();
+    expect(
+      afterUploadInterrupt.workspaces.find(
+        (workspace) => workspace.id === source,
+      )?.chatDrafts?.[chat.paneId]?.text,
+    ).toBe(localDraft);
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
+    await connectWorkspace(desktop, linux.socket, key + ".pub");
     const destinationCollision = path.join(
       linux.environment.CODEX_HOME,
       rolloutName,
@@ -397,10 +413,10 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await desktop.page.screenshot({
       path: info.outputPath("linux-move-confirm.png"),
     });
-    await truncate(localRollout, 22 * 1024 * 1024 + 1);
+    await truncate(localRollout, 256 * 1024 * 1024 + 1);
     await confirm.getByRole("button", { name: "Move conversation" }).click();
     await expect(confirm.getByRole("alert")).toContainText(
-      "exceeds the 22 MiB transfer limit. You can keep using the chat in its current workspace.",
+      "exceeds the 256 MiB transfer limit. You can keep using the chat in its current workspace.",
     );
     await expect(
       confirm.getByRole("button", { name: "Move conversation" }),
@@ -416,6 +432,21 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
       path: info.outputPath("linux-move-size-refusal.png"),
     });
     await writeFile(localRollout, originalBytes);
+    // Exercise a rollout above the former 22 MiB limit without inflating
+    // the fake provider's transcript response.
+    const padding = Buffer.alloc(1024 * 1024, 0x20);
+    const sourceFile = await open(localRollout, "a");
+    try {
+      await sourceFile.write('{"type":"fixture_padding"}');
+      for (let index = 0; index < 23; index += 1)
+        await sourceFile.write(padding);
+      await sourceFile.write("\n");
+    } finally {
+      await sourceFile.close();
+    }
+    const uploadedDigest = createHash("sha256")
+      .update(await readFile(localRollout))
+      .digest("hex");
     await confirm.press("Escape");
     await expect(picker).toBeVisible();
     expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
@@ -476,7 +507,7 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await desktop.start();
     await installWorkspaceRelay(desktop, dropReply);
     await connectWorkspace(desktop, linux.socket, key + ".pub");
-    await writeFile(dropReply, "conversation.accept-transfer");
+    await writeFile(dropReply, "conversation.accept-transfer:commit");
     expect((await desktop.raw(...move(linux.folders[0]))).stderr).toContain(
       "did not confirm",
     );
@@ -494,7 +525,12 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await desktop.start();
     await installWorkspaceRelay(desktop, dropReply);
     await connectWorkspace(desktop, linux.socket, key + ".pub");
+    // The host receipt is sufficient after a lost commit ACK, even if the
+    // source provider cannot currently locate its old rollout.
+    const sourceBackup = localRollout + ".backup";
+    await rename(localRollout, sourceBackup);
     const receipt = await desktop.cli<Chat>(...move(linux.folders[0]));
+    await rename(sourceBackup, localRollout);
     expect(receipt.nativeId).toBe(chat.nativeId);
     expect((await desktop.cli<AppState>("state")).conversations).toHaveLength(
       0,
@@ -525,7 +561,11 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
       .toBe("ready");
     expect(await linux.prompts()).toHaveLength(1);
     expect(await desktop.prompts()).toHaveLength(2);
-    expect(await readFile(localRollout)).toEqual(originalBytes);
+    expect(
+      createHash("sha256")
+        .update(await readFile(localRollout))
+        .digest("hex"),
+    ).toBe(uploadedDigest);
     expect(
       (
         await desktop.raw(

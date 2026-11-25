@@ -199,6 +199,7 @@ export interface ConversationState {
     host: string;
     workspace: string;
     cwd: string;
+    committing?: boolean;
   };
   paneId: string;
   workspaceId: string;

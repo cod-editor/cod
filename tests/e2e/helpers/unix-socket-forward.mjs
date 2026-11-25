@@ -13,11 +13,15 @@ createServer((client) => {
     forward(client, host, (line) => {
       const frame = JSON.parse(line);
       watch ||= frame.op === "workspace.watch";
-      const operation = frame.op ?? frame.request?.op;
+      const request = frame.request ?? frame;
+      const operation = request.op;
+      const phase = request.phase ?? (request.transferId ? "commit" : "check");
+      const matches = (selector) =>
+        selector === operation || selector === operation + ":" + phase;
       if (
         holdRequest &&
         existsSync(holdRequest) &&
-        operation === readFileSync(holdRequest, "utf8")
+        matches(readFileSync(holdRequest, "utf8"))
       ) {
         writeFileSync(holdRequest + ".seen", "");
         const release = setInterval(() => {
@@ -28,10 +32,7 @@ createServer((client) => {
         host.once("close", () => clearInterval(release));
         return false;
       }
-      if (
-        existsSync(dropReply) &&
-        operation === readFileSync(dropReply, "utf8")
-      ) {
+      if (existsSync(dropReply) && matches(readFileSync(dropReply, "utf8"))) {
         unlinkSync(dropReply);
         withholding = true;
         withheld = frame.type === "review-command" ? frame.id : true;
