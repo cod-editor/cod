@@ -36,7 +36,7 @@ import { createIntegrationSetup } from "./integration";
 import { reconcileView } from "./view-reconcile";
 import { chatMarkdown, visualizationStart } from "./chat-markdown";
 import DOMPurify from "dompurify";
-import { structuredMessageLabel } from "./message-label";
+import { structuredMessageLabel } from "../message-label";
 import { menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history-cursor";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";

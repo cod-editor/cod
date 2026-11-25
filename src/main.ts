@@ -1308,9 +1308,25 @@ let quitting = false;
 let choosingQuit = false;
 let shutdown: Promise<void> | undefined;
 
+function quitSessionLabel(name: string, limit: number): string {
+  const characters = Array.from(name.replace(/\s+/g, " ").trim());
+  return characters.length > limit
+    ? characters.slice(0, limit - 1).join("") + "…"
+    : characters.join("");
+}
+
 async function confirmQuit(): Promise<"leave" | "stop" | "cancel"> {
   const status = operations.quitStatus();
-  if (!status.active) return "stop";
+  const count = status.active.length;
+  if (!count) return "stop";
+  const lines = status.active
+    .slice(0, 5)
+    .map(
+      ({ workspace, session }) =>
+        `${quitSessionLabel(workspace, 28)} — ${quitSessionLabel(session, 42)}`,
+    );
+  const remaining = count - lines.length;
+  if (remaining) lines.push(`… and ${remaining} more`);
   const choices = status.canLeaveRunning
     ? ["Leave Running", "Stop", "Cancel"]
     : ["Stop", "Cancel"];
@@ -1318,12 +1334,10 @@ async function confirmQuit(): Promise<"leave" | "stop" | "cancel"> {
     type: "question",
     title: "Quit Cod",
     message:
-      status.active === 1
+      count === 1
         ? "One local agent is active"
-        : `${status.active} local agents are active`,
-    detail: status.canLeaveRunning
-      ? "Detached agents can continue after Cod closes. Desktop-only actions and local terminal tabs require Cod to be open."
-      : "The active work includes agents started in Cod. Stop them before quitting, or cancel and let them finish.",
+        : `${count} local agents are active`,
+    detail: lines.join("\n"),
     buttons: choices,
     defaultId: choices.length - 1,
     cancelId: choices.length - 1,

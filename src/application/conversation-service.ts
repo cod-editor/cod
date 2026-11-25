@@ -10,6 +10,7 @@ import {
   conversationHandoffReason,
   hasRunningBackground,
 } from "../conversation-actions";
+import { conversationLabel } from "../message-label";
 import { parseProviderCommand } from "../provider-commands";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -327,7 +328,7 @@ export class ConversationApplicationService {
       await replay.dispose();
     }
   }
-  quitStatus(): { active: number; canLeaveRunning: boolean } {
+  quitStatus() {
     const active = this.store.data.conversations.filter(
       (conversation) =>
         this.isActive(conversation.id) ||
@@ -335,7 +336,13 @@ export class ConversationApplicationService {
         hasRunningBackground(conversation),
     );
     return {
-      active: active.length,
+      active: active.map((conversation) => ({
+        workspace:
+          this.store.data.workspaces.find(
+            (workspace) => workspace.id === conversation.workspaceId,
+          )?.name ?? "Workspace",
+        session: conversationLabel(conversation, this.store.data),
+      })),
       canLeaveRunning:
         active.length > 0 &&
         active.every(

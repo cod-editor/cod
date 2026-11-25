@@ -140,12 +140,20 @@ export class WorkspaceApp {
         if (options.title !== "Quit Cod") return (show as any)(...arguments_);
         const decisions = globalThis as typeof globalThis & {
           quitChoice?: string;
-          quitOptions?: string[];
-          quitDefault?: string;
+          quitDialog?: {
+            message: string;
+            detail: string;
+            buttons: string[];
+            defaultButton: string;
+          };
           showNativeQuit?: boolean;
         };
-        decisions.quitOptions = options.buttons;
-        decisions.quitDefault = options.buttons[options.defaultId];
+        decisions.quitDialog = {
+          message: options.message,
+          detail: options.detail,
+          buttons: options.buttons,
+          defaultButton: options.buttons[options.defaultId],
+        };
         if (decisions.showNativeQuit) return (show as any)(...arguments_);
         const choice = decisions.quitChoice ?? "Stop";
         return Promise.resolve({

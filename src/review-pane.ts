@@ -13,7 +13,7 @@ import {
   keyboardPlatform,
   shortcutTitle,
 } from "./ui/keyboard-ui";
-import { conversationLabel } from "./ui/message-label";
+import { conversationLabel } from "./message-label";
 import { readPreference, writePreference } from "./ui/preferences";
 import { menu } from "./ui/controls";
 import type { AppState, ReviewSummary } from "./types";
