@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown-view";
+import { settingsSchema } from "./settings";
 let revision = 0;
 let linkReturn: { element: HTMLElement; range?: Range } | undefined;
 function rememberFocus(element = document.activeElement as HTMLElement) {
@@ -15,10 +16,15 @@ document.addEventListener("focusout", (event) => {
   if (event.target instanceof HTMLElement) rememberFocus(event.target);
 });
 window.addEventListener("message", (event) => {
-  if (
-    event.source === parent &&
-    event.data?.type === "cod-preview-link-restore"
-  ) {
+  if (event.source !== parent) return;
+  if (event.data?.type === "cod-preview-text-size") {
+    const { size } = event.data;
+    const { min, max } = settingsSchema["chat.fontSize"];
+    if (typeof size === "number" && size >= min && size <= max)
+      document.body.style.fontSize = `${size}px`;
+    return;
+  }
+  if (event.data?.type === "cod-preview-link-restore") {
     const origin = linkReturn;
     linkReturn = undefined;
     if (origin?.element.isConnected)
@@ -34,7 +40,6 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (
-    event.source !== parent ||
     event.data?.type !== "cod-preview" ||
     typeof event.data.content !== "string"
   )

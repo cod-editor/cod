@@ -1,4 +1,5 @@
 import { imagePreviewPane } from "./ui/image-preview";
+import { appearanceSettings } from "./ui/appearance";
 import type { DiffPane, PreviewPane, WorkspaceState } from "./types";
 import type { Invoke } from "./ui/contracts";
 export function previewPane(
@@ -21,6 +22,16 @@ export function previewPane(
   let ready = false;
   let generation = 0;
   let shown: string | undefined;
+  function updateTextSize() {
+    if (!ready) return;
+    frame.contentWindow?.postMessage(
+      {
+        type: "cod-preview-text-size",
+        size: appearanceSettings()["chat.fontSize"],
+      },
+      "*",
+    );
+  }
   function refresh() {
     if (!ready) return;
     const request = ++generation;
@@ -43,9 +54,16 @@ export function previewPane(
       });
   }
   region.addEventListener("cod:refresh-preview", refresh);
+  document.addEventListener("cod:settings-changed", updateTextSize);
+  region.addEventListener(
+    "cod:dispose-view",
+    () => document.removeEventListener("cod:settings-changed", updateTextSize),
+    { once: true },
+  );
   frame.addEventListener("load", () => {
     ready = true;
     shown = undefined;
+    updateTextSize();
     refresh();
   });
   return region;

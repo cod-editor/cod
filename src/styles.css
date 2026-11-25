@@ -1266,7 +1266,8 @@ button[aria-busy="true"] {
   line-height: 1.5;
 }
 .transcript,
-.composer textarea {
+.composer textarea,
+.review-markdown {
   font-size: var(--chat-font-size);
 }
 

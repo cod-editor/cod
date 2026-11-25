@@ -1007,6 +1007,100 @@ test("Markdown review eye switches source and Mermaid preview and preserves exac
   ).toHaveText(["world", "world"]);
 });
 
+test("Rendered Markdown Review and Preview follow the chat text size", async ({}, info) => {
+  const workspace = await shell.create("Reading size fixture");
+  const chat = await shell.newChat(workspace, "codex");
+  await shell.send(chat.id, "The reading pane should match this chat.");
+  const chatBody = shell
+    .pane(chat.paneId)
+    .locator(".chat-message.assistant")
+    .filter({ hasText: "DONE The reading pane should match this chat." });
+  await expect(chatBody).toBeVisible();
+  const file = path.join(path.dirname(shell.file), "reading-size.md");
+  const paragraph = "Everyone can read the same short release note.";
+  await writeFile(
+    file,
+    [
+      "# Release notes",
+      "",
+      paragraph,
+      "",
+      "- Record the current build.",
+      "- Reopen the release note.",
+      "",
+      "| Step | Result |",
+      "| --- | --- |",
+      "| Open notes | Ready |",
+      "",
+      "```ts",
+      'const status = "ready";',
+      "```",
+      "",
+    ].join("\n"),
+  );
+  const review = await open(workspace, file);
+  const host = pane(review);
+  const sourceSize = await source(review).evaluate(
+    (node) => getComputedStyle(node).fontSize,
+  );
+  const header = host.locator(".review-header");
+  const headerSize = await header.evaluate(
+    (node) => getComputedStyle(node).fontSize,
+  );
+  const eye = host.locator("[data-preview-toggle]");
+  await eye.click();
+  const rendered = host.getByRole("document", { name: "Review preview" });
+  const reviewBody = rendered.getByText(paragraph, { exact: true });
+  const size = async (value: number) => {
+    await shell.cli(
+      "settings",
+      "update",
+      "--values",
+      JSON.stringify({ "chat.fontSize": value }),
+    );
+    await expect(chatBody).toHaveCSS("font-size", `${value}px`);
+  };
+  const matchesChat = async (body: Locator, image: string, size: string) => {
+    await expect(body).toBeVisible();
+    await expect(chatBody).toHaveCSS("font-size", size);
+    await shell.page.screenshot({ path: info.outputPath(image) });
+    await expect(body).toHaveCSS("font-size", size);
+  };
+  await matchesChat(reviewBody, "markdown-review-default.png", "15px");
+  await size(20);
+  await matchesChat(reviewBody, "markdown-review-scaled.png", "20px");
+  await expect(header).toHaveCSS("font-size", headerSize);
+  await eye.click();
+  await expect(source(review)).toHaveCSS("font-size", sourceSize);
+  await size(15);
+  const preview = await shell.cli<{ paneId: string }>(
+    "preview",
+    "open",
+    "--workspace",
+    workspace,
+    "--path",
+    file,
+    "--source-pane",
+    review.paneId,
+    "--focus",
+    "true",
+  );
+  const previewHost = shell.pane(preview.paneId);
+  const frame = previewHost.locator("iframe");
+  const previewBody = frame
+    .contentFrame()
+    .getByText(paragraph, { exact: true });
+  await matchesChat(previewBody, "markdown-preview-default.png", "15px");
+  await size(20);
+  await matchesChat(previewBody, "markdown-preview-scaled.png", "20px");
+  await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+  expect(
+    await previewBody.evaluate(
+      (node) => typeof node.ownerDocument.defaultView?.cod,
+    ),
+  ).toBe("undefined");
+});
+
 test("Markdown review keeps a pending exact fragment through wrap, focus and view changes", async ({}, info) => {
   const workspace = await shell.create("Release notes workshop");
   const file = path.join(path.dirname(shell.file), "review-fragment.md");
