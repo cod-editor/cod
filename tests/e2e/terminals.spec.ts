@@ -125,6 +125,47 @@ test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and thr
   await shell.page.screenshot({ path: info.outputPath("real-terminals.png") });
 });
 
+test("terminal input preserves Cyrillic when Cod starts without a locale", async ({}, info) => {
+  await shell.stop();
+  for (const name of ["LANG", "LC_CTYPE", "LC_ALL"]) {
+    delete shell.environment[name];
+  }
+  await shell.start();
+
+  const workspace = await shell.create("Unicode terminal fixture");
+  const ordinary = await open(workspace);
+  const sentence = "Проверка ыь";
+  const checkUnicode = async (id: string) => {
+    const locale = await command(id, "printf 'CHARMAP:'; locale charmap");
+    expect(locale).toContain("CHARMAP:UTF-8");
+    await command(id, `printf '%s\\n' '${sentence}'`);
+    await output(id, new RegExp(`[\\r\\n]${sentence}[\\r\\n]`));
+  };
+
+  await checkUnicode(ordinary.id);
+  await expect(
+    shell
+      .pane(ordinary.paneId)
+      .getByRole("region", { name: "Terminal output", exact: true }),
+  ).toContainText(sentence);
+  await input(ordinary.paneId).focus();
+  await shell.page.keyboard.press("Control+Backquote");
+  const dialog = shell.page.getByRole("dialog", { name: "Quick Terminal" });
+  const quickInput = dialog.getByRole("textbox", { name: "Terminal input" });
+  await expect(quickInput).toBeFocused();
+  const quick = (await shell.cli<AppState>("state")).quickTerminals!.find(
+    (item) => item.workspaceId === workspace,
+  )!;
+  await ready(quick.id);
+  await checkUnicode(quick.id);
+  await expect(
+    dialog.getByRole("region", { name: "Terminal output", exact: true }),
+  ).toContainText(sentence);
+  await shell.page.screenshot({
+    path: info.outputPath("cyrillic-quick-terminal.png"),
+  });
+});
+
 test("T1 AC2 preserves two independent shells and output across workspace switches without replay duplication", async () => {
   const first = await shell.create("Terminal alpha");
   const one = await open(first);
