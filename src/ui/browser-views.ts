@@ -5,6 +5,7 @@ import { browserDownloads } from "./browser-downloads";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
+import type { AddressSuggestionPopup } from "../browser/address-suggestion-types";
 import type { Invoke } from "./contracts";
 import { createBrowserHome } from "./browser-home";
 
@@ -34,6 +35,13 @@ export function createBrowserViews(
     ReturnType<typeof setTimeout>
   >();
   const homes = new Map<string, ReturnType<typeof createBrowserHome>>();
+  const addressLists = new Map<string, ReturnType<typeof addressSuggestions>>();
+  window.cod.onBrowserSuggestionPick((id, revision, index) =>
+    addressLists.get(id)?.pick(revision, index),
+  );
+  window.cod.onBrowserSuggestionDismiss((id, revision) =>
+    addressLists.get(id)?.dismiss(revision),
+  );
   let browserLayoutPending = false;
   function scheduleBrowserLayout(): void {
     if (browserLayoutPending) return;
@@ -190,18 +198,41 @@ export function createBrowserViews(
   }
   function flushBrowserLayout(): void {
     const dialog = openBackdropDialog();
+    const modal = document.querySelector("dialog[open]");
+    if (modal)
+      for (const list of addressLists.values())
+        if (!list.element.hidden) list.close();
     // The native layer remains visible while the replacement frame is staged.
     // Only the opening handoff can hide it during this interval.
     if (dialog?.hasAttribute("data-browser-preparing")) return;
     const slots = visibleSlots();
     updateBrowserBackdrops(dialog, slots);
-    const rectangles = document.querySelector("dialog[open]")
+    const rectangles = modal
       ? []
       : [...slots].map(([id, element]) => {
           const { x, y, width, height } = element.getBoundingClientRect();
           return { id, x, y, width, height };
         });
-    window.cod.browserLayout(rectangles);
+    let popup: AddressSuggestionPopup | undefined;
+    if (!modal)
+      for (const [id, list] of addressLists) {
+        const snapshot = list.snapshot();
+        if (!snapshot) continue;
+        popup = { id, revision: snapshot.revision };
+        if (slots.has(id)) {
+          const style = getComputedStyle(document.documentElement);
+          popup.presentation = {
+            height: list.element.getBoundingClientRect().height,
+            paint: {
+              rows: snapshot.rows,
+              fontSize: style.fontSize,
+              fontFamily: style.fontFamily,
+            },
+          };
+        }
+        break;
+      }
+    window.cod.browserLayout(rectangles, popup);
   }
   async function stageBrowserBackdrop(
     dialog: HTMLDialogElement,
@@ -480,6 +511,8 @@ export function createBrowserViews(
         return url === "about:blank" ? "" : (url ?? "");
       },
     );
+    addressLists.set(record.id, suggestions);
+    resizeObserver.observe(suggestions.element);
     const blocking = paneButton("Ad blocking", async () => {
       const dialog = document.createElement("dialog");
       dialog.className = "browser-protection";
@@ -688,15 +721,10 @@ export function createBrowserViews(
     const permissionRequests = document.createElement("div");
     permissionRequests.className = "browser-permission-requests";
     permissionRequests.hidden = true;
-    body.append(
-      navigation,
-      permissionRequests,
-      suggestions.element,
-      home.element,
-      content,
-      failure,
-      message,
-    );
+    const viewport = document.createElement("div");
+    viewport.className = "browser-viewport";
+    viewport.append(suggestions.element, home.element, content, failure);
+    body.append(navigation, permissionRequests, viewport, message);
     container.append(body);
     browserPanes.set(record.id, container);
     updateBrowserPane(container, record);
@@ -740,6 +768,12 @@ export function createBrowserViews(
         if (!getState().browsers.some((b) => b.id === id)) {
           browserPanes.delete(id);
           homes.delete(id);
+          const suggestions = addressLists.get(id);
+          if (suggestions) {
+            resizeObserver.unobserve(suggestions.element);
+            suggestions.close();
+            addressLists.delete(id);
+          }
         }
     },
     layout: scheduleBrowserLayout,
@@ -760,6 +794,8 @@ export function createBrowserViews(
       captureSession = null;
       browserPanes.clear();
       homes.clear();
+      for (const list of addressLists.values()) list.close();
+      addressLists.clear();
       window.cod.browserLayout([]);
     },
   };

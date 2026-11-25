@@ -49,6 +49,11 @@ await Promise.all([
     entryPoints: ["src/agent-pages/preload.ts"],
     outfile: "dist/agent-page-preload.cjs",
   }),
+  build({
+    ...shared,
+    entryPoints: ["src/browser/address-overlay-preload.ts"],
+    outfile: "dist/address-overlay-preload.cjs",
+  }),
   build({ ...shared, entryPoints: ["src/cli.ts"], outfile: "dist/cli.cjs" }),
   build({
     ...shared,
@@ -94,6 +99,7 @@ await Promise.all([
     target: "chrome130",
     sourcemap: true,
   }),
+  copyFile("src/browser/address-overlay.html", "dist/address-overlay.html"),
   copyFile("src/preview.html", "dist/preview.html"),
   copyFile("src/preview.css", "dist/preview.css"),
   copyFile("src/index.html", "dist/index.html"),

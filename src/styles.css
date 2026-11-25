@@ -1780,12 +1780,29 @@ browser-action-list::part(action):focus-visible {
 .hljs-link {
   color: #61afef;
 }
+.browser-viewport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .browser-suggestions {
-  flex: 0 0 auto;
-  max-height: 30vh;
   overflow: auto;
-  border-bottom: 1px solid #454b57;
+  overscroll-behavior: contain;
+  background: var(--surface-base);
+  border-bottom: 1px solid var(--line);
   padding: 4px;
+}
+.browser-viewport > .browser-suggestions {
+  position: absolute;
+  inset: 0 0 auto;
+  max-height: min(30vh, 100%);
+  z-index: 1;
+}
+.browser-suggestion-popup .browser-suggestions {
+  max-height: 100vh;
 }
 .browser-suggestions button,
 .browser-library .browser-history-link,

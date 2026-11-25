@@ -11,6 +11,8 @@ export const buildOutputs = [
   "main.cjs",
   "preload.cjs",
   "agent-page-preload.cjs",
+  "address-overlay-preload.cjs",
+  "address-overlay.html",
   "cli.cjs",
   "sqlite-state-worker.cjs",
   "provider-owner.cjs",

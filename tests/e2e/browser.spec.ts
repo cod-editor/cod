@@ -164,7 +164,7 @@ async function nativeBrowserFrame(points: { x: number; y: number }[]) {
     points,
   );
 }
-async function rightClickNativeBrowser(x: number, y: number) {
+async function clickNativeBrowser(x: number, y: number, button = 1) {
   const bounds = await shell.app!.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].getContentBounds(),
   );
@@ -174,7 +174,7 @@ async function rightClickNativeBrowser(x: number, y: number) {
     String(Math.round(x + bounds.x)),
     String(Math.round(y + bounds.y)),
     "click",
-    "3",
+    String(button),
   ]);
 }
 async function scrollManager(dialog: Locator, last: Locator) {
@@ -290,11 +290,13 @@ test.beforeEach(async () => {
       response.setHeader("Content-Type", "text/html");
       response.end(`<!doctype html><title>Overlay fixture</title>
         <style>
-          body { background: rgb(14, 122, 86); color: white; font: 20px sans-serif }
-          main { padding: 50px 12px; line-height: 2 }
+          body { background: rgb(14, 122, 86); color: white; font: 20px sans-serif; min-height: 1600px }
+          header { position: sticky; top: 0; background: rgb(14, 122, 86) }
+          main { padding: 320px 12px 50px; line-height: 2 }
         </style>
         <header>Invented browser page</header>
-        <main>Tab actions should leave this page in place.</main>`);
+        <main>Browser controls should leave this page in place.</main>
+        <script>window.pageClicks=0; document.addEventListener("click", () => pageClicks++);</script>`);
       return;
     }
     if (route === "/new-tab-post") {
@@ -1824,7 +1826,7 @@ test("Browser tab actions keep the native page painted and preserve keyboard acc
   await expect
     .poll(async () => (await frame()).colors)
     .toEqual([pageColor, pageColor]);
-  await rightClickNativeBrowser(anchor.x, anchor.y);
+  await clickNativeBrowser(anchor.x, anchor.y, 3);
   await expect
     .poll(async () => (await frame()).colors[0])
     .not.toEqual(pageColor);
@@ -1860,6 +1862,234 @@ test("Browser tab actions keep the native page painted and preserve keyboard acc
   await expect(tab).toHaveAttribute("data-pinned", "true");
   const restored = await frame();
   expect(restored.colors).toEqual([pageColor, pageColor]);
+});
+
+test("Address suggestions overlay a live browser and leave page input and geometry intact", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Requires the isolated X11 desktop");
+  const workspace = await shell.create("Address suggestions over a page");
+  const route = "/overlay-fixture";
+  const destination = route + "?destination=one";
+  await open(workspace, route + "?destination=three");
+  await open(workspace, route + "?destination=two");
+  await open(workspace, destination);
+  await expect
+    .poll(() => shell.cli("browser", "history", "--query", destination))
+    .toEqual([expect.objectContaining({ url: origin + destination })]);
+  const record = await open(workspace, route);
+  await expect.poll(async () => (await inspect(record.id)).visible).toBe(true);
+  await shell.cli("browser", "zoom", "--id", record.id, "--action", "in");
+  await shell.cli("browser", "zoom", "--id", record.id, "--action", "in");
+  const pane = shell.pane(record.paneId);
+  const address = pane.getByRole("combobox", { name: "Address", exact: true });
+  const viewport = pane.getByRole("region", { name: "Browser content" });
+  const option = pane.getByRole("option", { name: /destination=one/ });
+  const overlay = (paint = true) =>
+    shell.app!.evaluate(async ({ BrowserWindow }, paint) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (view) =>
+          "webContents" in view &&
+          (view as Electron.WebContentsView).webContents
+            .getURL()
+            .endsWith("/address-overlay.html"),
+      );
+      if (!view?.getVisible()) return null;
+      if (!paint) return view.getBounds();
+      return {
+        ...view.getBounds(),
+        list: await (
+          view as Electron.WebContentsView
+        ).webContents.executeJavaScript(
+          `(() => {
+            const list = document.querySelector(".browser-suggestions");
+            return {
+              rows: list.children.length,
+              overflow: list.scrollHeight - list.clientHeight,
+              selected: list.querySelector('[aria-selected="true"] small')?.textContent,
+            };
+          })()`,
+        ),
+      };
+    }, paint);
+  const pageState = () =>
+    remote(route, "({ width: innerWidth, height: innerHeight, top: scrollY })");
+  const pageColor = [14, 122, 86];
+  await remote(route, "window.scrollTo(0,80)");
+  await expect.poll(pageState).toMatchObject({ top: 80 });
+  const original = await pageState();
+  const box = (await viewport.boundingBox())!;
+  const point = (dy: number) => ({
+    x: Math.floor(box.x + box.width / 2),
+    y: Math.ceil(box.y + dy),
+  });
+  const baselinePoints = [point(16), point(box.height / 2)];
+  const closed = () => nativeBrowserFrame(baselinePoints);
+  await expect
+    .poll(async () => (await closed()).colors)
+    .toEqual([pageColor, pageColor]);
+  await writeFile(
+    info.outputPath("address-overlay-closed.png"),
+    Buffer.from((await closed()).image, "base64"),
+  );
+  await address.focus();
+  await address.fill("overlay-fixture");
+  await expect(option).toBeVisible();
+  expect(await viewport.boundingBox()).toEqual(box);
+  expect(await pageState()).toEqual(original);
+  await expect
+    .poll(overlay)
+    .toMatchObject({ y: box.y, width: Math.floor(box.width) });
+  await address.press("ArrowDown");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect(address).toHaveAttribute(
+    "aria-activedescendant",
+    (await option.getAttribute("id"))!,
+  );
+  await expect.poll(overlay).toMatchObject({
+    list: { rows: 3, overflow: 0, selected: origin + destination },
+  });
+  await address.press("ArrowDown");
+  await expect(
+    pane.getByRole("option", { name: /destination=two/ }),
+  ).toHaveAttribute("aria-selected", "true");
+  await address.press("ArrowUp");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(async () => (await closed()).colors[0])
+    .not.toEqual(pageColor);
+  const opened = await closed();
+  expect(opened.colors[1]).toEqual(pageColor);
+  await writeFile(
+    info.outputPath("address-overlay-open.png"),
+    Buffer.from(opened.image, "base64"),
+  );
+  await expect(address).toBeFocused();
+  expect(
+    await remote(route, "typeof cod + ',' + typeof codAddressOverlay"),
+  ).toBe("undefined,undefined");
+
+  await address.dispatchEvent("compositionstart");
+  await expect(option).toBeHidden();
+  await expect.poll(overlay).toBeNull();
+  await address.fill("overlay-fixture");
+  await expect(address).toHaveAttribute("aria-expanded", "false");
+  await address.dispatchEvent("compositionend");
+  await expect(option).toBeVisible();
+  await expect.poll(overlay).not.toBeNull();
+  await address.press("Escape");
+  await expect(option).toBeHidden();
+  await expect.poll(overlay).toBeNull();
+  await expect(address).toBeFocused();
+  expect(await pageState()).toEqual(original);
+
+  await address.fill("overlay-fixture");
+  await expect.poll(overlay).not.toBeNull();
+  await clickNativeBrowser(baselinePoints[1].x, baselinePoints[1].y);
+  await expect.poll(() => remote(route, "pageClicks")).toBe(1);
+  await expect(option).toBeHidden();
+  await expect.poll(overlay).toBeNull();
+  expect(await pageState()).toEqual(original);
+
+  await address.focus();
+  await address.fill("overlay-fixture");
+  await expect.poll(overlay).not.toBeNull();
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(960, 620),
+  );
+  await expect
+    .poll(async () => (await viewport.boundingBox())?.width)
+    .toBeLessThan(box.width);
+  const narrow = (await viewport.boundingBox())!;
+  await expect
+    .poll(overlay)
+    .toMatchObject({ y: narrow.y, width: Math.floor(narrow.width) });
+  await writeFile(
+    info.outputPath("address-overlay-narrow.png"),
+    Buffer.from((await nativeBrowserFrame([])).image, "base64"),
+  );
+  await address.press(`${modifier}+Shift+o`);
+  const overview = shell.page.getByRole("dialog", {
+    name: "Overview",
+    exact: true,
+  });
+  await expect(overview).toBeVisible();
+  await expect(overview).not.toHaveAttribute("data-browser-preparing", "");
+  await expect.poll(async () => (await nativeView(route))?.visible).toBe(false);
+  await expect.poll(overlay).toBeNull();
+  const dialog = (await overview.boundingBox())!;
+  const backdropPoint = {
+    x: Math.round(dialog.x + dialog.width / 3),
+    y: Math.round(dialog.y + 100),
+  };
+  const dialogColor = await overview.evaluate((node) =>
+    getComputedStyle(node)
+      .backgroundColor.match(/\d+/g)!
+      .slice(0, 3)
+      .map(Number),
+  );
+  let modalFrame = await nativeBrowserFrame([backdropPoint]);
+  await expect
+    .poll(async () => {
+      modalFrame = await nativeBrowserFrame([backdropPoint]);
+      return modalFrame.colors[0];
+    })
+    .toEqual(dialogColor);
+  await writeFile(
+    info.outputPath("address-overlay-overview.png"),
+    Buffer.from(modalFrame.image, "base64"),
+  );
+  await overview
+    .getByRole("combobox", { name: "Search Overview" })
+    .press("Escape");
+  await expect(overview).toBeHidden();
+  await expect(option).toBeHidden();
+
+  await address.focus();
+  await address.fill("overlay-fixture");
+  await expect.poll(overlay).toMatchObject({ list: { rows: 3 } });
+  await shell.app!.evaluate(async ({ webContents }) => {
+    const contents = webContents.getAllWebContents();
+    const popup = contents.find((view) =>
+      view.getURL().endsWith("/address-overlay.html"),
+    )!;
+    const renderer = popup.getOSProcessId();
+    if (
+      renderer <= 1 ||
+      contents.some(
+        (view) => view !== popup && view.getOSProcessId() === renderer,
+      )
+    )
+      throw new Error("Expected a renderer dedicated to the test overlay");
+    const gone = new Promise<void>((resolve) =>
+      popup.once("render-process-gone", () => resolve()),
+    );
+    process.kill(renderer, "SIGKILL");
+    await gone;
+  });
+  await expect.poll(() => overlay(false)).toBeNull();
+  await expect(option).toBeHidden();
+  await expect(address).toBeFocused();
+
+  await address.fill("overlay-fixture");
+  await expect.poll(overlay).toMatchObject({ list: { rows: 3 } });
+  const row = (await option.boundingBox())!;
+  await clickNativeBrowser(row.x + 30, row.y + row.height / 2);
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + destination);
+  await expect.poll(overlay).toBeNull();
+  await expect.poll(async () => (await inspect(record.id)).loading).toBe(false);
+  await address.fill("overlay-fixture");
+  await expect(
+    pane
+      .getByRole("option")
+      .filter({ hasText: origin + route })
+      .first(),
+  ).toBeVisible();
+  await address.press("ArrowDown");
+  await address.press("Enter");
+  await expect
+    .poll(async () => (await inspect(record.id)).url)
+    .toBe(origin + route);
 });
 
 test("Local address suggestions, searchable history and search engine settings survive restart", async ({}, info) => {

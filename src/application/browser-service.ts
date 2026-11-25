@@ -7,6 +7,8 @@ import {
   type SitePermission,
 } from "../browser/permission-types";
 import { BrowserLibrary } from "../browser/library";
+import { BrowserAddressOverlay } from "../browser/address-overlay";
+import type { AddressSuggestionPopup } from "../browser/address-suggestion-types";
 import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
 import {
@@ -64,6 +66,7 @@ export class BrowserApplicationService {
   private browserAdmissions = new Map<string, AbortController>();
   private browserInitializations = new Map<string, Promise<unknown>>();
   private browserWindow?: BrowserWindow;
+  private addressOverlay?: BrowserAddressOverlay;
   private overviewOpening: number | undefined;
   private readonly overviewCaptures = new Set<string>();
   constructor(
@@ -266,6 +269,7 @@ export class BrowserApplicationService {
     downloadDirectory: string,
   ): void {
     this.browserWindow = window;
+    this.addressOverlay = new BrowserAddressOverlay(window);
     this.sitePermissions = new SitePermissions({
       session,
       owner: (contents) => this.browserService?.owner(contents.id),
@@ -511,6 +515,7 @@ export class BrowserApplicationService {
       });
     });
     contents.on("before-mouse-event", (event, input) => {
+      if (input.type === "mouseDown") this.addressOverlay?.dismiss();
       if (this.overviewOpening === undefined) return;
       event.preventDefault();
       if (input.type === "mouseDown" || input.type === "mouseUp")
@@ -707,6 +712,7 @@ export class BrowserApplicationService {
 
   async browserOverviewBackdrop(ids: unknown, opening?: number) {
     if (opening !== undefined) {
+      this.addressOverlay?.dismiss();
       this.overviewOpening = opening;
       this.browserWindow?.webContents.focus();
     }
@@ -764,7 +770,11 @@ export class BrowserApplicationService {
       : [];
   }
 
-  browserLayout(rectangles: BrowserRectangle[], retireOverview = false): void {
+  browserLayout(
+    rectangles: BrowserRectangle[],
+    retireOverview = false,
+    popup?: AddressSuggestionPopup,
+  ): void {
     if (retireOverview) this.overviewOpening = undefined;
     const service = this.browserService,
       window = this.browserWindow;
@@ -825,6 +835,7 @@ export class BrowserApplicationService {
         this.selectBrowserContents(contents);
       }
     }
+    let popupSlot: BrowserRectangle | undefined;
     for (const item of [
       ...service.list(),
       ...(this.agentPages?.list() ?? []),
@@ -846,15 +857,29 @@ export class BrowserApplicationService {
         rect.x + rect.width <= width + 1 &&
         rect.y + rect.height <= height + 1,
       );
-      if (visible && rect)
+      if (visible && rect) {
         itemService.setBounds(item.id, {
           x: Math.round(rect.x),
           y: Math.round(rect.y),
           width: Math.max(1, Math.floor(rect.width)),
           height: Math.max(1, Math.floor(rect.height)),
         });
+        if (popup?.id === item.id && !record.agentPage) popupSlot = rect;
+      }
       if (item.visible !== visible) itemService.setVisible(item.id, visible);
     }
+    const validOwner =
+      popup &&
+      typeof popup.id === "string" &&
+      Number.isSafeInteger(popup.revision) &&
+      this.overviewOpening === undefined &&
+      this.store.data.browsers.some(
+        (record) =>
+          record.id === popup.id &&
+          record.workspaceId === active?.id &&
+          !record.agentPage,
+      );
+    this.addressOverlay?.update(validOwner ? popup : undefined, popupSlot);
   }
   selectBrowserContents(contents: import("electron").WebContents): void {
     this.synchronizingBrowserSelection = true;

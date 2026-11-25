@@ -373,7 +373,16 @@ export interface CodBridge {
   ): Promise<{ path: string; expectedContent?: string } | null>;
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
-  browserLayout(rectangles: BrowserRectangle[]): void;
+  browserLayout(
+    rectangles: BrowserRectangle[],
+    popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup,
+  ): void;
+  onBrowserSuggestionPick(
+    callback: (id: string, revision: number, index: number) => void,
+  ): void;
+  onBrowserSuggestionDismiss(
+    callback: (id: string, revision: number) => void,
+  ): void;
   browserTabMenu(
     anchor: { x: number; y: number },
     items: BrowserTabMenuItem[],
