@@ -231,12 +231,19 @@ export async function attachWorkspaceHost(
                   ),
                 );
               };
-              const deadline = setTimeout(() => {
-                unconfirmed();
-                fail(
-                  "The Linux workspace stopped responding to review requests",
-                );
-              }, 30_000);
+              const deadline = setTimeout(
+                () => {
+                  unconfirmed();
+                  fail(
+                    "The Linux workspace stopped responding to review requests",
+                  );
+                },
+                request.op === "conversation.accept-transfer" &&
+                  request.phase === undefined &&
+                  request.transferId !== undefined
+                  ? 120_000
+                  : 30_000,
+              );
               pendingReview = {
                 id,
                 unconfirmed,

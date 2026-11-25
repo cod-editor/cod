@@ -11,7 +11,14 @@ import type { OperationRequest, ReviewSummary } from "./types";
 
 const invoke = (request: OperationRequest) =>
   invokeCommand(defaultSocketPath(), request, {
-    timeoutMs: desktopWorkspaceOperations.has(request.op) ? 45_000 : undefined,
+    // The paired upload bounds each chunk separately. A slow link can still
+    // move a large history without the local CLI abandoning the whole call.
+    timeoutMs:
+      request.op === "conversation.transfer"
+        ? null
+        : desktopWorkspaceOperations.has(request.op)
+          ? 45_000
+          : undefined,
   });
 
 async function main(): Promise<void> {

@@ -69,6 +69,10 @@ export class ApplicationStateStore {
       await this.database.request<WorkspaceRow[]>({ operation: "load" }),
     );
     saved.workspaces?.forEach(assertWorkspaceLayout);
+    // A crash during upload cannot have started a host import. Only a transfer
+    // that reached the commit request can keep the source fenced on restart.
+    for (const chat of saved.conversations ?? [])
+      if (chat.transfer?.committing === false) delete chat.transfer;
     for (const archive of saved.closedWorkspaces ?? [])
       this.unloadedArchives.add(archive);
     Object.assign(this.data, saved, {
