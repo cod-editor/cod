@@ -202,6 +202,16 @@ export class TerminalService {
     for (const [key, value] of Object.entries(input.env ?? process.env)) {
       if (value !== undefined) env[key] = value;
     }
+    // Desktop launches can omit locale variables. Interactive shells need a
+    // UTF-8 character locale to display and edit non-ASCII input correctly.
+    if (
+      process.platform !== "win32" &&
+      !env.LC_ALL &&
+      !env.LC_CTYPE &&
+      !env.LANG
+    ) {
+      env.LC_CTYPE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+    }
     env.TERM = input.env?.TERM ?? TERMINAL_TYPE;
     const pty = this.spawn(shell, args, {
       cwd: input.cwd,
