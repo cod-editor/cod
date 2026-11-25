@@ -9,6 +9,7 @@ import {
   realpath,
   unlink,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,11 @@ import { NativeAdapter } from "./adapter";
 
 // Base64, the request envelope, and a bounded text draft share one 32 MiB frame.
 export const maximumCodexRolloutBytes = 22 * 1024 * 1024;
+const rolloutHeaderSampleBytes = 64 * 1024;
+const keepChatHere = "You can keep using the chat in its current workspace.";
+const linkedHistoryError =
+  "This chat uses linked Codex history that cannot move to Linux yet. " +
+  keepChatHere;
 
 export interface CodexRollout {
   filename: string;
@@ -32,27 +38,51 @@ function sessionsDirectory(): string {
 
 function rolloutDate(filename: string, nativeId: string): string[] {
   const date =
-    /^rollout-(\d{4})-(\d{2})-(\d{2})T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/.exec(
+    /^rollout-(\d{4})-(\d{2})-(\d{2})T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?\.jsonl(\.zst)?$/.exec(
       filename,
     );
   if (!date || date[4] !== nativeId)
     throw new Error("The Codex session filename does not match its native ID");
+  if (date[5]) throw new Error(linkedHistoryError);
+  if (date[6])
+    throw new Error(
+      "This saved Codex history is compressed and cannot move to Linux yet. " +
+        keepChatHere,
+    );
   return date.slice(1, 4);
 }
 
-function checkSessionHeader(bytes: Buffer, nativeId: string): void {
+function checkSessionHeader(
+  bytes: Buffer,
+  nativeId: string,
+  complete = bytes.at(-1) === 0x0a,
+): void {
   const firstLine = bytes.indexOf(0x0a);
-  if (firstLine < 0 || bytes.at(-1) !== 0x0a)
+  if (firstLine < 0 || !complete)
     throw new Error("The saved Codex session is incomplete");
   const { type, payload } = JSON.parse(bytes.toString("utf8", 0, firstLine));
   if (type !== "session_meta" || payload?.id !== nativeId)
     throw new Error("The saved Codex session does not match its native ID");
+  if (payload.history_base != null) throw new Error(linkedHistoryError);
 }
 
-export async function readCodexRollout(
+async function readBytes(
+  file: FileHandle,
+  length: number,
+  position = 0,
+): Promise<Buffer> {
+  const bytes = Buffer.alloc(length);
+  const { bytesRead } = await file.read(bytes, 0, length, position);
+  if (bytesRead !== length)
+    throw new Error("The saved Codex session is still changing");
+  return bytes;
+}
+
+async function readManagedRollout(
   nativeId: string,
   cwd: string,
-): Promise<CodexRollout> {
+  headerOnly: boolean,
+): Promise<{ filename: string; bytes: Buffer }> {
   const adapter = new NativeAdapter("codex", {
     cwd,
     ...(await resolveProviderExecutable("codex")),
@@ -78,21 +108,49 @@ export async function readCodexRollout(
     if (!initial.isFile())
       throw new Error("The native session must be a regular file");
     if (initial.size > maximumCodexRolloutBytes)
-      throw new Error("This saved session exceeds the 22 MiB transfer limit");
-    const bytes = Buffer.alloc(initial.size);
-    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      throw new Error(
+        "This saved Codex session exceeds the 22 MiB transfer limit. " +
+          keepChatHere,
+      );
+    const sampleLength = headerOnly
+      ? Math.min(initial.size, rolloutHeaderSampleBytes)
+      : initial.size;
+    let bytes = await readBytes(file, sampleLength);
+    // Long session metadata is valid. Inspect the bounded full file only if its
+    // header did not fit in the sample.
+    if (bytes.length < initial.size && !bytes.includes(0x0a))
+      bytes = await readBytes(file, initial.size);
+    const lastByte =
+      bytes.length === initial.size
+        ? bytes.at(-1)
+        : (await readBytes(file, 1, initial.size - 1))[0];
     const final = await file.stat();
     if (
-      bytesRead !== initial.size ||
       final.size !== initial.size ||
-      final.mtimeMs !== initial.mtimeMs
+      final.mtimeMs !== initial.mtimeMs ||
+      final.ctimeMs !== initial.ctimeMs
     )
       throw new Error("The saved Codex session is still changing");
-    checkSessionHeader(bytes, nativeId);
-    return { filename, bytes: bytes.toString("base64") };
+    checkSessionHeader(bytes, nativeId, lastByte === 0x0a);
+    return { filename, bytes };
   } finally {
     await file.close();
   }
+}
+
+export async function preflightCodexRollout(
+  nativeId: string,
+  cwd: string,
+): Promise<void> {
+  await readManagedRollout(nativeId, cwd, true);
+}
+
+export async function readCodexRollout(
+  nativeId: string,
+  cwd: string,
+): Promise<CodexRollout> {
+  const { filename, bytes } = await readManagedRollout(nativeId, cwd, false);
+  return { filename, bytes: bytes.toString("base64") };
 }
 
 async function rolloutDestination(

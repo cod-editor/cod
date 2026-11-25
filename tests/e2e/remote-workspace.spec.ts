@@ -8,6 +8,8 @@ import {
   readdir,
   readFile,
   rm,
+  symlink,
+  truncate,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -259,6 +261,77 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
       `rollout-2026-01-01T12-00-00-${chat.nativeId}.jsonl`,
     );
     const localRollout = path.join(desktop.environment.CODEX_HOME, rolloutName);
+    const sourceBytes = await readFile(localRollout);
+    const sourceWriter = (await desktop.prompts())[0].pid!;
+    const localDraft = "Invented draft before preflight";
+    await desktop.cli(
+      "conversation",
+      "composer",
+      "--workspace",
+      source,
+      "--pane-id",
+      chat.paneId,
+      "--text",
+      localDraft,
+    );
+    const expectPreflightRefusal = async (message: string) => {
+      const rejected = await desktop.raw(...move(linux.folders[0]));
+      expect(rejected.code).toBe(1);
+      expect(rejected.stderr).toContain(message);
+      const state = await desktop.cli<AppState>("state");
+      expect(state.conversations[0].transfer).toBeUndefined();
+      expect(
+        state.workspaces.find((workspace) => workspace.id === source)
+          ?.chatDrafts?.[chat.paneId]?.text,
+      ).toBe(localDraft);
+      expect(() => process.kill(sourceWriter, 0)).not.toThrow();
+      expect((await linux.cli<AppState>("state")).conversations).toHaveLength(
+        0,
+      );
+    };
+    const linkedHeader =
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: chat.nativeId,
+          history_mode: "paginated",
+          history_base: {
+            thread_id: "00000000-0000-4000-8000-000000000001",
+            end_ordinal_exclusive: 5,
+            end_byte_offset: 128,
+          },
+        },
+      }) + "\n";
+    const replacement = localRollout.replace(
+      /\.jsonl$/,
+      "_00000000-0000-4000-8000-000000000002.jsonl",
+    );
+    await writeFile(replacement, linkedHeader);
+    await desktop.configure({
+      codex: { portableRollout: true, portableReadPath: replacement },
+    });
+    await expectPreflightRefusal(
+      "linked Codex history that cannot move to Linux",
+    );
+    await desktop.configure({ codex: { portableRollout: true } });
+    await unlink(replacement);
+    await writeFile(localRollout, linkedHeader);
+    await expectPreflightRefusal(
+      "linked Codex history that cannot move to Linux",
+    );
+    const outsideRollout = path.join(desktop.temporary, "outside.jsonl");
+    await writeFile(outsideRollout, sourceBytes);
+    await unlink(localRollout);
+    await symlink(outsideRollout, localRollout);
+    await expectPreflightRefusal("outside the Codex sessions directory");
+    await unlink(localRollout);
+    await writeFile(
+      localRollout,
+      Buffer.concat([sourceBytes, Buffer.alloc(70 * 1024, 0x20)]),
+    );
+    await expectPreflightRefusal("saved Codex session is incomplete");
+    await writeFile(localRollout, sourceBytes);
+
     const destinationCollision = path.join(
       linux.environment.CODEX_HOME,
       rolloutName,
@@ -280,6 +353,7 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
       .poll(async () => (await desktop.inspect(chat.id)).status)
       .toBe("ready");
     const originalBytes = await readFile(localRollout);
+    const resumedWriter = (await desktop.prompts()).at(-1)!.pid!;
 
     await desktop.cli(
       "conversation",
@@ -323,6 +397,25 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await desktop.page.screenshot({
       path: info.outputPath("linux-move-confirm.png"),
     });
+    await truncate(localRollout, 22 * 1024 * 1024 + 1);
+    await confirm.getByRole("button", { name: "Move conversation" }).click();
+    await expect(confirm.getByRole("alert")).toContainText(
+      "exceeds the 22 MiB transfer limit. You can keep using the chat in its current workspace.",
+    );
+    await expect(
+      confirm.getByRole("button", { name: "Move conversation" }),
+    ).toBeEnabled();
+    const afterRefusal = await desktop.cli<AppState>("state");
+    expect(afterRefusal.conversations[0].transfer).toBeUndefined();
+    expect(() => process.kill(resumedWriter, 0)).not.toThrow();
+    expect(
+      afterRefusal.workspaces.find((workspace) => workspace.id === source)
+        ?.chatDrafts?.[chat.paneId]?.text,
+    ).toBe("Invented unsent draft");
+    await desktop.page.screenshot({
+      path: info.outputPath("linux-move-size-refusal.png"),
+    });
+    await writeFile(localRollout, originalBytes);
     await confirm.press("Escape");
     await expect(picker).toBeVisible();
     expect((await linux.cli<AppState>("state")).conversations).toHaveLength(0);
