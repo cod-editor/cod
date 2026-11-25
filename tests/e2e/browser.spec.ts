@@ -59,6 +59,24 @@ const iconHeader = Buffer.from([
   0,
 ]);
 const fixtureIco = Buffer.concat([iconHeader, fixtureIcon]);
+const bitmapSize = 16;
+const bitmap = Buffer.alloc(40 + bitmapSize * bitmapSize * 4 + 4 * bitmapSize);
+bitmap.writeUInt32LE(40, 0);
+bitmap.writeInt32LE(bitmapSize, 4);
+bitmap.writeInt32LE(bitmapSize * 2, 8);
+bitmap.writeUInt16LE(1, 12);
+bitmap.writeUInt16LE(32, 14);
+for (let row = 0; row < bitmapSize; row++)
+  for (let column = 0; column < bitmapSize; column++) {
+    const offset = 40 + (row * bitmapSize + column) * 4;
+    bitmap[offset] = row < 8 ? 232 : 96;
+    bitmap[offset + 1] = 181;
+    bitmap[offset + 2] = column < 8 ? 65 : 241;
+    bitmap[offset + 3] = column === 0 ? 0 : column === 1 ? 128 : 255;
+  }
+const bitmapIconHeader = Buffer.from(iconHeader);
+bitmapIconHeader.writeUInt32LE(bitmap.length, 14);
+const fixtureBitmapIco = Buffer.concat([bitmapIconHeader, bitmap]);
 let shell: WorkspaceApp,
   server: Server,
   origin: string,
@@ -183,6 +201,18 @@ test.beforeEach(async () => {
     if (route === "/fixture-icon.ico") {
       response.setHeader("Content-Type", "image/x-icon");
       response.end(fixtureIco);
+      return;
+    }
+    if (route === "/fixture-bitmap.ico") {
+      response.setHeader("Content-Type", "image/x-icon");
+      response.end(fixtureBitmapIco);
+      return;
+    }
+    if (route === "/site-with-bitmap-icon") {
+      response.setHeader("Content-Type", "text/html");
+      response.end(
+        '<!doctype html><title>Bitmap icon fixture</title><link rel="shortcut icon" href="/fixture-bitmap.ico"><h1>Bitmap icon fixture</h1>',
+      );
       return;
     }
     if (route === "/fixture-icon.jpg") {
@@ -540,6 +570,90 @@ test("Site favicon accepts JPEG and a PNG embedded in an ICO", async () => {
   await expect(icon).toHaveJSProperty("naturalWidth", 12);
   await shell.cli("browser", "reload", "--id", record.id);
   await expect(icon).toHaveJSProperty("naturalWidth", 12);
+});
+
+test("A bitmap ICO appears on a visited tab and updates an existing Home pin", async ({}, info) => {
+  const workspace = await shell.create("Bitmap site icon fixture");
+  const route = "/site-with-bitmap-icon";
+  const site = origin + route;
+  await shell.cli("browser", "pin", "--url", site, "--title", "Bitmap docs");
+  expect(requests).toEqual([]);
+  const record = await open(workspace, route);
+  await expect(
+    shell.page.getByRole("tab", { name: "Bitmap icon fixture", exact: true }),
+  ).toBeVisible();
+  const icon = () =>
+    shell.page
+      .getByRole("tab", { name: "Bitmap icon fixture", exact: true })
+      .locator("img.site-favicon");
+  // Chromium itself decodes the ICO. Cod should learn that usable icon too.
+  expect(
+    await remote(
+      route,
+      `(async () => {
+      const image = new Image();
+      image.src = document.querySelector('link[rel="shortcut icon"]').href;
+      await image.decode();
+      return [image.naturalWidth, image.naturalHeight];
+    })()`,
+    ),
+  ).toEqual([bitmapSize, bitmapSize]);
+  await expect
+    .soft(icon())
+    .toHaveJSProperty("naturalWidth", bitmapSize, { timeout: 5_000 });
+  await shell.page.screenshot({
+    path: info.outputPath("browser-bitmap-tab.png"),
+  });
+
+  await shell.page.keyboard.press(`${modifier}+t`);
+  const pinIcon = () =>
+    shell.page
+      .getByRole("region", { name: "Browser home" })
+      .getByRole("button", { name: "Bitmap docs", exact: true })
+      .locator("img.site-favicon");
+  await expect
+    .soft(pinIcon())
+    .toHaveJSProperty("naturalWidth", bitmapSize, { timeout: 5_000 });
+  await shell.page.screenshot({
+    path: info.outputPath("browser-bitmap-home.png"),
+  });
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  await expect
+    .soft(pinIcon())
+    .toHaveJSProperty("naturalWidth", bitmapSize, { timeout: 5_000 });
+  expect(requests).toEqual([]);
+  await shell.page
+    .getByRole("tab", { name: "Bitmap icon fixture", exact: true })
+    .click();
+  await expect(icon()).toHaveJSProperty("naturalWidth", bitmapSize, {
+    timeout: 5_000,
+  });
+  requests = [];
+  await shell.cli("browser", "reload", "--id", record.id);
+  await expect.poll(() => requests.includes("/fixture-bitmap.ico")).toBe(true);
+  await expect(icon()).toHaveJSProperty("naturalWidth", bitmapSize, {
+    timeout: 5_000,
+  });
+  expect(
+    await icon().evaluate((image: HTMLImageElement) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return [
+        Array.from(context.getImageData(0, 0, 1, 1).data),
+        Array.from(context.getImageData(1, 0, 1, 1).data),
+        Array.from(context.getImageData(9, 14, 1, 1).data),
+      ];
+    }),
+  ).toEqual([
+    [0, 0, 0, 0],
+    [66, 181, 96, 128],
+    [241, 181, 232, 255],
+  ]);
 });
 
 test("Site favicon cannot follow a superseded navigation or come from a different origin or SVG", async () => {

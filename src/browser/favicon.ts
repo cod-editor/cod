@@ -1,4 +1,4 @@
-import { nativeImage, type Session } from "electron";
+import { nativeImage, type NativeImage, type Session } from "electron";
 import { faviconOrigin } from "./favicon-origin";
 
 const limit = 64 * 1024;
@@ -54,18 +54,82 @@ function smallJpeg(bytes: Buffer): boolean {
   return false;
 }
 
-function raster(bytes: Buffer): Buffer | undefined {
-  if (smallPng(bytes) || smallJpeg(bytes)) return bytes;
+function bitmapIcon(bytes: Buffer): NativeImage | undefined {
+  // An ICO frame stores a bottom-up color bitmap followed by a 1-bit mask.
+  const header = 40;
+  if (bytes.length < header || bytes.readUInt32LE(0) !== header) return;
+  const width = bytes.readInt32LE(4);
+  const height = bytes.readInt32LE(8) / 2;
+  const bits = bytes.readUInt16LE(14);
+  if (
+    width < 1 ||
+    width > 256 ||
+    !Number.isInteger(height) ||
+    height < 1 ||
+    height > 256 ||
+    bytes.readUInt16LE(12) !== 1 ||
+    (bits !== 24 && bits !== 32) ||
+    bytes.readUInt32LE(16) !== 0 ||
+    bytes.readUInt32LE(32) !== 0
+  )
+    return;
+
+  const pixelBytes = bits / 8;
+  const stride = Math.ceil((width * pixelBytes) / 4) * 4;
+  const maskStride = Math.ceil(width / 32) * 4;
+  const maskStart = header + stride * height;
+  if (maskStart + maskStride * height > bytes.length) return;
+
+  // A 32-bit frame's all-zero alpha channel denotes legacy mask transparency.
+  let hasAlpha = false;
+  if (bits === 32)
+    for (let offset = header + 3; offset < maskStart; offset += 4)
+      if (bytes[offset] !== 0) {
+        hasAlpha = true;
+        break;
+      }
+
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const sourceRow = height - 1 - y;
+    for (let x = 0; x < width; x++) {
+      const source = header + sourceRow * stride + x * pixelBytes;
+      const mask = bytes[maskStart + sourceRow * maskStride + (x >> 3)]!;
+      const alpha = hasAlpha
+        ? bytes[source + 3]!
+        : mask & (0x80 >> (x % 8))
+          ? 0
+          : 255;
+      const destination = (y * width + x) * 4;
+      // Electron's native bitmap uses premultiplied BGRA on Cod's platforms.
+      for (let channel = 0; channel < 3; channel++)
+        pixels[destination + channel] = Math.round(
+          (bytes[source + channel]! * alpha) / 255,
+        );
+      pixels[destination + 3] = alpha;
+    }
+  }
+  return nativeImage.createFromBitmap(pixels, { width, height });
+}
+
+function raster(bytes: Buffer): NativeImage | undefined {
+  if (smallPng(bytes) || smallJpeg(bytes))
+    return nativeImage.createFromBuffer(bytes);
   if (bytes.length < 22 || bytes.readUInt32LE(0) !== 0x00010000) return;
   const entries = bytes.readUInt16LE(4);
   if (entries > 32 || 6 + 16 * entries > bytes.length) return;
+  let bitmap: NativeImage | undefined;
   for (let entry = 6; entry < 6 + 16 * entries; entry += 16) {
     const size = bytes.readUInt32LE(entry + 8);
     const start = bytes.readUInt32LE(entry + 12);
     if (start < 6 + 16 * entries || start + size > bytes.length) continue;
     const image = bytes.subarray(start, start + size);
-    if (smallPng(image)) return image;
+    if (smallPng(image)) {
+      const png = nativeImage.createFromBuffer(image);
+      if (!png.isEmpty()) return png;
+    } else bitmap ??= bitmapIcon(image);
   }
+  return bitmap;
 }
 
 export async function loadFavicon(
@@ -85,10 +149,8 @@ export async function loadFavicon(
         signal,
       });
       const bytes = await readIcon(response);
-      const imageBytes = bytes && raster(bytes);
-      if (!imageBytes) continue;
-      const image = nativeImage.createFromBuffer(imageBytes);
-      if (image.isEmpty()) continue;
+      const image = bytes && raster(bytes);
+      if (!image || image.isEmpty()) continue;
       const { width, height } = image.getSize();
       const reduced =
         Math.max(width, height) <= 32
