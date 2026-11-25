@@ -18,6 +18,7 @@ export function menu(
   items: MenuAction[],
   options: {
     restoreFocus?: () => void;
+    trigger?: HTMLButtonElement;
     shortcutChangeEvent?: string;
   } = {},
 ): void {
@@ -33,7 +34,9 @@ export function menu(
   dialog.dataset.choices = String(
     items.some((item) => item?.selected !== undefined),
   );
-  const trigger = anchor instanceof HTMLButtonElement ? anchor : undefined;
+  const trigger =
+    options.trigger ??
+    (anchor instanceof HTMLButtonElement ? anchor : undefined);
   const previousExpanded = trigger?.getAttribute("aria-expanded");
   const previousControls = trigger?.getAttribute("aria-controls");
   trigger?.classList.add("menu-open");

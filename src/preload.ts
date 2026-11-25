@@ -53,6 +53,9 @@ const bridge: CodBridge = {
   browserLayout(rectangles) {
     ipcRenderer.send("cod:browser-layout", rectangles);
   },
+  browserTabMenu(anchor, items) {
+    return ipcRenderer.invoke("cod:browser-tab-menu", anchor, items);
+  },
   browserHideForOverview(opening) {
     return ipcRenderer.invoke("cod:browser-hide-for-overview", opening);
   },
