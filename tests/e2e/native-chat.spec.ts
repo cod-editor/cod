@@ -1191,6 +1191,114 @@ test("Detached owner upgrade retains a running turn and opens saved chats on the
   }
 });
 
+const nameQuitChat = (id: string, name: string) =>
+  shell.cli("conversation", "rename", "--id", id, "--name", name);
+
+async function captureAndCancelQuit(screenshot: string, closeWindow = false) {
+  const app = shell.app!;
+  const native = process.platform === "linux";
+  await app.evaluate(
+    ({ app, BrowserWindow }, { native, closeWindow }) => {
+      (globalThis as any).quitDialog = undefined;
+      (globalThis as any).quitChoice = "Cancel";
+      (globalThis as any).showNativeQuit = native;
+      if (closeWindow) BrowserWindow.getAllWindows()[0].close();
+      else app.quit();
+    },
+    { native, closeWindow },
+  );
+  const quitDialog = () => app.evaluate(() => (globalThis as any).quitDialog);
+  await expect.poll(quitDialog).toBeDefined();
+  if (native) {
+    const execute = promisify(execFile);
+    let nativeWindow = "";
+    try {
+      await expect
+        .poll(async () => {
+          nativeWindow = (
+            await execute("xdotool", [
+              "search",
+              "--onlyvisible",
+              "--name",
+              "Quit Cod",
+            ]).catch(() => ({ stdout: "" }))
+          ).stdout
+            .trim()
+            .split("\n")
+            .at(-1)!;
+          return nativeWindow;
+        })
+        .not.toBe("");
+      const image = await app.evaluate(async ({ desktopCapturer }) => {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1280, height: 1024 },
+        });
+        return sources[0]?.thumbnail.toPNG().toString("base64");
+      });
+      if (image) await writeFile(screenshot, Buffer.from(image, "base64"));
+    } finally {
+      await execute(
+        "xdotool",
+        nativeWindow
+          ? ["key", "--window", nativeWindow, "Escape"]
+          : ["key", "Escape"],
+      ).catch(() => undefined);
+      await app.evaluate(() => {
+        (globalThis as any).showNativeQuit = false;
+      });
+    }
+  }
+  return quitDialog();
+}
+
+test("Quit dialog names active local chats across workspaces and bounds the list", async ({}, info) => {
+  const research = await shell.create("Research");
+  const operations = await shell.create("Operations");
+  await shell.newChat(research, "codex");
+  const chats: Array<{ id: string; nativeId: string }> = [];
+  for (const index of [1, 2, 3, 4, 5, 6]) {
+    const chat = await shell.newChat(
+      index % 2 ? research : operations,
+      "codex",
+    );
+    if (index === 1) await nameQuitChat(chat.id, "Draft\nsummary");
+    if (index === 3)
+      await nameQuitChat(chat.id, "Long session " + "x".repeat(60));
+    await shell.send(chat.id, `[hold] Session ${index}`);
+    chats.push(chat);
+  }
+  await expect
+    .poll(() => Promise.all(chats.map((chat) => status(chat.id))))
+    .toEqual(Array(6).fill("working"));
+
+  expect(
+    await captureAndCancelQuit(info.outputPath("local-chats-quit.png"), true),
+  ).toEqual({
+    buttons: ["Stop", "Cancel"],
+    defaultButton: "Cancel",
+    message: "6 local agents are active",
+    detail: [
+      "Research — Draft summary",
+      "Operations — [hold] Session 2",
+      "Research — Long session " + "x".repeat(28) + "…",
+      "Operations — [hold] Session 4",
+      "Research — [hold] Session 5",
+      "… and 1 more",
+    ].join("\n"),
+  });
+  await expect
+    .poll(() => Promise.all(chats.map((chat) => status(chat.id))))
+    .toEqual(Array(6).fill("working"));
+  await shell.quitWithChoice("Stop");
+  await shell.start();
+  for (const chat of chats) {
+    const restored = await shell.inspect(chat.id);
+    expect(restored.nativeId).toBe(chat.nativeId);
+    expect(restored.status).toBe("failed");
+  }
+});
+
 test("Detached local chat keeps an approval through restart, with Cancel and Stop at Quit", async ({}, info) => {
   const owner = new LocalProviderOwner(shell.data);
   try {
@@ -1205,61 +1313,15 @@ test("Detached local chat keeps an approval through restart, with Cancel and Sto
     await shell.send(chat.id, "[approve] retained approval");
     await expect.poll(() => status(chat.id)).toBe("waiting");
     const original = (await shell.inspect(chat.id)).pendingPermissions[0];
-    await shell.app!.evaluate(({ app }, performNative) => {
-      (globalThis as any).quitChoice = "Cancel";
-      (globalThis as any).showNativeQuit = performNative;
-      app.quit();
-    }, process.platform === "linux");
-    await expect
-      .poll(() => shell.app!.evaluate(() => (globalThis as any).quitOptions))
-      .toEqual(["Leave Running", "Stop", "Cancel"]);
+    await nameQuitChat(chat.id, "Approve release draft");
     expect(
-      await shell.app!.evaluate(() => (globalThis as any).quitDefault),
-    ).toBe("Cancel");
-    if (process.platform === "linux") {
-      const execute = promisify(execFile);
-      let nativeWindow = "";
-      try {
-        await expect
-          .poll(async () => {
-            nativeWindow = (
-              await execute("xdotool", [
-                "search",
-                "--onlyvisible",
-                "--name",
-                "Quit Cod",
-              ]).catch(() => ({ stdout: "" }))
-            ).stdout
-              .trim()
-              .split("\n")
-              .at(-1)!;
-            return nativeWindow;
-          })
-          .not.toBe("");
-        const image = await shell.app!.evaluate(async ({ desktopCapturer }) => {
-          const sources = await desktopCapturer.getSources({
-            types: ["screen"],
-            thumbnailSize: { width: 1280, height: 1024 },
-          });
-          return sources[0]?.thumbnail.toPNG().toString("base64");
-        });
-        if (image)
-          await writeFile(
-            info.outputPath("detached-chat-quit.png"),
-            Buffer.from(image, "base64"),
-          );
-      } finally {
-        await execute(
-          "xdotool",
-          nativeWindow
-            ? ["key", "--window", nativeWindow, "Escape"]
-            : ["key", "Escape"],
-        ).catch(() => undefined);
-        await shell.app!.evaluate(() => {
-          (globalThis as any).showNativeQuit = false;
-        });
-      }
-    }
+      await captureAndCancelQuit(info.outputPath("detached-chat-quit.png")),
+    ).toEqual({
+      buttons: ["Leave Running", "Stop", "Cancel"],
+      defaultButton: "Cancel",
+      message: "One local agent is active",
+      detail: "Detached approval fixture — Approve release draft",
+    });
     await expect.poll(() => status(chat.id)).toBe("waiting");
     await shell.quitWithChoice("Leave Running");
 

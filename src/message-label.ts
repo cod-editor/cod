@@ -1,4 +1,4 @@
-import type { AppState, ConversationState } from "../types";
+import type { AppState, ConversationState } from "./types";
 export function structuredMessageLabel(
   text: string,
   state: AppState,

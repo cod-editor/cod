@@ -4,7 +4,7 @@ import { documentKey, isTextDocument } from "../text-document";
 import { createTabDrag } from "./tab-drag";
 import { keyboardPlatform, shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
-import { conversationLabel } from "./message-label";
+import { conversationLabel } from "../message-label";
 import { browserLabel } from "./browser-label";
 import { siteFavicon, siteIcon } from "./site-icon";
 import { icon, iconButton } from "../ui-kit";
