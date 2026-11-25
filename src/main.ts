@@ -1323,7 +1323,7 @@ async function confirmQuit(): Promise<"leave" | "stop" | "cancel"> {
     .slice(0, 5)
     .map(
       ({ workspace, session }) =>
-        `${quitSessionLabel(workspace, 28)} — ${quitSessionLabel(session, 42)}`,
+        `• ${quitSessionLabel(workspace, 28)} — ${quitSessionLabel(session, 42)}`,
     );
   const remaining = count - lines.length;
   if (remaining) lines.push(`… and ${remaining} more`);
