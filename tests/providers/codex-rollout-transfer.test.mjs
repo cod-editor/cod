@@ -150,6 +150,11 @@ test("Codex staged transfers verify bounded ordered chunks and own the installed
   assert.deepEqual(await readFile(previous), active);
   await rm(previous);
 
+  const scratch = path.join(
+    path.dirname(previous),
+    `.transfer-${transfer}.writing`,
+  );
+  await writeFile(scratch, "Invented incomplete copy left by host crash");
   const installed = await installCodexRollout(
     nativeId,
     manifest,
@@ -157,6 +162,7 @@ test("Codex staged transfers verify bounded ordered chunks and own the installed
     transfer,
   );
   assert.deepEqual(await readFile(installed.file), active);
+  await assert.rejects(stat(scratch), { code: "ENOENT" });
   const restarted = await installCodexRollout(
     nativeId,
     manifest,

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   copyFile,
   link,
@@ -344,7 +344,7 @@ export async function installCodexRollout(
     path.dirname(destination),
     `.transfer-${transferId}`,
   );
-  const writing = temporary + "." + randomUUID();
+  const writing = temporary + ".writing";
   if (await otherManagedRollout(root, nativeId, destination))
     throw new Error(
       "This Codex session already has saved history on the Linux host",
@@ -354,6 +354,9 @@ export async function installCodexRollout(
       await remove(destination);
     await remove(temporary);
   };
+  // A previous host process may have died during this transfer's scratch copy.
+  // The durable transfer binds this pathname before any native file is installed.
+  await remove(writing);
   try {
     await copyFile(stagedFile, writing, constants.COPYFILE_EXCL);
     await link(writing, temporary);
