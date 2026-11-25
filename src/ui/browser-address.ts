@@ -1,6 +1,8 @@
 import { isPlainEscape } from "../keyboard";
 import { eligibleSearchPhrase } from "../browser/search-query";
 import type { Invoke } from "./contracts";
+import { suggestionRow } from "./browser-suggestion-list";
+import type { SuggestionRow } from "../browser/address-suggestion-types";
 
 type Suggestion = { title: string; url?: string };
 export function addressSuggestions(
@@ -64,24 +66,21 @@ export function addressSuggestions(
       input.setAttribute("aria-activedescendant", rows[index].id);
       rows[index].scrollIntoView({ block: "nearest" });
     } else input.removeAttribute("aria-activedescendant");
+    if (!list.hidden) layout();
   }
   function appendRows(items: Suggestion[], generation: number) {
     const rows = document.createDocumentFragment();
     items.forEach((item, i) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.tabIndex = -1;
+      const button = suggestionRow({
+        title: item.title,
+        detail: item.url ?? "Search",
+        selected: false,
+        disabled: false,
+      });
       button.id = `${list.id}-${list.childElementCount + i}`;
-      button.setAttribute("role", "option");
-      button.setAttribute("aria-selected", "false");
-      const title = document.createElement("span"),
-        detail = document.createElement("small");
-      title.textContent = item.title;
-      detail.textContent = item.url ?? "Search";
-      button.append(title, detail);
-      button.onmousedown = (event) => event.preventDefault();
       button.onclick = () => {
-        if (generation !== revision) return;
+        if (!current(generation) || document.querySelector("dialog[open]"))
+          return;
         const value = item.url ?? item.title;
         input.value = value;
         close();
@@ -221,5 +220,30 @@ export function addressSuggestions(
       if (!event.repeat) close();
     }
   });
-  return { element: list, close };
+  return {
+    element: list,
+    close,
+    dismiss(generation: number) {
+      if (generation === revision) close();
+    },
+    pick(generation: number, index: number) {
+      if (!list.hidden && current(generation))
+        list.querySelectorAll<HTMLButtonElement>("button")[index]?.click();
+    },
+    snapshot() {
+      if (
+        list.hidden ||
+        document.activeElement !== input ||
+        !list.getClientRects().length
+      )
+        return;
+      const rows: SuggestionRow[] = Array.from(list.children, (row) => ({
+        title: row.children[0].textContent?.slice(0, 4096) ?? "",
+        detail: row.children[1].textContent?.slice(0, 16384) ?? "",
+        selected: row.getAttribute("aria-selected") === "true",
+        disabled: row.getAttribute("aria-disabled") === "true",
+      }));
+      return { revision, rows };
+    },
+  };
 }

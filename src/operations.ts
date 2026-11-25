@@ -117,8 +117,12 @@ export class ApplicationOperations {
   ): void {
     this.browsers.attachBrowserHost(window, session, downloadDirectory);
   }
-  browserLayout(rectangles: BrowserRectangle[], retireOverview = false): void {
-    this.browsers.browserLayout(rectangles, retireOverview);
+  browserLayout(
+    rectangles: BrowserRectangle[],
+    retireOverview = false,
+    popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup,
+  ): void {
+    this.browsers.browserLayout(rectangles, retireOverview, popup);
   }
   browserHideForOverview(opening: number): boolean {
     return this.browsers.browserHideForOverview(opening);

@@ -50,8 +50,19 @@ const bridge: CodBridge = {
   browserSelect(id) {
     ipcRenderer.send("cod:browser-select", id);
   },
-  browserLayout(rectangles) {
-    ipcRenderer.send("cod:browser-layout", rectangles);
+  browserLayout(rectangles, popup) {
+    ipcRenderer.send("cod:browser-layout", rectangles, popup);
+  },
+  onBrowserSuggestionPick(callback) {
+    ipcRenderer.on(
+      "cod:browser-suggestion-pick",
+      (_event, id, revision, index) => callback(id, revision, index),
+    );
+  },
+  onBrowserSuggestionDismiss(callback) {
+    ipcRenderer.on("cod:browser-suggestion-dismiss", (_event, id, revision) =>
+      callback(id, revision),
+    );
   },
   browserTabMenu(anchor, items) {
     return ipcRenderer.invoke("cod:browser-tab-menu", anchor, items);

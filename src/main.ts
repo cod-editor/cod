@@ -862,12 +862,17 @@ async function start(): Promise<void> {
         return;
       operations.browserSelect(id);
     });
-    ipcMain.on("cod:browser-layout", (event, rectangles) => {
+    ipcMain.on("cod:browser-layout", (event, rectangles, popup) => {
       if (
         event.sender === mainWindow?.webContents &&
-        event.senderFrame?.url === rendererUrl
+        event.senderFrame === event.sender.mainFrame &&
+        event.senderFrame.url === rendererUrl
       )
-        operations.browserLayout(remoteView ? [] : rectangles, true);
+        operations.browserLayout(
+          remoteView ? [] : rectangles,
+          true,
+          remoteView ? undefined : popup,
+        );
     });
     ipcMain.handle(
       "cod:browser-tab-menu",
