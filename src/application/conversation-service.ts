@@ -2054,18 +2054,21 @@ export class ConversationApplicationService {
             if (linkedRollout?.cwd !== directory || discovered.has(nativeId))
               continue;
             // A stale provider index row after removal is not a saved session.
-            const file = await lstat(linkedRollout.path).catch((error) => {
+            try {
+              if (
+                !(await lstat(linkedRollout.path)).isFile() ||
+                (await realpath(linkedRollout.path)) !== linkedRollout.path
+              )
+                continue;
+            } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "ENOENT")
                 throw error;
-            });
-            if (
-              !file?.isFile() ||
-              (await realpath(linkedRollout.path)) !== linkedRollout.path
-            )
               continue;
+            }
             const result = await adapter.codexDiscoverImportedThread(
               nativeId,
               linkedRollout.path,
+              directory,
             );
             if (result) {
               ordinary.push(result);

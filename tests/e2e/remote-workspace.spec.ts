@@ -739,7 +739,7 @@ test("A paired linked Codex transfer recovers only the selected thread and its r
       linux.folders[0],
     ];
     const snapshot = () => desktop.cli<AppState>("state");
-    const discoveredIds = async () =>
+    const discoveredIds = async (cwd = linux.folders[0]) =>
       (
         await linux.cli<Array<{ nativeId: string }>>(
           "conversation",
@@ -748,6 +748,8 @@ test("A paired linked Codex transfer recovers only the selected thread and its r
           destination.id,
           "--provider",
           "codex",
+          "--cwd",
+          cwd,
         )
       )
         .map(({ nativeId }) => nativeId)
@@ -798,6 +800,9 @@ test("A paired linked Codex transfer recovers only the selected thread and its r
     expect(await discoveredIds()).toEqual(
       [chat.nativeId, ordinary.nativeId].sort(),
     );
+    const directoryAlias = path.join(linux.temporary, "invented-folder-alias");
+    await symlink(linux.folders[0], directoryAlias, "dir");
+    expect(await discoveredIds(directoryAlias)).toContain(chat.nativeId);
     await rename(target, target + ".held");
     expect(await discoveredIds()).toEqual([ordinary.nativeId]);
     await rename(target + ".held", target);

@@ -522,8 +522,11 @@ function receive(message, external = false) {
     configuration().linkedTransfer
   ) {
     const index = recording + ".linked-index";
+    const row = existsSync(index)
+      ? JSON.parse(readFileSync(index, "utf8"))
+      : undefined;
     reply(message, {
-      data: existsSync(index) ? [JSON.parse(readFileSync(index, "utf8"))] : [],
+      data: row && row.cwd === params.cwd ? [row] : [],
       nextCursor: null,
     });
     return;

@@ -372,6 +372,7 @@ export class NativeAdapter implements ProviderAdapter {
   async codexDiscoverImportedThread(
     nativeId: string,
     rolloutPath: string,
+    cwd = this.cwd,
   ): Promise<Conversation | undefined> {
     if (!(await this.supportsLinkedCodexTransfer())) return;
     const cursors = new Set<string>();
@@ -379,7 +380,7 @@ export class NativeAdapter implements ProviderAdapter {
     do {
       const page = object(
         await this.rpc!.request("thread/list", {
-          cwd: this.cwd,
+          cwd,
           sourceKinds: [],
           limit: 100,
           useStateDbOnly: true,
@@ -395,9 +396,9 @@ export class NativeAdapter implements ProviderAdapter {
         if (
           thread.id === nativeId &&
           thread.path === rolloutPath &&
-          thread.cwd === this.cwd
+          thread.cwd === cwd
         )
-          return { provider: "codex", nativeId, cwd: this.cwd, metadata: row };
+          return { provider: "codex", nativeId, cwd, metadata: row };
       }
       cursor = string(page.nextCursor);
       if (cursor && cursors.has(cursor))
