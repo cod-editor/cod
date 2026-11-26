@@ -368,6 +368,16 @@ function receive(message, external = false) {
     return;
   }
   if (message.method === "thread/turns/list") {
+    if (configuration().linkedTransfer && params.threadId !== nativeId) {
+      const [header, saved] = readFileSync(
+        rolloutFile(params.threadId),
+        "utf8",
+      ).split("\n");
+      if (JSON.parse(header).payload.id !== params.threadId)
+        throw new Error("Unexpected linked transfer history identity");
+      nativeId = params.threadId;
+      history = JSON.parse(saved);
+    }
     if (params.itemsView === "summary") {
       reply(message, {
         data: history.map(({ id, status }) => ({ id, status })),

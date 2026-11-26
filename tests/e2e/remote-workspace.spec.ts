@@ -774,6 +774,7 @@ test("A paired linked Codex transfer recovers only the selected thread and its r
     await writeFile(dropReply, "conversation.accept-transfer:commit");
     expect((await desktop.raw(...move)).stderr).toContain("did not confirm");
     expect((await snapshot()).conversations[0].transfer?.committing).toBe(true);
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(1);
     await desktop.stop();
     await stopHost();
     host = startHost();
