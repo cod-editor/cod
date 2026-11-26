@@ -37,18 +37,14 @@ export async function resolveProviderExecutable(
   const args = overrideArguments(provider);
   if (override) return { executable: override, args };
 
+  const standard = [
+    `/opt/homebrew/bin/${provider}`,
+    `/usr/local/bin/${provider}`,
+  ];
   const installed =
     provider === "kimi"
-      ? [
-          path.join(os.homedir(), ".kimi-code", "bin", "kimi"),
-          "/opt/homebrew/bin/kimi",
-          "/usr/local/bin/kimi",
-        ]
-      : [
-          "/opt/homebrew/bin/codex",
-          "/usr/local/bin/codex",
-          path.join(os.homedir(), ".local", "bin", "codex"),
-        ];
+      ? [path.join(os.homedir(), ".kimi-code", "bin", "kimi"), ...standard]
+      : [...standard, path.join(os.homedir(), ".local", "bin", provider)];
   const onPath = (process.env.PATH ?? "")
     .split(path.delimiter)
     .filter(Boolean)

@@ -29,7 +29,7 @@ import {
 } from "../providers/local-owner-client";
 import {
   createCodexAdapter,
-  createKimiAdapter,
+  createProviderAdapter,
   type ProviderAdapter,
   type ProviderEvent,
 } from "../providers";
@@ -37,11 +37,17 @@ import { codexItemsCursor } from "../conversation-history-cursor";
 import {
   commitHistory,
   emptyHistory,
+  stageClaudeHistory,
   stageCodexItemsPage,
   stageCodexSnapshot,
   stageKimiEvent,
   type StagedHistory,
 } from "../conversation-history";
+import {
+  claudeHandoffArgs,
+  findClaudeSession,
+  readClaudeSession,
+} from "../providers/claude-native";
 import type {
   ConversationMessage,
   ConversationState,
@@ -304,6 +310,8 @@ export class ConversationApplicationService {
           conversation.nativeId,
         );
       else if (conversation.provider === "kimi") stageKimiEvent(history, event);
+      else if (conversation.provider === "claude" && event.type === "history")
+        stageClaudeHistory(history, event.details, conversation.nativeId);
     });
     this.replays.add(replay);
     try {
@@ -788,7 +796,7 @@ export class ConversationApplicationService {
         throw new Error(
           "Quit Cod to stop the disconnected owner before resuming this chat",
         );
-      if (this.detached?.enabled()) {
+      if (conversation.provider !== "claude" && this.detached?.enabled()) {
         const adapter = await this.detached.owner.open(
           {
             id: conversation.id,
@@ -813,6 +821,10 @@ export class ConversationApplicationService {
       cwd: conversation.cwd,
       executable: resolved.executable,
       args: resolved.args,
+      unrecordedClaudeId:
+        object(conversation.metadata).unrecorded === true
+          ? conversation.nativeId
+          : undefined,
       env: {
         ...process.env,
         COD_CONVERSATION_ID: conversation.id,
@@ -826,9 +838,7 @@ export class ConversationApplicationService {
         onEvent ??
         ((event: ProviderEvent) => this.providerEvent(conversation.id, event)),
     };
-    return conversation.provider === "codex"
-      ? createCodexAdapter(options)
-      : createKimiAdapter(options);
+    return createProviderAdapter(conversation.provider, options);
   }
 
   async handoffConversation(
@@ -856,6 +866,27 @@ export class ConversationApplicationService {
     });
     try {
       const resolved = await resolveProviderExecutable(conversation.provider);
+      let nativeArgs: string[];
+      switch (conversation.provider) {
+        case "claude": {
+          const saved = await findClaudeSession(
+            conversation.cwd,
+            conversation.nativeId,
+          );
+          if (!saved && object(conversation.metadata).unrecorded !== true)
+            throw new Error(
+              "Claude Code has no saved session with that ID in this directory",
+            );
+          nativeArgs = claudeHandoffArgs(conversation.nativeId, Boolean(saved));
+          break;
+        }
+        case "codex":
+          nativeArgs = ["resume", conversation.nativeId];
+          break;
+        case "kimi":
+          nativeArgs = ["--session", conversation.nativeId];
+          break;
+      }
       await this.disposeController(id);
       this.assertCurrent(conversation);
       const snapshot = this.terminals.createProcess({
@@ -874,12 +905,7 @@ export class ConversationApplicationService {
           COD_CLI_PATH: path.join(__dirname, "cli.cjs"),
           COD_NODE_PATH: process.execPath,
         },
-        args: [
-          ...(resolved.args ?? []),
-          ...(conversation.provider === "codex"
-            ? ["resume", conversation.nativeId]
-            : ["--session", conversation.nativeId]),
-        ],
+        args: [...(resolved.args ?? []), ...nativeArgs],
       });
       const terminal: TerminalState = {
         ...snapshot,
@@ -1303,8 +1329,12 @@ export class ConversationApplicationService {
         throw new Error("A turn is already active for this conversation");
       const turnId = this.beginTurn(conversation);
       delete conversation.initialSelection;
+      const userMessageId = randomUUID();
       conversation.messages.push({
-        id: randomUUID(),
+        id:
+          conversation.provider === "claude"
+            ? `claude/live/${conversation.nativeId}/${userMessageId}`
+            : userMessageId,
         turnId,
         role: "user",
         text,
@@ -1314,16 +1344,26 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
-      if (!fromQueue && !questionId)
+      const awaitNativeReceipt =
+        conversation.provider === "claude" && !fromQueue && !questionId;
+      const clearDraft = () =>
         this.clearSubmittedDraft(
           conversation,
           text,
           images,
           request.writer as string | undefined,
         );
+      if (!fromQueue && !questionId && !awaitNativeReceipt) clearDraft();
       this.store.notify();
       this.store.schedulePersist();
-      const turn = adapter.send(text, images, skills);
+      let confirm!: () => void;
+      const accepted = new Promise<void>((resolve) => {
+        confirm = resolve;
+      });
+      const turn = adapter.send(text, images, skills, {
+        id: userMessageId,
+        accepted: confirm,
+      });
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
@@ -1374,6 +1414,41 @@ export class ConversationApplicationService {
           this.store.schedulePersist(true);
         },
       );
+      if (awaitNativeReceipt) {
+        const received = await Promise.race([
+          accepted.then(() => true),
+          turn.then(
+            () => false,
+            () => false,
+          ),
+        ]);
+        if (!received) {
+          const history = await readClaudeSession(
+            conversation.cwd,
+            conversation.nativeId,
+          );
+          if (!history?.messages.some((row) => row.uuid === userMessageId)) {
+            conversation.messages = conversation.messages.filter(
+              (row) =>
+                row.id !==
+                `claude/live/${conversation.nativeId}/${userMessageId}`,
+            );
+            this.store.notify();
+            this.store.schedulePersist(true);
+            throw new Error(
+              "Claude Code did not save this prompt. The draft is ready to retry.",
+            );
+          }
+        }
+        this.assertCurrent(conversation);
+        clearDraft();
+        conversation.metadata = {
+          ...object(conversation.metadata),
+          unrecorded: false,
+        };
+        this.store.notify();
+        this.store.schedulePersist(true);
+      }
       return { id: conversation.id, status: conversation.status };
     } catch (error) {
       this.release(conversation.id);
@@ -1753,6 +1828,11 @@ export class ConversationApplicationService {
         );
       } else if (conversation.provider === "kimi") {
         stageKimiEvent(resume, event);
+      } else if (
+        conversation.provider === "claude" &&
+        event.type === "history"
+      ) {
+        stageClaudeHistory(resume, event.details, conversation.nativeId);
       }
       this.store.notify(true);
       return;
@@ -1801,8 +1881,10 @@ export class ConversationApplicationService {
             break;
         }
         if (!event.replay) {
+          const prefix =
+            conversation.provider === "claude" ? "claude" : "codex";
           const id = event.itemId
-            ? `codex/live/${conversation.nativeId}/${event.itemId}`
+            ? `${prefix}/live/${conversation.nativeId}/${event.itemId}`
             : randomUUID();
           const existing = event.itemId
             ? conversation.messages.find((message) => message.id === id)
@@ -1896,6 +1978,11 @@ export class ConversationApplicationService {
         this.scheduleQueue(id);
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         if (event.outcome.status === "completed") {
+          if (conversation.provider === "claude")
+            conversation.metadata = {
+              ...object(conversation.metadata),
+              unrecorded: false,
+            };
           conversation.completionRevision =
             (conversation.completionRevision ?? 0) + 1;
         }
@@ -2039,10 +2126,14 @@ export class ConversationApplicationService {
             ? path.resolve(request.cwd)
             : (workspace.folders[0] ?? process.env.HOME ?? process.cwd());
         const resolved = await resolveProviderExecutable(provider);
-        const adapter = new NativeAdapter(provider, { cwd, ...resolved });
+        const adapter =
+          provider === "claude"
+            ? createProviderAdapter(provider, { cwd, ...resolved })
+            : new NativeAdapter(provider, { cwd, ...resolved });
         try {
           const ordinary = await adapter.discover();
-          if (provider !== "codex") return ordinary;
+          if (provider !== "codex" || !(adapter instanceof NativeAdapter))
+            return ordinary;
           const imported = Object.values(
             this.store.data.completedCodexImports ?? {},
           );

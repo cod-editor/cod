@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { codexQuestions } from "./codex-questions.ts";
-import type { ProviderEvent } from "./providers/types";
+import type { ImageAttachment, ProviderEvent } from "./providers/types";
 import type {
   ConversationMessage,
   ConversationState,
@@ -181,6 +181,106 @@ export function stageKimiEvent(
   }
 }
 
+export function stageClaudeHistory(
+  staged: StagedHistory,
+  value: unknown,
+  nativeId: string,
+): void {
+  if (!Array.isArray(value)) return;
+  const tools = new Map<string, ToolActivity>();
+  const messages = new Map<string, ConversationMessage>();
+  let turnId: string | undefined;
+  for (const row of value.map(object)) {
+    if (row.session_id !== nativeId || row.parent_tool_use_id) continue;
+    const uuid = text(row.uuid);
+    const message = object(row.message);
+    const role = message.role;
+    if (!uuid || (role !== "assistant" && role !== "user")) continue;
+    const content = Array.isArray(message.content)
+      ? message.content.map(object)
+      : [{ type: "text", text: message.content }];
+    const prose = content
+      .filter((block) => block.type === "text")
+      .map((block) => text(block.text) ?? "")
+      .join("");
+    const images: ImageAttachment[] = [];
+    let imageBytes = 0;
+    for (const item of content) {
+      if (role === "user" && item.type === "image") {
+        const source = object(item.source);
+        const mimeType = source.media_type;
+        const data = text(source.data);
+        if (
+          source.type === "base64" &&
+          data &&
+          images.length < 8 &&
+          (mimeType === "image/png" ||
+            mimeType === "image/jpeg" ||
+            mimeType === "image/gif" ||
+            mimeType === "image/webp") &&
+          (imageBytes += Buffer.byteLength(data, "base64")) <=
+            20 * 1024 * 1024 &&
+          /^[A-Za-z0-9+/]+={0,2}$/.test(data)
+        )
+          images.push({ mimeType, data });
+        continue;
+      }
+      if (role === "user" && item.type === "tool_result") {
+        const tool = tools.get(text(item.tool_use_id) ?? "");
+        if (tool) {
+          tool.phase = "completed";
+          tool.details = {
+            ...object(tool.details),
+            output: item.content,
+            status: item.is_error ? "failed" : "completed",
+          };
+        }
+      }
+    }
+    const interrupted =
+      /^\[Request interrupted by user(?: for tool use)?\]$/.test(prose);
+    if ((prose || images.length) && !(role === "user" && interrupted)) {
+      if (role === "user") turnId = `claude/${nativeId}/${uuid}`;
+      const id = role === "assistant" ? (text(message.id) ?? uuid) : uuid;
+      const messageId = `claude/live/${nativeId}/${id}`;
+      const existing = messages.get(messageId);
+      if (existing) {
+        existing.text += prose;
+      } else {
+        const row: ConversationMessage = {
+          id: messageId,
+          role,
+          turnId,
+          text: prose,
+          order: staged.order++,
+          ...(images.length ? { images } : {}),
+        };
+        messages.set(messageId, row);
+        staged.messages.push(row);
+      }
+    }
+    if (role !== "assistant") continue;
+    for (const item of content) {
+      const id = text(item.id);
+      if (item.type !== "tool_use" || !id || tools.has(id)) continue;
+      const tool: ToolActivity = {
+        id: `live/${nativeId}/${id}`,
+        turnId,
+        phase: "started",
+        order: staged.order++,
+        details: {
+          toolCallId: id,
+          kind: item.name,
+          title: item.name,
+          input: item.input,
+        },
+      };
+      tools.set(id, tool);
+      staged.tools.push(tool);
+    }
+  }
+}
+
 export function codexHistoryTurns(entries: unknown[]) {
   const turns = new Map<string, unknown[]>();
   for (let index = entries.length - 1; index >= 0; index--) {
@@ -356,12 +456,12 @@ export function commitHistory(
       matches.set(tool.id, cached.id);
     }
   }
-  if (codex) {
+  if (codex || conversation.provider === "claude") {
     for (const message of native) {
       const cached =
         cachedMessages.get(message.id) ??
         cachedMessages.get(
-          `codex/live/${conversation.nativeId}/${itemId(message.id)}`,
+          `${conversation.provider}/live/${conversation.nativeId}/${itemId(message.id)}`,
         );
       if (cached) {
         link(message.turnId, cached.turnId);

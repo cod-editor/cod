@@ -88,7 +88,10 @@ export class NativeAdapter implements ProviderAdapter {
   private selectionChanges = 0;
   private optionWaiters: Array<() => void> = [];
   private cancellationSequence = 0;
-  constructor(provider: ProviderId, options: AdapterOptions) {
+  constructor(
+    provider: Exclude<ProviderId, "claude">,
+    options: AdapterOptions,
+  ) {
     if (!isAbsolute(options.cwd))
       throw new Error("Provider cwd must be an absolute path");
     this.provider = provider;

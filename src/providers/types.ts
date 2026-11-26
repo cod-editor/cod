@@ -1,6 +1,6 @@
 import type { InspectionSection, ProviderInspection } from "./inspection.ts";
 export type { InspectionSection, ProviderInspection } from "./inspection.ts";
-export type ProviderId = "codex" | "kimi";
+export type ProviderId = "codex" | "kimi" | "claude";
 export type ProviderState =
   "starting" | "ready" | "working" | "waiting" | "failed" | "closed";
 export interface Conversation {
@@ -83,6 +83,8 @@ export interface AdapterOptions {
   requestTimeoutMs?: number;
   /** Deadline for a Kimi ACP session/prompt, which replies when its turn ends. */
   turnTimeoutMs?: number;
+  /** Cod reserved this UUID locally, before Claude wrote native history. */
+  unrecordedClaudeId?: string;
   onEvent?: (event: ProviderEvent) => void;
 }
 export interface NativeChoice {
@@ -163,6 +165,7 @@ export interface ProviderAdapter {
     text: string,
     images?: ImageAttachment[],
     skills?: Array<{ name: string; path: string }>,
+    submission?: { id: string; accepted(): void },
   ): Promise<TurnOutcome>;
   activeTurnIdentity(): string | undefined;
   steer(

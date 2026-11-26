@@ -33,9 +33,9 @@ export async function discoverClaudeSessions(cwd: string) {
   return sessions.filter((_, index) => matches[index]);
 }
 
-export async function readClaudeSession(cwd: string, id: string) {
+export async function findClaudeSession(cwd: string, id: string) {
   requireClaudeId(id);
-  const { getSessionInfo, getSessionMessages } = await sdk();
+  const { getSessionInfo } = await sdk();
   const session = await getSessionInfo(id, { dir: cwd });
   if (
     !session ||
@@ -43,6 +43,13 @@ export async function readClaudeSession(cwd: string, id: string) {
     !(await matchingDirectory(session.cwd, cwd))
   )
     return undefined;
+  return session;
+}
+
+export async function readClaudeSession(cwd: string, id: string) {
+  const session = await findClaudeSession(cwd, id);
+  if (!session) return undefined;
+  const { getSessionMessages } = await sdk();
   return { session, messages: await getSessionMessages(id, { dir: cwd }) };
 }
 
@@ -92,7 +99,10 @@ export async function openClaudeSession(
       persistSession: true,
       settingSources: [],
       strictMcpConfig: true,
+      tools: { type: "preset", preset: "claude_code" },
       permissionMode: "default",
+      includePartialMessages: true,
+      extraArgs: { "replay-user-messages": null },
       canUseTool: options.canUseTool,
       spawnClaudeCodeProcess({ command, args, cwd, env, signal }) {
         const process = spawn(command, [...(options.args ?? []), ...args], {

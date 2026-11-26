@@ -590,8 +590,7 @@ export function createConversationViews({
       menu(
         provider,
         ["codex", "kimi", "claude"].map((id) => ({
-          label: providerLabel(id) + (id === "claude" ? " (unavailable)" : ""),
-          disabled: id === "claude",
+          label: providerLabel(id),
           selected: id === (draftProviders.get(pane.id) ?? "codex"),
           run: () => {
             if (id !== (draftProviders.get(pane.id) ?? "codex"))

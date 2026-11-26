@@ -715,7 +715,11 @@ export function createCommands(
     const form = document.createElement("form");
     const provider = document.createElement("select");
     provider.setAttribute("aria-label", "Provider");
-    provider.append(new Option("Codex", "codex"), new Option("Kimi", "kimi"));
+    provider.append(
+      new Option("Codex", "codex"),
+      new Option("Kimi", "kimi"),
+      new Option("Claude Code", "claude"),
+    );
     const cwd = document.createElement("input");
     cwd.setAttribute("aria-label", "Working directory");
     cwd.placeholder = "Working directory";

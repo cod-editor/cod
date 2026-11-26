@@ -16,11 +16,8 @@ export function requiredName(request: OperationRequest): string {
 
 export function providerId(request: OperationRequest): ProviderId {
   const provider = requiredString(request, "provider");
-  if (provider !== "codex" && provider !== "kimi") {
-    throw new Error(
-      "provider must be codex or kimi; Claude is not implemented",
-    );
-  }
+  if (provider !== "codex" && provider !== "kimi" && provider !== "claude")
+    throw new Error("provider must be codex, kimi or claude");
   return provider;
 }
 
