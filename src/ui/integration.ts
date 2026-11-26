@@ -222,11 +222,11 @@ export function integrationDialog(
       installed?.(result);
       return;
     }
+    status.textContent = "Review the changes before applying.";
+    const instructions = document.createElement("p");
+    instructions.textContent =
+      "Cod will update the target and keep a private backup. The settings link and your other hooks stay in place.";
     if (Object.keys(review.add).length || Object.keys(review.remove).length) {
-      const instructions = document.createElement("p");
-      instructions.textContent = result.changes.length
-        ? "Prepare the Cod files before editing the linked settings."
-        : "Apply the entries below to the hooks object in the target, keeping your other hooks. Then check settings again.";
       previewHost.append(instructions);
       for (const { label, entries } of [
         { label: "Remove old Cod entries", entries: review.remove },
@@ -241,22 +241,19 @@ export function integrationDialog(
         details.append(summary, code);
         previewHost.append(details);
       }
-      status.textContent = result.changes.length
-        ? "Linked settings require a manual edit."
-        : "Cod files are ready.";
     } else {
-      status.textContent =
-        "The linked hook entries match. Prepare the local Cod files to finish.";
+      instructions.textContent =
+        "The linked hook entries already match. Only the Cod files below will change.";
+      previewHost.append(instructions);
     }
     if (result.changes.length) renderFiles(result);
-    submit.textContent = result.changes.length
-      ? "Prepare Cod files"
-      : "Check settings again";
+    submit.textContent = "Apply changes";
   };
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (busy) return;
     const submittedWithFocus = document.activeElement === submit;
+    const linkedSubmission = Boolean(preview?.linkedSettings);
     busy = true;
     submit.disabled = true;
     submit.setAttribute("aria-busy", "true");
@@ -265,13 +262,9 @@ export function integrationDialog(
     const current = generation;
     try {
       const linked = preview?.linkedSettings;
-      if (
-        preview &&
-        !preview.installed &&
-        (!linked || (linked.review && preview.changes.length > 0))
-      ) {
+      if (preview && !preview.installed && (!linked || linked.review)) {
         status.textContent = linked
-          ? "Preparing Cod files..."
+          ? "Applying changes..."
           : "Installing integration...";
         const result = await invoke<Preview>(
           "agent-integration.install",
@@ -339,7 +332,7 @@ export function integrationDialog(
       provider.disabled = false;
       path.disabled = false;
       if (
-        preview?.linkedSettings &&
+        (linkedSubmission || preview?.linkedSettings) &&
         submittedWithFocus &&
         document.activeElement === document.body &&
         dialog.open

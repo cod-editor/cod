@@ -4,7 +4,9 @@ import {
   lstat,
   mkdir,
   readFile,
+  readdir,
   realpath,
+  rename,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -236,7 +238,7 @@ test("Integration setup can be deferred, reopened and installed only after previ
   }
 });
 
-test("Linked Claude integration shows the target and verifies a manual hook edit", async ({}, info) => {
+test("Linked Claude integration reviews the destination and applies only the approved changes", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -285,20 +287,39 @@ test("Linked Claude integration shows the target and verifies a manual hook edit
     });
 
     await button("Review linked settings").click();
-    await expect(button("Prepare Cod files")).toBeFocused();
+    await expect(button("Apply changes")).toBeFocused();
     await expect(dialog.getByText("Add Cod entries")).toBeVisible();
     await expect(dialog).not.toContainText(
       /private-fixture-value|personal-hook/,
     );
-    await button("Prepare Cod files").click();
-    await expect(button("Check settings again")).toBeFocused();
-    await expect(status).toHaveText("Cod files are ready.");
-    await expect(button("Install integration")).toHaveCount(0);
     expect(await readFile(target, "utf8")).toBe(original);
     expect((await lstat(link)).ino).toBe(linkInode);
+
+    const newer = JSON.stringify({ ...settings, editedDuringReview: true });
+    const replacement = path.join(fixture, "external-save.json");
+    await writeFile(replacement, newer);
+    await rename(replacement, target);
+    await button("Apply changes").click();
+    await expect(status).toHaveText(
+      "Linked Claude settings changed. Review the target again.",
+    );
+    await expect(button("Preview changes")).toBeFocused();
+    expect(await readFile(target, "utf8")).toBe(newer);
+    expect(await readdir(profile)).toEqual(["settings.json"]);
+    await button("Preview changes").click();
+    await button("Review linked settings").click();
+    await expect(button("Apply changes")).toBeFocused();
+    const files = dialog.getByText("Review 3 file changes");
+    await expect(files).toBeVisible();
     await app.page.screenshot({
-      path: info.outputPath("linked-claude-manual.png"),
+      path: info.outputPath("linked-claude-apply.png"),
     });
+    await files.click();
+    for (const file of ["status-hook.mjs", "SKILL.md", "manifest.json"])
+      await expect(
+        dialog.getByText(`Create cod-integration/${file}`),
+      ).toBeVisible();
+    await files.click();
 
     const additions = dialog.getByText("Add Cod entries", { exact: true });
     await additions.click();
@@ -309,16 +330,49 @@ test("Linked Claude integration shows the target and verifies a manual hook edit
         .locator("pre")
         .textContent())!,
     );
+    await app.page.screenshot({
+      path: info.outputPath("linked-claude-diff.png"),
+    });
     const updated = {
       ...settings,
+      editedDuringReview: true,
       hooks: { ...proposed, Stop: [personalHook, ...proposed.Stop] },
     };
-    await writeFile(target, JSON.stringify(updated));
-    await button("Check settings again").click();
-    await button("Review linked settings").click();
+    await button("Apply changes").press("Enter");
     await expect(status).toHaveText("Integration is installed.");
-    await expect(button("Done")).toBeVisible();
+    await expect(button("Done")).toBeFocused();
     expect((await lstat(link)).ino).toBe(linkInode);
+    expect(JSON.parse(await readFile(target, "utf8"))).toEqual(updated);
+    const backups = (await readdir(path.dirname(target))).filter((name) =>
+      name.startsWith("claude-settings.json.cod-backup-"),
+    );
+    expect(backups).toHaveLength(1);
+    expect(
+      await readFile(path.join(path.dirname(target), backups[0]), "utf8"),
+    ).toBe(newer);
+    await app.page.screenshot({
+      path: info.outputPath("linked-claude-installed.png"),
+    });
+    await button("Done").click();
+    await app.stop();
+    await app.start();
+    await app.command("Install agent integration...");
+    const reopened = app.page.getByRole("dialog", {
+      name: "Install agent integration",
+    });
+    await reopened
+      .getByRole("combobox", { name: "Provider" })
+      .selectOption("claude");
+    await expect(
+      reopened.getByRole("textbox", { name: "Agent profile directory" }),
+    ).toHaveValue(profile);
+    await reopened.getByRole("button", { name: "Preview changes" }).click();
+    await reopened
+      .getByRole("button", { name: "Review linked settings" })
+      .click();
+    await expect(reopened.getByRole("status")).toHaveText(
+      "Integration is installed.",
+    );
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual(updated);
   } finally {
     await app.cleanup();
