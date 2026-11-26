@@ -1,0 +1,3 @@
+interface:
+  display_name: "Cod Diagnostics"
+  short_description: "Capture bounded evidence for slow or frozen Cod"
