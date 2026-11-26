@@ -1,7 +1,8 @@
 import { hasRunningBackground } from "../conversation-actions.ts";
 import type { AppState, ConversationState } from "../types";
 import { conversationLabel } from "../message-label.ts";
-import { browserLabel, isBrowserHome } from "./browser-label.ts";
+import { browserLabel } from "./browser-label.ts";
+import { isBrowserHome } from "../browser/view-state.ts";
 
 export type NavigationKind =
   "workspace" | "conversation" | "browser" | "terminal" | "review";

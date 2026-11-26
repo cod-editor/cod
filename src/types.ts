@@ -80,10 +80,20 @@ export interface BrowserRectangle {
   width: number;
   height: number;
 }
-export type BrowserTabMenuItem = {
+export interface BrowserLayout {
+  rectangles: BrowserRectangle[];
+  popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup;
+  resumeModal?: number;
+}
+
+export type BrowserModalCover = { kind: "shell-modal"; opening: number };
+
+export type ShellMenuItem = {
   label: string;
   shortcut: string;
   disabled: boolean;
+  selected?: boolean;
+  title?: string;
 } | null;
 export interface EmptyPane {
   id: string;
@@ -380,24 +390,21 @@ export interface CodBridge {
   ): Promise<{ path: string; expectedContent?: string } | null>;
   invoke<T = unknown>(request: OperationRequest): Promise<T>;
   onState(callback: (state: AppState) => void): void;
-  browserLayout(
-    rectangles: BrowserRectangle[],
-    popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup,
-  ): void;
+  browserLayout(layout: BrowserLayout): void;
   onBrowserSuggestionPick(
     callback: (id: string, revision: number, index: number) => void,
   ): void;
   onBrowserSuggestionDismiss(
     callback: (id: string, revision: number) => void,
   ): void;
-  browserTabMenu(
+  shellMenu(
     anchor: { x: number; y: number },
-    items: BrowserTabMenuItem[],
+    items: ShellMenuItem[],
   ): Promise<number | null>;
-  browserHideForOverview(opening: number): Promise<boolean>;
-  browserOverviewBackdrop(
+  browserCoverModal(cover: BrowserModalCover): Promise<boolean>;
+  browserPrepareModal(
     ids: string[],
-    opening?: number,
+    opening: number,
   ): Promise<{ id: string; url: string; bytes: Uint8Array }[]>;
   browserSelect(id: string): void;
   browserFind(

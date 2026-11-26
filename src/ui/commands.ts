@@ -1782,7 +1782,6 @@ export function createCommands(
     let performed = false;
     const dialog = document.createElement("dialog");
     dialog.setAttribute("aria-label", "Command palette");
-    dialog.dataset.browserBackdrop = "prepare";
     const input = document.createElement("input");
     input.setAttribute("aria-label", "Filter commands");
     input.placeholder = "Search commands...";

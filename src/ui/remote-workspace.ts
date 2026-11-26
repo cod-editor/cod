@@ -15,7 +15,6 @@ export function remoteWorkspaceDialog(
   afterConnect: (reviewAccess: boolean, selectedKey: boolean) => void,
 ): void {
   const dialog = dialogSurface("Connect to Linux workspace");
-  dialog.dataset.browserBackdrop = "connection";
   const { body, actions } = dialogRegions(dialog, "Connect to Linux workspace");
   const form = document.createElement("form");
   form.id = "connect-linux-workspace";

@@ -89,7 +89,6 @@ export function createQuickTerminal(
     const origin = focus.capture();
     const dialog = dialogSurface("Quick Terminal");
     dialog.className = "ui-dialog quick-terminal";
-    dialog.dataset.browserBackdrop = "preserve";
     const header = document.createElement("header");
     header.className = "ui-dialog-header quick-terminal-header";
     const hideButton = iconButton("close", "Hide Quick Terminal", () =>

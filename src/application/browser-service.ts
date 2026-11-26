@@ -8,7 +8,7 @@ import {
 } from "../browser/permission-types";
 import { BrowserLibrary } from "../browser/library";
 import { BrowserAddressOverlay } from "../browser/address-overlay";
-import type { AddressSuggestionPopup } from "../browser/address-suggestion-types";
+import { isBrowserFailure, isBrowserHome } from "../browser/view-state";
 import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
 import {
@@ -36,7 +36,9 @@ import { AgentPageService } from "../agent-pages";
 import { BrowserAddons } from "../browser-addons";
 import type {
   BrowserState,
+  BrowserLayout,
   BrowserRectangle,
+  BrowserModalCover,
   OperationRequest,
 } from "../types";
 import { ApplicationStateStore } from "./state";
@@ -67,8 +69,12 @@ export class BrowserApplicationService {
   private browserInitializations = new Map<string, Promise<unknown>>();
   private browserWindow?: BrowserWindow;
   private addressOverlay?: BrowserAddressOverlay;
-  private overviewOpening: number | undefined;
-  private readonly overviewCaptures = new Set<string>();
+  private modalPresentation?: {
+    opening: number;
+    workspace: string;
+    covered?: Set<string>;
+  };
+  private readonly modalCaptures = new Set<string>();
   constructor(
     private readonly store: ApplicationStateStore,
     private readonly conversations: BrowserConversationPort,
@@ -427,8 +433,8 @@ export class BrowserApplicationService {
     this.browserService.onEvent((event) => this.browserEvent(event));
   }
   private syncNativeFocus(contents: Electron.WebContents, id: string): void {
-    if (this.overviewOpening !== undefined) {
-      this.focusOverview(this.overviewOpening);
+    if (this.modalPresentation !== undefined) {
+      this.focusShellModal(this.modalPresentation.opening);
       return;
     }
     if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
@@ -520,13 +526,14 @@ export class BrowserApplicationService {
     });
     contents.on("before-mouse-event", (event, input) => {
       if (input.type === "mouseDown") this.addressOverlay?.dismiss();
-      if (this.overviewOpening === undefined) return;
+      const modal = this.modalPresentation;
+      if (!modal) return;
       event.preventDefault();
       if (input.type === "mouseDown" || input.type === "mouseUp")
-        this.focusOverview(this.overviewOpening);
+        this.focusShellModal(modal.opening);
     });
     contents.on("before-input-event", (event, input) => {
-      if (this.overviewOpening !== undefined) {
+      if (this.modalPresentation !== undefined) {
         event.preventDefault();
         return;
       }
@@ -667,6 +674,7 @@ export class BrowserApplicationService {
     toggleDevTools(contents);
   }
   browserFocus(id: string): void {
+    if (this.modalPresentation) return;
     const browser = this.store.data.browsers.find(
       (item) =>
         item.id === id &&
@@ -699,31 +707,50 @@ export class BrowserApplicationService {
     }
   }
 
-  private focusOverview(opening: number): void {
+  private focusShellModal(opening: number): void {
     // Native click-to-focus may finish after the mouse/focus callback returns.
     setImmediate(() => {
-      if (opening === this.overviewOpening)
+      if (opening === this.modalPresentation?.opening)
         this.browserWindow?.webContents.focus();
     });
   }
 
-  browserHideForOverview(opening: number): boolean {
-    if (opening !== this.overviewOpening) return false;
-    this.overviewOpening = undefined;
-    this.browserLayout([]);
+  browserCoverModal(cover: BrowserModalCover): boolean {
+    const modal = this.modalPresentation;
+    if (
+      cover.kind !== "shell-modal" ||
+      !modal ||
+      cover.opening !== modal.opening ||
+      modal.workspace !== this.store.data.activeWorkspaceId
+    )
+      return false;
+    // Layout continues to describe viewport geometry. Only the prepared
+    // shell-modal handoff can suppress those viewports to show a backdrop.
+    this.hideNativeViews((modal.covered ??= new Set()));
     return true;
   }
 
-  async browserOverviewBackdrop(ids: unknown, opening?: number) {
-    if (opening !== undefined) {
-      this.addressOverlay?.dismiss();
-      this.overviewOpening = opening;
-      this.browserWindow?.webContents.focus();
+  clearBrowserPresentation(): void {
+    this.modalPresentation = undefined;
+    this.addressOverlay?.dismiss();
+    this.hideNativeViews();
+  }
+
+  private hideNativeViews(covered?: Set<string>): void {
+    for (const service of [this.browserService, this.agentPages]) {
+      if (!service) continue;
+      for (const item of service.list()) {
+        if (!item.visible) continue;
+        covered?.add(item.id);
+        service.setVisible(item.id, false);
+      }
     }
+  }
+
+  async browserPrepareModal(ids: unknown, opening: number) {
     const service = this.browserService;
     const workspace = this.store.data.activeWorkspaceId;
     if (
-      !service ||
       !workspace ||
       this.store.closing ||
       !Array.isArray(ids) ||
@@ -731,6 +758,15 @@ export class BrowserApplicationService {
       !ids.every((id) => typeof id === "string")
     )
       return [];
+    this.addressOverlay?.dismiss();
+    const modal = {
+      opening,
+      workspace,
+      covered: this.modalPresentation?.covered,
+    };
+    this.modalPresentation = modal;
+    this.browserWindow?.webContents.focus();
+    if (!service) return [];
     const visible = new Set(
       service
         .list()
@@ -743,80 +779,85 @@ export class BrowserApplicationService {
     const captures: { id: string; url: string; bytes: Uint8Array }[] = [];
     const pending = Promise.all(
       [...new Set<string>(ids)]
-        .filter((id) => visible.has(id) && !this.overviewCaptures.has(id))
+        .filter((id) => visible.has(id) && !this.modalCaptures.has(id))
         .map(async (id) => {
-          this.overviewCaptures.add(id);
+          this.modalCaptures.add(id);
           try {
-            const frame = await service.captureOverviewBackdrop(id);
+            const frame = await service.captureModalBackdrop(id);
             if (frame) captures.push({ id, ...frame });
           } catch {
             // A browser may close between checking visibility and capturing.
           } finally {
-            this.overviewCaptures.delete(id);
+            this.modalCaptures.delete(id);
           }
         }),
     );
-    if (opening === undefined) await pending;
-    else {
-      // A stalled pane must not hold up a frame from a neighboring pane.
-      let timer: NodeJS.Timeout | undefined;
-      await Promise.race([
-        pending,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, 50);
-        }),
-      ]);
-      clearTimeout(timer);
-    }
-    return workspace === this.store.data.activeWorkspaceId &&
+    // A stalled pane must not hold up a frame from a neighboring pane.
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      pending,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 50);
+      }),
+    ]);
+    clearTimeout(timer);
+    return this.modalPresentation === modal &&
+      workspace === this.store.data.activeWorkspaceId &&
       !this.store.closing
       ? captures.slice()
       : [];
   }
 
-  browserLayout(
-    rectangles: BrowserRectangle[],
-    retireOverview = false,
-    popup?: AddressSuggestionPopup,
-  ): void {
-    if (retireOverview) this.overviewOpening = undefined;
+  browserLayout({ rectangles, popup, resumeModal }: BrowserLayout): void {
+    const closing =
+      resumeModal !== undefined &&
+      resumeModal === this.modalPresentation?.opening
+        ? this.modalPresentation
+        : undefined;
+    if (closing) this.modalPresentation = undefined;
+    const covered = this.modalPresentation?.covered;
     const service = this.browserService,
       window = this.browserWindow;
-    if (
-      !service ||
-      !window ||
-      window.isDestroyed() ||
-      !Array.isArray(rectangles)
-    )
-      return;
+    if (!service || !window || window.isDestroyed()) return;
     const active = this.store.data.workspaces.find(
       (item) => item.id === this.store.data.activeWorkspaceId,
     );
+    const visiblePanes = new Set(
+      active?.groups
+        ?.filter((group) => !group.hidden)
+        .map((group) => group.activePaneId),
+    );
+    const hasViewport = (record: BrowserState) =>
+      record.workspaceId === active?.id &&
+      visiblePanes.has(record.paneId) &&
+      !isBrowserFailure(record) &&
+      !isBrowserHome(record);
     const [width, height] = window.getContentSize();
-    // A restored record is inert until an actual visible viewport requests it.
-    // Existing views stay alive across workspace switches to retain forms/media.
-    for (const rect of rectangles) {
-      if (
-        !rect ||
-        ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
-        rect.x < 0 ||
-        rect.y < 0 ||
-        rect.width < 1 ||
-        rect.height < 1 ||
-        rect.x + rect.width > width + 1 ||
-        rect.y + rect.height > height + 1
-      )
-        continue;
-      const record = this.store.data.browsers.find(
-        (item) =>
-          item.id === rect.id &&
-          item.workspaceId === active?.id &&
-          !item.agentPage,
-      );
+    const bounds = new Map(
+      rectangles
+        .filter(
+          (rect) =>
+            rect &&
+            typeof rect.id === "string" &&
+            [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) &&
+            rect.x >= 0 &&
+            rect.y >= 0 &&
+            rect.width >= 1 &&
+            rect.height >= 1 &&
+            rect.x + rect.width <= width + 1 &&
+            rect.y + rect.height <= height + 1,
+        )
+        .map((rect) => [rect.id, rect]),
+    );
+    // A restored browser remains dormant until its selected pane reports bounds.
+    for (const { id } of bounds.values()) {
+      const record = this.store.data.browsers.find((item) => item.id === id);
       if (
         record &&
-        !service.list().some((item) => item.id === record.id) &&
-        !this.browserInitializations.has(record.id)
+        hasViewport(record) &&
+        !record.agentPage &&
+        !service.list().some((item) => item.id === id) &&
+        !this.browserInitializations.has(id)
       )
         void this.restoreBrowser(record).catch(() => undefined);
     }
@@ -831,7 +872,7 @@ export class BrowserApplicationService {
         (item) =>
           item.workspaceId === active?.id &&
           !item.agentPage &&
-          rectangles.some((rectangle) => rectangle.id === item.id),
+          bounds.has(item.id),
       );
     if (browser && service.list().some((item) => item.id === browser.id)) {
       const contents = service.getWebContents(browser.id);
@@ -849,18 +890,15 @@ export class BrowserApplicationService {
       );
       if (!record) continue;
       const itemService = record.agentPage ? this.agentPages! : service;
-      const rect = rectangles.find((rect) => rect && rect.id === item.id);
-      const visible = Boolean(
-        rect &&
-        item.workspaceId === this.store.data.activeWorkspaceId &&
-        [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) &&
-        rect.x >= 0 &&
-        rect.y >= 0 &&
-        rect.width >= 1 &&
-        rect.height >= 1 &&
-        rect.x + rect.width <= width + 1 &&
-        rect.y + rect.height <= height + 1,
-      );
+      const rect = bounds.get(item.id);
+      // Geometry can be late, including when returning from a modal. Preserve
+      // the last native viewport of a selected page through either update.
+      const visible =
+        !covered &&
+        hasViewport(record) &&
+        (Boolean(rect) ||
+          item.visible ||
+          Boolean(closing?.covered?.has(item.id)));
       if (visible && rect) {
         itemService.setBounds(item.id, {
           x: Math.round(rect.x),
@@ -876,7 +914,7 @@ export class BrowserApplicationService {
       popup &&
       typeof popup.id === "string" &&
       Number.isSafeInteger(popup.revision) &&
-      this.overviewOpening === undefined &&
+      this.modalPresentation === undefined &&
       this.store.data.browsers.some(
         (record) =>
           record.id === popup.id &&

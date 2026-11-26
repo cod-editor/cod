@@ -1025,23 +1025,26 @@ test("Overview stages browser pixels before native hide, accepts early input and
         release: () => {},
         visible: () => child.getVisible(),
       };
-      const channel = "cod:browser-hide-for-overview";
+      const channel = "cod:browser-cover-modal";
       const handler = (
         ipcMain as unknown as {
           _invokeHandlers: Map<
             string,
-            (event: Electron.IpcMainInvokeEvent, opening: number) => boolean
+            (
+              event: Electron.IpcMainInvokeEvent,
+              cover: { kind: "shell-modal"; opening: number },
+            ) => boolean
           >;
         }
       )._invokeHandlers.get(channel)!;
       ipcMain.removeHandler(channel);
-      ipcMain.handle(channel, async (event, opening: number) => {
+      ipcMain.handle(channel, async (event, cover) => {
         await new Promise<void>((resolve) => {
           gate.pending = true;
           gate.release = resolve;
         });
         gate.pending = false;
-        return handler(event, opening);
+        return handler(event, cover);
       });
       Object.assign(globalThis, { overviewHandoffFixture: gate });
       return win.getNativeWindowHandle().readUInt32LE(0);

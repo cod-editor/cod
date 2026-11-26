@@ -1686,7 +1686,10 @@ test("Linux connection keeps the native browser context and aligns dialog action
       }
       await openNativeCommands();
       await expect(filter).toBeFocused();
-      await expect(backdrop).not.toBeVisible();
+      await expect(backdrop).toBeVisible();
+      const paletteFrame = await backdrop.evaluate(
+        (image: HTMLImageElement) => image.src,
+      );
       await filter.fill("Connect to Linux workspace");
       if (width === 1280) await filter.press("Enter");
       else await openConnection.click();
@@ -1760,6 +1763,7 @@ test("Linux connection keeps the native browser context and aligns dialog action
       const imageUrl = await backdrop.evaluate(
         (image: HTMLImageElement) => image.src,
       );
+      expect(imageUrl).toBe(paletteFrame);
       await expect
         .poll(() =>
           backdrop.evaluate((image: HTMLImageElement) => image.naturalWidth),
