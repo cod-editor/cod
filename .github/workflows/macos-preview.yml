@@ -72,6 +72,7 @@ jobs:
           [[ "$VERSION_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.(0|[1-9][0-9]*))?$ ]] || exit 1
           [[ "$DMG" == "Cod-${VERSION_TAG#v}-macOS-arm64.dmg" ]] || exit 1
           revision=$(git rev-parse "refs/tags/${VERSION_TAG}^{commit}")
+          [[ "$revision" == "$(git rev-parse HEAD)" && "$revision" == "$(git rev-parse "${GITHUB_SHA}^{commit}")" ]] || exit 1
           git merge-base --is-ancestor "$revision" origin/master
           gh api "repos/${GITHUB_REPOSITORY}/commits/${revision}/check-runs?check_name=e2e&filter=latest" \
             --jq '.check_runs | any(.app.slug == "github-actions" and .status == "completed" and .conclusion == "success")' | grep -Fx true
@@ -82,6 +83,10 @@ jobs:
             title="Cod ${VERSION_TAG#v} (macOS preview)"
             channel=(--prerelease --latest=false)
           fi
+          tag_ref="refs/tags/$VERSION_TAG"
+          remote_revision=$(git ls-remote --exit-code origin "$tag_ref" "$tag_ref^{}" |
+            awk -v ref="$tag_ref" '$2 == ref { direct = $1 } $2 == ref "^{}" { peeled = $1 } END { print peeled ? peeled : direct }')
+          [[ "$remote_revision" == "$revision" ]] || exit 1
           gh release create "$VERSION_TAG" "$DMG" "$DMG.sha256" --verify-tag "${channel[@]}" \
             --title "$title" \
             --notes "Apple Silicon build with an ad-hoc signature. See the [README](https://github.com/cod-editor/cod/tree/$VERSION_TAG#install-on-macos) for installation, checksum verification and manual updates."
