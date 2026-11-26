@@ -828,7 +828,7 @@ export class BrowserService {
       throw new Error("Invalid browser view bounds");
     resource.view.setBounds(bounds);
   }
-  async captureOverviewBackdrop(id: string) {
+  async captureModalBackdrop(id: string) {
     const resource = this.resource(id);
     const { contents, view } = resource;
     const { width, height } = view.getBounds();

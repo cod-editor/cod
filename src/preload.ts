@@ -50,8 +50,8 @@ const bridge: CodBridge = {
   browserSelect(id) {
     ipcRenderer.send("cod:browser-select", id);
   },
-  browserLayout(rectangles, popup) {
-    ipcRenderer.send("cod:browser-layout", rectangles, popup);
+  browserLayout(layout) {
+    ipcRenderer.send("cod:browser-layout", layout);
   },
   onBrowserSuggestionPick(callback) {
     ipcRenderer.on(
@@ -64,14 +64,14 @@ const bridge: CodBridge = {
       callback(id, revision),
     );
   },
-  browserTabMenu(anchor, items) {
-    return ipcRenderer.invoke("cod:browser-tab-menu", anchor, items);
+  shellMenu(anchor, items) {
+    return ipcRenderer.invoke("cod:shell-menu", anchor, items);
   },
-  browserHideForOverview(opening) {
-    return ipcRenderer.invoke("cod:browser-hide-for-overview", opening);
+  browserCoverModal(cover) {
+    return ipcRenderer.invoke("cod:browser-cover-modal", cover);
   },
-  browserOverviewBackdrop(ids, opening) {
-    return ipcRenderer.invoke("cod:browser-overview-backdrop", ids, opening);
+  browserPrepareModal(ids, opening) {
+    return ipcRenderer.invoke("cod:browser-prepare-modal", ids, opening);
   },
   browserFind(id, text, options) {
     return ipcRenderer.invoke("cod:browser-find", id, text, options);

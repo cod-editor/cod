@@ -18,7 +18,8 @@ import type { BuildInfo } from "./build-info";
 import { LocalProviderOwner } from "./providers/local-owner-client";
 import type {
   AppState,
-  BrowserRectangle,
+  BrowserLayout,
+  BrowserModalCover,
   OperationRequest,
   TerminalUiEvent,
 } from "./types";
@@ -117,18 +118,17 @@ export class ApplicationOperations {
   ): void {
     this.browsers.attachBrowserHost(window, session, downloadDirectory);
   }
-  browserLayout(
-    rectangles: BrowserRectangle[],
-    retireOverview = false,
-    popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup,
-  ): void {
-    this.browsers.browserLayout(rectangles, retireOverview, popup);
+  browserLayout(layout: BrowserLayout): void {
+    this.browsers.browserLayout(layout);
   }
-  browserHideForOverview(opening: number): boolean {
-    return this.browsers.browserHideForOverview(opening);
+  clearBrowserPresentation(): void {
+    this.browsers.clearBrowserPresentation();
   }
-  browserOverviewBackdrop(ids: unknown, opening?: number) {
-    return this.browsers.browserOverviewBackdrop(ids, opening);
+  browserCoverModal(cover: BrowserModalCover): boolean {
+    return this.browsers.browserCoverModal(cover);
+  }
+  browserPrepareModal(ids: unknown, opening: number) {
+    return this.browsers.browserPrepareModal(ids, opening);
   }
   browserFind(
     id: string,

@@ -45,7 +45,13 @@ import {
   type PreparedWorkspace,
 } from "./application/workspace-preparation";
 import { defaultDataDirectory, defaultSocketPath } from "./paths";
-import type { AppState, BrowserTabMenuItem, OperationRequest } from "./types";
+import type {
+  AppState,
+  BrowserLayout,
+  BrowserModalCover,
+  ShellMenuItem,
+  OperationRequest,
+} from "./types";
 import {
   canUsePairedDesktop,
   type WorkspaceHostSelection,
@@ -208,7 +214,7 @@ function followPreparedWorkspace(link: HostLink) {
   if (link.state.workspaces.some((workspace) => workspace.id === pending.id)) {
     pendingWorkspace = undefined;
     remoteView = pending.id;
-    operations.browserLayout([]);
+    operations.clearBrowserPresentation();
   }
 }
 
@@ -285,7 +291,7 @@ async function connectRemoteWorkspace(
     if (select) remoteView = link.state.activeWorkspaceId ?? undefined;
     else if (!link.state.workspaces.some(({ id }) => id === remoteView))
       remoteView = undefined;
-    if (remoteView) operations.browserLayout([]);
+    if (remoteView) operations.clearBrowserPresentation();
     showWorkspaceState();
     return link;
   } finally {
@@ -506,7 +512,7 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
       if (link.connected) await link.invoke(request);
       if (remoteWorkspace === link) {
         remoteView = String(request.id);
-        operations.browserLayout([]);
+        operations.clearBrowserPresentation();
         showWorkspaceState();
       }
       return;
@@ -679,6 +685,13 @@ function createWindow(): void {
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url !== rendererUrl) event.preventDefault();
   });
+  mainWindow.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument)
+      operations.clearBrowserPresentation();
+  });
+  mainWindow.webContents.on("render-process-gone", () =>
+    operations.clearBrowserPresentation(),
+  );
   mainWindow.webContents.on("did-finish-load", () => {
     if (releaseUpdate)
       mainWindow?.webContents.send("cod:release-update", releaseUpdate.version);
@@ -863,25 +876,21 @@ async function start(): Promise<void> {
         return;
       operations.browserSelect(id);
     });
-    ipcMain.on("cod:browser-layout", (event, rectangles, popup) => {
+    ipcMain.on("cod:browser-layout", (event, layout: BrowserLayout) => {
       if (
         event.sender === mainWindow?.webContents &&
         event.senderFrame === event.sender.mainFrame &&
-        event.senderFrame.url === rendererUrl
+        event.senderFrame.url === rendererUrl &&
+        !remoteView &&
+        layout &&
+        Array.isArray(layout.rectangles)
       )
-        operations.browserLayout(
-          remoteView ? [] : rectangles,
-          true,
-          remoteView ? undefined : popup,
-        );
+        operations.browserLayout(layout);
     });
+    let activeShellMenu: Menu | undefined;
     ipcMain.handle(
-      "cod:browser-tab-menu",
-      (
-        event,
-        anchor: { x: number; y: number },
-        items: BrowserTabMenuItem[],
-      ) => {
+      "cod:shell-menu",
+      (event, anchor: { x: number; y: number }, items: ShellMenuItem[]) => {
         const window = mainWindow;
         if (
           !window ||
@@ -892,22 +901,28 @@ async function start(): Promise<void> {
           !Number.isFinite(anchor.x) ||
           !Number.isFinite(anchor.y) ||
           !Array.isArray(items) ||
-          items.length > 16 ||
+          items.length > 128 ||
           !items.every(
             (item) =>
               item === null ||
               (item &&
                 typeof item.label === "string" &&
-                item.label.length <= 100 &&
+                item.label.length <= 512 &&
                 typeof item.shortcut === "string" &&
                 item.shortcut.length <= 60 &&
-                typeof item.disabled === "boolean"),
+                typeof item.disabled === "boolean" &&
+                (item.selected === undefined ||
+                  typeof item.selected === "boolean") &&
+                (item.title === undefined ||
+                  (typeof item.title === "string" &&
+                    item.title.length <= 512))),
           )
         )
           return null;
         const [width, height] = window.getContentSize();
         const x = Math.round(Math.max(0, Math.min(width - 1, anchor.x)));
         const y = Math.round(Math.max(0, Math.min(height - 1, anchor.y)));
+        activeShellMenu?.closePopup(window);
         return new Promise<number | null>((resolve) => {
           const menu = Menu.buildFromTemplate(
             items.map((item, index) =>
@@ -916,51 +931,56 @@ async function start(): Promise<void> {
                     label: item.shortcut
                       ? `${item.label}    ${item.shortcut}`
                       : item.label,
+                    type: item.selected === undefined ? "normal" : "checkbox",
+                    checked: item.selected,
+                    toolTip: item.title,
                     enabled: !item.disabled,
                     click: () => resolve(index),
                   }
                 : { type: "separator" },
             ),
           );
+          activeShellMenu = menu;
           menu.popup({
             window,
             x,
             y,
-            callback: () => setImmediate(() => resolve(null)),
+            callback: () => {
+              if (activeShellMenu === menu) activeShellMenu = undefined;
+              setImmediate(() => resolve(null));
+            },
           });
         });
       },
     );
     ipcMain.handle(
-      "cod:browser-hide-for-overview",
-      (event, opening: unknown) => {
+      "cod:browser-cover-modal",
+      (event, cover: BrowserModalCover | undefined) => {
         if (
           event.sender !== mainWindow?.webContents ||
           event.senderFrame !== event.sender.mainFrame ||
           event.senderFrame.url !== rendererUrl ||
-          typeof opening !== "number"
+          cover?.kind !== "shell-modal" ||
+          !Number.isSafeInteger(cover.opening)
         )
           return false;
-        return operations.browserHideForOverview(opening);
+        return operations.browserCoverModal(cover);
       },
     );
     ipcMain.handle(
-      "cod:browser-overview-backdrop",
+      "cod:browser-prepare-modal",
       (event, ids: unknown, opening: unknown) => {
         if (
           event.sender !== mainWindow?.webContents ||
           event.senderFrame !== event.sender.mainFrame ||
-          event.senderFrame.url !== rendererUrl
+          event.senderFrame.url !== rendererUrl ||
+          typeof opening !== "number" ||
+          !Number.isSafeInteger(opening) ||
+          opening <= 0
         )
           return [];
-        return operations.browserOverviewBackdrop(
-          ids,
-          typeof opening === "number" &&
-            Number.isSafeInteger(opening) &&
-            opening > 0
-            ? opening
-            : undefined,
-        );
+        if (mainWindow) activeShellMenu?.closePopup(mainWindow);
+        return operations.browserPrepareModal(ids, opening);
       },
     );
     ipcMain.handle("cod:choose-directory", async (event) => {

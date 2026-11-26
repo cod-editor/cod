@@ -12,6 +12,7 @@ import { mkdir, writeFile, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
 import type { BrowserDownload } from "../../src/browser/download-types";
+import type { BrowserLayout } from "../../src/types";
 interface BrowserRecord {
   id: string;
   paneId: string;
@@ -2045,6 +2046,218 @@ test("Browser tab actions keep the native page painted and preserve keyboard acc
   await expect(tab).toHaveAttribute("data-pinned", "true");
   const restored = await frame();
   expect(restored.colors).toEqual([pageColor, pageColor]);
+});
+
+test("Shell menus and dialogs preserve the view of native background pages", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Requires the isolated X11 desktop");
+  const workspace = await shell.create("Browser overlay coverage");
+  const route = "/overlay-fixture";
+  const left = await open(workspace, route);
+  const chat = await shell.cli<{ paneId: string }>(
+    "pane",
+    "split",
+    "--workspace",
+    workspace,
+    "--id",
+    left.paneId,
+    "--direction",
+    "right",
+  );
+  await expect.poll(async () => (await inspect(left.id)).visible).toBe(true);
+  const chatTab = shell.page.locator(`[data-tab-id="${chat.paneId}"]`);
+  const leftPane = shell.pane(left.paneId);
+  const area = leftPane.getByRole("region", { name: "Browser content" });
+  const bounds = (await area.boundingBox())!;
+  const pagePoint = {
+    x: bounds.x + 30,
+    y: bounds.y + bounds.height / 2 + 100,
+  };
+  const reportLayout = (layout: BrowserLayout) =>
+    shell.page.evaluate(
+      async ({ id, layout }) => {
+        window.cod.browserLayout(layout);
+        // Both messages go through the same desktop renderer IPC connection.
+        return window.cod.invoke<{ visible: boolean }>({
+          op: "browser.inspect",
+          id,
+        });
+      },
+      { id: left.id, layout },
+    );
+  expect(await reportLayout({ rectangles: [] })).toMatchObject({
+    visible: true,
+  });
+  expect(
+    await reportLayout({ rectangles: [{ id: left.id, ...bounds, width: 0 }] }),
+  ).toMatchObject({ visible: true });
+  const pageColor = [14, 122, 86];
+  const pointColor = async () =>
+    (await nativeBrowserFrame([pagePoint])).colors[0];
+  await expect.poll(pointColor).toEqual(pageColor);
+  await remote(route, "window.scrollTo(0, 150)");
+  const pageGeometry = () =>
+    remote(
+      route,
+      "({ width: innerWidth, height: innerHeight, scroll: scrollY })",
+    );
+  await expect.poll(pageGeometry).toMatchObject({ scroll: 150 });
+  const initial = await pageGeometry();
+  const tabBox = (await chatTab.boundingBox())!;
+  const popupPoint = {
+    x: Math.ceil(tabBox.x + 20),
+    y: Math.ceil(tabBox.y + tabBox.height + 25),
+  };
+  const frame = () => nativeBrowserFrame([pagePoint, popupPoint]);
+  const previousFrame = await frame();
+  await chatTab.focus();
+  await chatTab.press("Shift+F10");
+  await expect
+    .poll(async () => (await frame()).colors[1])
+    .not.toEqual(previousFrame.colors[1]);
+  expect(await inspect(left.id)).toMatchObject({ visible: true });
+  await expect(shell.page.locator("dialog[open]")).toHaveCount(0);
+  expect(await pointColor()).toEqual(pageColor);
+  await writeFile(
+    info.outputPath("browser-adjacent-chat-menu.png"),
+    Buffer.from((await frame()).image, "base64"),
+  );
+  await execute("xdotool", ["key", "Escape"]);
+  await expect(chatTab).toBeFocused();
+  await expect
+    .poll(async () => (await frame()).colors)
+    .toEqual(previousFrame.colors);
+
+  await shell.cli(
+    "pane",
+    "focus",
+    "--workspace",
+    workspace,
+    "--id",
+    chat.paneId,
+  );
+  const rightRoute = route + "?right";
+  const right = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    origin + rightRoute,
+    "--source-pane",
+    chat.paneId,
+    "--focus",
+    "true",
+  );
+  await expect.poll(async () => (await inspect(right.id)).visible).toBe(true);
+  await expect.poll(async () => (await inspect(left.id)).visible).toBe(true);
+  const block = leftPane.getByRole("button", {
+    name: "Ad blocking",
+    exact: true,
+  });
+  const dialog = shell.page.getByRole("dialog", { name: "Site protection" });
+  const leftStill = area.locator("img.browser-overview-backdrop");
+  const rightPane = shell.pane(right.paneId);
+  const rightStill = rightPane.locator("img.browser-overview-backdrop");
+  const rightPaused = rightPane.getByText(
+    "Page paused while this dialog is open",
+  );
+  function done() {
+    return dialog.getByRole("button", { name: "Done", exact: true }).click();
+  }
+  await block.click();
+  await expect(dialog).toHaveCSS("opacity", "1");
+  await expect(leftStill).toBeVisible();
+  await expect(rightStill).toBeVisible();
+  await expect(rightPaused).toBeHidden();
+  expect(await inspect(left.id)).toMatchObject({ visible: false });
+  expect(await inspect(right.id)).toMatchObject({ visible: false });
+  expect(
+    await reportLayout({ rectangles: [{ id: left.id, ...bounds }] }),
+  ).toMatchObject({ visible: false });
+  expect(
+    await reportLayout({
+      rectangles: [{ id: left.id, ...bounds }],
+      resumeModal: -1,
+    }),
+  ).toMatchObject({ visible: false });
+  await clickNativeBrowser(pagePoint.x, pagePoint.y);
+  expect(await remote(route, "pageClicks")).toBe(0);
+  await shell.page.screenshot({
+    path: info.outputPath("browser-both-backed-under-modal.png"),
+  });
+  await done();
+  await expect.poll(async () => (await inspect(right.id)).visible).toBe(true);
+  await expect.poll(async () => (await inspect(left.id)).visible).toBe(true);
+  await expect(leftStill).toHaveCount(0);
+
+  // Only one capture stalls. Its neighbor must retain the real page image,
+  // and the modal must appear without waiting for the stalled browser.
+  await shell.app!.evaluate(({ webContents }, url) => {
+    const wc = webContents
+      .getAllWebContents()
+      .find((item) => item.getURL() === url)!;
+    wc.capturePage = () => new Promise(() => undefined);
+  }, origin + rightRoute);
+  await block.click();
+  await expect(dialog).toHaveCSS("opacity", "1");
+  await expect(leftStill).toBeVisible();
+  await expect(rightStill).toHaveCount(0);
+  await expect(rightPaused).toBeVisible();
+  expect(await inspect(left.id)).toMatchObject({ visible: false });
+  expect(await inspect(right.id)).toMatchObject({ visible: false });
+  await shell.page.screenshot({
+    path: info.outputPath("browser-modal-capture-fallback.png"),
+  });
+  // The genuine modal close can arrive ahead of layout settling.
+  await area.evaluate((slot) => {
+    slot.getBoundingClientRect = () => new DOMRect();
+  });
+  await done();
+  await expect(rightPaused).toBeHidden();
+  await expect.poll(async () => (await inspect(left.id)).visible).toBe(true);
+  await expect.poll(async () => (await inspect(right.id)).visible).toBe(true);
+  await area.evaluate((slot) =>
+    Reflect.deleteProperty(slot, "getBoundingClientRect"),
+  );
+  await expect.poll(pageGeometry).toEqual(initial);
+});
+
+test("A shell reload releases its modal and a crashed page exposes its recovery controls", async () => {
+  const workspace = await shell.create("Browser presentation lifecycle");
+  const route = "/overlay-fixture";
+  const { id, paneId } = await open(workspace, route);
+  await expect.poll(async () => (await inspect(id)).visible).toBe(true);
+  await remote(route, "window.scrollTo(0, 175)");
+  const pane = shell.pane(paneId);
+  await pane.getByRole("button", { name: "Ad blocking" }).click();
+  const modal = shell.page.getByRole("dialog", { name: "Site protection" });
+  await expect(modal).toHaveCSS("opacity", "1");
+  expect(await inspect(id)).toMatchObject({ visible: false });
+
+  await shell.app!.evaluate(async ({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents;
+    const loaded = new Promise<void>((resolve) =>
+      contents.once("did-finish-load", () => resolve()),
+    );
+    contents.reload();
+    await loaded;
+  });
+  await expect(modal).toHaveCount(0);
+  await expect.poll(async () => (await inspect(id)).visible).toBe(true);
+  expect(await remote(route, "scrollY")).toBe(175);
+
+  await shell.app!.evaluate(({ webContents }, url) => {
+    const website = webContents
+      .getAllWebContents()
+      .find((wc) => wc.getURL() === url)!;
+    website.forcefullyCrashRenderer();
+  }, origin + route);
+  const error = pane.getByRole("region", { name: "Page could not load" });
+  await expect(error).toBeVisible();
+  await expect.poll(async () => (await inspect(id)).visible).toBe(false);
+  await error.getByRole("button", { name: "Reload page" }).click();
+  await expect(error).toBeHidden();
+  await expect.poll(async () => (await inspect(id)).visible).toBe(true);
 });
 
 test("Browser toolbar matches the tab height and fits larger interface text", async ({}, info) => {

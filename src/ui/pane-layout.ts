@@ -1,8 +1,8 @@
 import { orderedGroups } from "../workspace-layout";
-import { formatShortcut, type CommandId } from "../keyboard";
+import type { CommandId } from "../keyboard";
 import { documentKey, isTextDocument } from "../text-document";
 import { createTabDrag } from "./tab-drag";
-import { keyboardPlatform, shortcutTitle } from "./keyboard-ui";
+import { shortcutTitle } from "./keyboard-ui";
 import { createNavigationWidths } from "./navigation-widths";
 import { conversationLabel } from "../message-label";
 import { browserLabel } from "./browser-label";
@@ -693,40 +693,6 @@ export function createPaneLayout(
           null,
         );
       const showTabMenu = (anchor: { x: number; y: number }) => {
-        if (
-          pane.kind === "browser" &&
-          getState().browsers.some(
-            (browser) =>
-              browser.workspaceId === workspace.id && browser.visible,
-          )
-        ) {
-          // A native menu can cover a live WebContentsView without hiding it.
-          void window.cod
-            .browserTabMenu(
-              anchor,
-              actions.map((item) =>
-                item
-                  ? {
-                      label: item.label,
-                      disabled: !!item.disabled,
-                      shortcut:
-                        item.command && !item.disabled
-                          ? formatShortcut(
-                              item.command,
-                              keyboardPlatform,
-                              item.surface ?? "shell",
-                            )
-                          : "",
-                    }
-                  : null,
-              ),
-            )
-            .then((index) => {
-              if (index !== null && item.isConnected) actions[index]?.run();
-            })
-            .catch(() => undefined);
-          return;
-        }
         const conversation =
           pane.kind === "conversation"
             ? getState().conversations.find((c) => c.id === pane.conversationId)
@@ -736,6 +702,7 @@ export function createPaneLayout(
           conversation
             ? [...conversationActions(conversation), null, ...actions]
             : actions,
+          { origin: item },
         );
       };
       item.oncontextmenu = (e) => {

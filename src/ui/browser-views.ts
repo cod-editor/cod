@@ -1,4 +1,5 @@
-import { browserLabel, isBrowserHome } from "./browser-label";
+import { browserLabel } from "./browser-label";
+import { isBrowserFailure, isBrowserHome } from "../browser/view-state";
 import { actionRow, uiSwitch, icon } from "../ui-kit";
 import { isInsecureSite } from "../browser/address";
 import { browserDownloads } from "./browser-downloads";
@@ -51,82 +52,75 @@ export function createBrowserViews(
       flushBrowserLayout();
     });
   }
-  type CaptureSession = { dialog: HTMLDialogElement; opening?: number };
+  type CaptureSession = {
+    dialog: HTMLDialogElement;
+    opening: number;
+    covered: boolean;
+  };
   let nextOpening = 0;
-  const overviewBackdropDeadline = 100; // Bound capture, decode and the paint handoff.
+  const backdropDeadline = 100; // Bound capture, decode and the paint handoff.
   let captureSession: CaptureSession | null = null;
-  const openBackdropDialog = () =>
-    document.querySelector<HTMLDialogElement>(
-      "dialog[open][data-browser-backdrop]",
-    );
-  const passesCapture = (
-    previous: HTMLDialogElement,
-    next: HTMLDialogElement | null,
-  ) =>
-    previous.dataset.browserBackdrop === "prepare" &&
-    next?.dataset.browserBackdrop === "connection";
+  const openShellModal = () =>
+    document.querySelector<HTMLDialogElement>("dialog:modal");
   const backdrops = new Map<
-    HTMLImageElement,
-    { pageUrl: string; objectUrl: string }
+    string,
+    { image: HTMLImageElement; pageUrl: string; objectUrl: string }
   >();
-  function removeBackdrop(image: HTMLImageElement, objectUrl: string) {
-    image.remove();
-    URL.revokeObjectURL(objectUrl);
-    backdrops.delete(image);
+
+  function removeBackdrop(id: string) {
+    const backdrop = backdrops.get(id);
+    if (!backdrop) return;
+    backdrop.image.remove();
+    URL.revokeObjectURL(backdrop.objectUrl);
+    backdrops.delete(id);
   }
-  function updateBrowserBackdrops(
-    dialog: HTMLDialogElement | null,
-    visibleSlots: Map<string, HTMLElement>,
-  ): void {
-    const previous = captureSession?.dialog;
-    if (!dialog && !previous) return;
-    const handoff = !!previous && passesCapture(previous, dialog);
-    const state = getState();
-    const workspace = state.workspaces.find(
-      ({ id }) => id === state.activeWorkspaceId,
+
+  function visibleSlots() {
+    return new Map(
+      [...panes.querySelectorAll<HTMLElement>(".browser-content")]
+        .filter((element) => !element.hidden && element.getClientRects().length)
+        .map((element) => [element.dataset.browserId!, element]),
     );
-    const browser = (id: string) =>
-      getState().browsers.find((record) => record.id === id);
-    for (const [image, { pageUrl, objectUrl }] of backdrops) {
-      const id = image.parentElement?.dataset.browserId ?? "";
-      const source = browser(id);
-      if (
-        !dialog ||
-        (dialog !== previous && !handoff) ||
-        visibleSlots.get(id) !== image.parentElement ||
-        source?.workspaceId !== workspace?.id ||
-        source?.url !== pageUrl
-      )
-        removeBackdrop(image, objectUrl);
-    }
-    if (dialog === previous) return;
-    if (handoff && captureSession && dialog) {
-      captureSession.dialog = dialog;
-      return;
-    }
-    captureSession = null;
-    if (!dialog || !workspace) return;
-    if (dialog.dataset.browserBackdrop === "preserve") return;
-    const session = { dialog };
-    captureSession = session;
-    void captureBrowserBackdrops(session, visibleSlots).catch(() => undefined);
   }
+
+  function syncBackdrops(slots: Map<string, HTMLElement>, covered: boolean) {
+    const state = getState();
+    for (const [id, { image, pageUrl }] of backdrops) {
+      const source = state.browsers.find((record) => record.id === id);
+      if (
+        slots.get(id) !== image.parentElement ||
+        source?.workspaceId !== state.activeWorkspaceId ||
+        source.url !== pageUrl ||
+        (!covered && source.visible)
+      )
+        removeBackdrop(id);
+    }
+    for (const [id, element] of slots) {
+      const source = state.browsers.find((record) => record.id === id);
+      // Keep a prepared still under the native view through the close IPC.
+      // Remove it when the restored view reports visible.
+      element.toggleAttribute(
+        "data-browser-covered",
+        covered ||
+          (element.hasAttribute("data-browser-covered") && !source?.visible),
+      );
+    }
+  }
+
   async function captureBrowserBackdrops(
     session: CaptureSession,
     slots: Map<string, HTMLElement>,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<boolean> {
     const state = getState();
     const workspace = state.workspaces.find(
       ({ id }) => id === state.activeWorkspaceId,
     );
-    const overview = session.opening !== undefined;
     const targets = state.browsers
       .filter(
         (item) =>
           item.workspaceId === workspace?.id &&
           !item.agentPage &&
-          (overview || item.paneId === workspace?.activePaneId) &&
           slots.has(item.id),
       )
       .sort(
@@ -134,19 +128,17 @@ export function createBrowserViews(
           Number(b.paneId === workspace?.activePaneId) -
           Number(a.paneId === workspace?.activePaneId),
       )
-      .slice(0, overview ? 4 : 1)
+      .slice(0, 4)
       .map(({ id }) => id);
-    if (!overview && !targets.length) return false;
-    const captures = await window.cod.browserOverviewBackdrop(
+    const captures = await window.cod.browserPrepareModal(
       targets,
       session.opening,
     );
     const stillCurrent = () =>
-      !signal?.aborted &&
+      !signal.aborted &&
       captureSession === session &&
-      getState().activeWorkspaceId === workspace?.id &&
-      (openBackdropDialog() === session.dialog ||
-        passesCapture(session.dialog, openBackdropDialog()));
+      session.dialog.open &&
+      getState().activeWorkspaceId === workspace?.id;
     if (!stillCurrent()) return false;
     const images = await Promise.all(
       captures.map(async ({ id, url, bytes }) => {
@@ -159,7 +151,6 @@ export function createBrowserViews(
             panes.contains(target) &&
             !target.hidden &&
             !!target.getClientRects().length &&
-            !source?.agentPage &&
             source?.url === url &&
             source.workspaceId === workspace?.id
           );
@@ -174,14 +165,15 @@ export function createBrowserViews(
         );
         image.src = objectUrl;
         try {
-          if (overview) await image.decode();
+          await image.decode();
           if (validSource()) {
-            backdrops.set(image, { pageUrl: url, objectUrl });
+            removeBackdrop(id);
+            backdrops.set(id, { image, pageUrl: url, objectUrl });
             target.append(image);
             return true;
           }
         } catch {
-          // A missing frame leaves the ordinary empty browser backdrop.
+          // The pane will explain that the page is paused until dismissal.
         }
         URL.revokeObjectURL(objectUrl);
         return false;
@@ -189,79 +181,77 @@ export function createBrowserViews(
     );
     return images.some(Boolean);
   }
-  function visibleSlots() {
-    return new Map(
-      [...panes.querySelectorAll<HTMLElement>(".browser-content")]
-        .filter((element) => !element.hidden && element.getClientRects().length)
-        .map((element) => [element.dataset.browserId!, element]),
-    );
-  }
+
   function flushBrowserLayout(): void {
-    const dialog = openBackdropDialog();
-    const modal = document.querySelector("dialog[open]");
-    if (modal)
+    // An HTML modal cannot be stacked over Electron's sibling website view.
+    // Reserve the normal viewport rectangles for actual pane geometry. A
+    // separate guarded handoff covers browser pixels only while a modal owns
+    // input, even when the modal came from a new shell feature.
+    const modal = openShellModal();
+    const slots = visibleSlots();
+    if (modal) {
       for (const list of addressLists.values())
         if (!list.element.hidden) list.close();
-    // The native layer remains visible while the replacement frame is staged.
-    // Only the opening handoff can hide it during this interval.
-    if (dialog?.hasAttribute("data-browser-preparing")) return;
-    const slots = visibleSlots();
-    updateBrowserBackdrops(dialog, slots);
-    const rectangles = modal
-      ? []
-      : [...slots].map(([id, element]) => {
-          const { x, y, width, height } = element.getBoundingClientRect();
-          return { id, x, y, width, height };
-        });
+      if (captureSession?.dialog !== modal)
+        void stageBrowserBackdrop(modal).catch(() => modal.close());
+      else if (captureSession.covered) syncBackdrops(slots, true);
+      return;
+    }
+    const resumeModal = captureSession?.opening;
+    captureSession = null;
+    syncBackdrops(slots, false);
+    const rectangles = [...slots].map(([id, element]) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { id, x, y, width, height };
+    });
     let popup: AddressSuggestionPopup | undefined;
-    if (!modal)
-      for (const [id, list] of addressLists) {
-        const snapshot = list.snapshot();
-        if (!snapshot) continue;
-        popup = { id, revision: snapshot.revision };
-        if (slots.has(id)) {
-          const style = getComputedStyle(document.documentElement);
-          popup.presentation = {
-            height: list.element.getBoundingClientRect().height,
-            paint: {
-              rows: snapshot.rows,
-              fontSize: style.fontSize,
-              fontFamily: style.fontFamily,
-            },
-          };
-        }
-        break;
+    for (const [id, list] of addressLists) {
+      const snapshot = list.snapshot();
+      if (!snapshot) continue;
+      popup = { id, revision: snapshot.revision };
+      if (slots.has(id)) {
+        const style = getComputedStyle(document.documentElement);
+        popup.presentation = {
+          height: list.element.getBoundingClientRect().height,
+          paint: {
+            rows: snapshot.rows,
+            fontSize: style.fontSize,
+            fontFamily: style.fontFamily,
+          },
+        };
       }
-    window.cod.browserLayout(rectangles, popup);
+      break;
+    }
+    window.cod.browserLayout({ rectangles, popup, resumeModal });
   }
+
   async function stageBrowserBackdrop(
     dialog: HTMLDialogElement,
   ): Promise<void> {
     const slots = visibleSlots();
     if (!slots.size && !getState().browsers.some((item) => item.visible))
       return;
-    for (const [image, { objectUrl }] of backdrops)
-      removeBackdrop(image, objectUrl);
-    const session = { dialog, opening: ++nextOpening };
+    if (captureSession?.dialog === dialog) return;
+    const session = { dialog, opening: ++nextOpening, covered: false };
     captureSession = session;
     dialog.dataset.browserPreparing = "";
+    // On modal-to-modal transfers a still may be the only available current
+    // image. Keep it only in its original visible pane, for the same URL.
+    syncBackdrops(slots, true);
     const deadline = new AbortController();
     const expired = new Promise<void>((resolve) => {
       deadline.signal.addEventListener("abort", () => resolve(), {
         once: true,
       });
     });
-    const timer = window.setTimeout(
-      () => deadline.abort(),
-      overviewBackdropDeadline,
-    );
+    const timer = window.setTimeout(() => deadline.abort(), backdropDeadline);
     try {
       await Promise.race([
         captureBrowserBackdrops(session, slots, deadline.signal)
           .then((painted) => {
             if (painted)
               return new Promise<void>((resolve) =>
-                // Give the decoded image a paint before removing the native view.
+                // Paint the prepared image before covering the native view.
                 requestAnimationFrame(() =>
                   requestAnimationFrame(() => resolve()),
                 ),
@@ -275,15 +265,24 @@ export function createBrowserViews(
       deadline.abort();
     }
     if (!dialog.open || captureSession !== session) return;
-    updateBrowserBackdrops(dialog, visibleSlots());
-    const hidden = await window.cod.browserHideForOverview(session.opening);
+    syncBackdrops(visibleSlots(), true);
+    const covered = await window.cod.browserCoverModal({
+      kind: "shell-modal",
+      opening: session.opening,
+    });
     if (!dialog.open || captureSession !== session) return;
-    if (!hidden) throw new Error("Overview native layout was superseded");
+    if (!covered) throw new Error("Modal browser layout was superseded");
+    session.covered = true;
     delete dialog.dataset.browserPreparing;
   }
   const resizeObserver = new ResizeObserver(scheduleBrowserLayout);
   resizeObserver.observe(panes);
-  const mutationObserver = new MutationObserver(scheduleBrowserLayout);
+  const mutationObserver = new MutationObserver(() => {
+    const modal = openShellModal();
+    if (modal && captureSession?.dialog !== modal)
+      void stageBrowserBackdrop(modal).catch(() => modal.close());
+    scheduleBrowserLayout();
+  });
   mutationObserver.observe(document.body, {
     childList: true,
     subtree: true,
@@ -333,7 +332,7 @@ export function createBrowserViews(
           record.addons.adblock.enabled,
       ),
     );
-    const failed = !!record.error && !record.agentPage;
+    const failed = isBrowserFailure(record);
     const insecure = container.querySelector<HTMLElement>(".browser-insecure")!;
     insecure.textContent = record.temporaryCertificate
       ? "Certificate not verified"
@@ -670,6 +669,10 @@ export function createBrowserViews(
     content.dataset.browserId = record.id;
     content.setAttribute("role", "region");
     content.setAttribute("aria-label", "Browser content");
+    const paused = document.createElement("p");
+    paused.className = "browser-modal-paused";
+    paused.textContent = "Page paused while this dialog is open";
+    content.append(paused);
     const message = document.createElement("div");
     message.className = "browser-status";
     message.setAttribute("role", "status");
@@ -789,14 +792,12 @@ export function createBrowserViews(
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleBrowserLayout);
       document.removeEventListener("scroll", scheduleBrowserLayout, true);
-      for (const [image, { objectUrl }] of backdrops)
-        removeBackdrop(image, objectUrl);
+      for (const id of backdrops.keys()) removeBackdrop(id);
       captureSession = null;
       browserPanes.clear();
       homes.clear();
       for (const list of addressLists.values()) list.close();
       addressLists.clear();
-      window.cod.browserLayout([]);
     },
   };
 }
