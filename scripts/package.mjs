@@ -249,6 +249,10 @@ try {
   await cp(path.join(install, "node_modules"), path.join(app, "node_modules"), {
     recursive: true,
     verbatimSymlinks: true,
+    // Cod uses the user's installed Claude Code binary.
+    filter: (source) =>
+      path.basename(path.dirname(source)) !== "@anthropic-ai" ||
+      !path.basename(source).startsWith("claude-agent-sdk-"),
   });
   await writeFile(
     path.join(app, "package.json"),
