@@ -1017,6 +1017,13 @@ export function createCommands(
     const w = activeWorkspace();
     return w?.panes.find((p) => p.id === w.activePaneId);
   };
+  function reviewHost(pane?: PaneState | null) {
+    return pane?.kind === "review"
+      ? panes.querySelector<HTMLElement>(
+          `[data-pane-id="${pane.id}"] .review-body`,
+        )
+      : null;
+  }
   function isOrdinaryBrowserPane(pane: PaneState | null | undefined): boolean {
     return (
       pane?.kind === "browser" &&
@@ -1026,6 +1033,12 @@ export function createCommands(
   }
   function shortcutSurface(element = document.activeElement) {
     const surface = keyboardSurface(element);
+    // Changing a reviewed file briefly detaches the focused source row.
+    if (
+      element === document.body &&
+      reviewHost(currentPane())?.hasAttribute("data-git-review")
+    )
+      return "git-review";
     // Selecting a browser tab can leave keyboard focus in the tab strip or
     // workspace shell until the user moves into the page.
     return surface === "shell" && isOrdinaryBrowserPane(currentPane())
@@ -1193,6 +1206,11 @@ export function createCommands(
       pane?.kind !== "review"
     )
       return "Select a review first";
+    if (
+      (id === "review.nextChange" || id === "review.previousChange") &&
+      !reviewHost(pane)?.hasAttribute("data-git-review")
+    )
+      return "Select a Git review first";
   }
   interface PaneSwitch {
     workspaceId: string;
@@ -1587,20 +1605,18 @@ export function createCommands(
             });
           break;
         case "review.addComment":
-        case "review.submit": {
-          const host = panes.querySelector<HTMLElement>(
-            `[data-pane-id="${pane?.id}"]`,
+        case "review.submit":
+        case "review.nextChange":
+        case "review.previousChange": {
+          const reviewEvents = {
+            "review.addComment": "cod:add-comment",
+            "review.submit": "cod:submit-review",
+            "review.nextChange": "cod:next-change",
+            "review.previousChange": "cod:previous-change",
+          };
+          reviewHost(pane)?.dispatchEvent(
+            new CustomEvent(reviewEvents[id], { detail: focusIntent.signal }),
           );
-          host
-            ?.querySelector(".review-body")
-            ?.dispatchEvent(
-              new CustomEvent(
-                id === "review.addComment"
-                  ? "cod:add-comment"
-                  : "cod:submit-review",
-                { bubbles: false },
-              ),
-            );
           break;
         }
         case "navigation.toggleFiles":

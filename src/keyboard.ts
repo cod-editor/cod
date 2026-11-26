@@ -7,7 +7,8 @@ export type KeyboardSurface =
   | "browser"
   | "browser-controls"
   | "agent-page"
-  | "review";
+  | "review"
+  | "git-review";
 export interface KeyInput {
   key: string;
   code?: string;
@@ -54,6 +55,7 @@ const all: readonly KeyboardSurface[] = [
   "browser-controls",
   "agent-page",
   "review",
+  "git-review",
 ];
 const cod: readonly KeyboardSurface[] = [
   "shell",
@@ -61,6 +63,7 @@ const cod: readonly KeyboardSurface[] = [
   "editor",
   "composer",
   "review",
+  "git-review",
 ];
 const host: readonly KeyboardSurface[] = [...cod, "terminal"];
 const browserSurfaces = ["browser", "browser-controls"] as const;
@@ -288,7 +291,13 @@ export const commands = [
     key("Escape", {}, ["shell", "composer"]),
   ]),
   entry("review.addComment", "Add review comment", "Review", [
-    key("KeyM", { mod: true, shift: true }, ["review"]),
+    key("KeyM", { mod: true, shift: true }, ["review", "git-review"]),
+  ]),
+  entry("review.nextChange", "Next Git change", "Review", [
+    key("ArrowDown", { mod: true, alt: true }, ["git-review"]),
+  ]),
+  entry("review.previousChange", "Previous Git change", "Review", [
+    key("ArrowUp", { mod: true, alt: true }, ["git-review"]),
   ]),
   entry("review.submit", "Send review feedback", "Review"),
   entry("workspace.rename", "Rename workspace", "Workspace"),
@@ -438,6 +447,8 @@ export function formatBinding(
     Escape: "Esc",
     Enter: "Enter",
     Backquote: "`",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
     Backslash: "\\",
   };
   const parts = [
