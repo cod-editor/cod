@@ -1,6 +1,6 @@
 # Cod
 
-An experimental desktop workspace for coding agents, files, reviews, terminals and browsing.
+An overbloated mix of code editor, terminal, browser and coding agents. So, a tiny subset of VS Code, essentially.
 
 ## Start
 
