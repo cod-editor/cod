@@ -46,11 +46,19 @@ export async function findClaudeSession(cwd: string, id: string) {
   return session;
 }
 
+export async function readClaudeMessages(
+  cwd: string,
+  id: string,
+  limit?: number,
+) {
+  const { getSessionMessages } = await sdk();
+  return getSessionMessages(id, { dir: cwd, limit });
+}
+
 export async function readClaudeSession(cwd: string, id: string) {
   const session = await findClaudeSession(cwd, id);
   if (!session) return undefined;
-  const { getSessionMessages } = await sdk();
-  return { session, messages: await getSessionMessages(id, { dir: cwd }) };
+  return { session, messages: await readClaudeMessages(cwd, id) };
 }
 
 export function claudeHandoffArgs(id: string, hasHistory: boolean): string[] {

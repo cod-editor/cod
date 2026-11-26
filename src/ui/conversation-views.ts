@@ -36,7 +36,7 @@ import { createIntegrationSetup } from "./integration";
 import { reconcileView } from "./view-reconcile";
 import { chatMarkdown, visualizationStart } from "./chat-markdown";
 import DOMPurify from "dompurify";
-import { structuredMessageLabel } from "../message-label";
+import { claudePromptText, structuredMessageLabel } from "../message-label";
 import { menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history-cursor";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
@@ -1258,7 +1258,10 @@ export function createConversationViews({
             : entry.message.role;
         const text = document.createElement("div");
         text.className = "message-text";
-        const source = questionTranscriptText(entry.message);
+        const source =
+          conversation.provider === "claude" && entry.message.role === "user"
+            ? claudePromptText(entry.message.text, entry.message.images)
+            : questionTranscriptText(entry.message);
         const answers =
           entry.message.role === "user" && conversation.provider === "codex"
             ? questionAnswers(source)

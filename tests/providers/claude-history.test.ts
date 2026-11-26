@@ -6,6 +6,7 @@ import {
   stageClaudeHistory,
 } from "../../src/conversation-history.ts";
 import type { ConversationState } from "../../src/types";
+import { claudePromptText } from "../../src/message-label.ts";
 
 test("Claude replay restores native prompt identity, image, reply and tool outcome", () => {
   const nativeId = "c18a585d-5f87-4fd8-b084-31242bcb669d";
@@ -106,4 +107,27 @@ test("Claude replay restores native prompt identity, image, reply and tool outco
     ["local-turn", "local-turn"],
   );
   assert.equal(conversation.messages[0]!.images?.[0]?.reference, 3);
+});
+
+test("Claude display omits only trailing attachment labels known to the rendered message", () => {
+  assert.equal(
+    claudePromptText("See [Image 1] and compare[Image 2]", [{}, {}]),
+    "See [Image 1] and compare",
+  );
+  assert.equal(
+    claudePromptText("Compare[Image 2] [Image 4]", [
+      { reference: 2 },
+      { reference: 4 },
+    ]),
+    "Compare",
+  );
+  assert.equal(claudePromptText("Discuss [Image 1]", []), "Discuss [Image 1]");
+  assert.equal(
+    claudePromptText("Discuss [Image 3]", [{}]),
+    "Discuss [Image 3]",
+  );
+  assert.equal(
+    claudePromptText("Reference [Image 1][Image 1]", [{}]),
+    "Reference [Image 1]",
+  );
 });

@@ -7,9 +7,12 @@ import type {
 import {
   discoverClaudeSessions,
   openClaudeSession,
+  readClaudeMessages,
   readClaudeSession,
 } from "./claude-native.ts";
 import { ProviderOptionError } from "./option-error.ts";
+import { emptyHistory, stageClaudeHistory } from "../conversation-history.ts";
+import { claudePromptText, trailingImageMarker } from "../message-label.ts";
 import type {
   AdapterOptions,
   Conversation,
@@ -102,16 +105,38 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   async discover(): Promise<Conversation[]> {
-    return (await discoverClaudeSessions(this.options.cwd)).map((item) => ({
-      provider: this.provider,
-      nativeId: item.sessionId,
-      cwd: this.options.cwd,
-      metadata: {
-        title: item.customTitle ?? item.summary,
-        preview: item.firstPrompt,
-        updatedAt: item.lastModified,
-      },
-    }));
+    const sessions = await discoverClaudeSessions(this.options.cwd);
+    return Promise.all(
+      sessions.map(async (item) => {
+        let preview = item.firstPrompt;
+        if (preview && trailingImageMarker.test(preview)) {
+          // Only inspect the first native row for a possible attachment label.
+          // Preserve titled or concurrently changed sessions if it cannot be verified.
+          const rows = await readClaudeMessages(
+            this.options.cwd,
+            item.sessionId,
+            1,
+          ).catch(() => []);
+          const history = emptyHistory();
+          stageClaudeHistory(history, rows, item.sessionId);
+          const first = history.messages[0];
+          if (first?.role === "user" && first.text.trim() === preview.trim())
+            preview = claudePromptText(preview, first.images) || undefined;
+        }
+        return {
+          provider: this.provider,
+          nativeId: item.sessionId,
+          cwd: this.options.cwd,
+          metadata: {
+            title:
+              item.customTitle ??
+              (item.summary === item.firstPrompt ? preview : item.summary),
+            preview,
+            updatedAt: item.lastModified,
+          },
+        };
+      }),
+    );
   }
 
   create() {

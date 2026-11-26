@@ -164,6 +164,18 @@ test("Claude Code picker and chat reopen the same native conversation without se
         name: "Conversation transcript",
         exact: true,
       });
+    const expectImagePrompt = async () => {
+      const first = transcript().locator(".chat-message.user").first();
+      await expect(first.locator(".message-text")).toHaveText(firstPrompt);
+      await expect(first.locator(".image-reference")).toHaveText("[Image 1]");
+      await expect(first.getByRole("img")).toHaveAttribute(
+        "src",
+        `data:image/png;base64,${pixel}`,
+      );
+      await expect(
+        app.page.locator(".tab-label").filter({ hasText: firstPrompt }),
+      ).toHaveText(firstPrompt);
+    };
     await app.page
       .getByRole("button", { name: "Provider", exact: true })
       .click();
@@ -197,6 +209,7 @@ test("Claude Code picker and chat reopen the same native conversation without se
     await expect(app.page.locator(".composer-images img")).toHaveCount(1);
     await composer().press(`${modifier}+Enter`);
     await expect(transcript()).toContainText(imageReply);
+    await expectImagePrompt();
     await expect(composer()).toHaveValue("");
     const current = async () =>
       (await app.cli<AppState>("state")).conversations.find(
@@ -234,6 +247,7 @@ test("Claude Code picker and chat reopen the same native conversation without se
       .selectOption("claude");
     const row = picker.getByRole("button", { name: /invented image/i });
     await expect(row).toHaveAttribute("title", new RegExp(first.nativeId));
+    await expect(row).not.toContainText("[Image 1]");
     await app.page.screenshot({
       path: info.outputPath("claude-native-session-picker.png"),
     });
@@ -251,6 +265,8 @@ test("Claude Code picker and chat reopen the same native conversation without se
     const users = resumed.messages.filter((message) => message.role === "user");
     expect(users).toHaveLength(2);
     expect(users[0].images?.[0]?.data).toBe(pixel);
+    expect(users[0].text).toContain("[Image 1]");
+    await expectImagePrompt();
     expect(model.previousImageSent).toBe(true);
     await app.page.screenshot({
       path: info.outputPath("claude-resumed-image-chat.png"),
