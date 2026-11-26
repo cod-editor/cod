@@ -100,7 +100,7 @@ downloadUpdate.onclick = async () => {
   const manual = releaseNotice.status === "manual";
   try {
     await window.cod.openReleaseUpdate();
-    if (!manual) setStatus("Quit Cod before replacing it in Applications.");
+    if (!manual) setStatus("Quit Cod first.");
   } catch {
     setStatus("Could not prepare the update. Try again.");
   } finally {

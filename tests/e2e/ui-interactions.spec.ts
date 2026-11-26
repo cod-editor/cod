@@ -328,6 +328,13 @@ test("The release update notice prepares, retries and opens only on explicit act
     const ready = app.page.getByRole("button", { name: "Open update" });
     await expect(ready).toBeFocused();
     await expect(ready).toBeEnabled();
+    const status = app.page.locator("#status");
+    await expect(status).toHaveText("Quit Cod first.");
+    expect(
+      await status.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
     await app.page.screenshot({
       path: info.outputPath("release-update-ready.png"),
     });
