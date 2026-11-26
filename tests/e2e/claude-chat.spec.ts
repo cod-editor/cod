@@ -157,23 +157,26 @@ test("Claude Code picker and chat reopen the same native conversation without se
       "--path",
       app.folders[0],
     );
-    const input = app.page.getByRole("textbox", {
-      name: "Message",
-      exact: true,
-    });
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const transcript = () =>
+      app.page.getByRole("region", {
+        name: "Conversation transcript",
+        exact: true,
+      });
     await app.page
       .getByRole("button", { name: "Provider", exact: true })
       .click();
     await app.page
       .getByRole("button", { name: "Claude Code", exact: true })
       .click();
-    await expect(input).toHaveAttribute(
+    await expect(composer()).toHaveAttribute(
       "placeholder",
       "Message Claude Code...",
     );
     expect(model.requests).toBe(0);
-    await input.fill(firstPrompt);
-    await input.evaluate((node, data) => {
+    await composer().fill(firstPrompt);
+    await composer().evaluate((node, data) => {
       const file = new File(
         [Uint8Array.from(atob(data), (value) => value.charCodeAt(0))],
         "invented.png",
@@ -192,13 +195,9 @@ test("Claude Code picker and chat reopen the same native conversation without se
       );
     }, pixel);
     await expect(app.page.locator(".composer-images img")).toHaveCount(1);
-    await input.press(`${modifier}+Enter`);
-    const transcript = app.page.getByRole("region", {
-      name: "Conversation transcript",
-      exact: true,
-    });
-    await expect(transcript).toContainText(imageReply);
-    await expect(input).toHaveValue("");
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(imageReply);
+    await expect(composer()).toHaveValue("");
     const current = async () =>
       (await app.cli<AppState>("state")).conversations.find(
         (conversation) => conversation.workspaceId === workspace,
@@ -213,6 +212,7 @@ test("Claude Code picker and chat reopen the same native conversation without se
     const calls = model.requests;
     await app.stop();
     await app.start();
+    await expect(composer()).toBeEnabled();
 
     await app.page.keyboard.press(`${modifier}+Shift+P`);
     const commands = app.page.getByRole("dialog", {
@@ -238,13 +238,13 @@ test("Claude Code picker and chat reopen the same native conversation without se
       path: info.outputPath("claude-native-session-picker.png"),
     });
     await row.click();
-    await expect(input).toBeFocused();
-    await expect(transcript).toContainText(imageReply);
+    await expect(composer()).toBeFocused();
+    await expect(transcript()).toContainText(imageReply);
     expect((await current())?.nativeId).toBe(first.nativeId);
     expect(model.requests).toBe(calls);
-    await input.fill(followUp);
-    await input.press(`${modifier}+Enter`);
-    await expect(transcript).toContainText(followUpReply);
+    await composer().fill(followUp);
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(followUpReply);
     await expect.poll(async () => (await current())?.status).toBe("ready");
     const resumed = (await current())!;
     expect(resumed.nativeId).toBe(first.nativeId);
