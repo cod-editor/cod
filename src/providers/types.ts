@@ -74,6 +74,7 @@ export type ProviderEvent = {
   | { type: "diagnostic"; message: string }
 );
 export interface AdapterOptions {
+  claudeEnvironment?: () => Promise<NodeJS.ProcessEnv>;
   cwd: string;
   executable?: string;
   /** Primarily for installations using a launcher, and subprocess contract tests. */

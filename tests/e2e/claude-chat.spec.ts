@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -13,7 +13,7 @@ const imageReply = "The invented pixel is green.";
 const followUp = "What did the previous prompt contain?";
 const followUpReply = "The previous prompt included an image.";
 
-async function loopbackModel() {
+async function loopbackModel(expectedAuthorization?: string) {
   let requests = 0;
   let imageSent = false;
   let previousImageSent = false;
@@ -27,6 +27,11 @@ async function loopbackModel() {
     if (route.endsWith("/models")) return reply({ data: [], has_more: false });
     if (request.method !== "POST" || route !== "/v1/messages")
       return reply({}, 404);
+    if (
+      expectedAuthorization &&
+      request.headers.authorization !== expectedAuthorization
+    )
+      return reply({}, 401);
     if (++requests > 12) return reply({}, 429);
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -271,6 +276,163 @@ test("Claude Code picker and chat reopen the same native conversation without se
     await app.page.screenshot({
       path: info.outputPath("claude-resumed-image-chat.png"),
     });
+  } finally {
+    try {
+      await app.cleanup();
+    } finally {
+      await model.close();
+    }
+  }
+});
+
+test("Claude API authentication survives a desktop restart without exposing the token", async ({}, info) => {
+  test.skip(
+    process.platform !== "darwin" ||
+      process.env.COD_VERIFY_MACOS_KEYCHAIN !== "1",
+    "Needs a disposable macOS Keychain and a Playwright loader without --use-mock-keychain",
+  );
+  test.setTimeout(90_000);
+  const app = new WorkspaceApp();
+  const token = "invented-cod-bearer";
+  const model = await loopbackModel("Bearer " + token);
+  try {
+    await app.prepare();
+    const executable = path.resolve(
+      "node_modules",
+      "@anthropic-ai",
+      `claude-agent-sdk-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    await access(executable);
+    for (const name of [
+      "CLAUDECODE",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+      "COD_CLAUDE_ARGS",
+    ])
+      delete app.environment[name];
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: executable,
+      CLAUDE_CONFIG_DIR: path.join(app.temporary, "native-claude"),
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:1",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    await app.start();
+    expect(
+      await app.app!.evaluate(({ app }) =>
+        app.commandLine.hasSwitch("use-mock-keychain"),
+      ),
+    ).toBe(false);
+    const workspace = await app.create("Invented authentication workspace");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const settings = () =>
+      app.page.getByRole("dialog", {
+        name: "Settings",
+        exact: true,
+      });
+    const openApi = async () => {
+      await app.page.keyboard.press(`${modifier}+Shift+P`);
+      const commands = app.page.getByRole("dialog", {
+        name: "Command palette",
+        exact: true,
+      });
+      const filter = commands.getByRole("textbox", {
+        name: "Filter commands",
+        exact: true,
+      });
+      await filter.fill("Settings...");
+      await filter.press("Enter");
+      await settings()
+        .getByRole("searchbox", { name: "Search settings" })
+        .fill("Claude");
+      await settings().getByText("API authentication", { exact: true }).click();
+    };
+    const url = () =>
+      settings().getByRole("textbox", { name: "API URL", exact: true });
+    const secret = () => settings().getByLabel("API token", { exact: true });
+    await openApi();
+    await expect(url()).toBeEnabled();
+    await url().fill(model.endpoint);
+    await expect(secret()).toHaveAttribute("type", "password");
+    await secret().fill(token);
+    await secret().press("Enter");
+    await expect(
+      settings()
+        .getByRole("status")
+        .filter({ hasText: "Saved for local Claude Code chats." }),
+    ).toBeVisible();
+    await expect(secret()).toHaveValue("");
+    await expect(secret()).toBeFocused();
+    await app.page.screenshot({
+      path: info.outputPath("claude-api-saved.png"),
+    });
+    expect(
+      (await readFile(path.join(app.data, "claude-api.enc"))).includes(token),
+    ).toBe(false);
+    expect(
+      JSON.stringify(await app.cli("settings", "get")).includes(token),
+    ).toBe(false);
+    await settings()
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await app.page
+      .getByRole("button", { name: "Provider", exact: true })
+      .click();
+    await app.page
+      .getByRole("button", { name: "Claude Code", exact: true })
+      .click();
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const transcript = () =>
+      app.page.getByRole("region", {
+        name: "Conversation transcript",
+        exact: true,
+      });
+    await composer().fill("An invented authentication test");
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(imageReply);
+    const current = async () =>
+      (await app.cli<AppState>("state")).conversations.find(
+        (conversation) => conversation.workspaceId === workspace,
+      );
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+    const first = (await current())!;
+    const calls = model.requests;
+    await app.stop();
+    await app.start();
+    expect(
+      await app.app!.evaluate(({ app }) =>
+        app.commandLine.hasSwitch("use-mock-keychain"),
+      ),
+    ).toBe(false);
+    await openApi();
+    await expect(url()).toHaveValue(model.endpoint + "/");
+    await expect(secret()).toHaveValue("");
+    await settings()
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    expect(model.requests).toBe(calls);
+    await composer().fill(followUp);
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(followUpReply);
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+    const latest = (await current())!;
+    expect(latest.nativeId).toBe(first.nativeId);
+    expect(
+      latest.messages.filter((message) => message.role === "user"),
+    ).toHaveLength(2);
+    expect(JSON.stringify(latest).includes(token)).toBe(false);
   } finally {
     try {
       await app.cleanup();

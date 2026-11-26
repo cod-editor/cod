@@ -16,6 +16,13 @@
   font-weight: 500;
   color: var(--text-muted);
 }
+.claude-api-settings {
+  width: 100%;
+}
+.claude-api-settings summary {
+  padding-block: var(--space-1);
+  cursor: pointer;
+}
 .settings-font {
   display: flex;
   flex-direction: column;

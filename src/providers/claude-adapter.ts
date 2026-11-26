@@ -167,6 +167,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         executable: this.options.executable,
         args: this.options.args,
         env: this.options.env,
+        environment: this.options.claudeEnvironment,
         nativeId: id,
         resume: Boolean(history),
         canUseTool: this.canUseTool,

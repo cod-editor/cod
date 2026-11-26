@@ -21,6 +21,7 @@ import {
   type LinkedCodexRollout,
 } from "../providers/codex-rollout";
 import { resolveProviderExecutable } from "../provider-executables";
+import type { ClaudeApiSettings } from "./claude-api-settings";
 import { defaultSocketPath } from "../paths";
 import {
   DetachedProviderAdapter,
@@ -168,6 +169,7 @@ export class ConversationApplicationService {
   >();
   private resumeContexts = new Map<string, StagedHistory>();
   private readonly replays = new Set<ProviderAdapter>();
+  private readonly claudeRevisions = new WeakMap<ProviderAdapter, number>();
   constructor(
     private readonly store: ApplicationStateStore,
     private readonly terminals: Pick<
@@ -179,6 +181,7 @@ export class ConversationApplicationService {
       owner: LocalProviderOwner;
       enabled: () => boolean;
     },
+    private readonly claudeApi?: ClaudeApiSettings,
   ) {}
   selection(
     id: string,
@@ -836,6 +839,18 @@ export class ConversationApplicationService {
         return adapter;
       }
     }
+    const env = {
+      ...process.env,
+      COD_CONVERSATION_ID: conversation.id,
+      COD_WORKSPACE_ID: conversation.workspaceId,
+      COD_SOCKET_PATH: defaultSocketPath(),
+      COD_DATA_DIR: this.store.directory,
+      COD_CLI_PATH: path.join(__dirname, "cli.cjs"),
+      COD_NODE_PATH: process.execPath,
+    };
+    const auth =
+      conversation.provider === "claude" ? this.claudeApi : undefined;
+    const revision = auth?.revision;
     const options = {
       cwd: conversation.cwd,
       executable: resolved.executable,
@@ -844,20 +859,15 @@ export class ConversationApplicationService {
         object(conversation.metadata).unrecorded === true
           ? conversation.nativeId
           : undefined,
-      env: {
-        ...process.env,
-        COD_CONVERSATION_ID: conversation.id,
-        COD_WORKSPACE_ID: conversation.workspaceId,
-        COD_SOCKET_PATH: defaultSocketPath(),
-        COD_DATA_DIR: this.store.directory,
-        COD_CLI_PATH: path.join(__dirname, "cli.cjs"),
-        COD_NODE_PATH: process.execPath,
-      },
+      env,
+      ...(auth && { claudeEnvironment: () => auth.environment(env) }),
       onEvent:
         onEvent ??
         ((event: ProviderEvent) => this.providerEvent(conversation.id, event)),
     };
-    return createProviderAdapter(conversation.provider, options);
+    const adapter = createProviderAdapter(conversation.provider, options);
+    if (revision !== undefined) this.claudeRevisions.set(adapter, revision);
+    return adapter;
   }
 
   async handoffConversation(
@@ -1095,7 +1105,17 @@ export class ConversationApplicationService {
       existing.detach();
       delete conversation.detachedOwner;
     } else if (existing) {
-      if (conversation.status !== "failed") return existing;
+      const credentialsChanged =
+        conversation.provider === "claude" &&
+        !!this.claudeApi &&
+        this.claudeRevisions.get(existing) !== this.claudeApi.revision;
+      if (
+        conversation.status !== "failed" &&
+        (!credentialsChanged ||
+          conversation.status === "working" ||
+          conversation.status === "waiting")
+      )
+        return existing;
       if (existing.provider !== "claude")
         this.controllers.delete(conversation.id);
       await existing.dispose();

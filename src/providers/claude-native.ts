@@ -71,6 +71,7 @@ type ClaudeSessionOptions = {
   executable: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  environment?: () => Promise<NodeJS.ProcessEnv>;
   nativeId: string;
   resume: boolean;
   canUseTool?: Options["canUseTool"];
@@ -103,7 +104,7 @@ export async function openClaudeSession(
     prompt,
     options: {
       cwd: options.cwd,
-      env: options.env,
+      env: options.environment ? await options.environment() : options.env,
       ...(options.resume
         ? { resume: options.nativeId }
         : { sessionId: options.nativeId }),
