@@ -13,7 +13,8 @@ import {
 import { mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { BrowserDiagnostics } from "./diagnostics";
-import { loadFavicon } from "./favicon";
+import { loadSiteIcons } from "./favicon";
+import type { SiteIcons } from "./site-icon-types";
 import { faviconOrigin } from "./favicon-origin";
 import {
   certificateSession,
@@ -81,6 +82,7 @@ interface Resource {
   diagnostics?: BrowserDiagnostics;
   favicon?: string;
   pendingFavicon?: AbortController;
+  pendingFavoriteArt?: AbortController;
   faviconCandidates?: string;
   awaitingDocument?: boolean;
   popups: Set<BrowserWindow>;
@@ -92,6 +94,7 @@ interface Options {
   downloadDirectory: string;
   scrollbarCSS?: string;
   isAllowedExtensionUrl?: (url: string) => boolean;
+  hasHomePin?: (origin: string) => boolean;
   openLink?: (id: string, url: string) => Promise<unknown>;
   openExternal?: (url: string) => Promise<unknown>;
   onViewCreated?: (contents: WebContents, id: string) => void;
@@ -138,7 +141,7 @@ export class BrowserService {
   private owners = new Map<number, Resource>();
   private listeners = new Set<(event: BrowserEvent) => void>();
   private disposed = false;
-  private favicons = new Map<string, string>();
+  private siteIcons = new Map<string, SiteIcons>();
   private retries = new Map<string, { count: number; expires: number }>();
   private downloads = new Map<
     string,
@@ -213,9 +216,42 @@ export class BrowserService {
       snapshot: this.snapshot(resource.id),
     });
   }
-  cachedFavicon(url: string): string | undefined {
+  cachedSiteIcons(url: string): SiteIcons | undefined {
     const origin = faviconOrigin(url);
-    return origin ? this.favicons.get(origin) : undefined;
+    return origin ? this.siteIcons.get(origin) : undefined;
+  }
+  private updateSiteIcons(
+    resource: Resource,
+    origin: string,
+    signal: AbortSignal,
+    icons: SiteIcons,
+  ) {
+    if (
+      signal.aborted ||
+      resource.contents.isDestroyed() ||
+      resource.error ||
+      faviconOrigin(resource.contents.getURL()) !== origin
+    )
+      return;
+    const previous = this.siteIcons.get(origin);
+    const tabChanged = icons.favicon && icons.favicon !== resource.favicon;
+    if (icons.favicon) resource.favicon = icons.favicon;
+    const oldArt = previous?.favoriteArt;
+    const newArt = icons.favoriteArt;
+    const best =
+      newArt &&
+      (!oldArt || newArt.width * newArt.height >= oldArt.width * oldArt.height)
+        ? newArt
+        : oldArt;
+    const next = {
+      favicon: icons.favicon ?? previous?.favicon,
+      favoriteArt: best,
+    };
+    this.siteIcons.delete(origin);
+    this.siteIcons.set(origin, next);
+    if (this.siteIcons.size > 64)
+      this.siteIcons.delete(this.siteIcons.keys().next().value!);
+    if (tabChanged || best?.png !== oldArt?.png) this.changed(resource);
   }
   private readFavicon(resource: Resource, candidates: string[]) {
     if (resource.awaitingDocument || resource.error || resource.temporary)
@@ -234,26 +270,57 @@ export class BrowserService {
       pending.signal,
       AbortSignal.timeout(4_000),
     ]);
-    void loadFavicon(this.options.session, origin, candidates, signal).then(
-      (icon) => {
-        if (
-          signal.aborted ||
-          resource.contents.isDestroyed() ||
-          resource.error ||
-          faviconOrigin(resource.contents.getURL()) !== origin ||
-          icon === resource.favicon
-        )
-          return;
-        if (icon) {
-          this.favicons.delete(origin);
-          this.favicons.set(origin, icon);
-          if (this.favicons.size > 64)
-            this.favicons.delete(this.favicons.keys().next().value!);
-        }
-        resource.favicon = icon;
-        this.changed(resource);
-      },
+    void loadSiteIcons(
+      this.options.session,
+      origin,
+      candidates,
+      signal,
+      (icons) => this.updateSiteIcons(resource, origin, signal, icons),
+      this.options.hasHomePin?.(origin) ? "pinned" : "tab",
     );
+  }
+  private async readTouchIcon(resource: Resource) {
+    if (resource.error || resource.temporary) return;
+    const origin = faviconOrigin(resource.contents.getURL());
+    if (!origin || !this.options.hasHomePin?.(origin)) return;
+    const pending = new AbortController();
+    resource.pendingFavoriteArt?.abort();
+    resource.pendingFavoriteArt = pending;
+    const signal = AbortSignal.any([
+      pending.signal,
+      AbortSignal.timeout(4_000),
+    ]);
+    try {
+      // Electron's favicon event excludes touch icons. Only read URLs from the
+      // loaded top-level document, in an isolated world without a preload.
+      const urls: unknown =
+        await resource.contents.executeJavaScriptInIsolatedWorld(1_042, [
+          {
+            code: `(() => {
+              const candidates = new Set();
+              for (const link of document.head?.querySelectorAll(
+                'link[rel~="apple-touch-icon" i],link[rel~="apple-touch-icon-precomposed" i]'
+              ) ?? []) {
+                if (link.href.length > 2048) continue;
+                candidates.add(link.href);
+                if (candidates.size >= 2) break;
+              }
+              return [...candidates];
+            })()`,
+          },
+        ]);
+      if (signal.aborted || !Array.isArray(urls)) return;
+      await loadSiteIcons(
+        this.options.session,
+        origin,
+        urls.slice(0, 2).filter((url) => typeof url === "string"),
+        signal,
+        (icons) => this.updateSiteIcons(resource, origin, signal, icons),
+        "touch",
+      );
+    } catch {
+      // A closed or superseded document has no Home icon update.
+    }
   }
   private secure(contents: WebContents, resource: Resource) {
     installPageContextMenu(contents, this.options.window, {
@@ -443,6 +510,7 @@ export class BrowserService {
         (_event, _url, inPlace, mainFrame) => {
           if (!mainFrame || inPlace) return;
           resource.pendingFavicon?.abort();
+          resource.pendingFavoriteArt?.abort();
           resource.favicon = undefined;
           resource.faviconCandidates = undefined;
           resource.awaitingDocument = true;
@@ -495,6 +563,7 @@ export class BrowserService {
         const url = resource.contents.getURL();
         if (!resource.error && /^https?:\/\//.test(url))
           resource.lastSuccessfulUrl = url;
+        void this.readTouchIcon(resource);
         changed();
       });
       view.webContents.on(
@@ -855,6 +924,7 @@ export class BrowserService {
     if (!resource || (contents && contents !== resource.contents)) return;
     resource.diagnostics?.dispose();
     resource.pendingFavicon?.abort();
+    resource.pendingFavoriteArt?.abort();
     resource.temporary?.close();
     this.resources.delete(id);
     for (const popup of resource.popups)

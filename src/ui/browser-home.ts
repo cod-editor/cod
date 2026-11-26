@@ -1,7 +1,7 @@
 import type { AppState } from "../types";
 import type { Invoke } from "./contracts";
 import { menu } from "./controls";
-import { siteFavicon, siteIcon } from "./site-icon";
+import { siteFavoriteArt, siteFavicon, siteIcon } from "./site-icon";
 
 export function createBrowserHome(
   getState: () => AppState,
@@ -34,14 +34,22 @@ export function createBrowserHome(
   element.append(grid, form);
   let signature = "";
   const marks = new Map<string, HTMLElement>();
-  function updateMark(site: { url: string; title: string; favicon?: string }) {
+  function updateMark(site: NonNullable<AppState["pinnedSites"]>[number]) {
     const mark = marks.get(site.url)!;
-    const favicon = siteFavicon(site.favicon);
+    const art = siteFavoriteArt(site.favoriteArt);
+    const favicon = art?.png ?? siteFavicon(site.favicon);
     const previous = mark.querySelector("img");
     if (favicon) {
-      if (previous?.getAttribute("src") !== favicon)
+      if (
+        previous?.getAttribute("src") !== favicon ||
+        mark.dataset.art !== art?.kind
+      ) {
         mark.replaceChildren(siteIcon(favicon));
+        if (art) mark.dataset.art = art.kind;
+        else delete mark.dataset.art;
+      }
     } else if (previous || !mark.textContent) {
+      delete mark.dataset.art;
       mark.textContent = [...site.title][0]?.toUpperCase() ?? "?";
     }
   }
@@ -113,7 +121,10 @@ export function createBrowserHome(
         let hash = 0;
         for (const char of new URL(site.url).hostname)
           hash = (hash * 31 + char.charCodeAt(0)) | 0;
-        mark.style.backgroundColor = `hsl(${Math.abs(hash) % 360} 28% 35%)`;
+        mark.style.setProperty(
+          "--monogram-background",
+          `hsl(${Math.abs(hash) % 360} 28% 35%)`,
+        );
         const label = document.createElement("span");
         label.textContent = site.title;
         button.append(mark, label);

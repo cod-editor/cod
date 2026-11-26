@@ -1,5 +1,6 @@
 import { nativeImage, type NativeImage, type Session } from "electron";
 import { faviconOrigin } from "./favicon-origin";
+import type { FavoriteArt, SiteIcons } from "./site-icon-types";
 
 const limit = 64 * 1024;
 
@@ -132,35 +133,102 @@ function raster(bytes: Buffer): NativeImage | undefined {
   return bitmap;
 }
 
-export async function loadFavicon(
+function fit(image: NativeImage, edge: number): NativeImage {
+  const { width, height } = image.getSize();
+  if (Math.max(width, height) <= edge) return image;
+  return image.resize(width >= height ? { width: edge } : { height: edge });
+}
+
+function pngData(png: Buffer): string {
+  return "data:image/png;base64," + png.toString("base64");
+}
+
+function favoriteArt(image: NativeImage): FavoriteArt | undefined {
+  const { width, height } = image.getSize();
+  if (Math.max(width, height) <= 32) return;
+  const pixels = image.toBitmap();
+  if (pixels.length !== width * height * 4) return;
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+  let opaque = true;
+  for (let row = 0; row < height; row++)
+    for (let col = 0; col < width; col++) {
+      const alpha = pixels[(row * width + col) * 4 + 3];
+      if (alpha !== 255) opaque = false;
+      if (!alpha) continue;
+      left = Math.min(left, col);
+      top = Math.min(top, row);
+      right = Math.max(right, col);
+      bottom = Math.max(bottom, row);
+    }
+  if (right < left || bottom < top) return;
+  const piece = opaque
+    ? image
+    : image.crop({
+        x: left,
+        y: top,
+        width: right - left + 1,
+        height: bottom - top + 1,
+      });
+  const size = piece.getSize();
+  if (Math.max(size.width, size.height) <= 32) return;
+  const kind = opaque && width === height && width >= 64 ? "cover" : "mark";
+  for (const edge of [128, 96, 64]) {
+    const image = fit(piece, edge);
+    const png = image.toPNG();
+    if (png.length && png.length <= 20 * 1024)
+      return { kind, png: pngData(png), ...image.getSize() };
+  }
+}
+
+async function fetchIcon(
+  session: Session,
+  origin: string,
+  url: string,
+  signal: AbortSignal,
+): Promise<NativeImage | undefined> {
+  if (url.length > 2048 || faviconOrigin(url) !== origin) return;
+  try {
+    const response = await session.fetch(url, {
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal,
+    });
+    const bytes = await readIcon(response);
+    const image = bytes && raster(bytes);
+    if (image && !image.isEmpty()) return image;
+  } catch {
+    // An unavailable icon must not change the page's navigation state.
+  }
+}
+
+export async function loadSiteIcons(
   session: Session,
   pageOrigin: string,
   candidates: readonly string[],
   signal: AbortSignal,
-): Promise<string | undefined> {
-  for (const value of candidates.slice(0, 4)) {
+  update: (icons: SiteIcons) => void,
+  mode: "tab" | "pinned" | "touch",
+): Promise<void> {
+  let favicon: string | undefined;
+  let largest = 0;
+  const limit = mode === "touch" ? 2 : 4;
+  for (const url of candidates.slice(0, limit)) {
     if (signal.aborted) return;
-    if (value.length > 2048 || faviconOrigin(value) !== pageOrigin) continue;
-    try {
-      const response = await session.fetch(value, {
-        credentials: "omit",
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-        signal,
-      });
-      const bytes = await readIcon(response);
-      const image = bytes && raster(bytes);
-      if (!image || image.isEmpty()) continue;
-      const { width, height } = image.getSize();
-      const reduced =
-        Math.max(width, height) <= 32
-          ? image
-          : image.resize(width >= height ? { width: 32 } : { height: 32 });
-      const png = reduced.toPNG();
-      if (png.length <= 5 * 1024)
-        return "data:image/png;base64," + png.toString("base64");
-    } catch {
-      // An unavailable icon must not change the page's navigation state.
-    }
+    const image = await fetchIcon(session, pageOrigin, url, signal);
+    if (!image || signal.aborted) continue;
+    const candidate = favoriteArt(image);
+    const size = candidate ? candidate.width * candidate.height : 0;
+    const art = size > largest ? candidate : undefined;
+    if (art) largest = size;
+    if (!favicon && mode !== "touch") {
+      const tab = fit(image, 32).toPNG();
+      if (tab.length && tab.length <= 5 * 1024) favicon = pngData(tab);
+      if (favicon || art) update({ favicon, favoriteArt: art });
+    } else if (art) update({ favoriteArt: art });
+    if (mode === "tab" && favicon) return;
   }
 }

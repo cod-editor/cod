@@ -344,6 +344,10 @@ export class BrowserApplicationService {
         "utf8",
       ),
       isAllowedExtensionUrl: (url) => this.browserAddons?.allows(url) ?? false,
+      hasHomePin: (origin) =>
+        (this.store.data.pinnedSites ?? []).some(
+          (site) => faviconOrigin(site.url) === origin,
+        ),
       window,
       session,
       downloadDirectory,
@@ -1318,12 +1322,21 @@ export class BrowserApplicationService {
       if (!event.snapshot.error || url !== record.url)
         record.httpFallback = undefined;
       Object.assign(record, event.snapshot, { url });
-      if (record.favicon && url === event.snapshot.url) {
-        const origin = faviconOrigin(url);
-        for (const site of this.store.data.pinnedSites ?? []) {
-          if (origin && faviconOrigin(site.url) === origin)
-            site.favicon = record.favicon;
-        }
+      if (
+        !record.error &&
+        !record.temporaryCertificate &&
+        url === event.snapshot.url
+      ) {
+        const favoriteArt =
+          this.browserService?.cachedSiteIcons(url)?.favoriteArt;
+        const origin =
+          record.favicon || favoriteArt ? faviconOrigin(url) : undefined;
+        if (origin)
+          for (const site of this.store.data.pinnedSites ?? []) {
+            if (faviconOrigin(site.url) !== origin) continue;
+            if (record.favicon) site.favicon = record.favicon;
+            if (favoriteArt) site.favoriteArt = favoriteArt;
+          }
       }
       const key = `${url}\n${record.title}`;
       if (
@@ -1621,9 +1634,13 @@ export class BrowserApplicationService {
               typeof request.title === "string" && request.title.trim()
                 ? request.title.trim()
                 : new URL(url).hostname;
-            const favicon =
-              this.browserService?.cachedFavicon(url) ?? sites[index]?.favicon;
-            const site = { url, title, favicon };
+            const icons = this.browserService?.cachedSiteIcons(url);
+            const site = {
+              url,
+              title,
+              favicon: icons?.favicon ?? sites[index]?.favicon,
+              favoriteArt: icons?.favoriteArt ?? sites[index]?.favoriteArt,
+            };
             if (index >= 0) sites[index] = site;
             else sites.push(site);
           }
