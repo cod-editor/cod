@@ -62,6 +62,81 @@ const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
 const text = (chat: Chat) =>
   chat.messages.map((message) => message.text).join("\n");
 
+test("Routine collaboration stays in ordered activity details through completion and reopen", async ({}, info) => {
+  const workspace = await shell.create("Invented collaboration workspace");
+  const chat = await shell.newChat(workspace, "codex");
+  const pane = () => shell.pane(chat.paneId);
+  const activity = () => transcript(chat).locator("details.turn-activity");
+  const summary = () => activity().locator(":scope > summary");
+  const calls = () => activity().locator(":scope > .tool-activity > summary");
+  const call = (name: string) =>
+    activity()
+      .locator(":scope > .tool-activity")
+      .filter({
+        has: shell.page.getByText(name, { exact: true }),
+      });
+
+  await shell.send(chat.id, "[collab-details] Coordinate invented work");
+  await expect.poll(() => status(chat.id)).toBe("working");
+  await expect(summary()).toHaveText("Activity");
+  await expect(calls()).toHaveText(["spawnAgent", "sendInput"]);
+  await expect(
+    pane().getByRole("button", { name: "Agents, 1 running" }),
+  ).toBeVisible();
+  await expect(calls().first()).toBeHidden();
+  await expect(transcript(chat)).toContainText("Coordinate invented work");
+  await pane().screenshot({
+    path: info.outputPath("active-collaboration-collapsed.png"),
+  });
+
+  await shell.configure({ codex: { showMixedCollaboration: true } });
+  await expect(summary()).toHaveText("Run echo");
+  await expect(calls()).toHaveText([
+    "spawnAgent",
+    "sendInput · failed",
+    "Run echo",
+    "wait",
+  ]);
+  await summary().click();
+  await expect(calls().first()).toBeVisible();
+  await call("sendInput · failed").locator("summary").click();
+  await expect(call("sendInput · failed").locator("pre")).toContainText(
+    "Invented agent call rejected",
+  );
+  await pane().screenshot({
+    path: info.outputPath("active-collaboration-expanded.png"),
+  });
+  await summary().click();
+
+  await shell.configure({
+    codex: { showMixedCollaboration: true, finishCollaboration: true },
+  });
+  await expect.poll(() => status(chat.id)).toBe("ready");
+  await expect(
+    transcript(chat).getByText("Invented final reply"),
+  ).toBeVisible();
+  await expect(summary()).not.toContainText(/spawnAgent|sendInput|wait/);
+  await expect(calls().first()).toBeHidden();
+  await shell.stop();
+  await shell.start();
+  await shell.cli("conversation", "show", "--id", chat.id);
+  await expect(
+    transcript(chat).getByText("Invented final reply"),
+  ).toBeVisible();
+  await expect(calls()).toHaveText([
+    "spawnAgent",
+    "sendInput · failed",
+    "Run echo",
+    "wait",
+  ]);
+  await expect(calls().first()).toBeHidden();
+  await summary().click();
+  await call("sendInput · failed").locator("summary").click();
+  await expect(call("sendInput · failed").locator("pre")).toContainText(
+    "Invented agent call rejected",
+  );
+});
+
 test("Assistant visualization links open sandboxed HTML beside the chat", async ({}, info) => {
   await shell.configure({ codex: { finalOnly: true } });
   const source = await shell.create("Original visualization workspace");

@@ -907,6 +907,58 @@ function receive(message, external = false) {
     complete();
     return;
   }
+  if (provider === "codex" && prompt.startsWith("[collab-details]")) {
+    const { turnId, turn } = active;
+    const child = "invented-collaboration-child";
+    const publish = (item, method = "item/completed") => {
+      if (!turn.items.includes(item)) turn.items.push(item);
+      persist();
+      notify(method, { threadId: nativeId, turnId, item });
+    };
+    const call = (tool, status, fields = {}) => ({
+      id: `collab-${tool}-${turnId}`,
+      type: "collabAgentToolCall",
+      tool,
+      status,
+      senderThreadId: nativeId,
+      receiverThreadIds: [child],
+      agentsStates: {},
+      ...fields,
+    });
+    publish(call("spawnAgent", "completed"));
+    const message = call("sendInput", "inProgress");
+    publish(message, "item/started");
+    const continueTurn = () => {
+      if (active?.turnId !== turnId) return;
+      if (!configuration().showMixedCollaboration) {
+        later(continueTurn, 30);
+        return;
+      }
+      Object.assign(message, {
+        status: "failed",
+        error: "Invented agent call rejected",
+      });
+      publish(message);
+      publish({
+        id: `ordinary-tool-${turnId}`,
+        type: "commandExecution",
+        command: "echo invented ordinary tool",
+        status: "completed",
+      });
+      publish(call("wait", "completed"));
+      const finish = () => {
+        if (active?.turnId !== turnId) return;
+        if (!configuration().finishCollaboration) later(finish, 30);
+        else {
+          text("Invented final reply");
+          complete();
+        }
+      };
+      later(finish, 30);
+    };
+    later(continueTurn, 30);
+    return;
+  }
   if (configuration().finalOnly) {
     later(() => {
       text(`DONE ${prompt}`);

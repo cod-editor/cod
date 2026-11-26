@@ -1331,6 +1331,11 @@ export function createConversationViews({
         const info = entry.tool.details as Record<string, unknown> | null;
         tool.dataset.toolPhase = entry.tool.phase;
         tool.dataset.compactCaption = compactToolCaption(info);
+        if (
+          info?.type === "collabAgentToolCall" ||
+          info?.type === "subAgentActivity"
+        )
+          tool.dataset.collaborationActivity = "true";
         const failed = !!(
           info?.error ||
           info?.isError ||
