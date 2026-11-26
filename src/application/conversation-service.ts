@@ -76,6 +76,7 @@ export class ConversationApplicationService {
   >();
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
+  private claudeAdmissions = new Set<string>();
   private externalTurns = new Set<string>();
   private steering = new Set<string>();
   private pendingToolResults = new Map<string, number>();
@@ -238,7 +239,11 @@ export class ConversationApplicationService {
       : undefined;
   }
   isActive(id: string): boolean {
-    return this.activeTurns.has(id) || this.pendingToolResults.has(id);
+    return (
+      this.activeTurns.has(id) ||
+      this.claudeAdmissions.has(id) ||
+      this.pendingToolResults.has(id)
+    );
   }
   reserve(id: string): void {
     if (this.isActive(id))
@@ -585,6 +590,7 @@ export class ConversationApplicationService {
         ? await adapter.resume(nativeId)
         : await adapter.create();
       this.assertCurrent(conversation);
+      this.checkClaudeController(conversation);
       if (resume) {
         const metadata = object(native.metadata);
         if (metadata.turnsBackwardsCursor || metadata.itemsBackwardsCursor)
@@ -845,6 +851,7 @@ export class ConversationApplicationService {
     id: string,
   ): Promise<{ id: string; paneId: string; terminalId: string }> {
     const terminalId = randomUUID();
+    await this.recoverIdleClaudeSubmission(this.store.conversation(id));
     const { conversation, workspace } = await this.store.serialize(() => {
       const conversation = this.store.conversation(id);
       if (
@@ -854,6 +861,10 @@ export class ConversationApplicationService {
         )
       )
         throw new Error("This saved Codex session was moved to Linux");
+      if (conversation.claudeSubmission)
+        throw new Error(
+          "Resolve the last Claude Code delivery before continuing in CLI",
+        );
       const reason = conversationHandoffReason(this.store.data, conversation);
       if (reason) throw new Error(reason);
       if (this.isActive(id) || this.controllerInitializations.has(id))
@@ -1077,6 +1088,7 @@ export class ConversationApplicationService {
       delete conversation.detachedOwner;
       this.assertCurrent(conversation);
     }
+    await this.recoverIdleClaudeSubmission(conversation);
     const adapter = await this.adapterFor(conversation);
     this.assertCurrent(conversation);
     this.controllers.set(conversation.id, adapter);
@@ -1085,6 +1097,7 @@ export class ConversationApplicationService {
     try {
       const native = await adapter.resume(conversation.nativeId);
       this.assertCurrent(conversation);
+      this.checkClaudeController(conversation);
       const metadata = object(native.metadata);
       if (metadata.turnsBackwardsCursor || metadata.itemsBackwardsCursor)
         staged.partial = true;
@@ -1116,6 +1129,13 @@ export class ConversationApplicationService {
     } finally {
       this.resumeContexts.delete(conversation.id);
     }
+  }
+
+  private checkClaudeController(conversation: ConversationState): void {
+    if (conversation.provider === "claude" && conversation.status === "failed")
+      throw new Error(
+        conversation.error ?? "The native Claude Code connection ended",
+      );
   }
 
   validateImages(
@@ -1188,12 +1208,15 @@ export class ConversationApplicationService {
     text: string,
     images: import("../providers/types").ImageAttachment[],
     writer?: string,
+    expectedVersion?: string,
   ): void {
     const workspace = this.store.workspace(conversation.workspaceId);
     const draft = workspace.chatDrafts?.[conversation.paneId];
     const attachments = draft?.images ?? [];
     if (
       !draft?.localDraft &&
+      (expectedVersion === undefined ||
+        (draft?.version ?? "") === expectedVersion) &&
       draft?.text === text &&
       attachments.length === images.length &&
       attachments.every(
@@ -1214,6 +1237,85 @@ export class ConversationApplicationService {
             : draft.writer,
         clearedFromVersion: draft.version ?? "",
       };
+    }
+  }
+
+  private async recoverClaudeSubmission(conversation: ConversationState) {
+    const pending = conversation.claudeSubmission;
+    if (!pending) return;
+    let saved: boolean | undefined;
+    try {
+      const history = await readClaudeSession(
+        conversation.cwd,
+        conversation.nativeId,
+      );
+      const unrecorded = object(conversation.metadata).unrecorded === true;
+      if (history?.messages.length || unrecorded)
+        saved =
+          history?.messages.some((row) => row.uuid === pending.messageId) ??
+          false;
+    } catch {
+      // A read failure cannot establish that the prompt was never saved.
+    }
+    if (saved === undefined)
+      throw new Error(
+        "Claude Code delivery could not be verified. Check the native session before sending again.",
+      );
+    const messageId = `claude/live/${conversation.nativeId}/${pending.messageId}`;
+    return this.store.change(() => {
+      this.assertCurrent(conversation);
+      if (conversation.claudeSubmission !== pending)
+        throw new Error("The Claude Code submission changed");
+      const prompt = conversation.messages.find(({ id }) => id === messageId);
+      const workspace = this.store.workspace(conversation.workspaceId);
+      const draft = workspace.chatDrafts?.[conversation.paneId];
+      if (saved) {
+        if (prompt && pending.draftVersion !== undefined)
+          this.clearSubmittedDraft(
+            conversation,
+            prompt.text,
+            prompt.images ?? [],
+            undefined,
+            pending.draftVersion,
+          );
+        conversation.metadata = {
+          ...object(conversation.metadata),
+          unrecorded: false,
+        };
+      } else {
+        if (
+          prompt &&
+          pending.draftVersion !== undefined &&
+          draft?.clearedFromVersion === pending.draftVersion &&
+          draft.text === "" &&
+          !draft.images?.length &&
+          !draft.localDraft
+        ) {
+          workspace.chatDrafts![conversation.paneId] = {
+            text: prompt.text,
+            ...(prompt.images?.length ? { images: prompt.images } : {}),
+            version: randomUUID(),
+            writer: draft.writer,
+          };
+        }
+        conversation.messages = conversation.messages.filter(
+          ({ id }) => id !== messageId,
+        );
+      }
+      delete conversation.claudeSubmission;
+      return { saved, prompt };
+    });
+  }
+
+  private async recoverIdleClaudeSubmission(conversation: ConversationState) {
+    if (!conversation.claudeSubmission || this.isActive(conversation.id))
+      return;
+    this.claudeAdmissions.add(conversation.id);
+    try {
+      return await this.recoverClaudeSubmission(conversation);
+    } finally {
+      this.claudeAdmissions.delete(conversation.id);
+      this.scheduleQueue(conversation.id);
     }
   }
 
@@ -1238,6 +1340,25 @@ export class ConversationApplicationService {
       throw new Error("Message must not be blank");
     if (conversation.handoffTerminalId)
       throw new Error("Return to chat before sending a message");
+    if (this.claudeAdmissions.has(conversation.id))
+      throw new Error(
+        "Wait while Cod verifies the last Claude Code submission.",
+      );
+    const recovered = conversation.claudeSubmission
+      ? await this.recoverIdleClaudeSubmission(conversation)
+      : undefined;
+    if (
+      recovered?.saved &&
+      recovered.prompt?.text === text &&
+      (recovered.prompt.images ?? []).length === images.length &&
+      (recovered.prompt.images ?? []).every(
+        (image, index) =>
+          image.data === images[index]?.data &&
+          image.mimeType === images[index]?.mimeType &&
+          image.reference === images[index]?.reference,
+      )
+    )
+      throw new Error("Claude Code already saved that prompt.");
     if (!fromQueue && request.pageId && this.isActive(conversation.id))
       throw new Error("Origin conversation is busy");
     if (
@@ -1315,8 +1436,7 @@ export class ConversationApplicationService {
       this.scheduleQueue(conversation.id);
       return { id: conversation.id, status: "queued", messageId };
     }
-    if (this.activeTurns.has(conversation.id))
-      throw new Error("Conversation is busy");
+    if (this.isActive(conversation.id)) throw new Error("Conversation is busy");
     if (!fromQueue) conversation.queuePaused = false;
     this.activeTurns.add(conversation.id);
     try {
@@ -1346,29 +1466,66 @@ export class ConversationApplicationService {
         conversation.completionRevision ?? 0;
       const awaitNativeReceipt =
         conversation.provider === "claude" && !fromQueue && !questionId;
+      const draftVersion = awaitNativeReceipt
+        ? (this.store.workspace(conversation.workspaceId).chatDrafts?.[
+            conversation.paneId
+          ]?.version ?? "")
+        : undefined;
       const clearDraft = () =>
         this.clearSubmittedDraft(
           conversation,
           text,
           images,
           request.writer as string | undefined,
+          draftVersion,
         );
       if (!fromQueue && !questionId && !awaitNativeReceipt) clearDraft();
       this.store.notify();
-      this.store.schedulePersist();
-      let confirm!: () => void;
-      const accepted = new Promise<void>((resolve) => {
-        confirm = resolve;
-      });
-      const turn = adapter.send(text, images, skills, {
-        id: userMessageId,
-        accepted: confirm,
-      });
+      if (awaitNativeReceipt) {
+        this.claudeAdmissions.add(conversation.id);
+        conversation.claudeSubmission = {
+          messageId: userMessageId,
+          draftVersion,
+        };
+        await this.store.serialize(() => this.store.persist());
+        this.assertCurrent(conversation);
+      } else {
+        this.store.schedulePersist();
+      }
+      let confirm: (() => void) | undefined;
+      let nativeAccepted = false;
+      const accepted = awaitNativeReceipt
+        ? new Promise<void>((resolve) => {
+            confirm = resolve;
+          })
+        : undefined;
+      const turn = adapter.send(
+        text,
+        images,
+        skills,
+        conversation.provider === "claude"
+          ? {
+              id: userMessageId,
+              accepted: () => {
+                nativeAccepted = true;
+                confirm?.();
+              },
+            }
+          : undefined,
+      );
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
         (outcome) => {
           if (this.store.closing) return;
+          if (
+            outcome.status === "completed" &&
+            nativeAccepted &&
+            conversation.claudeSubmission?.messageId === userMessageId
+          ) {
+            clearDraft();
+            delete conversation.claudeSubmission;
+          }
           if (this.turnClocks.get(conversation.id)?.id === turnId) {
             this.finishTurn(conversation, outcome.status);
             this.activeTurns.delete(conversation.id);
@@ -1414,7 +1571,7 @@ export class ConversationApplicationService {
           this.store.schedulePersist(true);
         },
       );
-      if (awaitNativeReceipt) {
+      if (accepted) {
         const received = await Promise.race([
           accepted.then(() => true),
           turn.then(
@@ -1423,29 +1580,13 @@ export class ConversationApplicationService {
           ),
         ]);
         if (!received) {
-          const history = await readClaudeSession(
-            conversation.cwd,
-            conversation.nativeId,
-          );
-          if (!history?.messages.some((row) => row.uuid === userMessageId)) {
-            conversation.messages = conversation.messages.filter(
-              (row) =>
-                row.id !==
-                `claude/live/${conversation.nativeId}/${userMessageId}`,
-            );
-            this.store.notify();
-            this.store.schedulePersist(true);
+          if (!(await this.recoverClaudeSubmission(conversation))?.saved)
             throw new Error(
               "Claude Code did not save this prompt. The draft is ready to retry.",
             );
-          }
         }
         this.assertCurrent(conversation);
         clearDraft();
-        conversation.metadata = {
-          ...object(conversation.metadata),
-          unrecorded: false,
-        };
         this.store.notify();
         this.store.schedulePersist(true);
       }
@@ -1453,6 +1594,9 @@ export class ConversationApplicationService {
     } catch (error) {
       this.release(conversation.id);
       throw error;
+    } finally {
+      if (this.claudeAdmissions.delete(conversation.id))
+        this.scheduleQueue(conversation.id);
     }
   }
 
@@ -1817,6 +1961,10 @@ export class ConversationApplicationService {
     }
     const resume = this.resumeContexts.get(id);
     if (resume) {
+      if (conversation.provider === "claude" && event.type === "error") {
+        conversation.status = "failed";
+        conversation.error = event.message;
+      }
       if (event.type === "state" && event.state === "starting")
         conversation.status = "starting";
       if (conversation.provider === "codex" && event.type === "history") {
@@ -2516,6 +2664,16 @@ export class ConversationApplicationService {
           conversation.queuePaused = true;
           for (const message of conversation.queuedMessages)
             if (message.status === "sending") message.status = "uncertain";
+        }
+        if (conversation.claudeSubmission) {
+          try {
+            await this.recoverClaudeSubmission(conversation);
+          } catch (error) {
+            conversation.status = "failed";
+            conversation.error =
+              error instanceof Error ? error.message : String(error);
+            return;
+          }
         }
         const cursor = conversation.detachedOwner;
         if (cursor && this.detached) {

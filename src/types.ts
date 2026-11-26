@@ -195,6 +195,7 @@ export interface ConversationState {
   queuedMessages?: QueuedMessage[];
   reservedQuestionAnswers?: string[];
   queuePaused?: boolean;
+  claudeSubmission?: { messageId: string; draftVersion?: string };
   displayName?: string;
   handoffTerminalId?: string;
   taskStatus?: "working" | "waiting" | "review" | "ready" | "failed";

@@ -55,6 +55,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   };
   private id: string | null = null;
   private closed = false;
+  private failure?: Error;
   private native?: Awaited<ReturnType<typeof openClaudeSession>>;
   private reading?: Promise<void>;
   private disposal?: Promise<void>;
@@ -166,9 +167,9 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   private async *inputs() {
-    while (!this.closed) {
+    while (!this.closed && !this.failure) {
       const message = await this.input.promise;
-      if (!message || this.closed) return;
+      if (!message || this.closed || this.failure) return;
       this.input = deferred<SDKUserMessage | undefined>();
       yield message;
     }
@@ -180,11 +181,14 @@ export class ClaudeAdapter implements ProviderAdapter {
       if (!this.closed) throw new Error();
     } catch {
       if (!this.closed) {
-        const message = "The native Claude Code connection ended";
-        this.active?.reject(new Error(message));
+        this.failure = new Error("The native Claude Code connection ended");
+        this.active?.reject(this.failure);
         this.active = undefined;
         this.submission = undefined;
-        this.emit({ type: "error", message });
+        this.input.resolve(undefined);
+        for (const settle of this.permissions.values())
+          settle({ behavior: "deny", message: this.failure.message });
+        this.emit({ type: "error", message: this.failure.message });
       }
     }
   }
@@ -193,6 +197,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (
       event.type === "user" &&
       "isReplay" in event &&
+      event.isReplay &&
       event.session_id === this.id
     )
       this.acceptPrompt(event.uuid);
@@ -264,7 +269,11 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.active = undefined;
     const interrupted = this.interrupting;
     this.interrupting = false;
-    if (event.session_id === this.id && event.user_message_uuid)
+    if (
+      event.session_id === this.id &&
+      !event.is_error &&
+      event.user_message_uuid
+    )
       this.acceptPrompt(event.user_message_uuid);
     this.submission = undefined;
     if (event.session_id !== this.id || (event.is_error && !interrupted)) {
@@ -313,7 +322,8 @@ export class ClaudeAdapter implements ProviderAdapter {
         if (!this.permissions.delete(requestId)) return;
         signal.removeEventListener("abort", close);
         this.emit({ type: "permission-resolved", requestId });
-        if (!this.closed) this.emit({ type: "state", state: "working" });
+        if (!this.closed && !this.failure)
+          this.emit({ type: "state", state: "working" });
         resolve({ ...result, toolUseID });
       };
       this.permissions.set(requestId, finish);
@@ -345,6 +355,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   private query() {
+    if (this.failure) throw this.failure;
     if (!this.native || this.closed)
       throw new Error("Claude Code controller is not ready");
     return this.native.query;
