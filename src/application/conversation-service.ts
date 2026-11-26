@@ -14,7 +14,12 @@ import { conversationLabel } from "../message-label";
 import { parseProviderCommand } from "../provider-commands";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { stat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
+import { NativeAdapter } from "../providers/adapter";
+import {
+  verifyLinkedCodexRollout,
+  type LinkedCodexRollout,
+} from "../providers/codex-rollout";
 import { resolveProviderExecutable } from "../provider-executables";
 import { defaultSocketPath } from "../paths";
 import {
@@ -616,6 +621,7 @@ export class ConversationApplicationService {
     cwd: string;
     requestedCwd: string;
     rolloutPath: string;
+    linkedHistory?: LinkedCodexRollout["history"];
     title?: string;
     draft?: string;
   }): Promise<{ id: string; paneId: string; nativeId: string }> {
@@ -655,6 +661,13 @@ export class ConversationApplicationService {
       this.replays.delete(reader);
       await reader.dispose();
     }
+    if (input.linkedHistory)
+      await verifyLinkedCodexRollout(
+        input.nativeId,
+        input.cwd,
+        input.rolloutPath,
+        input.linkedHistory,
+      );
     return this.store.change(() => {
       if (this.store.closing)
         throw new Error("The Linux workspace host is shutting down");
@@ -687,7 +700,12 @@ export class ConversationApplicationService {
         nativeId: input.nativeId,
       };
       (this.store.data.completedCodexImports ??= {})[input.transferId] =
-        receipt;
+        input.linkedHistory
+          ? {
+              ...receipt,
+              linkedRollout: { cwd: input.cwd, path: input.rolloutPath },
+            }
+          : receipt;
       delete this.store.data.pendingCodexImports![input.nativeId];
       return receipt;
     });
@@ -2021,11 +2039,40 @@ export class ConversationApplicationService {
             ? path.resolve(request.cwd)
             : (workspace.folders[0] ?? process.env.HOME ?? process.cwd());
         const resolved = await resolveProviderExecutable(provider);
-        const adapter = (
-          provider === "codex" ? createCodexAdapter : createKimiAdapter
-        )({ cwd, executable: resolved.executable, args: resolved.args });
+        const adapter = new NativeAdapter(provider, { cwd, ...resolved });
         try {
-          return await adapter.discover();
+          const ordinary = await adapter.discover();
+          if (provider !== "codex") return ordinary;
+          const imported = Object.values(
+            this.store.data.completedCodexImports ?? {},
+          );
+          if (!imported.some((receipt) => receipt.linkedRollout))
+            return ordinary;
+          const directory = await realpath(cwd);
+          const discovered = new Set(ordinary.map(({ nativeId }) => nativeId));
+          for (const { nativeId, linkedRollout } of imported) {
+            if (linkedRollout?.cwd !== directory || discovered.has(nativeId))
+              continue;
+            // A stale provider index row after removal is not a saved session.
+            const file = await lstat(linkedRollout.path).catch((error) => {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+            });
+            if (
+              !file?.isFile() ||
+              (await realpath(linkedRollout.path)) !== linkedRollout.path
+            )
+              continue;
+            const result = await adapter.codexDiscoverImportedThread(
+              nativeId,
+              linkedRollout.path,
+            );
+            if (result) {
+              ordinary.push(result);
+              discovered.add(nativeId);
+            }
+          }
+          return ordinary;
         } finally {
           await adapter.dispose();
         }

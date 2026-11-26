@@ -1,6 +1,10 @@
 import { codexQuestions, questionAnswers } from "../codex-questions.ts";
 import { codexHistoryTurns } from "../conversation-history.ts";
-import { codexHistoryPage, readCodexHistoryPage } from "./codex-history.ts";
+import {
+  codexHistoryPage,
+  codexLinkedHistoryProof,
+  readCodexHistoryPage,
+} from "./codex-history.ts";
 import { CodexBackground } from "./codex-background.ts";
 import { listCodexChildren } from "./codex-children.ts";
 import { NativeInspection, type InspectionSection } from "./inspection.ts";
@@ -69,6 +73,7 @@ export class NativeAdapter implements ProviderAdapter {
   private failure?: Error;
   private id: string | null = null;
   private paginatedHistory = false;
+  private codexVersion?: string;
   private active?: ActiveTurn;
   private steeringUnavailable = false;
   private finishedTurns = new Set<string>();
@@ -173,9 +178,13 @@ export class NativeAdapter implements ProviderAdapter {
               }
             : { protocolVersion: 1, clientCapabilities: {} },
         );
-        if (this.provider === "codex") this.rpc.notify("initialized", {});
-        else if (object(initialized).protocolVersion !== 1)
+        if (this.provider === "codex") {
+          const agent = string(object(initialized).userAgent);
+          this.codexVersion = agent?.match(/^cod\/([^ ]+) /)?.[1];
+          this.rpc.notify("initialized", {});
+        } else if (object(initialized).protocolVersion !== 1) {
           throw new Error("Unsupported Kimi ACP protocol version");
+        }
       })().catch((error) => {
         this.fail(errorOf(error));
         throw error;
@@ -319,6 +328,82 @@ export class NativeAdapter implements ProviderAdapter {
     if (thread.id !== nativeId || !rollout || !isAbsolute(rollout))
       throw new Error("Codex could not identify this saved session file");
     return rollout;
+  }
+
+  async supportsLinkedCodexTransfer(): Promise<boolean> {
+    if (this.provider !== "codex") return false;
+    await this.initialize();
+    return this.codexVersion === "0.172.0";
+  }
+
+  async codexLinkedTransferProof(nativeId: string) {
+    if (!(await this.supportsLinkedCodexTransfer()))
+      throw new Error("Linked transfers require Codex 0.172.0");
+    return codexLinkedHistoryProof(this.rpc!, nativeId);
+  }
+
+  async codexReindexLinkedTransfer(nativeId: string, lastTurnId: string) {
+    if (this.id || this.binding || !(await this.supportsLinkedCodexTransfer()))
+      throw new Error(
+        "Linked transfer indexing requires an unbound Codex 0.172.0 client",
+      );
+    const result = object(
+      await this.rpc!.request("thread/fork", {
+        threadId: nativeId,
+        cwd: this.cwd,
+        lastTurnId,
+        ephemeral: true,
+        excludeTurns: true,
+      }),
+    );
+    const fork = object(result.thread);
+    const helperId = string(fork.id);
+    if (!helperId || helperId === nativeId || fork.path !== null)
+      throw new Error("Codex did not create a transient history index helper");
+    const unsubscribed = object(
+      await this.rpc!.request("thread/unsubscribe", {
+        threadId: helperId,
+      }),
+    );
+    if (unsubscribed.status !== "unsubscribed")
+      throw new Error("Codex could not release the history index helper");
+  }
+
+  async codexDiscoverImportedThread(
+    nativeId: string,
+    rolloutPath: string,
+  ): Promise<Conversation | undefined> {
+    if (!(await this.supportsLinkedCodexTransfer())) return;
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = object(
+        await this.rpc!.request("thread/list", {
+          cwd: this.cwd,
+          sourceKinds: [],
+          limit: 100,
+          useStateDbOnly: true,
+          ...(cursor ? { cursor } : {}),
+        }),
+      );
+      if (!Array.isArray(page.data))
+        throw new Error(
+          "Codex returned invalid imported session discovery data",
+        );
+      for (const row of page.data) {
+        const thread = object(row);
+        if (
+          thread.id === nativeId &&
+          thread.path === rolloutPath &&
+          thread.cwd === this.cwd
+        )
+          return { provider: "codex", nativeId, cwd: this.cwd, metadata: row };
+      }
+      cursor = string(page.nextCursor);
+      if (cursor && cursors.has(cursor))
+        throw new Error("Provider repeated an imported session cursor");
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
   }
 
   async discover(): Promise<Conversation[]> {

@@ -1,6 +1,6 @@
 import { openWorkspaceState } from "../support/workspace-state";
 import { expect, test } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { connect } from "node:net";
@@ -313,15 +313,11 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
     await desktop.configure({
       codex: { portableRollout: true, portableReadPath: replacement },
     });
-    await expectPreflightRefusal(
-      "linked Codex history that cannot move to Linux",
-    );
+    await expectPreflightRefusal("unsupported linked Codex history");
     await desktop.configure({ codex: { portableRollout: true } });
     await unlink(replacement);
     await writeFile(localRollout, linkedHeader);
-    await expectPreflightRefusal(
-      "linked Codex history that cannot move to Linux",
-    );
+    await expectPreflightRefusal("unsupported linked Codex history");
     const outsideRollout = path.join(desktop.temporary, "outside.jsonl");
     await writeFile(outsideRollout, sourceBytes);
     await unlink(localRollout);
@@ -582,6 +578,234 @@ test("A saved Codex chat moves to Linux once after a lost reply and restart", as
         )
       ).stderr,
     ).toContain("moved to Linux");
+  } finally {
+    await desktop.cleanup();
+    await stopHost();
+    await linux.cleanup();
+  }
+});
+
+test("A paired linked Codex transfer recovers only the selected thread and its retained history", async () => {
+  test.skip(process.platform !== "linux", "The workspace host requires Linux");
+  test.setTimeout(75_000);
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  for (const app of [desktop, linux])
+    app.environment.CODEX_HOME = path.join(app.temporary, "invented-native");
+  await desktop.configure({ codex: { portableRollout: true } });
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+  const startHost = () =>
+    spawn(process.execPath, ["dist/workspace-host.cjs", linux.data], {
+      env: linux.environment,
+      stdio: "ignore",
+    });
+  let host = startHost();
+  const stopHost = async () => {
+    if (host.exitCode !== null || host.signalCode !== null) return;
+    const exited = once(host, "exit");
+    host.kill();
+    await exited;
+  };
+  const ready = () =>
+    expect.poll(async () => (await linux.raw("capabilities")).code).toBe(0);
+  try {
+    await ready();
+    const destination = await linux.cli<{ id: string }>(
+      "workspace",
+      "prepare",
+      "--name",
+      "Invented linked destination",
+      "--folders",
+      JSON.stringify(linux.folders),
+    );
+    await desktop.start();
+    const source = await desktop.create("Invented linked source");
+    const chat = await desktop.newChat(source, "codex");
+    await desktop.send(chat.id, "Retained invented turn");
+    await expect
+      .poll(async () => (await desktop.inspect(chat.id)).status)
+      .toBe("ready");
+
+    const stem = `rollout-2026-01-01T12-00-00-${chat.nativeId}`;
+    const originalName = stem + ".jsonl";
+    const selectedName = stem + "_" + randomUUID() + ".jsonl";
+    const relative = path.join("sessions", "2026", "01", "01");
+    const original = path.join(
+      desktop.environment.CODEX_HOME,
+      relative,
+      originalName,
+    );
+    const selected = path.join(
+      desktop.environment.CODEX_HOME,
+      relative,
+      selectedName,
+    );
+    const target = path.join(
+      linux.environment.CODEX_HOME,
+      relative,
+      selectedName,
+    );
+    const archive = path.join(
+      linux.environment.CODEX_HOME,
+      "archived_sessions",
+      originalName,
+    );
+    const history = JSON.parse(
+      (await readFile(original, "utf8")).split("\n")[1],
+    );
+    history[0].id = randomUUID();
+    const header = (historyBase?: Record<string, unknown>) =>
+      JSON.stringify({
+        type: "session_meta",
+        ordinal: 1,
+        payload: { id: chat.nativeId, history_base: historyBase },
+      }) + "\n";
+    const retained =
+      header() + JSON.stringify({ ordinal: 2, type: "event_msg" }) + "\n";
+    const originalBytes =
+      retained +
+      '{"ordinal":3,"type":"event_msg","text":"Reverted invented content"}\n';
+    const selectedBytes =
+      header({
+        thread_id: chat.nativeId,
+        end_ordinal_exclusive: 3,
+        end_byte_offset: Buffer.byteLength(retained),
+      }) +
+      JSON.stringify(history) +
+      "\n";
+    await writeFile(original, originalBytes);
+    await writeFile(selected, selectedBytes);
+    await desktop.configure({
+      codex: {
+        portableRollout: true,
+        linkedTransfer: {
+          version: "0.172.0",
+          rolloutPath: selected,
+        },
+      },
+    });
+    const ordinary = {
+      nativeId: "ordinary-invented-discovery",
+      cwd: linux.folders[0],
+      name: "Neighbor",
+    };
+    const destinationProvider = (version: string, failIndex = false) =>
+      linux.configure({
+        codex: {
+          portableRollout: true,
+          sessions: [ordinary],
+          linkedTransfer: {
+            version,
+            rolloutPath: target,
+            archivePath: archive,
+            cwd: linux.folders[0],
+            failIndex,
+          },
+        },
+      });
+
+    const key = path.join(desktop.temporary, "invented-linked-transfer-key");
+    execFileSync("/usr/bin/ssh-keygen", [
+      "-q",
+      "-N",
+      "",
+      "-t",
+      "ed25519",
+      "-f",
+      key,
+    ]);
+    await writeFile(
+      path.join(linux.data, "desktop-signers"),
+      'cod-desktop namespaces="cod-review" ' +
+        (await readFile(key + ".pub", "utf8")),
+      { mode: 0o600 },
+    );
+    const dropReply = path.join(desktop.temporary, "drop-linked-reply");
+    const connectPaired = async () => {
+      await installWorkspaceRelay(desktop, dropReply);
+      await connectWorkspace(desktop, linux.socket, key + ".pub");
+    };
+    const move = [
+      "conversation",
+      "transfer",
+      "--id",
+      chat.id,
+      "--workspace",
+      destination.id,
+      "--cwd",
+      linux.folders[0],
+    ];
+    const snapshot = () => desktop.cli<AppState>("state");
+    const discoveredIds = async () =>
+      (
+        await linux.cli<Array<{ nativeId: string }>>(
+          "conversation",
+          "discover",
+          "--workspace",
+          destination.id,
+          "--provider",
+          "codex",
+        )
+      )
+        .map(({ nativeId }) => nativeId)
+        .sort();
+    await connectPaired();
+    await destinationProvider("0.171.0");
+    expect((await desktop.raw(...move)).stderr).toContain(
+      "does not support linked history",
+    );
+    expect((await snapshot()).conversations[0].transfer).toBeUndefined();
+
+    await destinationProvider("0.172.0", true);
+    expect((await desktop.raw(...move)).stderr).toContain(
+      "Invented linked reindex failure",
+    );
+    expect((await snapshot()).conversations[0].transfer).toBeUndefined();
+    expect((await linux.cli<AppState>("state")).conversations).toEqual([]);
+    await expect(readFile(target, "utf8")).rejects.toThrow("ENOENT");
+    await expect(readFile(archive, "utf8")).rejects.toThrow("ENOENT");
+    expect(await discoveredIds()).toEqual([ordinary.nativeId]);
+    expect(await linux.prompts()).toEqual([]);
+
+    await destinationProvider("0.172.0");
+    await writeFile(dropReply, "conversation.accept-transfer:commit");
+    expect((await desktop.raw(...move)).stderr).toContain("did not confirm");
+    expect((await snapshot()).conversations[0].transfer?.committing).toBe(true);
+    await desktop.stop();
+    await stopHost();
+    host = startHost();
+    await ready();
+    await desktop.start();
+    await connectPaired();
+    await rename(selected, selected + ".held");
+    const receipt = await desktop.cli<Chat>(...move);
+    await rename(selected + ".held", selected);
+    expect(receipt.nativeId).toBe(chat.nativeId);
+    expect((await snapshot()).conversations).toEqual([]);
+    expect((await linux.cli<AppState>("state")).conversations).toHaveLength(1);
+    expect(
+      (await linux.inspect(receipt.id)).messages.some(
+        ({ text }) => text === "Retained invented turn",
+      ),
+    ).toBe(true);
+    expect(await readFile(original, "utf8")).toBe(originalBytes);
+    expect(await readFile(archive, "utf8")).toBe(retained);
+    expect(await readFile(selected, "utf8")).toBe(selectedBytes);
+    expect(await discoveredIds()).toEqual(
+      [chat.nativeId, ordinary.nativeId].sort(),
+    );
+    await rename(target, target + ".held");
+    expect(await discoveredIds()).toEqual([ordinary.nativeId]);
+    await rename(target + ".held", target);
+    expect(await linux.prompts()).toEqual([]);
+    await linux.send(receipt.id, "One explicit invented follow-up");
+    await expect
+      .poll(async () => (await linux.inspect(receipt.id)).status)
+      .toBe("ready");
+    expect(await linux.prompts()).toHaveLength(1);
   } finally {
     await desktop.cleanup();
     await stopHost();

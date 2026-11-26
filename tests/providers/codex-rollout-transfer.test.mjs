@@ -177,6 +177,67 @@ test("Codex staged transfers verify bounded ordered chunks and own the installed
     code: "ENOENT",
   });
 
+  const prefix = Buffer.from(
+    meta() + JSON.stringify({ ordinal: 2, type: "event_msg" }) + "\n",
+  );
+  const revisionHeader = meta({
+    thread_id: nativeId,
+    end_byte_offset: prefix.length,
+    end_ordinal_exclusive: 3,
+  });
+  const revision = Buffer.concat([
+    Buffer.from(revisionHeader),
+    Buffer.alloc(chunk - 100, 0x20),
+    Buffer.from("\n"),
+  ]);
+  const linkedManifest = {
+    files: [entry(otherName, revision), entry(activeName, prefix)],
+    history: { lastTurnId: revisionId, digest: digest(prefix) },
+  };
+  const combined = Buffer.concat([revision, prefix]);
+  const linkedTransfer = randomUUID();
+  await assert.rejects(
+    beginCodexStage(linkedTransfer, binding, {
+      ...linkedManifest,
+      files: [
+        linkedManifest.files[0],
+        {
+          ...linkedManifest.files[1],
+          filename: activeName.replace(nativeId, randomUUID()),
+        },
+      ],
+    }),
+    /native ID/,
+  );
+  await beginCodexStage(linkedTransfer, binding, linkedManifest);
+  for (let offset = 0; offset < combined.length; offset += chunk)
+    await upload(
+      linkedTransfer,
+      offset,
+      combined.subarray(offset, offset + chunk),
+    );
+  const linkedStage = await readCodexStage(linkedTransfer, binding);
+  assert.deepEqual(linkedStage.manifest, linkedManifest);
+  const imported = await installCodexRollout(
+    nativeId,
+    linkedManifest,
+    linkedStage.file,
+    linkedTransfer,
+  );
+  assert.deepEqual(await readFile(imported.file), revision);
+  const archived = path.join(home, "archived_sessions", activeName);
+  assert.deepEqual(await readFile(archived), prefix);
+  await installCodexRollout(
+    nativeId,
+    linkedManifest,
+    linkedStage.file,
+    linkedTransfer,
+  );
+  await imported.finish(true);
+  await assert.rejects(stat(imported.file), { code: "ENOENT" });
+  await assert.rejects(stat(archived), { code: "ENOENT" });
+  await removeCodexStage(linkedTransfer, binding);
+
   const journals = Array.from({ length: 4 }, () => randomUUID());
   await Promise.all(
     journals.map((id) => beginCodexStage(id, binding, manifest)),

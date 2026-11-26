@@ -6,6 +6,8 @@ import {
   installCodexRollout,
   preflightCodexRollout,
   readCodexRollout,
+  supportsLinkedCodexRollout,
+  reindexLinkedCodexRollout,
 } from "../providers/codex-rollout";
 import {
   appendCodexChunk,
@@ -31,7 +33,7 @@ interface TransferReceipt {
 }
 
 type TransferReply =
-  | { status: "ready"; chunkedTransfer?: true }
+  | { status: "ready"; chunkedTransfer?: true; linkedTransfer?: true }
   | { status: "moved"; receipt: TransferReceipt }
   | { status: "rejected"; reason: string };
 
@@ -80,10 +82,11 @@ export class ConversationTransferService {
       const { nativeId, cwd } = original;
       if (!original.transfer) {
         this.checkSourceReadiness(original);
-        await preflightCodexRollout(nativeId, cwd);
+        const linked = await preflightCodexRollout(nativeId, cwd);
         const checked = (await receive({
           op: "conversation.accept-transfer",
           check: true,
+          ...(linked ? { linked: true } : {}),
           nativeId,
           workspace: destination.workspace,
           cwd: destination.cwd,
@@ -97,6 +100,10 @@ export class ConversationTransferService {
         if (!checked.chunkedTransfer)
           throw new Error(
             "Update the Linux workspace host before moving this chat",
+          );
+        if (linked && !checked.linkedTransfer)
+          throw new Error(
+            "The Linux workspace host does not support linked history. Update it and use Codex 0.172.0 on both hosts.",
           );
       }
       const prepared = await this.store.change(() => {
@@ -267,8 +274,10 @@ export class ConversationTransferService {
       const completed = transferId
         ? this.store.data.completedCodexImports?.[transferId]
         : undefined;
-      if (completed?.nativeId === nativeId)
-        return { status: "moved", receipt: completed };
+      if (completed?.nativeId === nativeId) {
+        const { id, paneId } = completed;
+        return { status: "moved", receipt: { id, paneId, nativeId } };
+      }
       if (completed)
         throw new Error("The transfer ID belongs to a different session");
       const existing = this.store.data.conversations.find(
@@ -297,7 +306,15 @@ export class ConversationTransferService {
         if (pending) throw error;
         return { status: "rejected", reason: reason(error) };
       }
-      if (!transferId) return { status: "ready", chunkedTransfer: true };
+      if (!transferId) {
+        const linkedTransfer =
+          request.linked === true && (await supportsLinkedCodexRollout(cwd));
+        return {
+          status: "ready",
+          chunkedTransfer: true,
+          ...(linkedTransfer ? { linkedTransfer: true } : {}),
+        };
+      }
       if (request.rollout !== undefined && !pending)
         return {
           status: "rejected",
@@ -360,8 +377,13 @@ export class ConversationTransferService {
         this.store.change(() => {
           delete this.store.data.pendingCodexImports![nativeId];
         });
+      const linkedHistory = "files" in manifest ? manifest.history : undefined;
       let installed: Awaited<ReturnType<typeof installCodexRollout>>;
       try {
+        if (linkedHistory && !(await supportsLinkedCodexRollout(cwd)))
+          throw new Error(
+            "Linked transfers require Codex 0.172.0 on the Linux host",
+          );
         installed = await installCodexRollout(
           nativeId,
           manifest,
@@ -376,6 +398,13 @@ export class ConversationTransferService {
       }
       let receipt: TransferReceipt;
       try {
+        if (linkedHistory)
+          await reindexLinkedCodexRollout(
+            nativeId,
+            cwd,
+            installed.file,
+            linkedHistory.lastTurnId,
+          );
         receipt = await this.conversations.importSavedCodex({
           transferId,
           nativeId,
@@ -392,6 +421,7 @@ export class ConversationTransferService {
               ? request.draft
               : undefined,
           rolloutPath: installed.file,
+          linkedHistory,
         });
       } catch (error) {
         await installed.finish(true);

@@ -135,3 +135,67 @@ export async function codexHistoryPage(
         : undefined,
   };
 }
+
+/** Fingerprint provider-visible retained history without carrying it in the transfer manifest. */
+export async function codexLinkedHistoryProof(
+  rpc: RpcTransport,
+  threadId: string,
+) {
+  const hash = createHash("sha256");
+  let lastTurnId: string | undefined;
+  const add = (kind: "turn" | "item", value: unknown) => {
+    hash.update(
+      JSON.stringify([kind, value], (_key, entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry))
+          return entry;
+        return Object.fromEntries(
+          Object.entries(entry).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        );
+      }) + "\n",
+    );
+  };
+  async function* records(
+    method: "thread/turns/list" | "thread/items/list",
+    options: Record<string, unknown>,
+  ) {
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = await readCodexHistoryPage(
+        rpc,
+        method,
+        { threadId, cursor, sortDirection: "desc", ...options },
+        30,
+      );
+      if (!Array.isArray(page.data) || !("nextCursor" in page))
+        throw new Error("Codex did not confirm the complete transfer history");
+      yield* page.data;
+      cursor = string(page.nextCursor);
+      if (cursor && cursors.has(cursor))
+        throw new Error("Codex repeated a transfer history cursor");
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+  }
+  for await (const turn of records("thread/turns/list", {
+    itemsView: "notLoaded",
+  })) {
+    const turnId = string(object(turn).id);
+    if (!turnId)
+      throw new Error("Codex returned a transfer turn without identity");
+    lastTurnId ??= turnId;
+    add("turn", turn);
+    for await (const item of records("thread/items/list", {
+      turnId,
+      deferOutput: { commandExecution: true, mcpToolCall: true },
+    })) {
+      if (object(item).turnId !== turnId)
+        throw new Error("Codex returned items from a different transfer turn");
+      add("item", item);
+    }
+  }
+  if (!lastTurnId)
+    throw new Error("The linked Codex history has no retained turn");
+  return { lastTurnId, digest: hash.digest("hex") };
+}
