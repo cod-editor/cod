@@ -24,6 +24,9 @@ const bridge: CodBridge = {
   openSettings() {
     return ipcRenderer.invoke("cod:settings-open");
   },
+  claudeApiSettings(request) {
+    return ipcRenderer.invoke("cod:claude-api-settings", request);
+  },
   getKeymap() {
     return ipcRenderer.invoke("cod:keymap");
   },

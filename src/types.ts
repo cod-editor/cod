@@ -386,6 +386,9 @@ export interface CodBridge {
     callback: (state: import("./settings").SettingsState) => void,
   ): void;
   openSettings(): Promise<void>;
+  claudeApiSettings(
+    request: import("./application/claude-api-settings").ClaudeApiRequest,
+  ): Promise<import("./application/claude-api-settings").ClaudeApiStatus>;
   getKeymap(): Promise<import("./keyboard").KeymapState>;
   onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
   openKeymap(): Promise<void>;

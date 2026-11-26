@@ -1,5 +1,6 @@
 import { defaultSearchEngine } from "./browser/address";
 import { SettingsService } from "./application/settings-service";
+import type { ClaudeApiSettings } from "./application/claude-api-settings";
 import { IntegrationApplicationService } from "./application/integration-service";
 import { WorkspaceApplicationService } from "./application/workspace-service";
 import { ReviewApplicationService } from "./application/review-service";
@@ -45,6 +46,7 @@ export class ApplicationOperations {
       store: ApplicationStateStore,
       conversations: BrowserConversationPort,
     ) => BrowserApplicationService,
+    claudeApi?: ClaudeApiSettings,
   ) {
     this.settings = new SettingsService(dataDirectory);
     this.store = new ApplicationStateStore(dataDirectory);
@@ -78,6 +80,7 @@ export class ApplicationOperations {
             enabled: () => this.settings.state.values["chat.detachedSessions"],
           }
         : undefined,
+      claudeApi,
     );
     this.reviews = new ReviewApplicationService(this.store, this.conversations);
     this.workspaces = new WorkspaceApplicationService(

@@ -36,6 +36,7 @@ import {
   protocol,
   dialog,
   shell,
+  safeStorage,
   webContents,
   WebContentsView,
   type WebContents,
@@ -45,6 +46,10 @@ import type { Server } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ApplicationOperations } from "./operations";
+import {
+  ClaudeApiSettings,
+  type ClaudeApiRequest,
+} from "./application/claude-api-settings";
 import { desktopWorkspaceOperations } from "./command-catalog";
 import { BrowserApplicationService } from "./application/browser-service";
 import { startCommandSocket } from "./application/command-socket";
@@ -759,11 +764,19 @@ function createWindow(): void {
 
 async function start(): Promise<void> {
   try {
+    const claudeApi = new ClaudeApiSettings(
+      dataDirectory,
+      process.platform === "darwin" &&
+        !app.commandLine.hasSwitch("use-mock-keychain")
+        ? safeStorage
+        : undefined,
+    );
     operations = new ApplicationOperations(
       dataDirectory,
       runningBuild,
       (store, conversations) =>
         new BrowserApplicationService(store, conversations),
+      claudeApi,
     );
     await operations.initialize();
     initialized = true;
@@ -823,6 +836,13 @@ async function start(): Promise<void> {
       const error = await shell.openPath(operations.settings.state.path);
       if (error) throw new Error(error);
     });
+    ipcMain.handle(
+      "cod:claude-api-settings",
+      (event, request: ClaudeApiRequest) => {
+        requireShellRenderer(event);
+        return claudeApi.command(request);
+      },
+    );
     ipcMain.handle("cod:keymap", (event) => {
       requireShellRenderer(event);
       return keymapState;

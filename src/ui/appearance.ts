@@ -12,6 +12,7 @@ import {
   uiSwitch,
 } from "../ui-kit";
 import { readPreference, writePreference } from "./preferences";
+import { claudeApiSettingsEntry } from "./claude-api-settings";
 import {
   defaultSettings,
   settingsSchema,
@@ -386,6 +387,8 @@ export function appearanceDialog(
   const browserRow = settingEntry("Search engine", engine);
   browserRow.reset.setAttribute("aria-label", "Reset Browser Search engine");
   section("Browser").append(browserRow.row);
+  const claudeRoute = claudeApiSettingsEntry();
+  section("Claude Code").append(claudeRoute);
   let browserValue: SearchEngine | undefined;
   let browserBusy = false;
   const refreshBrowser = () => {
@@ -469,6 +472,9 @@ export function appearanceDialog(
       `browser.searchengine browser ${browserRow.row.textContent}`
         .toLowerCase()
         .includes(token),
+    );
+    claudeRoute.hidden = !tokens.every((token) =>
+      "claude code api authentication url token".includes(token),
     );
     for (const element of sections.values())
       element.hidden = [
