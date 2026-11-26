@@ -83,6 +83,7 @@ export interface BrowserRectangle {
 export interface BrowserLayout {
   rectangles: BrowserRectangle[];
   popup?: import("./browser/address-suggestion-types").AddressSuggestionPopup;
+  downloads?: import("./browser/download-presentation").DownloadPopup;
   resumeModal?: number;
 }
 
@@ -401,6 +402,9 @@ export interface CodBridge {
   ): void;
   onBrowserSuggestionDismiss(
     callback: (id: string, revision: number) => void,
+  ): void;
+  onBrowserDownloadDismiss(
+    callback: (revision: number, restore: boolean) => void,
   ): void;
   shellMenu(
     anchor: { x: number; y: number },

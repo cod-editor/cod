@@ -13,7 +13,6 @@ import { createWorkspaceOverview } from "./workspace-overview";
 import type { createWorkspaceNavigation } from "./workspace-navigation";
 import { focusedWebLink, webLink, webLinkMenu } from "./web-links";
 import { browserBookmarks } from "./browser-bookmarks";
-import { browserDownloads } from "./browser-downloads";
 import { sitePermissions } from "./browser-permissions";
 import { browserHistory } from "./browser-library";
 import { showProviderCommands } from "./provider-commands";
@@ -105,6 +104,7 @@ interface CommandFeatures {
   saveFile: (workspace: string, pane: string) => Promise<void>;
   focusNativeView: (id: string) => void;
   showBrowserZoom: (id: string, zoomPercent: number) => void;
+  showDownloads: (browserId?: string) => void;
   stageBrowserBackdrop: (dialog: HTMLDialogElement) => Promise<void>;
   quickTerminal: Pick<
     ReturnType<typeof import("./quick-terminal").createQuickTerminal>,
@@ -1504,7 +1504,9 @@ export function createCommands(
           break;
         }
         case "browser.downloads":
-          browserDownloads(invoke);
+          features.showDownloads(
+            pane?.kind === "browser" ? pane.browserId : undefined,
+          );
           break;
         case "browser.permissions":
           await sitePermissions(

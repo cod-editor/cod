@@ -8,6 +8,7 @@ import {
 } from "../browser/permission-types";
 import { BrowserLibrary } from "../browser/library";
 import { BrowserAddressOverlay } from "../browser/address-overlay";
+import { downloadRows } from "../browser/download-presentation";
 import { isBrowserFailure, isBrowserHome } from "../browser/view-state";
 import { normalizeNavigation } from "../browser/navigation";
 import { readFileSync } from "node:fs";
@@ -372,7 +373,9 @@ export class BrowserApplicationService {
     downloadDirectory: string,
   ): void {
     this.browserWindow = window;
-    this.addressOverlay = new BrowserAddressOverlay(window);
+    this.addressOverlay = new BrowserAddressOverlay(window, (id, action) =>
+      this.handle({ op: "browser.download-action", id, action }),
+    );
     this.sitePermissions = new SitePermissions({
       session,
       owner: (contents) => this.browserService?.owner(contents.id),
@@ -920,7 +923,12 @@ export class BrowserApplicationService {
       : [];
   }
 
-  browserLayout({ rectangles, popup, resumeModal }: BrowserLayout): void {
+  browserLayout({
+    rectangles,
+    popup,
+    downloads,
+    resumeModal,
+  }: BrowserLayout): void {
     const closing =
       resumeModal !== undefined &&
       resumeModal === this.modalPresentation?.opening
@@ -1033,7 +1041,43 @@ export class BrowserApplicationService {
           record.workspaceId === active?.id &&
           !record.agentPage,
       );
-    this.addressOverlay?.update(validOwner ? popup : undefined, popupSlot);
+    const downloadRecord = this.store.data.browsers.find(
+      ({ id }) => id === downloads?.id,
+    );
+    const slot = downloadRecord && bounds.get(downloadRecord.id);
+    const panel = downloads?.bounds;
+    const validDownloads =
+      this.modalPresentation === undefined &&
+      downloads &&
+      downloadRecord &&
+      !downloadRecord.agentPage &&
+      hasViewport(downloadRecord) &&
+      slot &&
+      panel &&
+      Number.isSafeInteger(downloads.revision) &&
+      typeof downloads.fontSize === "string" &&
+      downloads.fontSize.length <= 24 &&
+      typeof downloads.fontFamily === "string" &&
+      downloads.fontFamily.length <= 512 &&
+      [panel.x, panel.y, panel.width, panel.height].every(Number.isInteger) &&
+      panel.width > 0 &&
+      panel.width <= 440 &&
+      panel.height > 0 &&
+      panel.height <= 360 &&
+      panel.x >= slot.x - 1 &&
+      panel.x + panel.width <= slot.x + slot.width + 1 &&
+      panel.y >= 0 &&
+      panel.y + panel.height <= Math.min(height + 1, slot.y + slot.height + 1);
+    this.addressOverlay?.update(
+      validOwner ? popup : undefined,
+      popupSlot,
+      validDownloads
+        ? {
+            popup: downloads,
+            entries: downloadRows(this.store.data.browserDownloads ?? []),
+          }
+        : undefined,
+    );
   }
   selectBrowserContents(contents: import("electron").WebContents): void {
     this.synchronizingBrowserSelection = true;

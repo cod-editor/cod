@@ -28,6 +28,7 @@ let brokenPage = true;
 let requests: string[] = [];
 let slowResponse: import("node:http").ServerResponse | undefined;
 let delayedIcons: import("node:http").ServerResponse[] = [];
+let heldDownloads = new Map<string, import("node:http").ServerResponse>();
 let fixtureJpeg: Buffer | undefined;
 let conventionalIcon: Buffer | undefined;
 let redirectedForge = false;
@@ -207,19 +208,41 @@ async function clickNativeBrowser(x: number, y: number, button = 1) {
     String(button),
   ]);
 }
-async function scrollManager(dialog: Locator, last: Locator) {
+async function scrollManager(
+  dialog: Locator,
+  last: Locator,
+  close = "Done",
+  list = ".ui-dialog-body",
+) {
   const heading = dialog.getByRole("heading", { level: 2 });
-  const done = dialog.getByRole("button", { name: "Done", exact: true });
-  const headingBounds = await heading.boundingBox();
-  const doneBounds = await done.boundingBox();
+  const done = dialog.getByRole("button", { name: close, exact: true });
+  const scrollBody = dialog.locator(list);
+  const boundsInPanel = (control: Locator) =>
+    control.evaluate((element) => {
+      const panel = element.closest('dialog, [role="dialog"]')!;
+      const bounds = element.getBoundingClientRect();
+      const origin = panel.getBoundingClientRect();
+      return {
+        x: bounds.x - origin.x,
+        y: bounds.y - origin.y,
+        width: bounds.width,
+        height: bounds.height,
+      };
+    });
+  const headingBounds = await boundsInPanel(heading);
+  const doneBounds = await boundsInPanel(done);
+  const start = await scrollBody.evaluate((element) => element.scrollTop);
   await expect(last).not.toBeInViewport();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toBeInViewport({ ratio: 1 });
   await expect(heading).toBeInViewport({ ratio: 1 });
   await expect(done).toBeInViewport({ ratio: 1 });
-  expect(await heading.boundingBox()).toEqual(headingBounds);
-  expect(await done.boundingBox()).toEqual(doneBounds);
-  for (const surface of [dialog, dialog.locator(".ui-dialog-body")]) {
+  expect(
+    await scrollBody.evaluate((element) => element.scrollTop),
+  ).toBeGreaterThan(start);
+  expect(await boundsInPanel(heading)).toEqual(headingBounds);
+  expect(await boundsInPanel(done)).toEqual(doneBounds);
+  for (const surface of [dialog, scrollBody]) {
     expect(await surface.evaluate((node) => node.scrollWidth)).toBe(
       await surface.evaluate((node) => node.clientWidth),
     );
@@ -253,6 +276,7 @@ test.beforeEach(async () => {
   requests = [];
   slowResponse = undefined;
   delayedIcons = [];
+  heldDownloads = new Map();
   fixtureJpeg = undefined;
   conventionalIcon = undefined;
   redirectedForge = false;
@@ -455,6 +479,19 @@ test.beforeEach(async () => {
         }
       }, 50);
       response.on("close", () => clearInterval(timer));
+      return;
+    }
+    if (route === "/known-download" || route === "/stream-download") {
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${route.slice(1)}.bin"`,
+        ...(route === "/known-download"
+          ? { "Content-Length": 256 * 1024 }
+          : {}),
+      });
+      heldDownloads.set(route, response);
+      response.on("close", () => heldDownloads.delete(route));
+      response.write(Buffer.alloc(64 * 1024));
       return;
     }
     if (route === "/download") {
@@ -3455,6 +3492,252 @@ test("Site permission rejection restores the committed choice and ignores a supe
   await expect(address).toBeFocused();
 });
 
+test("Downloads open under their toolbar button over a still interactive browser", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Requires the isolated X11 desktop");
+  const workspace = await shell.create("Downloads overlay");
+  const route = "/overlay-fixture";
+  const record = await open(workspace, route);
+  const pane = shell.pane(record.paneId);
+  const trigger = pane.getByRole("button", { name: "Downloads", exact: true });
+  await expect(trigger).toBeVisible();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(async () => (await inspect(record.id)).visible).toBe(true);
+  const begin = (file: string) =>
+    remote(
+      route,
+      `(() => { const link = document.createElement("a"); link.href = ${JSON.stringify(file)}; document.body.append(link); link.click(); link.remove(); })()`,
+    );
+  const entries = () => shell.cli<BrowserDownload[]>("browser", "downloads");
+  await begin("/download");
+  await expect.poll(async () => (await entries())[0]?.status).toBe("completed");
+  await expect(trigger).toHaveAttribute("data-download-start", /^\d+$/);
+  await expect(trigger).not.toHaveAttribute("data-download-start", /^\d+$/);
+  const readCue = () =>
+    trigger.evaluate((button) => {
+      const element = button as HTMLButtonElement;
+      delete element.dataset.observedDownloadAnimation;
+      const observer = new MutationObserver(() => {
+        if (!button.hasAttribute("data-download-start")) return;
+        const glyph = button.querySelector(".icon")!;
+        element.dataset.observedDownloadAnimation = String(
+          glyph.getAnimations().length,
+        );
+        observer.disconnect();
+      });
+      observer.observe(button, {
+        attributes: true,
+        attributeFilter: ["data-download-start"],
+      });
+    });
+  await shell.page.emulateMedia({ reducedMotion: "no-preference" });
+  await readCue();
+  await begin("/known-download");
+  await expect
+    .poll(async () =>
+      (await entries()).find((item) => item.basename === "known-download.bin"),
+    )
+    .toMatchObject({ status: "progressing", totalBytes: 256 * 1024 });
+  await expect(trigger).toHaveAttribute(
+    "data-observed-download-animation",
+    "1",
+  );
+  await expect(trigger).toHaveAttribute("data-download-active", "");
+  await expect(trigger).not.toHaveAttribute("data-download-indeterminate", "");
+  await expect(trigger).toHaveAttribute(
+    "aria-description",
+    /1 in progress · 25%/,
+  );
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  const overlayBounds = () =>
+    shell.app!.evaluate(({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          "webContents" in child &&
+          (child as Electron.WebContentsView).webContents
+            .getURL()
+            .endsWith("/address-overlay.html"),
+      );
+      return view?.getVisible() ? view.getBounds() : null;
+    });
+  let popupPage: typeof shell.page | undefined;
+  const openPopup = async () => {
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(overlayBounds).not.toBeNull();
+    await expect
+      .poll(() => {
+        popupPage = shell
+          .app!.context()
+          .pages()
+          .find((page) => page.url().endsWith("/address-overlay.html"));
+        return !!popupPage;
+      })
+      .toBe(true);
+    const dialog = popupPage!.getByRole("dialog", {
+      name: "Downloads",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+  const pageBefore = await nativeView(route);
+  const bounds = pageBefore!.bounds;
+  const outside = { x: bounds.x + 30, y: bounds.y + 335 };
+  const before = await nativeBrowserFrame([outside]);
+  const dialog = await openPopup();
+  const anchor = (await trigger.boundingBox())!;
+  const popup = (await overlayBounds())!;
+  expect(popup.y).toBe(Math.ceil(anchor.y + anchor.height) + 4);
+  expect(
+    Math.abs(popup.x + popup.width - (anchor.x + anchor.width)),
+  ).toBeLessThan(2);
+  expect(popup.width).toBeLessThanOrEqual(360);
+  expect(await nativeView(route)).toEqual(pageBefore);
+  await expect(
+    dialog
+      .getByRole("region", { name: "known-download.bin" })
+      .getByRole("progressbar"),
+  ).toHaveJSProperty("value", 0.25);
+  await expect(
+    dialog.getByRole("region", { name: "fixture.txt" }),
+  ).toContainText("Completed");
+  const opened = await nativeBrowserFrame([outside]);
+  expect(opened.colors).toEqual(before.colors);
+  const closeButton = dialog.getByRole("button", { name: "Close downloads" });
+  const pause = dialog.getByRole("button", { name: "Pause", exact: true });
+  await expect(closeButton).toBeFocused();
+  await execute("xdotool", ["key", "Tab"]);
+  await expect(pause).toBeFocused();
+  heldDownloads.get("/known-download")!.write(Buffer.alloc(64 * 1024));
+  await expect(trigger).toHaveAttribute(
+    "aria-description",
+    /1 in progress · 50%/,
+  );
+  await expect(dialog.getByRole("progressbar")).toHaveJSProperty("value", 0.5);
+  await expect(pause).toBeFocused();
+  await writeFile(
+    info.outputPath("browser-downloads-open.png"),
+    Buffer.from((await nativeBrowserFrame([outside])).image, "base64"),
+  );
+  const panelBox = (await dialog.boundingBox())!;
+  await expect
+    .poll(async () => (await overlayBounds())?.height)
+    .toBe(Math.ceil(panelBox.height));
+  const justBelowPanel = {
+    x: popup.x + popup.width / 2,
+    y: popup.y + Math.ceil(panelBox.y + panelBox.height) + 3,
+  };
+  const clicks = await remote(route, "pageClicks");
+  await clickNativeBrowser(justBelowPanel.x, justBelowPanel.y);
+  await expect.poll(() => remote(route, "pageClicks")).toBe(clicks + 1);
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(overlayBounds).toBeNull();
+  expect(await nativeView(route)).toEqual(pageBefore);
+
+  await openPopup();
+  await execute("xdotool", ["key", "Escape"]);
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toBeFocused();
+  await expect.poll(overlayBounds).toBeNull();
+  heldDownloads.get("/known-download")!.end(Buffer.alloc(128 * 1024));
+  await expect
+    .poll(
+      async () =>
+        (await entries()).find(
+          ({ basename }) => basename === "known-download.bin",
+        )?.status,
+    )
+    .toBe("completed");
+  await expect(trigger).not.toHaveAttribute("data-download-active", "");
+  await expect(trigger).not.toHaveAttribute("data-download-start", /^\d+$/);
+
+  await shell.page.emulateMedia({ reducedMotion: "reduce" });
+  await readCue();
+  await begin("/stream-download");
+  await expect(trigger).toHaveAttribute(
+    "data-observed-download-animation",
+    "0",
+  );
+  await expect(trigger).toHaveAttribute("data-download-indeterminate", "");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(
+    await trigger
+      .locator(".browser-download-progress")
+      .evaluate(
+        (element) => getComputedStyle(element, "::before").animationName,
+      ),
+  ).toBe("none");
+  const stream = (await openPopup()).getByRole("region", {
+    name: "stream-download.bin",
+  });
+  await expect(stream.getByRole("progressbar")).not.toHaveAttribute("value");
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 570),
+  );
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 20 }),
+  );
+  await expect(stream).toHaveCSS("font-size", "20px");
+  const narrowDialog = popupPage!.getByRole("dialog", {
+    name: "Downloads",
+    exact: true,
+  });
+  expect(await narrowDialog.evaluate((element) => element.scrollWidth)).toBe(
+    await narrowDialog.evaluate((element) => element.clientWidth),
+  );
+  await expect
+    .poll(async () => {
+      const [overlay, rendered] = await Promise.all([
+        overlayBounds(),
+        narrowDialog.boundingBox(),
+      ]);
+      return overlay?.height === Math.ceil(rendered?.height ?? 0);
+    })
+    .toBe(true);
+  const narrowBounds = (await overlayBounds())!;
+  await expect
+    .poll(
+      async () =>
+        (
+          await nativeBrowserFrame([
+            {
+              x: narrowBounds.x + narrowBounds.width - 14,
+              y: narrowBounds.y + narrowBounds.height + 3,
+            },
+          ])
+        ).colors,
+    )
+    .toEqual([[14, 122, 86]]);
+  await writeFile(
+    info.outputPath("browser-downloads-narrow.png"),
+    Buffer.from((await nativeBrowserFrame([])).image, "base64"),
+  );
+  const cancel = stream.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancel).toBeVisible();
+  const overlay = (await overlayBounds())!;
+  const action = (await cancel.boundingBox())!;
+  await clickNativeBrowser(
+    overlay.x + action.x + action.width / 2,
+    overlay.y + action.y + action.height / 2,
+  );
+  await expect(stream).toContainText("Cancelled");
+  await expect(trigger).not.toHaveAttribute("data-download-active", "");
+  await shell.cli(
+    "browser",
+    "navigate",
+    "--id",
+    record.id,
+    "--url",
+    origin + "/two",
+  );
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(overlayBounds).toBeNull();
+});
+
 test("Downloads survive tab closure and retain history across restart", async () => {
   const workspace = await shell.create("Downloads");
   const record = await open(workspace);
@@ -3520,11 +3803,29 @@ test("Downloads survive tab closure and retain history across restart", async ()
     name: "Downloads",
     exact: true,
   });
-  const done = dialog.getByRole("button", { name: "Done", exact: true });
+  const done = dialog.getByRole("button", {
+    name: "Close downloads",
+    exact: true,
+  });
   await expect(done).toBeFocused();
   const row = dialog.getByRole("region", { name: "large.bin", exact: true });
   const lastAction = row.getByRole("button", { name: "Show in folder" });
   await expect(lastAction).toBeVisible();
+  const idleMutations = await dialog.evaluate(async (panel) => {
+    let count = 0;
+    const observer = new MutationObserver(
+      (records) => (count += records.length),
+    );
+    observer.observe(panel, { childList: true, subtree: true });
+    for (let frame = 0; frame < 4; frame++)
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    count += observer.takeRecords().length;
+    observer.disconnect();
+    return count;
+  });
+  expect(idleMutations).toBe(0);
   await shell.page.screenshot({
     path: test.info().outputPath("downloads.png"),
   });
@@ -3536,7 +3837,12 @@ test("Downloads survive tab closure and retain history across restart", async ()
     JSON.stringify({ "ui.fontSize": 20 }),
   );
   await expect(shell.page.locator("html")).toHaveCSS("font-size", "20px");
-  await scrollManager(dialog, lastAction);
+  await scrollManager(
+    dialog,
+    lastAction,
+    "Close downloads",
+    ".browser-downloads-list",
+  );
   await shell.page.screenshot({
     path: test.info().outputPath("downloads-scrolled-narrow.png"),
   });
