@@ -79,7 +79,11 @@ function within<T>(promise: Promise<T>, timeoutMs: number, reason: string) {
 export async function openClaudeSession(
   options: ClaudeSessionOptions,
   prompt: AsyncIterable<SDKUserMessage>,
-): Promise<{ query: Query; dispose(): Promise<void> }> {
+): Promise<{
+  query: Query;
+  ready: Promise<unknown>;
+  dispose(): Promise<void>;
+}> {
   requireClaudeId(options.nativeId);
   if (!isAbsolute(options.cwd) || !isAbsolute(options.executable))
     throw new Error("Claude Code cwd and executable must be absolute paths");
@@ -133,16 +137,14 @@ export async function openClaudeSession(
           "Claude Code did not release the session",
         );
       }
-    })());
-  try {
-    await within(
-      session.initializationResult(),
-      10_000,
-      "Claude Code did not initialize",
-    );
-    return { query: session, dispose };
-  } catch {
-    await dispose();
-    throw new Error("Could not open the native Claude Code session");
-  }
+    })().catch((error) => {
+      disposal = undefined;
+      throw error;
+    }));
+  const ready = within(
+    session.initializationResult(),
+    10_000,
+    "Claude Code did not initialize",
+  );
+  return { query: session, ready, dispose };
 }

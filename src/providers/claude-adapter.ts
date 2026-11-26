@@ -148,6 +148,11 @@ export class ClaudeAdapter implements ProviderAdapter {
       },
       this.inputs(),
     );
+    try {
+      await this.native.ready;
+    } catch {
+      throw new Error("Could not open the native Claude Code session");
+    }
     if (this.closed) {
       await this.native.dispose();
       throw new Error("Claude Code controller was closed");
@@ -409,7 +414,10 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   dispose() {
-    return (this.disposal ??= this.close());
+    return (this.disposal ??= this.close().catch((error) => {
+      this.disposal = undefined;
+      throw error;
+    }));
   }
 
   private async close() {

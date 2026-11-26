@@ -608,6 +608,19 @@ export class ConversationApplicationService {
         nativeId: conversation.nativeId,
       };
     } catch (error) {
+      if (adapter?.provider === "claude") {
+        try {
+          await this.disposeController(id);
+        } catch (releaseError) {
+          conversation.nativeId = adapter.nativeId ?? conversation.nativeId;
+          if (!resume) conversation.metadata = { unrecorded: true };
+          conversation.status = "failed";
+          conversation.error = "Claude Code has not released this session.";
+          this.store.notify();
+          this.store.schedulePersist(true);
+          throw releaseError;
+        }
+      }
       try {
         await this.store.serialize(() =>
           this.removeConversationRecord(
@@ -1083,8 +1096,11 @@ export class ConversationApplicationService {
       delete conversation.detachedOwner;
     } else if (existing) {
       if (conversation.status !== "failed") return existing;
-      this.controllers.delete(conversation.id);
+      if (existing.provider !== "claude")
+        this.controllers.delete(conversation.id);
       await existing.dispose();
+      if (this.controllers.get(conversation.id) === existing)
+        this.controllers.delete(conversation.id);
       delete conversation.detachedOwner;
       this.assertCurrent(conversation);
     }
@@ -1109,9 +1125,11 @@ export class ConversationApplicationService {
       this.store.schedulePersist(true);
       return adapter;
     } catch (error) {
-      if (this.controllers.get(conversation.id) === adapter) {
+      if (
+        adapter.provider !== "claude" &&
+        this.controllers.get(conversation.id) === adapter
+      )
         this.controllers.delete(conversation.id);
-      }
       if (this.isCurrent(conversation)) {
         conversation.status = "failed";
         conversation.error =
@@ -1124,6 +1142,8 @@ export class ConversationApplicationService {
         this.store.schedulePersist(true);
       }
       await adapter.dispose();
+      if (this.controllers.get(conversation.id) === adapter)
+        this.controllers.delete(conversation.id);
       delete conversation.detachedOwner;
       throw error;
     } finally {
@@ -2261,9 +2281,10 @@ export class ConversationApplicationService {
     id: string,
     removedOwner?: ConversationState["detachedOwner"],
   ): Promise<void> {
-    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     const adapter = this.controllers.get(id);
-    this.controllers.delete(id);
+    if (adapter?.provider === "claude") await adapter.dispose();
+    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+    if (this.controllers.get(id) === adapter) this.controllers.delete(id);
     this.activeTurns.delete(id);
     this.externalTurns.delete(id);
     this.resumeContexts.delete(id);
@@ -2271,8 +2292,8 @@ export class ConversationApplicationService {
       (item) => item.id === id,
     );
     const cursor = conversation?.detachedOwner ?? removedOwner;
-    if (adapter) await adapter.dispose();
-    else if (cursor) await this.detached?.owner.release(id, cursor);
+    if (adapter && adapter.provider !== "claude") await adapter.dispose();
+    else if (!adapter && cursor) await this.detached?.owner.release(id, cursor);
     if (conversation) delete conversation.detachedOwner;
   }
 
