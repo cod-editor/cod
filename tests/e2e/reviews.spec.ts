@@ -1931,6 +1931,7 @@ for (const feedback of [false, true])
     };
     const fit = async (phase: string, compact = false) => {
       await expect(primary()).toBeVisible();
+      await expect(host().locator(".review-change-controls")).toBeHidden();
       await expect(round()).toHaveValue(review.roundId);
       await expect(host().locator(".review-origin")).toContainText(name);
       await expect(host().locator(".review-origin")).toHaveAttribute(
@@ -1941,30 +1942,31 @@ for (const feedback of [false, true])
         .locator(".review-header")
         .evaluate((header) => {
           const pane = header.parentElement!.getBoundingClientRect();
-          const controls = [
-            ...header.querySelectorAll<HTMLElement>(
-              "button:not([hidden], select > button), select",
-            ),
-          ].map((control) => {
-            const box = control.getBoundingClientRect();
-            const points = [
-              [box.left + 3, box.top + box.height / 2],
-              [box.right - 3, box.top + box.height / 2],
-              [box.left + box.width / 2, box.top + 3],
-              [box.left + box.width / 2, box.bottom - 3],
-            ];
-            return {
-              label: control.getAttribute("aria-label") || control.textContent,
-              left: box.left,
-              right: box.right,
-              top: box.top,
-              bottom: box.bottom,
-              hits: points.every(([x, y]) => {
-                const hit = document.elementFromPoint(x, y);
-                return hit === control || (!!hit && control.contains(hit));
-              }),
-            };
-          });
+          const controls = Array.from(
+            header.querySelectorAll<HTMLElement>("button, select"),
+          )
+            .filter((control) => !control.closest("[hidden], select > button"))
+            .map((control) => {
+              const box = control.getBoundingClientRect();
+              const points = [
+                [box.left + 3, box.top + box.height / 2],
+                [box.right - 3, box.top + box.height / 2],
+                [box.left + box.width / 2, box.top + 3],
+                [box.left + box.width / 2, box.bottom - 3],
+              ];
+              return {
+                label:
+                  control.getAttribute("aria-label") || control.textContent,
+                left: box.left,
+                right: box.right,
+                top: box.top,
+                bottom: box.bottom,
+                hits: points.every(([x, y]) => {
+                  const hit = document.elementFromPoint(x, y);
+                  return hit === control || (!!hit && control.contains(hit));
+                }),
+              };
+            });
           return {
             height: header.getBoundingClientRect().height,
             width: header.clientWidth,
