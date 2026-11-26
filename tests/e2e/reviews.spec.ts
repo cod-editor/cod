@@ -1471,6 +1471,116 @@ test("Diff review keeps unchanged context neutral and anchors keyboard comments 
   await host.screenshot({ path: info.outputPath("unified-diff.png") });
 });
 
+test("Diff review highlights Java source while preserving line text and comment anchors", async ({}, info) => {
+  const workspace = await shell.create("Java diff review");
+  const folder = shell.folders[0];
+  const java = path.join(folder, "Example.java");
+  const notes = path.join(folder, "notes.txt");
+  const oldLine = '    return "before";';
+  const newLine = '    return "<img src=x onerror=alert(1)>";';
+  const javaSource = (line: string) =>
+    [
+      "public class Example {",
+      "  String message() {",
+      line,
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+  await writeFile(java, javaSource(oldLine));
+  await writeFile(notes, "public return before\n");
+  const env = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  };
+  execFileSync("git", ["add", "--all"], { cwd: folder, env });
+  execFileSync("git", ["commit", "-m", "Invented baseline"], {
+    cwd: folder,
+    env,
+  });
+  await writeFile(java, javaSource(newLine));
+  await writeFile(notes, "public return after\n");
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const chat = await shell.newChat(workspace, "codex");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    chat.id,
+  );
+  const host = pane(review);
+  const javaPath = await realpath(java);
+  const added = host.getByRole("button", {
+    name: `New line 3 ${javaPath}`,
+    exact: true,
+  });
+  const removed = host.getByRole("button", {
+    name: `Old line 3 ${javaPath}`,
+    exact: true,
+  });
+  const context = host.getByRole("button", {
+    name: `New line 1 ${javaPath}`,
+    exact: true,
+  });
+  const plainText = host.getByRole("button", {
+    name: `New line 1 ${await realpath(notes)}`,
+    exact: true,
+  });
+  await expect(added).toBeVisible();
+  await shell.page.screenshot({ path: info.outputPath("java-diff.png") });
+  await expect(added).toHaveAttribute("data-diff-kind", "added");
+  await expect(removed).toHaveAttribute("data-diff-kind", "removed");
+  await expect(context).toHaveAttribute("data-diff-kind", "context");
+  await expect(added.locator(".hljs-keyword")).toHaveText("return");
+  await expect(added.locator(".hljs-string")).toHaveText(
+    '"<img src=x onerror=alert(1)>"',
+  );
+  await expect(removed.locator(".hljs-keyword")).toHaveText("return");
+  await expect(context.locator(".hljs-keyword")).toHaveText([
+    "public",
+    "class",
+  ]);
+  await expect(plainText.locator("span")).toHaveCount(0);
+  await expect(host.locator(".review-line img")).toHaveCount(0);
+  expect(await added.textContent()).toBe("+        3  " + newLine);
+  expect(await removed.textContent()).toBe("-   3       " + oldLine);
+  expect(
+    await added.evaluate((line) => {
+      const selection = window.getSelection()!;
+      selection.selectAllChildren(line);
+      const selected = selection.toString();
+      selection.removeAllRanges();
+      return selected;
+    }),
+  ).toBe("+        3  " + newLine);
+  await removed.focus();
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const input = host.getByRole("textbox", { name: "Comment", exact: true });
+  await expect(input).toBeFocused();
+  await input.fill("Removed return value");
+  await input.press(`${modifier}+Enter`);
+  await expect(host.getByLabel("Draft comment", { exact: true })).toContainText(
+    "Removed return value",
+  );
+  await expect(removed).toBeFocused();
+});
+
 test("Diff review headings keep paths and revision labels compact in a narrow pane", async ({}, info) => {
   const workspace = await shell.create("Compact diff review");
   const folder = shell.folders[0];
