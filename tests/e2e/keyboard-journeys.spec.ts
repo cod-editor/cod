@@ -2174,9 +2174,13 @@ for (const replacement of [
   "already focused native",
 ] as const) {
   const cancelled = replacement !== "none";
-  test(`A hidden chat ${cancelled ? `does not steal focus after newer ${replacement} navigation` : "regains native keyboard focus when its selection snapshot follows the operation reply"}`, async () => {
+  const bothSplitsVisible = replacement === "already focused native";
+  const scenario = bothSplitsVisible
+    ? "An already focused native click selects its visible split before Chromium focus updates"
+    : `A hidden chat ${cancelled ? `does not steal focus after newer ${replacement} navigation` : "regains native keyboard focus when its selection snapshot follows the operation reply"}`;
+  test(scenario, async () => {
     test.skip(
-      replacement === "already focused native" && process.platform !== "linux",
+      bothSplitsVisible && process.platform !== "linux",
       "Requires an isolated X11 desktop",
     );
     const app = new ChatApp();
@@ -2248,19 +2252,45 @@ for (const replacement of [
           .find((w) => w.id === workspace)!
           .groups!.find((g) => g.paneIds.includes(chat.paneId))!.id,
         "--hidden",
-        "true",
+        bothSplitsVisible ? "false" : "true",
       );
-      await expect(app.pane(chat.paneId)).toBeHidden();
+      if (bothSplitsVisible) await expect(app.pane(chat.paneId)).toBeVisible();
+      else await expect(app.pane(chat.paneId)).toBeHidden();
+      if (replacement === "native")
+        await expect
+          .poll(
+            async () =>
+              (
+                await app.cli<{ visible: boolean }>(
+                  "browser",
+                  "inspect",
+                  "--id",
+                  browser.id,
+                )
+              ).visible,
+          )
+          .toBe(true);
       await app.app!.evaluate(
-        ({ BrowserWindow, ipcMain }, { workspace, pane }) => {
+        ({ BrowserWindow, ipcMain }, { workspace, pane, holdNativeLayout }) => {
           const contents = BrowserWindow.getAllWindows()[0].webContents;
           const send = contents.send.bind(contents);
+          const layoutChannel = "cod:browser-layout";
+          const layoutListeners = holdNativeLayout
+            ? ipcMain.listeners(layoutChannel)
+            : [];
+          // Hold native geometry with the renderer snapshot for this variant.
+          // Selecting the parked chat otherwise makes the browser legitimately
+          // non-interactive before the artificial input reaches it.
+          for (const listener of layoutListeners)
+            ipcMain.removeListener(layoutChannel, listener);
           let pending: unknown[] | undefined;
           let holding = true;
           let capturing = false;
           Object.assign(globalThis, {
             releasePaneSelection: () => {
               holding = false;
+              for (const listener of layoutListeners)
+                ipcMain.on(layoutChannel, listener);
               if (pending) send("cod:state", ...pending);
             },
             paneSelectionAccepted: false,
@@ -2303,7 +2333,11 @@ for (const replacement of [
             return result;
           });
         },
-        { workspace, pane: chat.paneId },
+        {
+          workspace,
+          pane: chat.paneId,
+          holdNativeLayout: replacement === "native",
+        },
       );
       await app.app!.evaluate(({ webContents }, url) => {
         const contents = webContents
@@ -2343,47 +2377,68 @@ for (const replacement of [
           .toBe(true);
       } else if (replacement !== "none") {
         if (replacement === "already focused native") {
-          const area = (await app
-            .pane(browser.paneId)
-            .getByRole("region", { name: "Browser content" })
-            .boundingBox())!;
-          const bounds = await app.app!.evaluate(
-            ({ BrowserWindow, webContents }, url) => {
-              const contents = webContents
-                .getAllWebContents()
-                .find((c) => c.getURL() === url)!;
-              contents.removeAllListeners("focus");
-              contents.focus();
-              if (!contents.isFocused())
-                throw new Error("Native page must already own keyboard focus");
-              const isFocused = contents.isFocused.bind(contents);
-              Object.assign(globalThis, {
-                receivedNativePress: false,
-                restoreNativeFocusProbe: () => {
-                  contents.isFocused = isFocused;
-                },
-              });
-              contents.prependListener(
-                "before-mouse-event",
-                (_event, input) => {
-                  if (input.type !== "mouseDown") return;
-                  // Model Chromium reporting stale focus despite a delivered
-                  // native click. Ignore that transient bit until selection.
-                  contents.isFocused = () => false;
-                  Object.assign(globalThis, { receivedNativePress: true });
-                },
+          const nativeViewport = () =>
+            app.app!.evaluate(({ BrowserWindow, WebContentsView }, url) => {
+              const win = BrowserWindow.getAllWindows()[0];
+              const view = win.contentView.children.find(
+                (child): child is Electron.WebContentsView =>
+                  child instanceof WebContentsView &&
+                  child.webContents.getURL() === url,
               );
-              return BrowserWindow.getAllWindows()[0].getContentBounds();
-            },
-            url,
-          );
+              if (!view?.getVisible()) return undefined;
+              const area = view.getBounds();
+              if (area.width < 100 || area.height < 100) return undefined;
+              const bounds = win.getContentBounds();
+              return {
+                windowId: win.getNativeWindowHandle().readUInt32LE(0),
+                origin: { x: bounds.x + 5, y: bounds.y + 5 },
+                target: {
+                  x: Math.round(bounds.x + area.x + area.width / 2),
+                  y: Math.round(bounds.y + area.y + area.height / 2),
+                },
+              };
+            }, url);
+          await expect.poll(nativeViewport).toBeDefined();
+          const viewport = (await nativeViewport())!;
+          await app.app!.evaluate(({ BrowserWindow, webContents }, url) => {
+            const win = BrowserWindow.getAllWindows()[0];
+            const contents = webContents
+              .getAllWebContents()
+              .find((c) => c.getURL() === url)!;
+            win.focus();
+            contents.removeAllListeners("focus");
+            contents.focus();
+            if (!contents.isFocused())
+              throw new Error("Native page must already own keyboard focus");
+            const isFocused = contents.isFocused.bind(contents);
+            Object.assign(globalThis, {
+              receivedNativePress: false,
+              restoreNativeFocusProbe: () => {
+                contents.isFocused = isFocused;
+              },
+            });
+            contents.prependListener("before-mouse-event", (_event, input) => {
+              if (input.type !== "mouseDown") return;
+              // Model Chromium reporting stale focus despite a delivered
+              // native click. Ignore that transient bit until selection.
+              contents.isFocused = () => false;
+              Object.assign(globalThis, { receivedNativePress: true });
+            });
+          }, url);
           execFileSync(
             "xdotool",
             [
+              "windowfocus",
+              "--sync",
+              String(viewport.windowId),
               "mousemove",
               "--sync",
-              String(Math.round(bounds.x + area.x + area.width / 2)),
-              String(Math.round(bounds.y + area.y + area.height / 2)),
+              String(viewport.origin.x),
+              String(viewport.origin.y),
+              "mousemove",
+              "--sync",
+              String(viewport.target.x),
+              String(viewport.target.y),
               "click",
               "1",
             ],
@@ -2430,7 +2485,12 @@ for (const replacement of [
         .pane(chat.paneId)
         .getByRole("textbox", { name: "Message", exact: true });
       if (cancelled) {
-        await expect(input).toBeHidden();
+        if (bothSplitsVisible) {
+          await expect(input).toBeVisible();
+          await expect(input).not.toBeFocused();
+        } else {
+          await expect(input).toBeHidden();
+        }
         await expect
           .poll(() =>
             app.app!.evaluate(
