@@ -98,6 +98,27 @@ test("stable release discovery excludes previews and inconsistent release tags",
   );
 });
 
+test("stable updates accept a disk image with or without a checksum sidecar", () => {
+  const existing = release("v0.4.1");
+  const diskImage = existing.assets[0];
+  existing.assets.unshift({
+    ...diskImage,
+    name: `${diskImage.name}.sha256`,
+    size: 94,
+    browser_download_url: `${diskImage.browser_download_url}.sha256`,
+  });
+  const next = release("v0.4.2");
+
+  assert.deepEqual(latestReleaseUpdate("v0.4.0", [existing]), {
+    version: "0.4.1",
+    downloadUrl: diskImage.browser_download_url,
+  });
+  assert.deepEqual(latestReleaseUpdate("v0.4.0", [existing, next]), {
+    version: "0.4.2",
+    downloadUrl: next.assets[0].browser_download_url,
+  });
+});
+
 test("preview discovery includes stable releases in version order", () => {
   const stable = release("v0.4.0");
   assert.deepEqual(

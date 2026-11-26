@@ -4,7 +4,7 @@ An overbloated mix of code editor, terminal, browser and coding agents. So, a ti
 
 ## Install on macOS
 
-Download the Apple Silicon disk image from [Releases](https://github.com/cod-editor/cod/releases). To verify it, download the matching `.sha256` file and run `shasum -a 256 -c Cod-0.1.0-macOS-arm64.dmg.sha256` in the download directory. Use the actual filename for other versions. Open the disk image and drag Cod to Applications.
+Download the Apple Silicon disk image from [Releases](https://github.com/cod-editor/cod/releases). To verify it, compare the downloaded file’s SHA-256 checksum with the one GitHub displays beside the DMG. Open the disk image and drag Cod to Applications.
 
 Cod uses an ad-hoc signature and has no Apple notarization. If macOS blocks the first launch after you verify the download, follow [Apple's instructions for opening a trusted app](https://support.apple.com/en-us/102445#openanyway).
 
