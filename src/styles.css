@@ -1895,11 +1895,8 @@ browser-action-list::part(action):focus-visible {
   margin: 4px 0 8px;
   overflow-wrap: anywhere;
 }
-.site-permissions h3,
-.download-row > strong {
-  overflow-wrap: anywhere;
-}
 .site-permissions h3 {
+  overflow-wrap: anywhere;
   font-size: var(--ui-font-size);
   font-weight: 500;
   margin: var(--space-4) 0 var(--space-2);
@@ -1907,14 +1904,164 @@ browser-action-list::part(action):focus-visible {
 .site-permissions h3:first-child {
   margin-block-start: 0;
 }
+.browser-download-trigger {
+  position: relative;
+}
+.browser-download-trigger:is([aria-expanded="true"], [data-download-start]) {
+  background: var(--control-hover);
+}
+.browser-download-trigger:is([data-download-active], [data-download-start]) {
+  color: var(--text-accent);
+}
+.browser-download-progress {
+  display: none;
+  position: absolute;
+  inset: auto 4px 1px;
+  height: 2px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--element-selected);
+  pointer-events: none;
+}
+.browser-download-trigger[data-download-active] > .browser-download-progress {
+  display: block;
+}
+.browser-download-progress::before {
+  content: "";
+  display: block;
+  width: max(2px, var(--download-progress, 0%));
+  height: 100%;
+  background: var(--text-accent);
+}
+.browser-download-trigger[data-download-indeterminate]
+  > .browser-download-progress::before {
+  width: 40%;
+  animation: browser-download-progress 1s ease-in-out infinite alternate;
+}
+@keyframes browser-download-progress {
+  from {
+    transform: translateX(-20%);
+  }
+  to {
+    transform: translateX(170%);
+  }
+}
+.browser-downloads-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  container-type: inline-size;
+}
+.browser-downloads-panel:focus {
+  outline: none;
+}
+.browser-downloads-floating {
+  position: fixed;
+  z-index: 15;
+  box-shadow: 0 6px 24px #0006;
+}
+html:has(> .browser-downloads-native),
+.browser-downloads-native {
+  background: transparent;
+}
+.browser-downloads-native > .browser-downloads-panel {
+  flex: none;
+}
+.browser-downloads-panel > header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.browser-downloads-panel h2 {
+  margin: 0;
+  font-size: 1em;
+  font-weight: 600;
+}
+.browser-downloads-panel > .action-error {
+  margin: 0;
+  padding: 4px 12px;
+}
+.browser-downloads-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.browser-downloads-list > .picker-empty {
+  padding: 8px 12px;
+}
+.download-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px 12px;
+}
 .download-row + .download-row {
   border-top: 1px solid var(--border-subtle);
-  margin-block-start: var(--space-2);
-  padding-block-start: var(--space-2);
+}
+.download-row > strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.download-row p,
+.download-row progress {
+  grid-column: 1 / -1;
 }
 .download-row p {
-  margin: var(--space-1) 0;
   color: var(--text-muted);
+  font-size: var(--ui-font-size);
+  margin: 2px 0 0;
+}
+.download-row progress {
+  appearance: none;
+  margin-top: 4px;
+  height: 4px;
+  width: 100%;
+}
+.download-row progress::-webkit-progress-bar {
+  background: var(--element-selected);
+}
+.download-row progress::-webkit-progress-value {
+  background: var(--text-accent);
+}
+.download-row progress:indeterminate::-webkit-progress-bar {
+  background: linear-gradient(
+    to right,
+    var(--text-accent) 0 28%,
+    var(--element-selected) 28% 100%
+  );
+}
+.download-row .ui-actions {
+  gap: 4px;
+  margin-top: 0;
+}
+.download-row button {
+  min-height: 22px;
+  padding: 1px 5px;
+}
+@container (max-width: 25em) {
+  .download-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .download-row .ui-actions {
+    order: 1;
+    justify-content: flex-start;
+    margin-top: 3px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .browser-download-trigger[data-download-indeterminate]
+    > .browser-download-progress::before {
+    animation: none;
+  }
 }
 .bookmark-row {
   padding: 8px 0;

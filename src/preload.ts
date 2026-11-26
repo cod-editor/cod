@@ -62,6 +62,12 @@ const bridge: CodBridge = {
       callback(id, revision),
     );
   },
+  onBrowserDownloadDismiss(callback) {
+    ipcRenderer.on(
+      "cod:browser-download-dismiss",
+      (_event, revision, restore) => callback(revision, restore),
+    );
+  },
   shellMenu(anchor, items) {
     return ipcRenderer.invoke("cod:shell-menu", anchor, items);
   },

@@ -5,6 +5,11 @@ import type {
   AddressSuggestionPopup,
   SuggestionPaint,
 } from "./address-suggestion-types";
+import type {
+  DownloadAction,
+  DownloadPopup,
+  DownloadRow,
+} from "./download-presentation";
 
 export class BrowserAddressOverlay {
   private view?: WebContentsView;
@@ -13,8 +18,17 @@ export class BrowserAddressOverlay {
   private bounds?: Rectangle;
   private dismissed?: Pick<AddressSuggestionPopup, "id" | "revision">;
   private lastPaint?: string;
+  private downloads?: { popup: DownloadPopup; entries: DownloadRow[] };
+  private downloadHeight?: number;
+  private dismissedDownload?: number;
 
-  constructor(private readonly window: BrowserWindow) {
+  constructor(
+    private readonly window: BrowserWindow,
+    private readonly downloadAction: (
+      id: string,
+      action: DownloadAction,
+    ) => Promise<unknown>,
+  ) {
     window.on("blur", this.dismiss);
     window.once("closed", () => {
       const contents = this.view?.webContents;
@@ -22,7 +36,26 @@ export class BrowserAddressOverlay {
     });
   }
 
-  update(state: AddressSuggestionPopup | undefined, slot?: Rectangle): void {
+  update(
+    state: AddressSuggestionPopup | undefined,
+    slot?: Rectangle,
+    downloads?: { popup: DownloadPopup; entries: DownloadRow[] },
+  ): void {
+    if (
+      downloads?.popup.revision !== this.dismissedDownload &&
+      this.window.isFocused()
+    ) {
+      if (this.downloads?.popup.revision !== downloads?.popup.revision)
+        this.downloadHeight = undefined;
+      this.downloads = downloads;
+    }
+    if (!downloads) this.downloads = undefined;
+    if (this.downloads) {
+      this.current = undefined;
+      if (!this.view) this.createView();
+      this.paint();
+      return;
+    }
     if (
       state &&
       state.id === this.dismissed?.id &&
@@ -56,6 +89,7 @@ export class BrowserAddressOverlay {
   }
 
   dismiss = (): void => {
+    this.dismissDownload(false);
     const state = this.current;
     if (!state) return;
     this.dismissed = { id: state.id, revision: state.revision };
@@ -67,6 +101,24 @@ export class BrowserAddressOverlay {
         state.revision,
       );
   };
+
+  private dismissDownload(restore: boolean): void {
+    const popup = this.downloads?.popup;
+    if (!popup) return;
+    this.dismissedDownload = popup.revision;
+    this.downloadHeight = undefined;
+    this.downloads = undefined;
+    this.lastPaint = undefined;
+    this.paint();
+    if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
+      if (restore && this.window.isFocused()) this.window.webContents.focus();
+      this.window.webContents.send(
+        "cod:browser-download-dismiss",
+        popup.revision,
+        restore,
+      );
+    }
+  }
 
   private clear() {
     this.current = undefined;
@@ -116,18 +168,69 @@ export class BrowserAddressOverlay {
     });
     const contents = view.webContents;
     this.view = view;
+    view.setBackgroundColor("#00000000");
     view.setVisible(false);
     this.window.contentView.addChildView(view);
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("will-frame-navigate", (event) => event.preventDefault());
     contents.on("will-navigate", (event) => event.preventDefault());
+    const owns = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
+      event.senderFrame === contents.mainFrame &&
+      event.senderFrame.url === pathToFileURL(file).href;
+    contents.ipc.on(
+      "cod:download-overlay-size",
+      (event, revision: unknown, height: unknown) => {
+        const popup = this.downloads?.popup;
+        if (
+          !owns(event) ||
+          !popup ||
+          revision !== popup.revision ||
+          typeof height !== "number" ||
+          !Number.isInteger(height) ||
+          height < 1 ||
+          height > popup.bounds.height
+        )
+          return;
+        const first = this.downloadHeight === undefined;
+        this.downloadHeight = height;
+        this.paint();
+        if (first && view.getVisible() && this.window.isFocused())
+          contents.focus();
+      },
+    );
+    contents.ipc.on(
+      "cod:download-overlay-close",
+      (event, revision: unknown) => {
+        if (owns(event) && revision === this.downloads?.popup.revision)
+          this.dismissDownload(true);
+      },
+    );
+    contents.ipc.handle(
+      "cod:download-overlay-action",
+      async (event, revision: unknown, id: unknown, action: DownloadAction) => {
+        if (
+          !owns(event) ||
+          !view.getVisible() ||
+          revision !== this.downloads?.popup.revision ||
+          typeof id !== "string" ||
+          !this.downloads?.entries
+            .find((item) => item.id === id)
+            ?.actions.includes(action)
+        )
+          throw new Error("Download action is unavailable");
+        try {
+          await this.downloadAction(id, action);
+        } catch {
+          throw new Error("Could not perform the download action");
+        }
+      },
+    );
     contents.ipc.on(
       "cod:address-overlay-pick",
       (event, revision: unknown, index: unknown) => {
         const state = this.current;
         if (
-          event.senderFrame !== contents.mainFrame ||
-          event.senderFrame.url !== pathToFileURL(file).href ||
+          !owns(event) ||
           !view.getVisible() ||
           !state?.presentation ||
           revision !== state.revision ||
@@ -168,14 +271,27 @@ export class BrowserAddressOverlay {
   private paint() {
     const view = this.view;
     if (!view || !this.ready || view.webContents.isDestroyed()) return;
+    const downloads = this.downloads;
+    if (downloads) {
+      const { bounds } = downloads.popup;
+      this.placeAtTop(view, {
+        ...bounds,
+        height: Math.min(this.downloadHeight ?? bounds.height, bounds.height),
+      });
+      const key = JSON.stringify(downloads);
+      if (key !== this.lastPaint) {
+        this.lastPaint = key;
+        view.webContents.send("cod:download-overlay-paint", downloads);
+      }
+      view.setVisible(this.downloadHeight !== undefined);
+      return;
+    }
     const state = this.current;
     if (!state?.presentation || !this.bounds) {
       view.setVisible(false);
       return;
     }
-    view.setBounds(this.bounds);
-    const root = this.window.contentView;
-    if (root.children.at(-1) !== view) root.addChildView(view);
+    this.placeAtTop(view, this.bounds);
     const next: SuggestionPaint = {
       ...state.presentation.paint,
       revision: state.revision,
@@ -186,5 +302,11 @@ export class BrowserAddressOverlay {
       view.webContents.send("cod:address-overlay-paint", next);
     }
     view.setVisible(true);
+  }
+
+  private placeAtTop(view: WebContentsView, bounds: Rectangle) {
+    view.setBounds(bounds);
+    const root = this.window.contentView;
+    if (root.children.at(-1) !== view) root.addChildView(view);
   }
 }

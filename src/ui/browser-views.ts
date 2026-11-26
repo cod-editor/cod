@@ -2,7 +2,12 @@ import { browserLabel } from "./browser-label";
 import { isBrowserFailure, isBrowserHome } from "../browser/view-state";
 import { actionRow, uiSwitch, icon } from "../ui-kit";
 import { isInsecureSite } from "../browser/address";
-import { browserDownloads } from "./browser-downloads";
+import { createDownloadPanel } from "./browser-downloads";
+import {
+  downloadProgress,
+  downloadRows,
+  type DownloadPopup,
+} from "../browser/download-presentation";
 import { updateSiteRequests, sitePermissions } from "./browser-permissions";
 import { addressSuggestions } from "./browser-address";
 import type { AppState, BrowserState } from "../types";
@@ -37,12 +42,37 @@ export function createBrowserViews(
   >();
   const homes = new Map<string, ReturnType<typeof createBrowserHome>>();
   const addressLists = new Map<string, ReturnType<typeof addressSuggestions>>();
+  let downloadSequence = 0;
+  let openDownloads:
+    | {
+        anchor: HTMLElement;
+        revision: number;
+        browserId?: string;
+        url?: string;
+        workspace: string | null;
+        returnFocus: HTMLElement | null;
+      }
+    | undefined;
+  const downloadEvents = new AbortController();
+  const downloadPanel = createDownloadPanel(
+    (id, action) =>
+      invoke("browser.download-action", { id, action }, { reportError: false }),
+    () => closeDownloads(true),
+  );
+  let knownDownloads: Set<string> | undefined;
+  let downloadCue = 0;
+  let downloadStart = 0;
+  let downloadCueTimer: ReturnType<typeof setTimeout> | undefined;
+  const downloadAnimations = new WeakMap<HTMLButtonElement, Animation>();
   window.cod.onBrowserSuggestionPick((id, revision, index) =>
     addressLists.get(id)?.pick(revision, index),
   );
   window.cod.onBrowserSuggestionDismiss((id, revision) =>
     addressLists.get(id)?.dismiss(revision),
   );
+  window.cod.onBrowserDownloadDismiss((revision, restore) => {
+    if (openDownloads?.revision === revision) closeDownloads(restore);
+  });
   let browserLayoutPending = false;
   function scheduleBrowserLayout(): void {
     if (browserLayoutPending) return;
@@ -81,6 +111,173 @@ export function createBrowserViews(
         .filter((element) => !element.hidden && element.getClientRects().length)
         .map((element) => [element.dataset.browserId!, element]),
     );
+  }
+
+  function setDownloadButton(button: HTMLButtonElement): void {
+    const { count, fraction } = downloadProgress(
+      getState().browserDownloads ?? [],
+    );
+    button.toggleAttribute("data-download-active", count > 0);
+    button.toggleAttribute(
+      "data-download-indeterminate",
+      count > 0 && fraction === undefined,
+    );
+    if (performance.now() >= downloadCue) {
+      button.removeAttribute("data-download-start");
+    } else if (button.dataset.downloadStart !== String(downloadStart)) {
+      button.dataset.downloadStart = String(downloadStart);
+      downloadAnimations.get(button)?.cancel();
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        const glyph = button.querySelector(".icon");
+        if (glyph) {
+          downloadAnimations.set(
+            button,
+            glyph.animate(
+              [
+                { transform: "translateY(0)" },
+                { transform: "translateY(-4px)", offset: 0.42 },
+                { transform: "translateY(0)" },
+              ],
+              { duration: 360, easing: "ease-out" },
+            ),
+          );
+        }
+      }
+    }
+    button.style.setProperty(
+      "--download-progress",
+      `${100 * (fraction ?? 0)}%`,
+    );
+    button.title = count ? `Downloads · ${count} in progress` : "Downloads";
+    if (count)
+      button.setAttribute(
+        "aria-description",
+        fraction === undefined
+          ? `${count} in progress`
+          : `${count} in progress · ${Math.floor(fraction * 100)}%`,
+      );
+    else button.removeAttribute("aria-description");
+  }
+
+  function closeDownloads(restore = false): void {
+    const current = openDownloads;
+    if (!current) return;
+    openDownloads = undefined;
+    downloadPanel.panel.remove();
+    if (current.anchor instanceof HTMLButtonElement)
+      current.anchor.setAttribute("aria-expanded", "false");
+    const focus =
+      current.anchor instanceof HTMLButtonElement
+        ? current.anchor
+        : current.returnFocus;
+    if (restore && focus?.isConnected) focus.focus({ preventScroll: true });
+    scheduleBrowserLayout();
+  }
+
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (
+        openDownloads &&
+        event.target instanceof Node &&
+        !openDownloads.anchor.contains(event.target) &&
+        !downloadPanel.panel.contains(event.target)
+      )
+        closeDownloads();
+    },
+    { capture: true, signal: downloadEvents.signal },
+  );
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (openDownloads && event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDownloads(true);
+      }
+    },
+    { capture: true, signal: downloadEvents.signal },
+  );
+
+  function showDownloads(anchor: HTMLElement, browserId?: string): void {
+    if (openDownloads?.anchor === anchor) {
+      closeDownloads(true);
+      return;
+    }
+    closeDownloads();
+    for (const list of addressLists.values()) list.close();
+    const state = getState();
+    openDownloads = {
+      anchor,
+      revision: ++downloadSequence,
+      browserId,
+      url: state.browsers.find(({ id }) => id === browserId)?.url,
+      workspace: state.activeWorkspaceId,
+      returnFocus:
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null,
+    };
+    if (anchor instanceof HTMLButtonElement)
+      anchor.setAttribute("aria-expanded", "true");
+    scheduleBrowserLayout();
+  }
+
+  function placeDownloads(
+    slots: Map<string, HTMLElement>,
+  ): DownloadPopup | undefined {
+    const current = openDownloads;
+    if (!current) return;
+    const { anchor, browserId, revision } = current;
+    const state = getState();
+    if (
+      !anchor.getClientRects().length ||
+      state.activeWorkspaceId !== current.workspace ||
+      (browserId &&
+        state.browsers.find(({ id }) => id === browserId)?.url !== current.url)
+    ) {
+      closeDownloads();
+      return;
+    }
+    const slot = browserId && slots.get(browserId)?.getBoundingClientRect();
+    const trigger = anchor.getBoundingClientRect();
+    const edgeLeft = Math.ceil(slot ? slot.left : 0);
+    const edgeRight = Math.floor(slot ? slot.right : innerWidth);
+    const edgeBottom = Math.floor(slot ? slot.bottom : innerHeight);
+    const width = Math.min(360, edgeRight - edgeLeft - 8);
+    const x = Math.max(
+      edgeLeft + 4,
+      Math.min(Math.round(trigger.right) - width, edgeRight - width - 4),
+    );
+    const y = Math.ceil(trigger.bottom) + 4;
+    const css = getComputedStyle(document.documentElement);
+    const entries = state.browserDownloads ?? [];
+    const height = Math.min(360, edgeBottom - y - 4);
+    if (width < 1 || height < 1) {
+      closeDownloads();
+      return;
+    }
+    if (slot && browserId) {
+      downloadPanel.panel.remove();
+      return {
+        id: browserId,
+        revision,
+        bounds: { x, y, width, height },
+        fontSize: css.fontSize,
+        fontFamily: css.fontFamily,
+      };
+    }
+    const { panel } = downloadPanel;
+    panel.classList.add("browser-downloads-floating");
+    panel.style.left = `${x}px`;
+    panel.style.top = `${y}px`;
+    panel.style.width = `${width}px`;
+    panel.style.maxHeight = `${height}px`;
+    downloadPanel.update(downloadRows(entries));
+    if (!panel.isConnected) {
+      document.body.append(panel);
+      downloadPanel.focus();
+    }
   }
 
   function syncBackdrops(slots: Map<string, HTMLElement>, covered: boolean) {
@@ -190,6 +387,7 @@ export function createBrowserViews(
     const modal = openShellModal();
     const slots = visibleSlots();
     if (modal) {
+      closeDownloads();
       for (const list of addressLists.values())
         if (!list.element.hidden) list.close();
       if (captureSession?.dialog !== modal)
@@ -222,7 +420,8 @@ export function createBrowserViews(
       }
       break;
     }
-    window.cod.browserLayout({ rectangles, popup, resumeModal });
+    const downloads = placeDownloads(slots);
+    window.cod.browserLayout({ rectangles, popup, downloads, resumeModal });
   }
 
   async function stageBrowserBackdrop(
@@ -430,7 +629,7 @@ export function createBrowserViews(
     const downloads = container.querySelector<HTMLButtonElement>(
       "[aria-label=Downloads]",
     );
-    if (downloads) downloads.hidden = !getState().browserDownloads?.length;
+    if (downloads) setDownloadButton(downloads);
     scheduleBrowserLayout();
     container.querySelector<HTMLElement>(".browser-status")!.textContent = [
       record.agentPage ? (record.error ?? "") : "",
@@ -634,14 +833,19 @@ export function createBrowserViews(
     blocking.replaceChildren(icon("shield"));
     navigation.append(blocking);
     const downloads = paneButton("Downloads", async () => {
-      browserDownloads(invoke);
+      showDownloads(downloads, record.id);
     });
     downloads.type = "button";
     downloads.classList.add("icon-button");
     downloads.setAttribute("aria-label", "Downloads");
     downloads.title = "Downloads";
-    downloads.replaceChildren(icon("download"));
-    downloads.hidden = !getState().browserDownloads?.length;
+    downloads.setAttribute("aria-haspopup", "dialog");
+    downloads.setAttribute("aria-expanded", "false");
+    downloads.classList.add("browser-download-trigger");
+    const progress = document.createElement("span");
+    progress.className = "browser-download-progress";
+    progress.setAttribute("aria-hidden", "true");
+    downloads.replaceChildren(icon("download"), progress);
     navigation.append(downloads);
     const actions = document.createElement("browser-action-list");
     actions.addEventListener(
@@ -759,6 +963,19 @@ export function createBrowserViews(
         }, 1800),
       );
     },
+    showDownloads(id?: string) {
+      const ids = new Set([id, ...visibleSlots().keys()]);
+      for (const current of ids) {
+        if (!current) continue;
+        const button = browserPanes
+          .get(current)
+          ?.querySelector<HTMLButtonElement>(".browser-download-trigger");
+        if (!button?.getClientRects().length) continue;
+        showDownloads(button, current);
+        return;
+      }
+      showDownloads(document.querySelector<HTMLElement>(".app-header")!);
+    },
     focusAddress(id: string) {
       const input = browserPanes
         .get(id)
@@ -767,6 +984,22 @@ export function createBrowserViews(
       input?.select();
     },
     reconcile() {
+      const next = new Set(
+        (getState().browserDownloads ?? []).map(({ id }) => id),
+      );
+      if (knownDownloads && [...next].some((id) => !knownDownloads!.has(id))) {
+        downloadStart++;
+        downloadCue = performance.now() + 650;
+        clearTimeout(downloadCueTimer);
+        downloadCueTimer = setTimeout(() => {
+          for (const button of panes.querySelectorAll<HTMLButtonElement>(
+            ".browser-download-trigger",
+          ))
+            setDownloadButton(button);
+        }, 660);
+      }
+      knownDownloads = next;
+      if (openDownloads) scheduleBrowserLayout();
       for (const id of browserPanes.keys())
         if (!getState().browsers.some((b) => b.id === id)) {
           browserPanes.delete(id);
@@ -788,6 +1021,9 @@ export function createBrowserViews(
       window.cod.browserFocus(id);
     },
     dispose() {
+      closeDownloads();
+      clearTimeout(downloadCueTimer);
+      downloadEvents.abort();
       resizeObserver.disconnect();
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleBrowserLayout);
