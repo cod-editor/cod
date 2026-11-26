@@ -57,6 +57,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   private closed = false;
   private failure?: Error;
   private native?: Awaited<ReturnType<typeof openClaudeSession>>;
+  private opening?: ReturnType<typeof openClaudeSession>;
   private reading?: Promise<void>;
   private disposal?: Promise<void>;
   private input = deferred<SDKUserMessage | undefined>();
@@ -135,8 +136,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (!this.options.executable)
       throw new Error("Claude Code executable is unavailable");
     this.id = id;
-    this.emit({ type: "state", state: "starting" });
-    this.native = await openClaudeSession(
+    this.opening = openClaudeSession(
       {
         cwd: this.options.cwd,
         executable: this.options.executable,
@@ -148,6 +148,9 @@ export class ClaudeAdapter implements ProviderAdapter {
       },
       this.inputs(),
     );
+    this.emit({ type: "state", state: "starting" });
+    this.native = await this.opening;
+    this.opening = undefined;
     try {
       await this.native.ready;
     } catch {
@@ -427,7 +430,8 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.active?.reject(new Error("Claude Code controller closed"));
     this.active = undefined;
     this.input.resolve(undefined);
-    await this.native?.dispose();
+    const native = this.native ?? (await this.opening?.catch(() => undefined));
+    await native?.dispose();
     await this.reading;
   }
 
