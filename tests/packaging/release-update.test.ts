@@ -17,6 +17,7 @@ import {
   checkForReleaseUpdate,
   latestReleaseUpdate,
   packagedReleaseTag,
+  pollReleaseUpdates,
   releaseImage,
 } from "../../src/release-update.ts";
 
@@ -272,6 +273,9 @@ async function installerFixture(context: TestContext) {
       assert.equal(await readFile(image, "utf8"), file);
       opened.push(image);
     },
+    async isMounted() {
+      return busy;
+    },
     async eject(image: string) {
       ejected.push(image);
       return !busy;
@@ -493,4 +497,106 @@ test("retrying a Finder failure reuses the verified image", async (context) => {
   await installer.open(update, signal());
   assert.equal(requested, 1);
   assert.equal(fixture.opened.length, 1);
+});
+
+test("owned corrupt cache recovers on retry without touching a mounted image", async (context) => {
+  const fixture = await installerFixture(context);
+  let requests = 0;
+  const installer = new ReleaseInstaller(
+    fixture.profile,
+    fixture.desktop,
+    async () => {
+      requests++;
+      return new Response(file);
+    },
+  );
+  await installer.open(update, signal());
+  const old = fixture.opened[0];
+  const damaged = "x".repeat(update.size);
+  await writeFile(old, damaged);
+  fixture.mountBusy(true);
+  await assert.rejects(installer.open(update, signal()), /Eject/);
+  assert.equal(await readFile(old, "utf8"), damaged);
+  assert.deepEqual(fixture.ejected, []);
+  assert.equal(requests, 1);
+
+  fixture.mountBusy(false);
+  await installer.open(update, signal());
+  assert.equal(requests, 2);
+  assert.equal(await readFile(old, "utf8"), file);
+  assert.equal(fixture.opened.length, 2);
+});
+
+test("release checks are serial every 15 minutes and wait through GitHub retry times", async () => {
+  const stop = new AbortController();
+  const finishTurn = () => new Promise((resolve) => setImmediate(resolve));
+  const interval = 15 * 60 * 1000;
+  let now = 1_800_000_000_000;
+  let timeout: { at: number; callback: () => void } | undefined;
+  const clock = {
+    now: () => now,
+    schedule(callback: () => void, delay: number) {
+      assert.equal(timeout, undefined);
+      timeout = { callback, at: now + delay };
+      return () => {
+        timeout = undefined;
+      };
+    },
+  };
+  const nextTime = () => timeout?.at;
+  const fire = async () => {
+    assert.ok(timeout);
+    const current = timeout;
+    timeout = undefined;
+    now = current.at;
+    current.callback();
+    await finishTurn();
+  };
+  let checks = 0;
+  let visibleVersion: string | undefined;
+  let finishFirst: (response: Response) => void = () => {};
+  pollReleaseUpdates(
+    async () => {
+      checks++;
+      const result = await checkForReleaseUpdate(
+        "v0.4.0",
+        stop.signal,
+        async () => {
+          if (checks === 1)
+            return new Promise((resolve) => (finishFirst = resolve));
+          if (checks === 2)
+            return new Response(null, {
+              status: 429,
+              headers: { "Retry-After": "2700" },
+            });
+          if (checks === 3)
+            return new Response(null, {
+              status: 403,
+              headers: { "X-RateLimit-Reset": String(now / 1000 + 3600) },
+            });
+          throw new Error("Invented network failure");
+        },
+      );
+      visibleVersion = result?.version;
+    },
+    stop.signal,
+    clock,
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(timeout, undefined);
+  finishFirst(Response.json([release("v0.4.1")]));
+  await finishTurn();
+  assert.equal(visibleVersion, "0.4.1");
+  assert.equal(nextTime(), now + interval);
+  await fire();
+  assert.equal(nextTime(), now + 2700 * 1000);
+  await fire();
+  assert.equal(nextTime(), now + 3600 * 1000);
+  await fire();
+  assert.equal(nextTime(), now + interval);
+  assert.equal(visibleVersion, "0.4.1");
+  assert.equal(checks, 4);
+  stop.abort();
+  assert.equal(timeout, undefined);
 });

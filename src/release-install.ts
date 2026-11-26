@@ -26,6 +26,7 @@ import {
 export interface ReleaseInstallDesktop {
   quarantine(image: string, downloadUrl: string): Promise<void>;
   open(image: string): Promise<void>;
+  isMounted(image: string): Promise<boolean>;
   eject(image: string, runningExecutable: string): Promise<boolean>;
 }
 type VerifiedUpdate = ReleaseUpdate & { sha256: string };
@@ -53,7 +54,8 @@ async function privateDirectory(directory: string): Promise<void> {
   if (
     !info.isDirectory() ||
     (info.mode & 0o077) !== 0 ||
-    info.uid !== process.getuid?.()
+    info.uid !== process.getuid?.() ||
+    (await realpath(directory)) !== directory
   )
     throw new Error("Update storage is not a private directory");
 }
@@ -96,15 +98,33 @@ async function readReceipt(directory: string): Promise<Receipt> {
     await file.close();
   }
 }
+function isOwnedFile(
+  info: Awaited<ReturnType<typeof fileIdentity>>,
+  receipt: Receipt,
+): boolean {
+  return info.dev === receipt.dev && info.ino === receipt.ino;
+}
 function isRecordedFile(
   info: Awaited<ReturnType<typeof fileIdentity>>,
   receipt: Receipt,
 ): boolean {
-  return (
-    info.dev === receipt.dev &&
-    info.ino === receipt.ino &&
-    info.size === receipt.size
-  );
+  return isOwnedFile(info, receipt) && info.size === receipt.size;
+}
+async function removeOwnedImage(
+  directory: string,
+  file: string,
+  receipt: Receipt,
+) {
+  await privateDirectory(directory);
+  if (!isOwnedFile(await fileIdentity(file), receipt))
+    throw new Error("The update file changed after verification");
+  const record = path.join(directory, receiptFile);
+  const marker = path.join(directory, partialMarker);
+  await Promise.all([fileIdentity(record), fileIdentity(marker)]);
+  await unlink(file);
+  await unlink(record);
+  await unlink(marker);
+  await rmdir(directory);
 }
 async function verifyCachedImage(
   file: string,
@@ -121,14 +141,19 @@ async function verifyCachedImage(
       !stat.isFile() ||
       stat.nlink !== 1 ||
       stat.uid !== process.getuid?.() ||
-      !isRecordedFile(stat, receipt)
+      !isOwnedFile(stat, receipt)
     )
       throw new Error("Update image does not match its download record");
+    if (stat.size !== receipt.size) return false;
     const sha = createHash("sha256");
     const stream = handle.createReadStream({ signal });
-    for await (const buffer of stream) sha.update(buffer);
-    if (sha.digest("hex") !== receipt.sha256)
-      throw new Error("The cached update failed checksum verification");
+    let count = 0;
+    for await (const buffer of stream) {
+      count += buffer.length;
+      if (count > receipt.size) return false;
+      sha.update(buffer);
+    }
+    return count === receipt.size && sha.digest("hex") === receipt.sha256;
   } finally {
     await handle.close();
   }
@@ -238,12 +263,14 @@ export class ReleaseInstaller {
     this.request = request;
   }
 
-  private directory(): Promise<string> {
+  private async directory(): Promise<string> {
     this.storage ??= this.initialize().catch((error) => {
       this.storage = undefined;
       throw error;
     });
-    return this.storage;
+    const storage = await this.storage;
+    await privateDirectory(storage);
+    return storage;
   }
 
   private async initialize(): Promise<string> {
@@ -304,13 +331,23 @@ export class ReleaseInstaller {
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
+    let receipt: Receipt | undefined;
     if (exists) {
       const record = await readReceipt(ready);
       if (!matchesUpdate(update, record))
         throw new Error("Unexpected cached update");
-      await verifyCachedImage(destination, record, signal);
-      await this.desktop.quarantine(destination, update.downloadUrl);
-    } else {
+      if (await verifyCachedImage(destination, record, signal)) {
+        if (!isRecordedFile(await fileIdentity(destination), record))
+          throw new Error("The update file changed after verification");
+        await this.desktop.quarantine(destination, update.downloadUrl);
+        receipt = record;
+      } else {
+        if (await this.desktop.isMounted(destination))
+          throw new Error("Eject the existing disk image before retrying");
+        await removeOwnedImage(ready, destination, record);
+      }
+    }
+    if (!receipt) {
       const stage = await mkdtemp(path.join(directory, ".partial-"));
       try {
         await writeFile(path.join(stage, partialMarker), image.name + "\n", {
@@ -321,9 +358,10 @@ export class ReleaseInstaller {
         await downloadImage(update, partial, this.request, signal);
         await this.desktop.quarantine(partial, update.downloadUrl);
         const { dev, ino } = await fileIdentity(partial);
+        receipt = { ...update, dev, ino };
         await writeFile(
           path.join(stage, receiptFile),
-          JSON.stringify({ ...update, dev, ino } satisfies Receipt),
+          JSON.stringify(receipt),
           { flag: "wx", mode: 0o600 },
         );
         signal.throwIfAborted();
@@ -339,6 +377,9 @@ export class ReleaseInstaller {
       }
     }
     signal.throwIfAborted();
+    await privateDirectory(ready);
+    if (!isRecordedFile(await fileIdentity(destination), receipt))
+      throw new Error("The update file changed after verification");
     await this.desktop.open(destination);
   }
 
@@ -351,15 +392,9 @@ export class ReleaseInstaller {
         const receipt = await readReceipt(directory);
         if (!installedReleaseIncludes(installed, receipt.version)) continue;
         const image = path.join(directory, releaseImage(receipt.version).name);
-        if (!isRecordedFile(await fileIdentity(image), receipt)) continue;
+        if (!isOwnedFile(await fileIdentity(image), receipt)) continue;
         if (!(await this.desktop.eject(image, runningExecutable))) continue;
-        if (!isRecordedFile(await fileIdentity(image), receipt)) continue;
-        await unlink(image);
-        await unlink(path.join(directory, receiptFile));
-        await unlink(path.join(directory, partialMarker)).catch((error) => {
-          if (!isMissing(error)) throw error;
-        });
-        await rmdir(directory);
+        await removeOwnedImage(directory, image, receipt);
       } catch {
         // Leave busy images or anything outside the ownership record in place.
       }

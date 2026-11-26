@@ -54,8 +54,11 @@ export async function installedApplication(
       if (
         directory === path.dirname(bundle) &&
         !contains("/Volumes", directory)
-      )
+      ) {
+        for (const { mount } of mounts(await attachedImages()))
+          if (contains(await realpath(mount), binary)) return false;
         return true;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -85,9 +88,9 @@ function plistJson(xml: string): Promise<unknown> {
 
 type MountedImage = {
   "image-path": string;
-  "system-entities": Array<{ "mount-point"?: string }>;
+  "system-entities": Array<{ "mount-point"?: string; "dev-entry"?: string }>;
 };
-async function mountedImages(image: string): Promise<MountedImage[]> {
+async function attachedImages(): Promise<MountedImage[]> {
   const { stdout } = await execute(
     "/usr/bin/hdiutil",
     ["info", "-plist"],
@@ -96,20 +99,25 @@ async function mountedImages(image: string): Promise<MountedImage[]> {
   const data = (await plistJson(stdout)) as { images?: MountedImage[] };
   if (!Array.isArray(data?.images))
     throw new Error("Could not read attached images");
-  return data.images.filter((record) => record["image-path"] === image);
+  return data.images;
 }
-
-function mountPoints(records: MountedImage[]): string[] {
-  return records.flatMap((record) =>
-    record["system-entities"]
-      .map((entity) => entity["mount-point"])
-      .filter(
-        (mount): mount is string =>
-          typeof mount === "string" && path.isAbsolute(mount),
-      ),
+async function mountedImages(image: string): Promise<MountedImage[]> {
+  return (await attachedImages()).filter(
+    (record) => record["image-path"] === image,
   );
 }
 
+function mounts(records: MountedImage[]) {
+  return records.flatMap((record) =>
+    record["system-entities"].flatMap((entity) => {
+      const mount = entity["mount-point"];
+      const device = entity["dev-entry"];
+      return typeof mount === "string" && path.isAbsolute(mount)
+        ? [{ mount, device }]
+        : [];
+    }),
+  );
+}
 export function macReleaseDesktop(
   openPath: (path: string) => Promise<string>,
 ): ReleaseInstallDesktop {
@@ -131,20 +139,35 @@ export function macReleaseDesktop(
         throw new Error("Could not quarantine the update");
     },
     async open(image) {
-      const mounts = mountPoints(await mountedImages(image));
-      const error = await openPath(mounts.length === 1 ? mounts[0] : image);
+      const attached = mounts(await mountedImages(image));
+      const error = await openPath(
+        attached.length === 1 ? attached[0].mount : image,
+      );
       if (error) throw new Error("Could not open the verified disk image");
+    },
+    async isMounted(image) {
+      return (await mountedImages(image)).length > 0;
     },
     async eject(image, runningExecutable) {
       const records = await mountedImages(image);
       if (records.length === 0) return true;
-      const mounts = mountPoints(records);
-      if (records.length !== 1 || mounts.length !== 1) return false;
-      const [mount] = mounts;
+      const attached = mounts(records);
+      if (records.length !== 1 || attached.length !== 1) return false;
+      const [{ mount, device }] = attached;
+      if (!device || !/^\/dev\/disk\d+(?:s\d+)*$/.test(device)) return false;
       const mounted = await realpath(mount);
       const running = await realpath(runningExecutable);
       if (contains(mounted, running)) return false;
-      await execute("/usr/bin/hdiutil", ["detach", mounted], options);
+      const current = await mountedImages(image);
+      const currentMounts = mounts(current);
+      if (
+        current.length !== 1 ||
+        currentMounts.length !== 1 ||
+        currentMounts[0].mount !== mount ||
+        currentMounts[0].device !== device
+      )
+        return false;
+      await execute("/usr/bin/hdiutil", ["detach", device], options);
       return (await mountedImages(image)).length === 0;
     },
   };

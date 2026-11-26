@@ -141,6 +141,72 @@ export function latestReleaseUpdate(
   return update;
 }
 
+class ReleaseFeedUnavailable extends Error {
+  readonly retryAfter: number;
+  readonly rateReset: number;
+  constructor(response: Response) {
+    super("Release list unavailable");
+    const seconds = (header: string) => {
+      const value = response.headers.get(header);
+      if (!value || !/^\d+$/.test(value)) return 0;
+      const ms = Number(value) * 1000;
+      return Number.isSafeInteger(ms) ? ms : 0;
+    };
+    const limited = response.status === 403 || response.status === 429;
+    this.retryAfter = limited ? seconds("retry-after") : 0;
+    this.rateReset = limited ? seconds("x-ratelimit-reset") : 0;
+  }
+}
+
+const checkInterval = 15 * 60 * 1000;
+const realReleaseClock = {
+  now: Date.now,
+  schedule(callback: () => void, delay: number) {
+    const timer = setTimeout(callback, delay);
+    timer.unref();
+    return () => clearTimeout(timer);
+  },
+};
+
+export function pollReleaseUpdates(
+  refresh: () => Promise<void>,
+  stop: AbortSignal,
+  clock = realReleaseClock,
+): void {
+  if (stop.aborted) return;
+  let cancelTimer: (() => void) | undefined;
+  const schedule = (when: number) => {
+    if (stop.aborted) return;
+    cancelTimer = clock.schedule(
+      () => {
+        if (clock.now() < when) schedule(when);
+        else void run();
+      },
+      Math.max(0, Math.min(when - clock.now(), 2 ** 31 - 1)),
+    );
+  };
+  const run = async () => {
+    if (stop.aborted) return;
+    let retry;
+    try {
+      await refresh();
+    } catch (error) {
+      // Failed checks leave the current update notice in place.
+      if (error instanceof ReleaseFeedUnavailable) retry = error;
+    }
+    const now = clock.now();
+    schedule(
+      Math.max(
+        now + checkInterval,
+        now + (retry?.retryAfter ?? 0),
+        retry?.rateReset ?? 0,
+      ),
+    );
+  };
+  stop.addEventListener("abort", () => cancelTimer?.(), { once: true });
+  void run();
+}
+
 export async function checkForReleaseUpdate(
   currentTag: string,
   stop: AbortSignal,
@@ -153,7 +219,7 @@ export async function checkForReleaseUpdate(
   });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
-    throw new Error("Release list unavailable");
+    throw new ReleaseFeedUnavailable(response);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

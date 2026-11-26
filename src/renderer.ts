@@ -19,6 +19,7 @@ import { createQuickTerminal } from "./ui/quick-terminal";
 import { createConversationViews } from "./ui/conversation-views";
 import { createDocumentViews } from "./ui/document-views";
 import { FileTree } from "./ui/files";
+import { uiButton } from "./ui-kit";
 import { createTerminalViews } from "./ui/terminal-views";
 import type { AppState, CodBridge, WorkspaceState } from "./types";
 
@@ -85,16 +86,27 @@ const layout = createPaneLayout(() => state, invoke, {
   nativeLayout: browsers.layout,
 });
 let releaseNotice: import("./release-update").ReleaseUpdateNotice | null = null;
-const downloadUpdate = paneButton("Download update", async () => {
-  if (!releaseNotice || releaseNotice.status === "downloading") return;
+const downloadUpdate = uiButton("Download");
+downloadUpdate.dataset.focusKey = "release-update";
+let activatingUpdate = false;
+downloadUpdate.onclick = async () => {
+  if (
+    !releaseNotice ||
+    activatingUpdate ||
+    releaseNotice.status === "downloading"
+  )
+    return;
+  activatingUpdate = true;
   const manual = releaseNotice.status === "manual";
   try {
     await window.cod.openReleaseUpdate();
     if (!manual) setStatus("Quit Cod before replacing it in Applications.");
   } catch {
     setStatus("Could not prepare the update. Try again.");
+  } finally {
+    activatingUpdate = false;
   }
-});
+};
 downloadUpdate.classList.add("release-update");
 downloadUpdate.hidden = true;
 document.querySelector("#pane-visibility")!.prepend(downloadUpdate);
@@ -112,10 +124,9 @@ window.cod.onReleaseUpdate((notice) => {
   const [label, accessibleName, title] = updateLabels[notice.status];
   downloadUpdate.textContent = label;
   downloadUpdate.setAttribute("aria-label", accessibleName);
-  downloadUpdate.setAttribute(
-    "aria-disabled",
-    String(notice.status === "downloading"),
-  );
+  const busy = String(notice.status === "downloading");
+  downloadUpdate.setAttribute("aria-disabled", busy);
+  downloadUpdate.setAttribute("aria-busy", busy);
   downloadUpdate.title = `${title} ${notice.version}`;
 });
 const navigation = createWorkspaceNavigation(() => state, invoke, {

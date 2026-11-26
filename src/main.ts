@@ -5,6 +5,7 @@ import { startupBuildInfo } from "./build-info";
 import {
   checkForReleaseUpdate,
   packagedReleaseTag,
+  pollReleaseUpdates,
   releaseImage,
   type ReleaseUpdate,
   type ReleaseUpdateNotice,
@@ -189,38 +190,28 @@ function startReleaseChecks(): void {
       )
       .catch(() => {});
   });
-  const refresh = async () => {
-    try {
-      const update = await checkForReleaseUpdate(current, stop.signal);
-      if (
-        stop.signal.aborted ||
-        releaseWork ||
-        (update?.version === releaseUpdate?.version &&
-          update?.sha256 === releaseUpdate?.sha256 &&
-          update?.size === releaseUpdate?.size)
-      )
-        return;
-      const status = !update
-        ? "available"
-        : !update.sha256
-          ? "manual"
-          : (await installer.ready(update))
-            ? "ready"
-            : "available";
-      if (stop.signal.aborted || releaseWork) return;
-      releaseUpdate = update;
-      publishReleaseNotice(status);
-    } catch {
-      // Keep the last successful notice when the release feed is unavailable.
-    }
-  };
-  void refresh();
-  const timer = setInterval(() => void refresh(), 6 * 60 * 60 * 1000);
-  timer.unref();
-  app.once("will-quit", () => {
-    clearInterval(timer);
-    stop.abort();
-  });
+  pollReleaseUpdates(async () => {
+    const update = await checkForReleaseUpdate(current, stop.signal);
+    if (
+      stop.signal.aborted ||
+      releaseWork ||
+      (update?.version === releaseUpdate?.version &&
+        update?.sha256 === releaseUpdate?.sha256 &&
+        update?.size === releaseUpdate?.size)
+    )
+      return;
+    const status = !update
+      ? "available"
+      : !update.sha256
+        ? "manual"
+        : (await installer.ready(update))
+          ? "ready"
+          : "available";
+    if (stop.signal.aborted || releaseWork) return;
+    releaseUpdate = update;
+    publishReleaseNotice(status);
+  }, stop.signal);
+  app.once("will-quit", () => stop.abort());
 }
 let commandServer: Server | null = null;
 let remoteWorkspace: HostLink | undefined;
