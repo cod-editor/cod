@@ -1,6 +1,6 @@
 const releasesUrl =
   "https://api.github.com/repos/cod-editor/cod/releases?per_page=30";
-const releaseDownloads = "https://github.com/cod-editor/cod/releases/download";
+const releasesPage = "https://github.com/cod-editor/cod/releases";
 const releaseTagPattern =
   /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview\.(0|[1-9]\d*))?$/;
 const maxResponseBytes = 1024 * 1024;
@@ -8,6 +8,31 @@ const maxResponseBytes = 1024 * 1024;
 export interface ReleaseUpdate {
   version: string;
   downloadUrl: string;
+  size: number;
+  sha256?: string;
+}
+export interface ReleaseUpdateNotice {
+  version: string;
+  status: "available" | "downloading" | "ready" | "retry" | "manual";
+}
+
+export function releaseImage(version: string) {
+  const tag = `v${version}`;
+  if (!releaseComponents(tag)) throw new Error("Invalid Cod release version");
+  const name = `Cod-${version}-macOS-arm64.dmg`;
+  return {
+    name,
+    downloadUrl: `${releasesPage}/download/${tag}/${name}`,
+    releaseUrl: `${releasesPage}/tag/${tag}`,
+  };
+}
+
+export function installedReleaseIncludes(installed: string, target: string) {
+  const current = releaseComponents(`v${installed}`);
+  const update = releaseComponents(`v${target}`);
+  return (
+    !!current && !!update && (installed === target || newer(current, update))
+  );
 }
 
 type Version = {
@@ -83,23 +108,34 @@ export function latestReleaseUpdate(
     )
       continue;
     const version = tag.slice(1);
-    const name = `Cod-${version}-macOS-arm64.dmg`;
-    const downloadUrl = `${releaseDownloads}/${tag}/${name}`;
-    const available = release.assets.some((asset: unknown) => {
-      if (!asset || typeof asset !== "object") return false;
-      const candidate = asset as Record<string, unknown>;
-      return (
-        candidate.name === name &&
-        candidate.state === "uploaded" &&
-        typeof candidate.size === "number" &&
-        Number.isSafeInteger(candidate.size) &&
-        candidate.size > 0 &&
-        candidate.browser_download_url === downloadUrl
-      );
-    });
+    const { name, downloadUrl } = releaseImage(version);
+    const available = release.assets.find(
+      (asset: unknown): asset is { size: number; digest?: unknown } => {
+        if (!asset || typeof asset !== "object") return false;
+        const candidate = asset as Record<string, unknown>;
+        return (
+          candidate.name === name &&
+          candidate.state === "uploaded" &&
+          typeof candidate.size === "number" &&
+          Number.isSafeInteger(candidate.size) &&
+          candidate.size > 0 &&
+          candidate.browser_download_url === downloadUrl
+        );
+      },
+    );
     if (available) {
       latest = components;
-      update = { version, downloadUrl };
+      const digest = available.digest;
+      const sha256 =
+        typeof digest === "string" && /^sha256:[a-f0-9]{64}$/.test(digest)
+          ? digest.slice("sha256:".length)
+          : undefined;
+      update = {
+        version,
+        downloadUrl,
+        size: available.size,
+        ...(sha256 ? { sha256 } : {}),
+      };
     }
   }
   return update;

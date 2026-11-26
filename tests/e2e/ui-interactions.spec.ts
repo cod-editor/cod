@@ -229,7 +229,7 @@ test("Integration setup can be deferred, reopened and installed only after previ
   }
 });
 
-test("A release update notice only hands off the asset on explicit activation", async ({}, info) => {
+test("The release update notice prepares, retries and opens only on explicit activation", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -237,15 +237,24 @@ test("A release update notice only hands off the asset on explicit activation", 
     const action = app.page.getByRole("button", { name: "Download update" });
     await expect(action).toBeHidden();
     await app.app!.evaluate(({ BrowserWindow, ipcMain }) => {
-      const state = { opened: 0 };
+      const state = { opened: 0, finish: () => {} };
       Object.assign(globalThis, { releaseNoticeFixture: state });
-      ipcMain.removeHandler("cod:release-update-open");
-      ipcMain.handle("cod:release-update-open", () => {
-        state.opened++;
-      });
       const window = BrowserWindow.getAllWindows()[0];
+      const publish = (version: string, status: string) =>
+        window.webContents.send("cod:release-update", { version, status });
+      ipcMain.removeHandler("cod:release-update-open");
+      ipcMain.handle("cod:release-update-open", async () => {
+        state.opened++;
+        publish("0.1.0", "downloading");
+        await new Promise<void>((resolve) => (state.finish = resolve));
+        if (state.opened === 1) {
+          publish("0.1.0", "retry");
+          throw new Error("Invented download error");
+        }
+        publish("0.1.0", "ready");
+      });
       window.setContentSize(760, 650);
-      window.webContents.send("cod:release-update", "0.1.0-preview.2");
+      publish("0.1.0-preview.2", "available");
     });
     await expect(action).toBeVisible();
     await expect(action).toHaveAttribute(
@@ -277,10 +286,10 @@ test("A release update notice only hands off the asset on explicit activation", 
       ).toBe(true);
     }
     await app.app!.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0].webContents.send(
-        "cod:release-update",
-        "0.1.0",
-      );
+      BrowserWindow.getAllWindows()[0].webContents.send("cod:release-update", {
+        version: "0.1.0",
+        status: "available",
+      });
     });
     await expect(action).toHaveAttribute("title", "Download Cod 0.1.0");
     const handoffs = () =>
@@ -292,15 +301,44 @@ test("A release update notice only hands off the asset on explicit activation", 
       path: info.outputPath("release-update-notice.png"),
     });
     await action.press("Enter");
+    const preparing = app.page.getByRole("button", {
+      name: "Preparing update",
+    });
+    await expect(preparing).toBeFocused();
+    await expect(preparing).toBeDisabled();
+    await app.page.screenshot({
+      path: info.outputPath("release-update-preparing.png"),
+    });
+    await app.page.keyboard.press("Enter");
     await expect.poll(handoffs).toBe(1);
+    const finish = () =>
+      app.app!.evaluate(() =>
+        (globalThis as any).releaseNoticeFixture.finish(),
+      );
+    await finish();
+    const retry = app.page.getByRole("button", { name: "Retry update" });
+    await expect(retry).toBeFocused();
+    await expect(app.page.locator("#status")).toContainText(
+      "Could not prepare the update",
+    );
+    await retry.press("Enter");
+    await expect.poll(handoffs).toBe(2);
+    await expect(preparing).toBeDisabled();
+    await finish();
+    const ready = app.page.getByRole("button", { name: "Open update" });
+    await expect(ready).toBeFocused();
+    await expect(ready).toBeEnabled();
+    await app.page.screenshot({
+      path: info.outputPath("release-update-ready.png"),
+    });
     await app.app!.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].webContents.send(
         "cod:release-update",
         null,
       );
     });
-    await expect(action).toBeHidden();
-    expect(await handoffs()).toBe(1);
+    await expect(ready).toBeHidden();
+    expect(await handoffs()).toBe(2);
   } finally {
     await app.cleanup();
   }

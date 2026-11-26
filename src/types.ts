@@ -374,7 +374,11 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
-  onReleaseUpdate(callback: (version: string | null) => void): void;
+  onReleaseUpdate(
+    callback: (
+      notice: import("./release-update").ReleaseUpdateNotice | null,
+    ) => void,
+  ): void;
   openReleaseUpdate(): Promise<void>;
   toggleDevTools(browserId?: string): Promise<void>;
   onSettings(

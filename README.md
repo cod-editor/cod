@@ -8,7 +8,7 @@ Download the Apple Silicon disk image from [Releases](https://github.com/cod-edi
 
 Cod uses an ad-hoc signature and has no Apple notarization. If macOS blocks the first launch after you verify the download, follow [Apple's instructions for opening a trusted app](https://support.apple.com/en-us/102445#openanyway).
 
-When Cod offers an update, click **Download**, quit Cod, then replace the app in Applications from the new disk image. Workspaces and settings are stored separately.
+When Cod offers an update, click **Download** to verify and open the disk image. Quit Cod, drag the updated app to Applications, and open it from there. The installed app ejects and removes the disk image managed by Cod. Workspaces and settings are stored separately.
 
 ## Run from source
 

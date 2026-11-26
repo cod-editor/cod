@@ -84,21 +84,39 @@ const layout = createPaneLayout(() => state, invoke, {
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });
+let releaseNotice: import("./release-update").ReleaseUpdateNotice | null = null;
 const downloadUpdate = paneButton("Download update", async () => {
+  if (!releaseNotice || releaseNotice.status === "downloading") return;
+  const manual = releaseNotice.status === "manual";
   try {
     await window.cod.openReleaseUpdate();
+    if (!manual) setStatus("Quit Cod before replacing it in Applications.");
   } catch {
-    setStatus("Could not open the preview download");
+    setStatus("Could not prepare the update. Try again.");
   }
 });
-downloadUpdate.textContent = "Download";
-downloadUpdate.setAttribute("aria-label", "Download update");
 downloadUpdate.classList.add("release-update");
 downloadUpdate.hidden = true;
 document.querySelector("#pane-visibility")!.prepend(downloadUpdate);
-window.cod.onReleaseUpdate((version) => {
-  downloadUpdate.hidden = !version;
-  downloadUpdate.title = version ? `Download Cod ${version}` : "";
+const updateLabels = {
+  available: ["Download", "Download update", "Download Cod"],
+  downloading: ["Preparing…", "Preparing update", "Preparing Cod"],
+  ready: ["Open DMG", "Open update", "Open Cod"],
+  retry: ["Retry", "Retry update", "Retry Cod"],
+  manual: ["Release", "Open release page", "View Cod"],
+} as const;
+window.cod.onReleaseUpdate((notice) => {
+  releaseNotice = notice;
+  downloadUpdate.hidden = !notice;
+  if (!notice) return;
+  const [label, accessibleName, title] = updateLabels[notice.status];
+  downloadUpdate.textContent = label;
+  downloadUpdate.setAttribute("aria-label", accessibleName);
+  downloadUpdate.setAttribute(
+    "aria-disabled",
+    String(notice.status === "downloading"),
+  );
+  downloadUpdate.title = `${title} ${notice.version}`;
 });
 const navigation = createWorkspaceNavigation(() => state, invoke, {
   folderDialog: (workspace, restoreFocus) =>
