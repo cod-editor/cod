@@ -11,7 +11,6 @@ if (!process.argv[2] || process.platform !== "darwin")
   throw new Error("Usage on macOS: node check-package.mjs PACKAGE_DIRECTORY");
 const bundle = path.join(artifact, "Cod.app");
 const app = path.join(bundle, "Contents/Resources/app");
-const executable = path.join(bundle, "Contents/MacOS/Electron");
 await execute("codesign", ["--verify", "--deep", "--strict", bundle]);
 const { stdout: plistJson } = await execute("plutil", [
   "-convert",
@@ -21,6 +20,15 @@ const { stdout: plistJson } = await execute("plutil", [
   path.join(bundle, "Contents/Info.plist"),
 ]);
 const plist = JSON.parse(plistJson);
+if (plist.CFBundleExecutable !== "Cod")
+  throw new Error(
+    "Packaged macOS executable must not be the Electron launcher",
+  );
+const executable = path.join(
+  bundle,
+  "Contents/MacOS",
+  plist.CFBundleExecutable,
+);
 const expectedVersion = process.argv[3];
 const manifest = JSON.parse(
   await readFile(path.join(app, "package.json"), "utf8"),
