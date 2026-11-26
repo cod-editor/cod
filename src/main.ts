@@ -5,8 +5,16 @@ import { startupBuildInfo } from "./build-info";
 import {
   checkForReleaseUpdate,
   packagedReleaseTag,
+  pollReleaseUpdates,
+  releaseImage,
   type ReleaseUpdate,
+  type ReleaseUpdateNotice,
 } from "./release-update";
+import { ReleaseInstaller } from "./release-install";
+import {
+  installedApplication,
+  macReleaseDesktop,
+} from "./release-update-macos";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -126,36 +134,84 @@ async function reloadKeymap(): Promise<void> {
 
 let mainWindow: BrowserWindow | null = null;
 let releaseUpdate: ReleaseUpdate | undefined;
+let releaseNotice: ReleaseUpdateNotice | null = null;
+let releaseInstaller: ReleaseInstaller | undefined;
+let releaseStop: AbortSignal | undefined;
+let releaseWork: Promise<void> | undefined;
+function publishReleaseNotice(
+  status: ReleaseUpdateNotice["status"] = "available",
+) {
+  releaseNotice = releaseUpdate
+    ? { version: releaseUpdate.version, status }
+    : null;
+  mainWindow?.webContents.send("cod:release-update", releaseNotice);
+}
+function openReleaseUpdate(): Promise<void> | undefined {
+  const update = releaseUpdate;
+  if (!update || !releaseInstaller || !releaseStop) return;
+  if (!update.sha256)
+    return shell.openExternal(releaseImage(update.version).releaseUrl);
+  if (releaseWork) return releaseWork;
+  publishReleaseNotice("downloading");
+  releaseWork = releaseInstaller
+    .open(update, releaseStop)
+    .then(
+      () => publishReleaseNotice("ready"),
+      (error) => {
+        publishReleaseNotice("retry");
+        throw error;
+      },
+    )
+    .finally(() => {
+      releaseWork = undefined;
+    });
+  return releaseWork;
+}
 function startReleaseChecks(): void {
+  const version = app.getVersion();
   const current = packagedReleaseTag(
     app.isPackaged,
     process.platform,
     process.arch,
-    app.getVersion(),
+    version,
   );
   if (!current) return;
   const stop = new AbortController();
-  const refresh = async () => {
-    try {
-      const update = await checkForReleaseUpdate(current, stop.signal);
-      if (stop.signal.aborted || update?.version === releaseUpdate?.version)
-        return;
-      releaseUpdate = update;
-      mainWindow?.webContents.send(
-        "cod:release-update",
-        update?.version ?? null,
-      );
-    } catch {
-      // The release notice is optional. Keep the last successful result if the feed is unavailable.
-    }
-  };
-  void refresh();
-  const timer = setInterval(() => void refresh(), 6 * 60 * 60 * 1000);
-  timer.unref();
-  app.once("will-quit", () => {
-    clearInterval(timer);
-    stop.abort();
+  const installer = new ReleaseInstaller(
+    app.getPath("userData"),
+    macReleaseDesktop((file) => shell.openPath(file)),
+  );
+  releaseInstaller = installer;
+  releaseStop = stop.signal;
+  mainWindow?.webContents.once("did-finish-load", () => {
+    void installedApplication(process.execPath, os.homedir())
+      .then((installed) =>
+        installed ? installer.cleanup(version, process.execPath) : undefined,
+      )
+      .catch(() => {});
   });
+  pollReleaseUpdates(async () => {
+    const update = await checkForReleaseUpdate(current, stop.signal);
+    if (
+      stop.signal.aborted ||
+      releaseWork ||
+      (update?.version === releaseUpdate?.version &&
+        update?.sha256 === releaseUpdate?.sha256 &&
+        update?.size === releaseUpdate?.size)
+    )
+      return;
+    const status = !update
+      ? "available"
+      : !update.sha256
+        ? "manual"
+        : (await installer.ready(update))
+          ? "ready"
+          : "available";
+    if (stop.signal.aborted || releaseWork) return;
+    releaseUpdate = update;
+    publishReleaseNotice(status);
+  }, stop.signal);
+  app.once("will-quit", () => stop.abort());
 }
 let commandServer: Server | null = null;
 let remoteWorkspace: HostLink | undefined;
@@ -695,8 +751,8 @@ function createWindow(): void {
     operations.clearBrowserPresentation(),
   );
   mainWindow.webContents.on("did-finish-load", () => {
-    if (releaseUpdate)
-      mainWindow?.webContents.send("cod:release-update", releaseUpdate.version);
+    if (releaseNotice)
+      mainWindow?.webContents.send("cod:release-update", releaseNotice);
   });
   void mainWindow.loadFile(rendererPath);
 }
@@ -744,7 +800,7 @@ async function start(): Promise<void> {
     };
     ipcMain.handle("cod:release-update-open", async (event) => {
       requireShellRenderer(event);
-      if (releaseUpdate) await shell.openExternal(releaseUpdate.downloadUrl);
+      await openReleaseUpdate();
     });
     ipcMain.handle("cod:devtools", (event, id: unknown) => {
       if (

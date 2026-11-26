@@ -10,9 +10,7 @@ import type {
 
 const bridge: CodBridge = {
   onReleaseUpdate(callback) {
-    ipcRenderer.on("cod:release-update", (_event, version) =>
-      callback(version),
-    );
+    ipcRenderer.on("cod:release-update", (_event, notice) => callback(notice));
   },
   openReleaseUpdate() {
     return ipcRenderer.invoke("cod:release-update-open");

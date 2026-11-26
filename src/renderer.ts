@@ -19,6 +19,7 @@ import { createQuickTerminal } from "./ui/quick-terminal";
 import { createConversationViews } from "./ui/conversation-views";
 import { createDocumentViews } from "./ui/document-views";
 import { FileTree } from "./ui/files";
+import { uiButton } from "./ui-kit";
 import { createTerminalViews } from "./ui/terminal-views";
 import type { AppState, CodBridge, WorkspaceState } from "./types";
 
@@ -84,21 +85,49 @@ const layout = createPaneLayout(() => state, invoke, {
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });
-const downloadUpdate = paneButton("Download update", async () => {
+let releaseNotice: import("./release-update").ReleaseUpdateNotice | null = null;
+const downloadUpdate = uiButton("Download");
+downloadUpdate.dataset.focusKey = "release-update";
+let activatingUpdate = false;
+downloadUpdate.onclick = async () => {
+  if (
+    !releaseNotice ||
+    activatingUpdate ||
+    releaseNotice.status === "downloading"
+  )
+    return;
+  activatingUpdate = true;
+  const manual = releaseNotice.status === "manual";
   try {
     await window.cod.openReleaseUpdate();
+    if (!manual) setStatus("Quit Cod first.");
   } catch {
-    setStatus("Could not open the preview download");
+    setStatus("Could not prepare the update. Try again.");
+  } finally {
+    activatingUpdate = false;
   }
-});
-downloadUpdate.textContent = "Download";
-downloadUpdate.setAttribute("aria-label", "Download update");
+};
 downloadUpdate.classList.add("release-update");
 downloadUpdate.hidden = true;
 document.querySelector("#pane-visibility")!.prepend(downloadUpdate);
-window.cod.onReleaseUpdate((version) => {
-  downloadUpdate.hidden = !version;
-  downloadUpdate.title = version ? `Download Cod ${version}` : "";
+const updateLabels = {
+  available: ["Download", "Download update", "Download Cod"],
+  downloading: ["Preparing…", "Preparing update", "Preparing Cod"],
+  ready: ["Open DMG", "Open update", "Open Cod"],
+  retry: ["Retry", "Retry update", "Retry Cod"],
+  manual: ["Release", "Open release page", "View Cod"],
+} as const;
+window.cod.onReleaseUpdate((notice) => {
+  releaseNotice = notice;
+  downloadUpdate.hidden = !notice;
+  if (!notice) return;
+  const [label, accessibleName, title] = updateLabels[notice.status];
+  downloadUpdate.textContent = label;
+  downloadUpdate.setAttribute("aria-label", accessibleName);
+  const busy = String(notice.status === "downloading");
+  downloadUpdate.setAttribute("aria-disabled", busy);
+  downloadUpdate.setAttribute("aria-busy", busy);
+  downloadUpdate.title = `${title} ${notice.version}`;
 });
 const navigation = createWorkspaceNavigation(() => state, invoke, {
   folderDialog: (workspace, restoreFocus) =>
