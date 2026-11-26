@@ -109,7 +109,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     return Promise.all(
       sessions.map(async (item) => {
         let preview = item.firstPrompt;
-        if (preview && trailingImageMarker.test(preview)) {
+        if (preview && trailingImageMarker.test(preview.trimEnd())) {
           // Only inspect the first native row for a possible attachment label.
           // Preserve titled or concurrently changed sessions if it cannot be verified.
           const rows = await readClaudeMessages(

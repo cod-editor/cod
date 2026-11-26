@@ -31,19 +31,21 @@ export function structuredMessageLabel(
     /* Ordinary conversation text is rendered without interpretation. */
   }
 }
-export const trailingImageMarker = /\s*\[Image (\d+)\]\s*$/;
+export const trailingImageMarker = /\[Image (\d+)\]$/;
 
 export function claudePromptText(
   text: string,
   images: readonly Pick<ImageAttachment, "reference">[] = [],
 ): string {
+  if (!images.length) return text;
   const references = new Set(
     images.map(({ reference }, index) => reference ?? index + 1),
   );
   while (references.size) {
-    const suffix = trailingImageMarker.exec(text);
+    const trimmed = text.trimEnd();
+    const suffix = trailingImageMarker.exec(trimmed);
     if (!suffix || !references.delete(Number(suffix[1]))) break;
-    text = text.slice(0, suffix.index);
+    text = trimmed.slice(0, suffix.index).trimEnd();
   }
   return text;
 }
