@@ -599,8 +599,8 @@ dialog.quick-terminal {
   display: flex;
   align-items: center;
   gap: 3px;
-  height: 42px;
-  padding: 5px 8px;
+  min-height: 32px;
+  padding: 1px 8px;
   border-bottom: 1px solid var(--line);
 }
 .browser-insecure {
@@ -617,10 +617,11 @@ dialog.quick-terminal {
 }
 .browser-navigation input {
   min-width: 0;
+  min-height: var(--control-height);
   flex: 1;
   background: #242830;
   border: 0;
-  padding: 6px 9px;
+  padding: var(--space-1) 9px;
 }
 .browser-navigation button {
   border: 0;

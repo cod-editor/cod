@@ -1864,6 +1864,76 @@ test("Browser tab actions keep the native page painted and preserve keyboard acc
   expect(restored.colors).toEqual([pageColor, pageColor]);
 });
 
+test("Browser toolbar matches the tab height and fits larger interface text", async ({}, info) => {
+  const workspace = await shell.create("Toolbar fixture");
+  const route = "/toolbar-fixture";
+  const record = await open(workspace, route);
+  await remote(route, `document.querySelector('a[href="/download"]').click()`);
+  const pane = shell.pane(record.paneId);
+  const toolbar = pane.locator(".browser-navigation");
+  const address = toolbar.getByRole("combobox", { name: "Address" });
+  await expect(
+    toolbar.getByRole("button", { name: "Downloads" }),
+  ).toBeVisible();
+
+  const fit = () =>
+    toolbar.evaluate((row) => {
+      const { left, right, top, bottom } = row.getBoundingClientRect();
+      return [...row.querySelectorAll("input, button")]
+        .filter((element) => element.getClientRects().length > 0)
+        .every((element) => {
+          const bounds = element.getBoundingClientRect();
+          return (
+            bounds.left >= left &&
+            bounds.right <= right &&
+            bounds.top >= top &&
+            bounds.bottom <= bottom
+          );
+        });
+    });
+  const screenshot = async (name: string) => {
+    if (process.platform === "linux")
+      await writeFile(
+        info.outputPath(name),
+        Buffer.from((await nativeBrowserFrame([])).image, "base64"),
+      );
+  };
+  const tabs = shell.page.locator(".tab-bar").filter({
+    has: shell.page.getByRole("tab", { name: "Fixture " + route }),
+  });
+  expect((await tabs.boundingBox())?.height).toBe(32);
+  expect((await toolbar.boundingBox())?.height).toBe(32);
+  expect((await address.boundingBox())?.height).toBe(28);
+  for (const button of await toolbar.getByRole("button").all()) {
+    expect(await button.boundingBox()).toMatchObject({ width: 28, height: 28 });
+  }
+  expect(await fit()).toBe(true);
+  await screenshot("browser-toolbar-default.png");
+
+  await shell.app!.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 620),
+  );
+  await expect
+    .poll(async () => (await toolbar.boundingBox())?.width)
+    .toBeLessThan(460);
+  expect(await fit()).toBe(true);
+  await address.focus();
+  await expect(address).toBeFocused();
+  await screenshot("browser-toolbar-narrow.png");
+
+  await shell.cli(
+    "settings",
+    "update",
+    "--values",
+    JSON.stringify({ "ui.fontSize": 32 }),
+  );
+  await expect(address).toHaveCSS("font-size", "32px");
+  expect((await toolbar.boundingBox())!.height).toBeGreaterThan(32);
+  expect((await address.boundingBox())!.height).toBeGreaterThanOrEqual(52);
+  expect(await fit()).toBe(true);
+  await screenshot("browser-toolbar-large-text.png");
+});
+
 test("Address suggestions overlay a live browser and leave page input and geometry intact", async ({}, info) => {
   test.skip(process.platform !== "linux", "Requires the isolated X11 desktop");
   const workspace = await shell.create("Address suggestions over a page");
