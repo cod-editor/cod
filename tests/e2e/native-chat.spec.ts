@@ -59,7 +59,7 @@ async function expandActivity(pane: Locator) {
       await activity.locator(":scope > summary").click();
 }
 const status = (id: string) => shell.inspect(id).then((chat) => chat.status);
-const text = (chat: Chat) =>
+const text = (chat: Pick<Chat, "messages">) =>
   chat.messages.map((message) => message.text).join("\n");
 
 test("Routine collaboration stays in ordered activity details through completion and reopen", async ({}, info) => {

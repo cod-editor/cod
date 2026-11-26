@@ -36,7 +36,7 @@ import { createIntegrationSetup } from "./integration";
 import { reconcileView } from "./view-reconcile";
 import { chatMarkdown, visualizationStart } from "./chat-markdown";
 import DOMPurify from "dompurify";
-import { structuredMessageLabel } from "../message-label";
+import { claudePromptText, structuredMessageLabel } from "../message-label";
 import { menu } from "./controls";
 import { codexItemsCursor } from "../conversation-history-cursor";
 import { unconfirmedRemoteSend } from "../remote-workspace/protocol";
@@ -590,8 +590,7 @@ export function createConversationViews({
       menu(
         provider,
         ["codex", "kimi", "claude"].map((id) => ({
-          label: providerLabel(id) + (id === "claude" ? " (unavailable)" : ""),
-          disabled: id === "claude",
+          label: providerLabel(id),
           selected: id === (draftProviders.get(pane.id) ?? "codex"),
           run: () => {
             if (id !== (draftProviders.get(pane.id) ?? "codex"))
@@ -1259,7 +1258,10 @@ export function createConversationViews({
             : entry.message.role;
         const text = document.createElement("div");
         text.className = "message-text";
-        const source = questionTranscriptText(entry.message);
+        const source =
+          conversation.provider === "claude" && entry.message.role === "user"
+            ? claudePromptText(entry.message.text, entry.message.images)
+            : questionTranscriptText(entry.message);
         const answers =
           entry.message.role === "user" && conversation.provider === "codex"
             ? questionAnswers(source)
@@ -1850,6 +1852,8 @@ export function createConversationViews({
     const conversation = state.conversations.find((item) => item.id === id);
     const owner = workspace ?? conversation?.workspaceId;
     const remote = owner && state.remoteWorkspace?.ids.includes(owner);
+    const usesNativeDraftVersion =
+      conversation?.provider === "claude" && !remote;
     const turn = conversation?.turns?.at(-1);
     const expectedTurn = turn && !turn.finishedAt ? turn.id : undefined;
     if (loadingImages.has(id)) {
@@ -1870,6 +1874,7 @@ export function createConversationViews({
       setStatus("Resolve or save this unsent message before sending.");
       return;
     }
+    const submittedVersion = draftVersion ?? versions.get(id) ?? "";
     sendErrors.delete(id);
     hydratedComposers.add(id);
     pendingSends.add(id);
@@ -1899,6 +1904,7 @@ export function createConversationViews({
           images,
           skills,
           writer,
+          ...(usesNativeDraftVersion ? { draftVersion: submittedVersion } : {}),
           ...(expectedTurn ? { expectedTurn } : {}),
         },
         { reportError: false },
@@ -1915,6 +1921,22 @@ export function createConversationViews({
       pendingSends.delete(id);
     }
 
+    if (usesNativeDraftVersion) {
+      const currentVersion = versions.get(id) ?? "";
+      const draft = getState().workspaces.find(({ id }) => id === owner)
+        ?.chatDrafts?.[conversation.paneId];
+      if (
+        dirtyComposers.has(id) ||
+        (currentVersion !== submittedVersion &&
+          !(
+            draft?.version === currentVersion &&
+            draft.clearedFromVersion === submittedVersion
+          ))
+      ) {
+        invalidate();
+        return;
+      }
+    }
     if (composerDrafts.get(id) === text) {
       composerDrafts.delete(id);
       skillDrafts.delete(id);

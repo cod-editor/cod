@@ -29,7 +29,7 @@ import {
 } from "../providers/local-owner-client";
 import {
   createCodexAdapter,
-  createKimiAdapter,
+  createProviderAdapter,
   type ProviderAdapter,
   type ProviderEvent,
 } from "../providers";
@@ -37,11 +37,17 @@ import { codexItemsCursor } from "../conversation-history-cursor";
 import {
   commitHistory,
   emptyHistory,
+  stageClaudeHistory,
   stageCodexItemsPage,
   stageCodexSnapshot,
   stageKimiEvent,
   type StagedHistory,
 } from "../conversation-history";
+import {
+  claudeHandoffArgs,
+  findClaudeSession,
+  readClaudeSession,
+} from "../providers/claude-native";
 import type {
   ConversationMessage,
   ConversationState,
@@ -70,6 +76,7 @@ export class ConversationApplicationService {
   >();
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
+  private claudeAdmissions = new Set<string>();
   private externalTurns = new Set<string>();
   private steering = new Set<string>();
   private pendingToolResults = new Map<string, number>();
@@ -232,7 +239,11 @@ export class ConversationApplicationService {
       : undefined;
   }
   isActive(id: string): boolean {
-    return this.activeTurns.has(id) || this.pendingToolResults.has(id);
+    return (
+      this.activeTurns.has(id) ||
+      this.claudeAdmissions.has(id) ||
+      this.pendingToolResults.has(id)
+    );
   }
   reserve(id: string): void {
     if (this.isActive(id))
@@ -304,6 +315,8 @@ export class ConversationApplicationService {
           conversation.nativeId,
         );
       else if (conversation.provider === "kimi") stageKimiEvent(history, event);
+      else if (conversation.provider === "claude" && event.type === "history")
+        stageClaudeHistory(history, event.details, conversation.nativeId);
     });
     this.replays.add(replay);
     try {
@@ -577,6 +590,7 @@ export class ConversationApplicationService {
         ? await adapter.resume(nativeId)
         : await adapter.create();
       this.assertCurrent(conversation);
+      this.checkClaudeController(conversation);
       if (resume) {
         const metadata = object(native.metadata);
         if (metadata.turnsBackwardsCursor || metadata.itemsBackwardsCursor)
@@ -594,6 +608,19 @@ export class ConversationApplicationService {
         nativeId: conversation.nativeId,
       };
     } catch (error) {
+      if (adapter?.provider === "claude") {
+        try {
+          await this.disposeController(id);
+        } catch (releaseError) {
+          conversation.nativeId = adapter.nativeId ?? conversation.nativeId;
+          if (!resume) conversation.metadata = { unrecorded: true };
+          conversation.status = "failed";
+          conversation.error = "Claude Code has not released this session.";
+          this.store.notify();
+          this.store.schedulePersist(true);
+          throw releaseError;
+        }
+      }
       try {
         await this.store.serialize(() =>
           this.removeConversationRecord(
@@ -788,7 +815,7 @@ export class ConversationApplicationService {
         throw new Error(
           "Quit Cod to stop the disconnected owner before resuming this chat",
         );
-      if (this.detached?.enabled()) {
+      if (conversation.provider !== "claude" && this.detached?.enabled()) {
         const adapter = await this.detached.owner.open(
           {
             id: conversation.id,
@@ -813,6 +840,10 @@ export class ConversationApplicationService {
       cwd: conversation.cwd,
       executable: resolved.executable,
       args: resolved.args,
+      unrecordedClaudeId:
+        object(conversation.metadata).unrecorded === true
+          ? conversation.nativeId
+          : undefined,
       env: {
         ...process.env,
         COD_CONVERSATION_ID: conversation.id,
@@ -826,15 +857,14 @@ export class ConversationApplicationService {
         onEvent ??
         ((event: ProviderEvent) => this.providerEvent(conversation.id, event)),
     };
-    return conversation.provider === "codex"
-      ? createCodexAdapter(options)
-      : createKimiAdapter(options);
+    return createProviderAdapter(conversation.provider, options);
   }
 
   async handoffConversation(
     id: string,
   ): Promise<{ id: string; paneId: string; terminalId: string }> {
     const terminalId = randomUUID();
+    await this.recoverIdleClaudeSubmission(this.store.conversation(id));
     const { conversation, workspace } = await this.store.serialize(() => {
       const conversation = this.store.conversation(id);
       if (
@@ -844,6 +874,10 @@ export class ConversationApplicationService {
         )
       )
         throw new Error("This saved Codex session was moved to Linux");
+      if (conversation.claudeSubmission)
+        throw new Error(
+          "Resolve the last Claude Code delivery before continuing in CLI",
+        );
       const reason = conversationHandoffReason(this.store.data, conversation);
       if (reason) throw new Error(reason);
       if (this.isActive(id) || this.controllerInitializations.has(id))
@@ -856,6 +890,27 @@ export class ConversationApplicationService {
     });
     try {
       const resolved = await resolveProviderExecutable(conversation.provider);
+      let nativeArgs: string[];
+      switch (conversation.provider) {
+        case "claude": {
+          const saved = await findClaudeSession(
+            conversation.cwd,
+            conversation.nativeId,
+          );
+          if (!saved && object(conversation.metadata).unrecorded !== true)
+            throw new Error(
+              "Claude Code has no saved session with that ID in this directory",
+            );
+          nativeArgs = claudeHandoffArgs(conversation.nativeId, Boolean(saved));
+          break;
+        }
+        case "codex":
+          nativeArgs = ["resume", conversation.nativeId];
+          break;
+        case "kimi":
+          nativeArgs = ["--session", conversation.nativeId];
+          break;
+      }
       await this.disposeController(id);
       this.assertCurrent(conversation);
       const snapshot = this.terminals.createProcess({
@@ -874,12 +929,7 @@ export class ConversationApplicationService {
           COD_CLI_PATH: path.join(__dirname, "cli.cjs"),
           COD_NODE_PATH: process.execPath,
         },
-        args: [
-          ...(resolved.args ?? []),
-          ...(conversation.provider === "codex"
-            ? ["resume", conversation.nativeId]
-            : ["--session", conversation.nativeId]),
-        ],
+        args: [...(resolved.args ?? []), ...nativeArgs],
       });
       const terminal: TerminalState = {
         ...snapshot,
@@ -1046,11 +1096,15 @@ export class ConversationApplicationService {
       delete conversation.detachedOwner;
     } else if (existing) {
       if (conversation.status !== "failed") return existing;
-      this.controllers.delete(conversation.id);
+      if (existing.provider !== "claude")
+        this.controllers.delete(conversation.id);
       await existing.dispose();
+      if (this.controllers.get(conversation.id) === existing)
+        this.controllers.delete(conversation.id);
       delete conversation.detachedOwner;
       this.assertCurrent(conversation);
     }
+    await this.recoverIdleClaudeSubmission(conversation);
     const adapter = await this.adapterFor(conversation);
     this.assertCurrent(conversation);
     this.controllers.set(conversation.id, adapter);
@@ -1059,6 +1113,7 @@ export class ConversationApplicationService {
     try {
       const native = await adapter.resume(conversation.nativeId);
       this.assertCurrent(conversation);
+      this.checkClaudeController(conversation);
       const metadata = object(native.metadata);
       if (metadata.turnsBackwardsCursor || metadata.itemsBackwardsCursor)
         staged.partial = true;
@@ -1070,9 +1125,11 @@ export class ConversationApplicationService {
       this.store.schedulePersist(true);
       return adapter;
     } catch (error) {
-      if (this.controllers.get(conversation.id) === adapter) {
+      if (
+        adapter.provider !== "claude" &&
+        this.controllers.get(conversation.id) === adapter
+      )
         this.controllers.delete(conversation.id);
-      }
       if (this.isCurrent(conversation)) {
         conversation.status = "failed";
         conversation.error =
@@ -1085,11 +1142,20 @@ export class ConversationApplicationService {
         this.store.schedulePersist(true);
       }
       await adapter.dispose();
+      if (this.controllers.get(conversation.id) === adapter)
+        this.controllers.delete(conversation.id);
       delete conversation.detachedOwner;
       throw error;
     } finally {
       this.resumeContexts.delete(conversation.id);
     }
+  }
+
+  private checkClaudeController(conversation: ConversationState): void {
+    if (conversation.provider === "claude" && conversation.status === "failed")
+      throw new Error(
+        conversation.error ?? "The native Claude Code connection ended",
+      );
   }
 
   validateImages(
@@ -1162,12 +1228,15 @@ export class ConversationApplicationService {
     text: string,
     images: import("../providers/types").ImageAttachment[],
     writer?: string,
+    expectedVersion?: string,
   ): void {
     const workspace = this.store.workspace(conversation.workspaceId);
     const draft = workspace.chatDrafts?.[conversation.paneId];
     const attachments = draft?.images ?? [];
     if (
       !draft?.localDraft &&
+      (expectedVersion === undefined ||
+        (draft?.version ?? "") === expectedVersion) &&
       draft?.text === text &&
       attachments.length === images.length &&
       attachments.every(
@@ -1191,6 +1260,99 @@ export class ConversationApplicationService {
     }
   }
 
+  private async recoverClaudeSubmission(conversation: ConversationState) {
+    const pending = conversation.claudeSubmission;
+    if (!pending) return;
+    let saved: boolean | undefined;
+    const probe = async () => {
+      const history = await readClaudeSession(
+        conversation.cwd,
+        conversation.nativeId,
+      );
+      if (!history?.messages.length)
+        return object(conversation.metadata).unrecorded === true
+          ? false
+          : undefined;
+      return history.messages.some(
+        (row) =>
+          row.type === "user" &&
+          row.session_id === conversation.nativeId &&
+          row.uuid === pending.messageId,
+      );
+    };
+    try {
+      saved = await probe();
+      if (saved !== true && this.controllers.has(conversation.id)) {
+        // A failed response can precede the native transcript flush.
+        await this.disposeController(conversation.id);
+        saved = await probe();
+      }
+    } catch {
+      // A read or native release failure cannot establish that the prompt was never saved.
+      saved = undefined;
+    }
+    if (saved === undefined)
+      throw new Error(
+        "Claude Code delivery could not be verified. Check the native session before sending again.",
+      );
+    const messageId = `claude/live/${conversation.nativeId}/${pending.messageId}`;
+    return this.store.change(() => {
+      this.assertCurrent(conversation);
+      if (conversation.claudeSubmission !== pending)
+        throw new Error("The Claude Code submission changed");
+      const prompt = conversation.messages.find(({ id }) => id === messageId);
+      const workspace = this.store.workspace(conversation.workspaceId);
+      const draft = workspace.chatDrafts?.[conversation.paneId];
+      if (saved) {
+        if (prompt && pending.draftVersion !== undefined)
+          this.clearSubmittedDraft(
+            conversation,
+            prompt.text,
+            prompt.images ?? [],
+            undefined,
+            pending.draftVersion,
+          );
+        conversation.metadata = {
+          ...object(conversation.metadata),
+          unrecorded: false,
+        };
+      } else {
+        if (
+          prompt &&
+          pending.draftVersion !== undefined &&
+          draft?.clearedFromVersion === pending.draftVersion &&
+          draft.text === "" &&
+          !draft.images?.length &&
+          !draft.localDraft
+        ) {
+          workspace.chatDrafts![conversation.paneId] = {
+            text: prompt.text,
+            ...(prompt.images?.length ? { images: prompt.images } : {}),
+            version: randomUUID(),
+            writer: draft.writer,
+          };
+        }
+        conversation.messages = conversation.messages.filter(
+          ({ id }) => id !== messageId,
+        );
+      }
+      delete conversation.claudeSubmission;
+      return { saved, prompt };
+    });
+  }
+
+  private async recoverIdleClaudeSubmission(conversation: ConversationState) {
+    if (!conversation.claudeSubmission || this.isActive(conversation.id))
+      return;
+    this.claudeAdmissions.add(conversation.id);
+    try {
+      return await this.recoverClaudeSubmission(conversation);
+    } finally {
+      this.claudeAdmissions.delete(conversation.id);
+      this.scheduleQueue(conversation.id);
+    }
+  }
+
   async sendConversation(
     request: OperationRequest,
     fromQueue = false,
@@ -1200,6 +1362,12 @@ export class ConversationApplicationService {
     const conversation = this.store.conversation(requiredString(request, "id"));
     if (conversation.transfer)
       throw new Error("Resolve the pending move to Linux first");
+    const awaitNativeReceipt =
+      conversation.provider === "claude" && !fromQueue && !questionId;
+    const submittedDraftVersion =
+      awaitNativeReceipt && typeof request.draftVersion === "string"
+        ? request.draftVersion
+        : undefined;
     const text = typeof request.text === "string" ? request.text : "";
     if (parseProviderCommand(text))
       throw new Error(
@@ -1212,6 +1380,25 @@ export class ConversationApplicationService {
       throw new Error("Message must not be blank");
     if (conversation.handoffTerminalId)
       throw new Error("Return to chat before sending a message");
+    if (this.claudeAdmissions.has(conversation.id))
+      throw new Error(
+        "Wait while Cod verifies the last Claude Code submission.",
+      );
+    const recovered = conversation.claudeSubmission
+      ? await this.recoverIdleClaudeSubmission(conversation)
+      : undefined;
+    if (
+      recovered?.saved &&
+      recovered.prompt?.text === text &&
+      (recovered.prompt.images ?? []).length === images.length &&
+      (recovered.prompt.images ?? []).every(
+        (image, index) =>
+          image.data === images[index]?.data &&
+          image.mimeType === images[index]?.mimeType &&
+          image.reference === images[index]?.reference,
+      )
+    )
+      throw new Error("Claude Code already saved that prompt.");
     if (!fromQueue && request.pageId && this.isActive(conversation.id))
       throw new Error("Origin conversation is busy");
     if (
@@ -1284,18 +1471,28 @@ export class ConversationApplicationService {
           text,
           images,
           request.writer as string | undefined,
+          submittedDraftVersion,
         );
       });
       this.scheduleQueue(conversation.id);
       return { id: conversation.id, status: "queued", messageId };
     }
-    if (this.activeTurns.has(conversation.id))
-      throw new Error("Conversation is busy");
+    if (this.isActive(conversation.id)) throw new Error("Conversation is busy");
     if (!fromQueue) conversation.queuePaused = false;
     this.activeTurns.add(conversation.id);
     try {
-      // Sending is a barrier after pending coalesced composer writes.
-      if (!fromQueue) await this.store.serialize(() => undefined);
+      // Capture the submitted version after pending composer writes and before native startup.
+      const draftVersion = !fromQueue
+        ? await this.store.serialize(() =>
+            awaitNativeReceipt
+              ? (submittedDraftVersion ??
+                this.store.workspace(conversation.workspaceId).chatDrafts?.[
+                  conversation.paneId
+                ]?.version ??
+                "")
+              : undefined,
+          )
+        : undefined;
       const adapter = await this.ensureController(conversation);
       await adapter.resolveSkills(text, skills);
       this.assertCurrent(conversation);
@@ -1303,8 +1500,12 @@ export class ConversationApplicationService {
         throw new Error("A turn is already active for this conversation");
       const turnId = this.beginTurn(conversation);
       delete conversation.initialSelection;
+      const userMessageId = randomUUID();
       conversation.messages.push({
-        id: randomUUID(),
+        id:
+          conversation.provider === "claude"
+            ? `claude/live/${conversation.nativeId}/${userMessageId}`
+            : userMessageId,
         turnId,
         role: "user",
         text,
@@ -1314,21 +1515,61 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
-      if (!fromQueue && !questionId)
+      const clearDraft = () =>
         this.clearSubmittedDraft(
           conversation,
           text,
           images,
           request.writer as string | undefined,
+          draftVersion,
         );
+      if (!fromQueue && !questionId && !awaitNativeReceipt) clearDraft();
       this.store.notify();
-      this.store.schedulePersist();
-      const turn = adapter.send(text, images, skills);
+      if (awaitNativeReceipt) {
+        this.claudeAdmissions.add(conversation.id);
+        conversation.claudeSubmission = {
+          messageId: userMessageId,
+          draftVersion,
+        };
+        await this.store.serialize(() => this.store.persist());
+        this.assertCurrent(conversation);
+      } else {
+        this.store.schedulePersist();
+      }
+      let confirm: (() => void) | undefined;
+      let nativeAccepted = false;
+      const accepted = awaitNativeReceipt
+        ? new Promise<void>((resolve) => {
+            confirm = resolve;
+          })
+        : undefined;
+      const turn = adapter.send(
+        text,
+        images,
+        skills,
+        conversation.provider === "claude"
+          ? {
+              id: userMessageId,
+              accepted: () => {
+                nativeAccepted = true;
+                confirm?.();
+              },
+            }
+          : undefined,
+      );
       const finishPage = (status: "completed" | "uncertain") =>
         this.views.finishPage(request, conversation.id, status);
       void turn.then(
         (outcome) => {
           if (this.store.closing) return;
+          if (
+            outcome.status === "completed" &&
+            nativeAccepted &&
+            conversation.claudeSubmission?.messageId === userMessageId
+          ) {
+            clearDraft();
+            delete conversation.claudeSubmission;
+          }
           if (this.turnClocks.get(conversation.id)?.id === turnId) {
             this.finishTurn(conversation, outcome.status);
             this.activeTurns.delete(conversation.id);
@@ -1374,10 +1615,32 @@ export class ConversationApplicationService {
           this.store.schedulePersist(true);
         },
       );
+      if (accepted) {
+        const received = await Promise.race([
+          accepted.then(() => true),
+          turn.then(
+            () => false,
+            () => false,
+          ),
+        ]);
+        if (!received) {
+          if (!(await this.recoverClaudeSubmission(conversation))?.saved)
+            throw new Error(
+              "Claude Code did not save this prompt. The draft is ready to retry.",
+            );
+        }
+        this.assertCurrent(conversation);
+        clearDraft();
+        this.store.notify();
+        this.store.schedulePersist(true);
+      }
       return { id: conversation.id, status: conversation.status };
     } catch (error) {
       this.release(conversation.id);
       throw error;
+    } finally {
+      if (this.claudeAdmissions.delete(conversation.id))
+        this.scheduleQueue(conversation.id);
     }
   }
 
@@ -1742,6 +2005,10 @@ export class ConversationApplicationService {
     }
     const resume = this.resumeContexts.get(id);
     if (resume) {
+      if (conversation.provider === "claude" && event.type === "error") {
+        conversation.status = "failed";
+        conversation.error = event.message;
+      }
       if (event.type === "state" && event.state === "starting")
         conversation.status = "starting";
       if (conversation.provider === "codex" && event.type === "history") {
@@ -1753,6 +2020,11 @@ export class ConversationApplicationService {
         );
       } else if (conversation.provider === "kimi") {
         stageKimiEvent(resume, event);
+      } else if (
+        conversation.provider === "claude" &&
+        event.type === "history"
+      ) {
+        stageClaudeHistory(resume, event.details, conversation.nativeId);
       }
       this.store.notify(true);
       return;
@@ -1801,8 +2073,10 @@ export class ConversationApplicationService {
             break;
         }
         if (!event.replay) {
+          const prefix =
+            conversation.provider === "claude" ? "claude" : "codex";
           const id = event.itemId
-            ? `codex/live/${conversation.nativeId}/${event.itemId}`
+            ? `${prefix}/live/${conversation.nativeId}/${event.itemId}`
             : randomUUID();
           const existing = event.itemId
             ? conversation.messages.find((message) => message.id === id)
@@ -1896,6 +2170,11 @@ export class ConversationApplicationService {
         this.scheduleQueue(id);
         if (this.externalTurns.delete(id)) this.activeTurns.delete(id);
         if (event.outcome.status === "completed") {
+          if (conversation.provider === "claude")
+            conversation.metadata = {
+              ...object(conversation.metadata),
+              unrecorded: false,
+            };
           conversation.completionRevision =
             (conversation.completionRevision ?? 0) + 1;
         }
@@ -2002,9 +2281,10 @@ export class ConversationApplicationService {
     id: string,
     removedOwner?: ConversationState["detachedOwner"],
   ): Promise<void> {
-    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     const adapter = this.controllers.get(id);
-    this.controllers.delete(id);
+    if (adapter?.provider === "claude") await adapter.dispose();
+    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+    if (this.controllers.get(id) === adapter) this.controllers.delete(id);
     this.activeTurns.delete(id);
     this.externalTurns.delete(id);
     this.resumeContexts.delete(id);
@@ -2012,8 +2292,8 @@ export class ConversationApplicationService {
       (item) => item.id === id,
     );
     const cursor = conversation?.detachedOwner ?? removedOwner;
-    if (adapter) await adapter.dispose();
-    else if (cursor) await this.detached?.owner.release(id, cursor);
+    if (adapter && adapter.provider !== "claude") await adapter.dispose();
+    else if (!adapter && cursor) await this.detached?.owner.release(id, cursor);
     if (conversation) delete conversation.detachedOwner;
   }
 
@@ -2039,10 +2319,14 @@ export class ConversationApplicationService {
             ? path.resolve(request.cwd)
             : (workspace.folders[0] ?? process.env.HOME ?? process.cwd());
         const resolved = await resolveProviderExecutable(provider);
-        const adapter = new NativeAdapter(provider, { cwd, ...resolved });
+        const adapter =
+          provider === "claude"
+            ? createProviderAdapter(provider, { cwd, ...resolved })
+            : new NativeAdapter(provider, { cwd, ...resolved });
         try {
           const ordinary = await adapter.discover();
-          if (provider !== "codex") return ordinary;
+          if (provider !== "codex" || !(adapter instanceof NativeAdapter))
+            return ordinary;
           const imported = Object.values(
             this.store.data.completedCodexImports ?? {},
           );
@@ -2425,6 +2709,16 @@ export class ConversationApplicationService {
           conversation.queuePaused = true;
           for (const message of conversation.queuedMessages)
             if (message.status === "sending") message.status = "uncertain";
+        }
+        if (conversation.claudeSubmission) {
+          try {
+            await this.recoverClaudeSubmission(conversation);
+          } catch (error) {
+            conversation.status = "failed";
+            conversation.error =
+              error instanceof Error ? error.message : String(error);
+            return;
+          }
         }
         const cursor = conversation.detachedOwner;
         if (cursor && this.detached) {

@@ -21,7 +21,7 @@ import {
 } from "../workspace-layout";
 import { ApplicationStateStore } from "./state";
 import { documentKey } from "../text-document";
-import { requiredString, requiredName, object } from "./request";
+import { requiredString, requiredName, providerId, object } from "./request";
 import { workspacePreparation } from "./workspace-preparation";
 import type { ConversationApplicationService } from "./conversation-service";
 import type { BrowserApplicationService } from "./browser-service";
@@ -1019,12 +1019,8 @@ export class WorkspaceApplicationService {
           const target = this.store.openingPane(workspace, request);
           if (request.sourcePane !== undefined) {
             const id = randomUUID();
-            const provider = request.provider === "kimi" ? "kimi" : "codex";
-            if (
-              request.provider !== undefined &&
-              !["codex", "kimi"].includes(String(request.provider))
-            )
-              throw new Error("Unsupported provider");
+            const provider =
+              request.provider === undefined ? "codex" : providerId(request);
             if (
               request.initialSelection !== undefined &&
               (!request.initialSelection ||

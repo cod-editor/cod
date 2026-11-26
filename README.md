@@ -12,7 +12,7 @@ When Cod offers an update, click **Download**, quit Cod, then replace the app in
 
 ## Run from source
 
-Use Node.js 24+ and npm. Install and sign in to Codex or Kimi in its own CLI.
+Use Node.js 24+ and npm. Install and authenticate in your chosen provider’s own CLI. Claude Code chats run locally in the foreground.
 
 ```sh
 npm ci --ignore-scripts

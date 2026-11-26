@@ -20,7 +20,11 @@ const shared = {
   format: "cjs",
   target: "node20",
   sourcemap: true,
-  external: ["electron", "@homebridge/node-pty-prebuilt-multiarch"],
+  external: [
+    "electron",
+    "@homebridge/node-pty-prebuilt-multiarch",
+    "@anthropic-ai/claude-agent-sdk",
+  ],
 };
 
 await Promise.all([

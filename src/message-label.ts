@@ -1,3 +1,4 @@
+import type { ImageAttachment } from "./providers/types";
 import type { AppState, ConversationState } from "./types";
 export function structuredMessageLabel(
   text: string,
@@ -30,6 +31,25 @@ export function structuredMessageLabel(
     /* Ordinary conversation text is rendered without interpretation. */
   }
 }
+export const trailingImageMarker = /\[Image (\d+)\]$/;
+
+export function claudePromptText(
+  text: string,
+  images: readonly Pick<ImageAttachment, "reference">[] = [],
+): string {
+  if (!images.length) return text;
+  const references = new Set(
+    images.map(({ reference }, index) => reference ?? index + 1),
+  );
+  while (references.size) {
+    const trimmed = text.trimEnd();
+    const suffix = trailingImageMarker.exec(trimmed);
+    if (!suffix || !references.delete(Number(suffix[1]))) break;
+    text = trimmed.slice(0, suffix.index).trimEnd();
+  }
+  return text;
+}
+
 export function conversationLabel(
   conversation: ConversationState,
   state: AppState,
@@ -38,11 +58,20 @@ export function conversationLabel(
   const first = conversation.messages.find(
     (message) => message.role === "user",
   );
+  const text =
+    first &&
+    (conversation.provider === "claude"
+      ? claudePromptText(first.text, first.images)
+      : first.text);
   return (
     (first &&
       (structuredMessageLabel(first.text, state) ||
-        first.text.trim().split("\n")[0] ||
+        text?.trim().split("\n")[0] ||
         first.images?.[0]?.name)) ||
-    (conversation.provider === "codex" ? "Codex" : "Kimi")
+    (conversation.provider === "codex"
+      ? "Codex"
+      : conversation.provider === "kimi"
+        ? "Kimi"
+        : "Claude Code")
   );
 }

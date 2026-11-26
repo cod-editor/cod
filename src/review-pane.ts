@@ -1,4 +1,5 @@
 import { diffHunks } from "./diff-hunks";
+import { highlight, languageFor } from "./editor-highlight";
 import {
   uiButton,
   actionRow,
@@ -573,13 +574,30 @@ export function reviewPane(
       ranges = [];
       diffAnchors = [];
       buttons = [];
-      function add(text: string, name: string, range: Range) {
+      function add(
+        prefix: string,
+        text: string,
+        name: string,
+        range: Range,
+        highlightSource: boolean,
+      ) {
         const index = buttons.length;
         const line = document.createElement("button");
         line.type = "button";
         line.tabIndex = index === end ? 0 : -1;
         line.className = "review-line";
-        line.textContent = text;
+        line.textContent = prefix + text;
+        if (highlightSource && range.path && text.length <= 4_000) {
+          const language = languageFor(range.path);
+          if (language !== "plaintext") {
+            const source = document.createElement("span");
+            // The shared highlighter escapes source text. Keep the original
+            // row if the HTML parser normalizes any source characters.
+            source.innerHTML = highlight(text, language);
+            if (source.childElementCount && source.textContent === text)
+              line.replaceChildren(prefix, source);
+          }
+        }
         line.setAttribute("aria-label", name);
         line.setAttribute(
           "aria-pressed",
@@ -671,6 +689,10 @@ export function reviewPane(
       } else {
         documentView = undefined;
         const files = diffHunks(snapshot.text);
+        const highlightSource =
+          snapshot.text.length <= 200_000 &&
+          files.flat().reduce((count, hunk) => count + hunk.rows.length, 0) <=
+            2_000;
         const repoPrefix = sourcePath.endsWith("/")
           ? sourcePath
           : `${sourcePath}/`;
@@ -724,9 +746,11 @@ export function reviewPane(
               const mark =
                 row.kind === "removed" ? "-" : row.kind === "added" ? "+" : " ";
               add(
-                `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  ${row.text}`,
+                `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  `,
+                row.text,
                 `${anchor.side === "old" ? "Old" : "New"} line ${anchor.startLine} ${anchor.path}`,
                 anchor,
+                highlightSource,
               );
               buttons.at(-1)!.dataset.diffKind = row.kind;
               diffAnchors.push({
