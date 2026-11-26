@@ -1,6 +1,6 @@
 export interface FavoriteArt {
   png: string;
-  kind: "cover" | "mark";
+  kind: "cover" | "mark" | "light";
   width: number;
   height: number;
 }

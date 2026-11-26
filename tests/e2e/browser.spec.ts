@@ -7,7 +7,7 @@ import {
 } from "../support/workspace-state";
 import { pathToFileURL } from "node:url";
 import { test, expect, type Locator } from "@playwright/test";
-import { createServer, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import { mkdir, writeFile, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceApp, modifier } from "./helpers/workspace-app";
@@ -29,6 +29,9 @@ let requests: string[] = [];
 let slowResponse: import("node:http").ServerResponse | undefined;
 let delayedIcons: import("node:http").ServerResponse[] = [];
 let fixtureJpeg: Buffer | undefined;
+let conventionalIcon: Buffer | undefined;
+let redirectedForge = false;
+let neighboringIconServer: Server | undefined;
 const fixtureIcon = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGN4O0+TJMQwqmFUw/DVAACONLQQCHI4yQAAAABJRU5ErkJggg==",
   "base64",
@@ -62,24 +65,50 @@ const iconHeader = Buffer.from([
   0,
 ]);
 const fixtureIco = Buffer.concat([iconHeader, fixtureIcon]);
+function bitmapIco(
+  sizes: number[],
+  pixel: (size: number, row: number, column: number) => number[],
+): Buffer {
+  const header = Buffer.alloc(6 + sizes.length * 16);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(sizes.length, 4);
+  let offset = header.length;
+  const frames = sizes.map((size, index) => {
+    const stride = 4 * Math.ceil(size / 32);
+    const frame = Buffer.alloc(40 + size * size * 4 + stride * size);
+    frame.writeUInt32LE(40, 0);
+    frame.writeInt32LE(size, 4);
+    frame.writeInt32LE(size * 2, 8);
+    frame.writeUInt16LE(1, 12);
+    frame.writeUInt16LE(32, 14);
+    for (let row = 0; row < size; row++)
+      for (let column = 0; column < size; column++)
+        frame.set(pixel(size, row, column), 40 + (row * size + column) * 4);
+    const entry = 6 + index * 16;
+    header[entry] = size;
+    header[entry + 1] = size;
+    header.writeUInt16LE(1, entry + 4);
+    header.writeUInt16LE(32, entry + 6);
+    header.writeUInt32LE(frame.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += frame.length;
+    return frame;
+  });
+  return Buffer.concat([header, ...frames]);
+}
+
 const bitmapSize = 16;
-const bitmap = Buffer.alloc(40 + bitmapSize * bitmapSize * 4 + 4 * bitmapSize);
-bitmap.writeUInt32LE(40, 0);
-bitmap.writeInt32LE(bitmapSize, 4);
-bitmap.writeInt32LE(bitmapSize * 2, 8);
-bitmap.writeUInt16LE(1, 12);
-bitmap.writeUInt16LE(32, 14);
-for (let row = 0; row < bitmapSize; row++)
-  for (let column = 0; column < bitmapSize; column++) {
-    const offset = 40 + (row * bitmapSize + column) * 4;
-    bitmap[offset] = row < 8 ? 232 : 96;
-    bitmap[offset + 1] = 181;
-    bitmap[offset + 2] = column < 8 ? 65 : 241;
-    bitmap[offset + 3] = column === 0 ? 0 : column === 1 ? 128 : 255;
-  }
-const bitmapIconHeader = Buffer.from(iconHeader);
-bitmapIconHeader.writeUInt32LE(bitmap.length, 14);
-const fixtureBitmapIco = Buffer.concat([bitmapIconHeader, bitmap]);
+const fixtureBitmapIco = bitmapIco([bitmapSize], (_size, row, column) => [
+  row < 8 ? 232 : 96,
+  181,
+  column < 8 ? 65 : 241,
+  column === 0 ? 0 : column === 1 ? 128 : 255,
+]);
+const darkBitmapIco = bitmapIco([16, 32], (size, row, column) => {
+  const center = (size - 1) / 2;
+  const mark = Math.abs(row - center) + Math.abs(column - center) < size / 2;
+  return [19, 19, 19, mark ? 255 : 0];
+});
 let shell: WorkspaceApp,
   server: Server,
   origin: string,
@@ -225,11 +254,24 @@ test.beforeEach(async () => {
   slowResponse = undefined;
   delayedIcons = [];
   fixtureJpeg = undefined;
+  conventionalIcon = undefined;
+  redirectedForge = false;
+  neighboringIconServer = undefined;
   server = createServer((request, response) => {
     requests.push(request.url!);
     // Network-count assertions must observe loads rather than HTTP cache hits.
     response.setHeader("Cache-Control", "no-store");
     const route = new URL(request.url!, "http://fixture").pathname;
+    if (route === "/favicon.ico") {
+      if (conventionalIcon && request.headers.host?.startsWith("127.0.0.1:")) {
+        response.setHeader("Content-Type", "image/x-icon");
+        response.end(conventionalIcon);
+      } else {
+        response.writeHead(404, { "Content-Type": "text/plain" });
+        response.end("No icon");
+      }
+      return;
+    }
     if (route === "/fixture-icon.png") {
       response.setHeader("Content-Type", "image/png");
       response.end(fixtureIcon);
@@ -265,6 +307,29 @@ test.beforeEach(async () => {
       response.setHeader("Content-Type", "image/svg+xml");
       response.end(
         '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="green"/></svg>',
+      );
+      return;
+    }
+    if (route === "/site-with-missing-icon") {
+      response.setHeader("Content-Type", "text/html");
+      response.end(
+        '<!doctype html><title>Missing site fixture</title><link rel="icon" href="/not-an-icon">',
+      );
+      return;
+    }
+    if (route === "/forge-with-external-icon") {
+      const other = origin.replace("127.0.0.1", "localhost");
+      if (redirectedForge) {
+        response.writeHead(302, {
+          Location: other + "/site-with-missing-icon",
+        });
+        response.end();
+        return;
+      }
+      const href = other + "/fixture-icon.png";
+      response.setHeader("Content-Type", "text/html");
+      response.end(
+        `<!doctype html><title>Forge fixture</title><link rel="icon" href="${href}">`,
       );
       return;
     }
@@ -430,6 +495,9 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   await shell?.cleanup();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
+  const neighbor = neighboringIconServer;
+  if (neighbor)
+    await new Promise<void>((resolve) => neighbor.close(() => resolve()));
 });
 
 test("Address bar searches text and opens bare addresses without sending addresses to search", async ({}, info) => {
@@ -887,6 +955,156 @@ test("A bitmap ICO appears on a visited tab and updates an existing Home pin", a
     [66, 181, 96, 128],
     [241, 181, 232, 255],
   ]);
+});
+
+test("A loaded site can fill its existing Home pin from its conventional icon", async ({}, info) => {
+  const workspace = await shell.create("Conventional site icon");
+  conventionalIcon = darkBitmapIco;
+  const neighbor = createServer(
+    server.listeners("request")[0] as RequestListener,
+  );
+  neighboringIconServer = neighbor;
+  await new Promise<void>((resolve) =>
+    neighbor.listen(0, "127.0.0.1", resolve),
+  );
+  const address = neighbor.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing neighbor");
+  const ordinary = await shell.cli<BrowserRecord>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    `http://127.0.0.1:${address.port}/site-with-icon`,
+  );
+  const ordinaryIcon = shell.page
+    .locator(`[role="tab"][data-tab-id="${ordinary.paneId}"]`)
+    .locator("img.site-favicon");
+  await expect(ordinaryIcon).toHaveJSProperty("naturalWidth", 16);
+  expect(requests).not.toContain("/favicon.ico");
+  const localUrl = origin + "/forge-with-external-icon";
+  const missingUrl =
+    origin.replace("127.0.0.1", "localhost") + "/site-with-missing-icon";
+  for (const [url, title] of [
+    [ordinary.url, "Site docs"],
+    [localUrl, "Forge"],
+    [missingUrl, "Missing icon"],
+  ]) {
+    await shell.cli("browser", "pin", "--url", url, "--title", title);
+  }
+  requests = [];
+  await shell.page.keyboard.press(`${modifier}+t`);
+  await expect(ordinaryIcon).toHaveJSProperty("naturalWidth", 16);
+  const home = shell.page.getByRole("region", { name: "Browser home" });
+  const pin = home.getByRole("button", { name: "Forge", exact: true });
+  await expect(pin.locator("img")).toHaveCount(0);
+  expect(requests).toEqual([]);
+  await pin.click();
+  const loadedTab = shell.page.getByRole("tab", {
+    name: "Forge fixture",
+    exact: true,
+  });
+  await expect(loadedTab.locator("img.site-favicon")).toHaveJSProperty(
+    "naturalWidth",
+    32,
+  );
+  expect(requests).toContain("/favicon.ico");
+  const { browsers } = await shell.cli<{ browsers: BrowserRecord[] }>("state");
+  const loaded = browsers.find((record) => record.url === localUrl)!;
+  requests = [];
+  await shell.cli("browser", "reload", "--id", loaded.id);
+  await expect
+    .poll(() => requests.includes("/forge-with-external-icon"))
+    .toBe(true);
+  await expect.poll(async () => (await inspect(loaded.id)).loading).toBe(false);
+  await expect(loadedTab.locator("img.site-favicon")).toHaveJSProperty(
+    "naturalWidth",
+    32,
+  );
+  await shell.page.keyboard.press(`${modifier}+t`);
+  const mark = pin.locator(".browser-home-monogram");
+  const pinImage = mark.locator("img.site-favicon");
+  await expect(mark).toHaveAttribute("data-art", "light");
+  await expect(pinImage).toHaveJSProperty("naturalWidth", 32);
+  await expect(pinImage).toHaveCSS("background-color", "rgb(224, 228, 234)");
+  const neighboring = home.getByRole("button", {
+    name: "Site docs",
+    exact: true,
+  });
+  await expect(neighboring.locator("img.site-favicon")).toHaveJSProperty(
+    "naturalWidth",
+    16,
+  );
+  await expect(
+    neighboring.locator(".browser-home-monogram"),
+  ).not.toHaveAttribute("data-art", "light");
+  const missing = home.getByRole("button", {
+    name: "Missing icon",
+    exact: true,
+  });
+  requests = [];
+  await missing.click();
+  await expect.poll(() => requests.includes("/favicon.ico")).toBe(true);
+  const missingTab = shell.page.getByRole("tab", {
+    name: "Missing site fixture",
+    exact: true,
+  });
+  await expect(missingTab).toBeVisible();
+  await expect(missingTab.locator("img.site-favicon")).toHaveCount(0);
+  await shell.page.keyboard.press(`${modifier}+t`);
+  await expect(missing.locator(".browser-home-monogram")).toHaveText("M");
+  await shell.page.screenshot({
+    path: info.outputPath("home-conventional-favicon.png"),
+  });
+  await shell.stop();
+  requests = [];
+  await shell.start();
+  const restoredHome = shell.page.getByRole("region", { name: "Browser home" });
+  const restoredForge = restoredHome.getByRole("button", {
+    name: "Forge",
+    exact: true,
+  });
+  const restoredMissing = restoredHome.getByRole("button", {
+    name: "Missing icon",
+    exact: true,
+  });
+  const restoredMark = restoredForge.locator(".browser-home-monogram");
+  await expect(restoredMark.locator("img")).toHaveJSProperty(
+    "naturalWidth",
+    32,
+  );
+  await expect(restoredMark).toHaveAttribute("data-art", "light");
+  await expect(restoredMissing.locator(".browser-home-monogram")).toHaveText(
+    "M",
+  );
+  expect(requests).toEqual([]);
+
+  const restoredTab = shell.page.locator(
+    `[role="tab"][data-tab-id="${loaded.paneId}"]`,
+  );
+  await restoredTab.click();
+  await expect(restoredTab.locator("img.site-favicon")).toHaveJSProperty(
+    "naturalWidth",
+    32,
+  );
+  redirectedForge = true;
+  await shell.cli("browser", "reload", "--id", loaded.id);
+  await expect
+    .poll(async () => {
+      const updated = await inspect(loaded.id);
+      return !updated.loading && updated.url === missingUrl;
+    })
+    .toBe(true);
+  await expect(restoredTab.locator("img.site-favicon")).toHaveCount(0);
+  await shell.page.keyboard.press(`${modifier}+t`);
+  await expect(restoredMissing.locator(".browser-home-monogram")).toHaveText(
+    "M",
+  );
+  await expect(restoredMark.locator("img")).toHaveJSProperty(
+    "naturalWidth",
+    32,
+  );
 });
 
 test("Site favicon cannot follow a superseded navigation or come from a different origin or SVG", async () => {
