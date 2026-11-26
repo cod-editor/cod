@@ -25,6 +25,8 @@ const shared = {
     "@homebridge/node-pty-prebuilt-multiarch",
     "@anthropic-ai/claude-agent-sdk",
   ],
+  // Bundle the parser's static imports in both the app and standalone host.
+  alias: { "jsonc-parser": "jsonc-parser/lib/esm/main.js" },
 };
 
 await Promise.all([

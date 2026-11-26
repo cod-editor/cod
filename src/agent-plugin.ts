@@ -7,12 +7,14 @@ import {
   mkdir,
   lstat,
   readlink,
+  realpath,
   open,
   rename,
   rm,
 } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { applyEdits, modify } from "jsonc-parser";
 
 export type IntegrationProvider = "codex" | "claude" | "kimi";
 export interface IntegrationOptions {
@@ -43,6 +45,21 @@ export interface IntegrationPreview {
   installed: boolean;
   linkedSettings?: LinkedSettings;
 }
+type LinkedSnapshot = {
+  link: LinkedSettings;
+  binding: string;
+  mode: number;
+  group: number;
+};
+type LinkedWrite = {
+  target: LinkedSnapshot;
+  before: Buffer;
+  after: string;
+};
+type IntegrationPlan = {
+  preview: IntegrationPreview;
+  linkedWrite?: LinkedWrite;
+};
 const events = [
   "SessionStart",
   "UserPromptSubmit",
@@ -56,6 +73,7 @@ const quote = (text: string) => "'" + text.replaceAll("'", "'\\''") + "'";
 const begin = "# BEGIN Cod managed hooks";
 const end = "# END Cod managed hooks";
 const maxLinkedSettingsBytes = 4 * 1024 * 1024;
+const activeInstalls = new Set<string>();
 async function read(file: string): Promise<string | null> {
   try {
     if ((await lstat(file)).isSymbolicLink())
@@ -89,9 +107,26 @@ function stamp(info: BigIntStats): string {
   return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
 }
 
+async function linkedAncestors(file: string): Promise<string[]> {
+  const identities: string[] = [];
+  for (
+    let directory = path.dirname(file);
+    directory !== path.dirname(directory);
+    directory = path.dirname(directory)
+  ) {
+    const info = await lstat(directory, { bigint: true });
+    if (!info.isDirectory())
+      throw new Error(
+        `Linked Claude settings require a regular directory: ${directory}`,
+      );
+    identities.push(`${info.dev}:${info.ino}`);
+  }
+  return identities;
+}
+
 async function linkedSettings(
   file: string,
-): Promise<LinkedSettings | undefined> {
+): Promise<LinkedSnapshot | undefined> {
   const info = await lstat(file, { bigint: true }).catch((error) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -99,7 +134,10 @@ async function linkedSettings(
   if (!info?.isSymbolicLink()) return;
   const link = await readlink(file);
   const target = path.resolve(path.dirname(file), link);
-  await safeAncestors(target);
+  const [profileAncestors, targetAncestors] = await Promise.all([
+    linkedAncestors(file),
+    linkedAncestors(target),
+  ]);
   const targetInfo = await lstat(target, { bigint: true }).catch((error) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error(
@@ -114,12 +152,29 @@ async function linkedSettings(
     throw new Error(
       "Linked Claude settings must point to a regular file you own",
     );
+  if ((await realpath(file)) !== target)
+    throw new Error(
+      "Linked Claude settings must resolve directly to the reviewed target",
+    );
+  const binding = hash(
+    JSON.stringify([
+      file,
+      link,
+      stamp(info),
+      target,
+      profileAncestors,
+      targetAncestors,
+    ]),
+  );
   return {
-    path: file,
-    target,
-    identity: hash(
-      JSON.stringify([file, link, stamp(info), target, stamp(targetInfo)]),
-    ),
+    link: {
+      path: file,
+      target,
+      identity: hash(`${binding}:${stamp(targetInfo)}`),
+    },
+    binding,
+    mode: Number(targetInfo.mode & 0o777n),
+    group: Number(targetInfo.gid),
   };
 }
 
@@ -133,7 +188,7 @@ async function readLinkedSettings(link: LinkedSettings): Promise<Buffer> {
     if (
       !before.isFile() ||
       before.uid !== BigInt(process.getuid?.() ?? -1) ||
-      (await linkedSettings(link.path))?.identity !== link.identity ||
+      (await linkedSettings(link.path))?.link.identity !== link.identity ||
       stamp(before) !== stamp(await lstat(link.target, { bigint: true }))
     )
       throw new Error(
@@ -146,7 +201,7 @@ async function readLinkedSettings(link: LinkedSettings): Promise<Buffer> {
     if (
       BigInt(bytesRead) !== before.size ||
       stamp(before) !== stamp(await file.stat({ bigint: true })) ||
-      (await linkedSettings(link.path))?.identity !== link.identity ||
+      (await linkedSettings(link.path))?.link.identity !== link.identity ||
       stamp(before) !== stamp(await lstat(link.target, { bigint: true }))
     )
       throw new Error(
@@ -162,9 +217,66 @@ const managedHook = (command: string): ManagedHook => ({
   hooks: [{ type: "command", command, timeout: 5 }],
 });
 
+function editLinkedHooks(
+  original: string,
+  config: { hooks?: Record<string, unknown[]> | null },
+  review: NonNullable<LinkedSettings["review"]>,
+): string {
+  let result = original;
+  const hooks = { ...config.hooks };
+  const edit = (key: (string | number)[], value: unknown, insert = false) => {
+    result = applyEdits(
+      result,
+      modify(result, key, value, { isArrayInsertion: insert }),
+    );
+  };
+  if (config.hooks == null) {
+    edit(["hooks"], review.add);
+    Object.assign(hooks, review.add);
+  } else {
+    for (const event of events) {
+      const remove = review.remove[event] ?? [];
+      const add = review.add[event] ?? [];
+      if (!remove.length && !add.length) continue;
+      const key = ["hooks", event];
+      const entries = hooks[event];
+      if (entries == null) {
+        edit(key, add);
+        hooks[event] = add;
+        continue;
+      }
+      const keeps = (entry: unknown) =>
+        !remove.some((owned) => isDeepStrictEqual(entry, owned));
+      for (let index = entries.length - 1; index >= 0; index--)
+        if (!keeps(entries[index])) edit([...key, index], undefined);
+      for (const entry of add) edit([...key, -1], entry, true);
+      hooks[event] = [...entries.filter(keeps), ...add];
+    }
+  }
+  let matches = false;
+  try {
+    matches = isDeepStrictEqual(JSON.parse(result), { ...config, hooks });
+  } catch {
+    // Parser diagnostics may include a private snippet of the settings.
+  }
+  if (!matches)
+    throw new Error("Could not apply only Cod hooks to the linked settings");
+  if (Buffer.byteLength(result) > maxLinkedSettingsBytes)
+    throw new Error(
+      "Updated linked Claude settings exceed the 4 MiB review limit",
+    );
+  return result;
+}
+
 export async function inspectIntegration(
   options: IntegrationOptions,
 ): Promise<IntegrationPreview> {
+  return (await planIntegration(options)).preview;
+}
+
+async function planIntegration(
+  options: IntegrationOptions,
+): Promise<IntegrationPlan> {
   if (!["codex", "claude", "kimi"].includes(options.provider))
     throw new Error("Unsupported provider");
   if (!path.isAbsolute(options.profilePath))
@@ -179,10 +291,11 @@ export async function inspectIntegration(
         ? "settings.json"
         : "hooks.json",
   );
-  const link =
+  const snapshot =
     options.provider === "claude"
       ? await linkedSettings(configPath)
       : undefined;
+  const link = snapshot?.link;
   const directory = path.join(profilePath, "cod-integration");
   if (link?.target.startsWith(directory + path.sep))
     throw new Error(
@@ -197,13 +310,15 @@ export async function inspectIntegration(
       : "Restart the provider session to load these hooks. Review them in the provider's hook settings. Hooks report only sessions launched by Cod; native live compatibility is not established by installation.";
   if (link && expectedLink === undefined)
     return {
-      provider: options.provider,
-      profilePath,
-      changes: [],
-      previewHash: "",
-      installed: false,
-      trustInstructions,
-      linkedSettings: link,
+      preview: {
+        provider: options.provider,
+        profilePath,
+        changes: [],
+        previewHash: "",
+        installed: false,
+        trustInstructions,
+        linkedSettings: link,
+      },
     };
 
   const root = options.bundleRoot ?? path.resolve(__dirname, "..");
@@ -244,7 +359,9 @@ export async function inspectIntegration(
   }
   const linkedContents = link ? await readLinkedSettings(link) : undefined;
   const before = linkedContents?.toString("utf8") ?? (await read(configPath));
-  const oldLinkedCommands = new Set<string>();
+  if (linkedContents && !linkedContents.equals(Buffer.from(before!)))
+    throw new Error("Linked Claude settings must contain valid UTF-8");
+  let linkedWrite: LinkedWrite | undefined;
   let after = "",
     block: string | undefined;
   if (options.provider === "kimi") {
@@ -283,19 +400,30 @@ export async function inspectIntegration(
       previous?.command,
       ...(previous?.linkedCommands ?? []),
     ].filter((item): item is string => !!item && item !== command);
+    const managedCommands = [command, ...oldCommands];
     for (const event of events) {
       let entries: unknown[] = hooks[event] ?? [];
       if (!Array.isArray(entries))
         throw new Error(`Invalid hook list: ${event}`);
       if (link) {
-        const outdated = entries.flatMap((entry) => {
-          const oldCommand = oldCommands.find((item) =>
+        for (const entry of entries) {
+          const hookList = (entry as { hooks?: unknown } | null)?.hooks;
+          if (
+            Array.isArray(hookList) &&
+            hookList.some((hook) => managedCommands.includes(hook?.command)) &&
+            !managedCommands.some((owned) =>
+              isDeepStrictEqual(entry, managedHook(owned)),
+            )
+          )
+            throw new Error(
+              `Managed ${event} hook was edited in linked settings`,
+            );
+        }
+        const outdated = entries.filter((entry): entry is ManagedHook =>
+          oldCommands.some((item) =>
             isDeepStrictEqual(entry, managedHook(item)),
-          );
-          if (!oldCommand) return [];
-          oldLinkedCommands.add(oldCommand);
-          return [managedHook(oldCommand)];
-        });
+          ),
+        );
         if (outdated.length) reviewed.remove[event] = outdated;
         if (!entries.some((entry) => isDeepStrictEqual(entry, desired)))
           reviewed.add[event] = [desired];
@@ -314,8 +442,19 @@ export async function inspectIntegration(
       }
       hooks[event] = [...entries, desired];
     }
-    if (link) link.review = reviewed;
-    else {
+    if (snapshot) {
+      snapshot.link.review = reviewed;
+      if (
+        Object.keys(reviewed.add).length ||
+        Object.keys(reviewed.remove).length
+      ) {
+        linkedWrite = {
+          target: snapshot,
+          before: linkedContents!,
+          after: editLinkedHooks(before!, config, reviewed),
+        };
+      }
+    } else {
       config.hooks = hooks;
       after = JSON.stringify(config, null, 2) + "\n";
     }
@@ -328,9 +467,6 @@ export async function inspectIntegration(
     ),
     command,
     ...(block ? { block } : {}),
-    ...(oldLinkedCommands.size
-      ? { linkedCommands: [...oldLinkedCommands] }
-      : {}),
   };
   const manifestText = JSON.stringify(manifest, null, 2) + "\n";
   if (previousText !== manifestText)
@@ -339,31 +475,49 @@ export async function inspectIntegration(
       before: previousText,
       after: manifestText,
     });
-  const needsManual =
-    link &&
-    (Object.keys(link.review!.add).length > 0 ||
-      Object.keys(link.review!.remove).length > 0);
   return {
-    provider: options.provider,
-    profilePath,
-    changes,
-    previewHash: hash(
-      JSON.stringify({
-        provider: options.provider,
-        profilePath,
-        changes,
-        ...(link ? { link, linkedContent: hash(linkedContents!) } : {}),
-      }),
-    ),
-    installed: changes.length === 0 && !needsManual,
-    trustInstructions,
-    ...(link ? { linkedSettings: link } : {}),
+    preview: {
+      provider: options.provider,
+      profilePath,
+      changes,
+      previewHash: hash(
+        JSON.stringify({
+          provider: options.provider,
+          profilePath,
+          changes,
+          ...(link ? { link, linkedContent: hash(linkedContents!) } : {}),
+          ...(linkedWrite
+            ? { linkedReplacement: hash(linkedWrite.after) }
+            : {}),
+        }),
+      ),
+      installed: changes.length === 0 && !linkedWrite,
+      trustInstructions,
+      ...(link ? { linkedSettings: link } : {}),
+    },
+    linkedWrite,
   };
 }
 export async function installIntegration(
   options: IntegrationOptions & { expectedPreviewHash: string },
 ) {
-  const preview = await inspectIntegration(options);
+  const key = path.resolve(options.profilePath);
+  if (activeInstalls.has(key))
+    throw new Error(
+      "Integration changes are already being applied to this profile",
+    );
+  activeInstalls.add(key);
+  try {
+    return await applyIntegration(options);
+  } finally {
+    activeInstalls.delete(key);
+  }
+}
+
+async function applyIntegration(
+  options: IntegrationOptions & { expectedPreviewHash: string },
+) {
+  const { preview, linkedWrite } = await planIntegration(options);
   if (
     (preview.linkedSettings && !preview.linkedSettings.review) ||
     preview.previewHash !== options.expectedPreviewHash
@@ -373,6 +527,7 @@ export async function installIntegration(
     );
   const backups: string[] = [];
   const written: IntegrationPreview["changes"] = [];
+  let linkedBackup: string | undefined;
   try {
     for (const change of preview.changes) {
       await safeAncestors(change.path);
@@ -389,9 +544,74 @@ export async function installIntegration(
       await rename(temporary, change.path);
       written.push(change);
     }
-    if (preview.linkedSettings)
-      return { ...(await inspectIntegration(options)), backups };
+    if (linkedWrite) {
+      const { link, binding, mode, group } = linkedWrite.target;
+      const backup = `${link.target}.cod-backup-${randomUUID()}`;
+      const temporary = `${link.target}.cod-new-${randomUUID()}`;
+      if ((await linkedSettings(link.path))?.link.identity !== link.identity)
+        throw new Error(
+          "Linked Claude settings changed. Review the target again.",
+        );
+      const staged = await open(temporary, "wx", 0o600);
+      try {
+        try {
+          await staged.writeFile(linkedWrite.after);
+          const stagedInfo = await staged.stat();
+          if (stagedInfo.gid !== group)
+            await staged.chown(stagedInfo.uid, group);
+          await staged.chmod(mode);
+          await staged.sync();
+        } finally {
+          await staged.close();
+        }
+        await writeFile(backup, linkedWrite.before, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        backups.push(backup);
+        const rechecked = await planIntegration(options);
+        if (rechecked.preview.changes.length)
+          throw new Error(
+            "Integration changed while applying; review the current files again",
+          );
+        if (!(await readLinkedSettings(link)).equals(linkedWrite.before))
+          throw new Error(
+            "Linked Claude settings changed. Review the target again.",
+          );
+        await rename(temporary, link.target);
+        linkedBackup = backup;
+      } finally {
+        await rm(temporary, { force: true });
+      }
+
+      const updated = await linkedSettings(link.path);
+      if (
+        updated?.binding !== binding ||
+        !(await readLinkedSettings(updated.link)).equals(
+          Buffer.from(linkedWrite.after),
+        )
+      )
+        throw new Error("Could not verify the applied settings");
+      const result = await inspectIntegration({
+        ...options,
+        expectedLinkedTargetHash: updated.link.identity,
+      });
+      if (!result.installed)
+        throw new Error("Could not verify the installed integration");
+      return { ...result, backups };
+    }
+    if (preview.linkedSettings) {
+      const result = await inspectIntegration(options);
+      if (!result.installed)
+        throw new Error("Could not verify the installed integration");
+      return { ...result, backups };
+    }
   } catch (error) {
+    if (linkedBackup)
+      throw new Error(
+        `Could not verify the applied integration. The original settings are backed up at ${linkedBackup}`,
+        { cause: error },
+      );
     for (const change of written.reverse()) {
       if ((await read(change.path)) !== change.after) continue;
       if (change.before === null) await rm(change.path);

@@ -11,6 +11,10 @@ import {
   readlink,
   symlink,
   truncate,
+  rename,
+  chmod,
+  chown,
+  readdir,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -197,7 +201,7 @@ test("install rejects config races and edited owned hook scripts", async () => {
   }
 });
 
-test("linked Claude settings show a target before content review and only prepare Cod files", async (context) => {
+test("linked Claude settings show a private diff and apply the reviewed hooks and Cod files together", async (context) => {
   const workspace = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "cod-linked-settings-")),
   );
@@ -212,8 +216,15 @@ test("linked Claude settings show a target before content review and only prepar
     },
     env: { EXAMPLE_VALUE: "invented-private-setting" },
   };
-  const original = JSON.stringify(existing);
+  const original = JSON.stringify(existing, null, 2) + "\n";
   await writeFile(target, original);
+  const targetInfo = await lstat(target);
+  const targetGroup =
+    process.getgroups?.().find((group) => group !== targetInfo.gid) ??
+    targetInfo.gid;
+  if (targetGroup !== targetInfo.gid)
+    await chown(target, targetInfo.uid, targetGroup);
+  await chmod(target, 0o640);
   await symlink("../dotfiles-settings.json", alias);
   const originalLink = (await lstat(alias)).ino;
   const options = {
@@ -242,28 +253,36 @@ test("linked Claude settings show a target before content review and only prepar
     /invented-private-setting|personal-hook/,
   );
   assert.equal(Object.keys(reviewed.linkedSettings!.review!.add).length, 5);
-  const prepared = await installIntegration({
+  const approving = {
     ...reviewOptions,
     expectedPreviewHash: reviewed.previewHash,
-  });
-  assert.equal(prepared.installed, false);
-  assert.deepEqual(prepared.changes, []);
-  assert.equal(await readFile(target, "utf8"), original);
+  };
+  const applying = installIntegration(approving);
+  await assert.rejects(installIntegration(approving), /already being applied/);
+  const applied = await applying;
+  assert.equal(applied.installed, true);
+  assert.deepEqual(applied.changes, []);
+  assert.equal(applied.backups.length, 1);
+  assert.equal(await readFile(applied.backups[0], "utf8"), original);
+  assert.equal((await lstat(applied.backups[0])).mode & 0o777, 0o600);
+  assert.equal((await lstat(target)).mode & 0o777, 0o640);
+  assert.equal((await lstat(target)).gid, targetGroup);
   assert.equal((await lstat(alias)).ino, originalLink);
   assert.equal(await readlink(alias), "../dotfiles-settings.json");
-
-  // Simulate the user's edit in their dotfiles. Only the proposed entries merge.
   const updated = {
     ...existing,
     hooks: {
-      ...prepared.linkedSettings!.review!.add,
+      ...reviewed.linkedSettings!.review!.add,
       Stop: [
         ...existing.hooks.Stop,
-        ...prepared.linkedSettings!.review!.add.Stop,
+        ...reviewed.linkedSettings!.review!.add.Stop,
       ],
     },
   };
-  await writeFile(target, JSON.stringify(updated));
+  assert.match(
+    await readFile(target, "utf8"),
+    /"env": \{\n    "EXAMPLE_VALUE": "invented-private-setting"\n  \}/,
+  );
   await assert.rejects(inspectIntegration(reviewOptions), /settings changed/);
   const updatedTarget = await inspectIntegration(options);
   const final = await inspectIntegration({
@@ -280,28 +299,25 @@ test("linked Claude settings show a target before content review and only prepar
     expectedLinkedTargetHash: final.linkedSettings!.identity,
   };
   const upgradePreview = await inspectIntegration(upgrade);
-  const upgradePrepared = await installIntegration({
+  const replacement = upgradePreview.linkedSettings!.review!;
+  assert.deepEqual(replacement.remove, reviewed.linkedSettings!.review!.add);
+  const upgradeApplied = await installIntegration({
     ...upgrade,
     expectedPreviewHash: upgradePreview.previewHash,
   });
-  assert.equal(upgradePrepared.installed, false);
-  assert.equal(upgradePrepared.backups.length, 1);
-  const replacement = upgradePrepared.linkedSettings!.review!;
-  assert.deepEqual(replacement.remove, prepared.linkedSettings!.review!.add);
+  assert.equal(upgradeApplied.installed, true);
+  assert.equal(upgradeApplied.backups.length, 2);
   assert.equal(Object.keys(replacement.add).length, 5);
-  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), updated);
-  const manuallyUpgraded = {
+  const upgraded = {
     ...existing,
     hooks: {
       ...replacement.add,
       Stop: [...existing.hooks.Stop, ...replacement.add.Stop],
     },
   };
-  await writeFile(target, JSON.stringify(manuallyUpgraded));
-  const newMetadata = await inspectIntegration(options);
   const finished = {
     ...upgrade,
-    expectedLinkedTargetHash: newMetadata.linkedSettings!.identity,
+    expectedLinkedTargetHash: upgradeApplied.linkedSettings!.identity,
   };
   const newPreview = await inspectIntegration(finished);
   assert.deepEqual(newPreview.linkedSettings!.review, { add: {}, remove: {} });
@@ -311,10 +327,27 @@ test("linked Claude settings show a target before content review and only prepar
   });
   assert.equal(result.installed, true);
   assert.equal((await lstat(alias)).ino, originalLink);
-  assert.deepEqual(
-    JSON.parse(await readFile(target, "utf8")),
-    manuallyUpgraded,
+  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), upgraded);
+  const edited = {
+    ...upgraded,
+    hooks: {
+      ...upgraded.hooks,
+      Stop: [
+        ...existing.hooks.Stop,
+        { ...replacement.add.Stop[0], matcher: "custom" },
+      ],
+    },
+  };
+  await writeFile(target, JSON.stringify(edited));
+  const editedTarget = await inspectIntegration(options);
+  await assert.rejects(
+    inspectIntegration({
+      ...finished,
+      expectedLinkedTargetHash: editedTarget.linkedSettings!.identity,
+    }),
+    /Managed Stop hook was edited in linked settings/,
   );
+  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), edited);
 });
 
 test("linked settings reject dangling links, same-content retargets and stale edits", async (context) => {
@@ -373,6 +406,22 @@ test("linked settings reject dangling links, same-content retargets and stale ed
     }),
     /settings changed/,
   );
+  const afterEdit = await inspectIntegration(options);
+  const afterEditOptions = {
+    ...options,
+    expectedLinkedTargetHash: afterEdit.linkedSettings!.identity,
+  };
+  const afterEditPreview = await inspectIntegration(afterEditOptions);
+  const replacementFile = path.join(profilePath, "new-settings.json");
+  await writeFile(replacementFile, '{"localEdit":true}');
+  await rename(replacementFile, other);
+  await assert.rejects(
+    installIntegration({
+      ...afterEditOptions,
+      expectedPreviewHash: afterEditPreview.previewHash,
+    }),
+    /settings changed/,
+  );
   await assert.rejects(lstat(path.join(profilePath, "cod-integration")), {
     code: "ENOENT",
   });
@@ -400,7 +449,110 @@ test("linked settings reject dangling links, same-content retargets and stale ed
     /outside Cod's managed files/,
   );
   assert.equal(await readFile(manifest, "utf8"), "{}");
+
+  const nested = path.join(profilePath, "external", "nested");
+  await mkdir(nested, { recursive: true });
+  await writeFile(path.join(profilePath, "external", "original.json"), "{}");
+  await symlink(nested, path.join(profilePath, "indirect"));
+  await rm(alias);
+  await symlink("indirect/../original.json", alias);
+  await assert.rejects(
+    inspectIntegration(options),
+    /must resolve directly to the reviewed target/,
+  );
 });
+
+test("linked installation rejects a changed target ancestor even when the file snapshot is unchanged", async (context) => {
+  const root = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "cod-linked-parent-")),
+  );
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "claude");
+  const directory = path.join(root, "dotfiles");
+  const nested = path.join(directory, "nested");
+  const target = path.join(nested, "settings.json");
+  const previous = path.join(root, "old-dotfiles");
+  await mkdir(profilePath);
+  await mkdir(nested, { recursive: true });
+  await writeFile(target, "{}");
+  const targetInfo = await lstat(target, { bigint: true });
+  await symlink(target, path.join(profilePath, "settings.json"));
+  const options = {
+    provider: "claude" as const,
+    profilePath,
+    bundleRoot: process.cwd(),
+  };
+  const metadata = await inspectIntegration(options);
+  const reviewed = {
+    ...options,
+    expectedLinkedTargetHash: metadata.linkedSettings!.identity,
+  };
+  const preview = await inspectIntegration(reviewed);
+  await rename(directory, previous);
+  await mkdir(directory);
+  await rename(path.join(previous, "nested"), nested);
+  const moved = await lstat(target, { bigint: true });
+  assert.equal(moved.ino, targetInfo.ino);
+  assert.equal(moved.ctimeNs, targetInfo.ctimeNs);
+  await assert.rejects(
+    installIntegration({
+      ...reviewed,
+      expectedPreviewHash: preview.previewHash,
+    }),
+    /settings changed/,
+  );
+  assert.equal(await readFile(target, "utf8"), "{}");
+  assert.deepEqual(await readdir(profilePath), ["settings.json"]);
+});
+
+test(
+  "linked installation rolls back its helper writes when the approved destination cannot be replaced",
+  { skip: process.getuid?.() === 0 },
+  async (context) => {
+    const root = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "cod-linked-rollback-")),
+    );
+    const profilePath = path.join(root, "claude");
+    const directory = path.join(root, "dotfiles");
+    const target = path.join(directory, "settings.json");
+    context.after(async () => {
+      await chmod(directory, 0o700);
+      await rm(root, { recursive: true, force: true });
+    });
+    await mkdir(profilePath);
+    await mkdir(directory);
+    await writeFile(target, "{}");
+    await symlink(target, path.join(profilePath, "settings.json"));
+    const options = {
+      provider: "claude" as const,
+      profilePath,
+      bundleRoot: process.cwd(),
+    };
+    const metadata = await inspectIntegration(options);
+    const reviewed = {
+      ...options,
+      expectedLinkedTargetHash: metadata.linkedSettings!.identity,
+    };
+    const preview = await inspectIntegration(reviewed);
+    await chmod(directory, 0o500);
+    await assert.rejects(
+      installIntegration({
+        ...reviewed,
+        expectedPreviewHash: preview.previewHash,
+      }),
+      { code: "EACCES" },
+    );
+    assert.equal(await readFile(target, "utf8"), "{}");
+    assert.equal(
+      await readlink(path.join(profilePath, "settings.json")),
+      target,
+    );
+    assert.deepEqual(
+      await readdir(path.join(profilePath, "cod-integration")),
+      [],
+    );
+  },
+);
 
 test("SessionStart delivers operating instructions in the native output shape and Kimi installs a discoverable skill", async () => {
   const profilePath = await realpath(
