@@ -9,13 +9,13 @@ import type {
 } from "./types";
 
 const bridge: CodBridge = {
-  onPreviewUpdate(callback) {
-    ipcRenderer.on("cod:preview-update", (_event, version) =>
+  onReleaseUpdate(callback) {
+    ipcRenderer.on("cod:release-update", (_event, version) =>
       callback(version),
     );
   },
-  openPreviewUpdate() {
-    return ipcRenderer.invoke("cod:preview-update-open");
+  openReleaseUpdate() {
+    return ipcRenderer.invoke("cod:release-update-open");
   },
   toggleDevTools(id) {
     return ipcRenderer.invoke("cod:devtools", id);

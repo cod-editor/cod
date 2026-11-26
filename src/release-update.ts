@@ -1,22 +1,27 @@
 const releasesUrl =
   "https://api.github.com/repos/cod-editor/cod/releases?per_page=30";
 const releaseDownloads = "https://github.com/cod-editor/cod/releases/download";
-const previewTagPattern =
-  /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.(0|[1-9]\d*)$/;
+const releaseTagPattern =
+  /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview\.(0|[1-9]\d*))?$/;
 const maxResponseBytes = 1024 * 1024;
 
-export interface PreviewUpdate {
+export interface ReleaseUpdate {
   version: string;
   downloadUrl: string;
 }
 
-function previewComponents(tag: unknown): string[] | undefined {
-  return typeof tag === "string" && tag.length < 128
-    ? previewTagPattern.exec(tag)?.slice(1)
-    : undefined;
+type Version = {
+  core: string[];
+  preview: string | undefined;
+};
+
+function releaseComponents(tag: unknown): Version | undefined {
+  if (typeof tag !== "string" || tag.length >= 128) return;
+  const match = releaseTagPattern.exec(tag);
+  if (match?.[0] === tag) return { core: match.slice(1, 4), preview: match[4] };
 }
 
-export function packagedPreviewTag(
+export function packagedReleaseTag(
   packaged: boolean,
   platform: string,
   architecture: string,
@@ -27,41 +32,56 @@ export function packagedPreviewTag(
     packaged &&
     platform === "darwin" &&
     architecture === "arm64" &&
-    previewComponents(tag)
+    releaseComponents(tag)
   )
     return tag;
 }
 
-function newer(components: string[], previous: string[]): boolean {
-  for (const [index, part] of components.entries()) {
-    const other = previous[index];
-    if (part.length !== other.length) return part.length > other.length;
-    if (part !== other) return part > other;
-  }
-  return false;
+function largerNumber(part: string, other: string): boolean {
+  return part.length === other.length
+    ? part > other
+    : part.length > other.length;
 }
 
-export function latestPreviewUpdate(
+function newer(candidate: Version, previous: Version): boolean {
+  for (const [index, part] of candidate.core.entries()) {
+    const other = previous.core[index];
+    if (part !== other) return largerNumber(part, other);
+  }
+  if (previous.preview === undefined) return false;
+  return (
+    candidate.preview === undefined ||
+    largerNumber(candidate.preview, previous.preview)
+  );
+}
+
+export function latestReleaseUpdate(
   currentTag: string,
   releases: unknown,
-): PreviewUpdate | undefined {
-  let latest = previewComponents(currentTag);
-  if (!latest || !Array.isArray(releases))
-    throw new Error("Invalid preview release metadata");
-  let update: PreviewUpdate | undefined;
+): ReleaseUpdate | undefined {
+  const current = releaseComponents(currentTag);
+  if (!current || !Array.isArray(releases))
+    throw new Error("Invalid release metadata");
+  let latest = current;
+  let update: ReleaseUpdate | undefined;
   for (const value of releases) {
     if (!value || typeof value !== "object") continue;
     const release = value as Record<string, unknown>;
     const tag = release.tag_name;
     if (
       release.draft !== false ||
-      release.prerelease !== true ||
       typeof tag !== "string" ||
       !Array.isArray(release.assets)
     )
       continue;
-    const components = previewComponents(tag);
+    const components = releaseComponents(tag);
     if (!components || !newer(components, latest)) continue;
+    const preview = components.preview !== undefined;
+    if (
+      release.prerelease !== preview ||
+      (preview && current.preview === undefined)
+    )
+      continue;
     const version = tag.slice(1);
     const name = `Cod-${version}-macOS-arm64.dmg`;
     const downloadUrl = `${releaseDownloads}/${tag}/${name}`;
@@ -85,11 +105,11 @@ export function latestPreviewUpdate(
   return update;
 }
 
-export async function checkForPreviewUpdate(
+export async function checkForReleaseUpdate(
   currentTag: string,
   stop: AbortSignal,
   request = fetch,
-): Promise<PreviewUpdate | undefined> {
+): Promise<ReleaseUpdate | undefined> {
   const response = await request(releasesUrl, {
     headers: { Accept: "application/vnd.github+json" },
     redirect: "error",
@@ -97,7 +117,7 @@ export async function checkForPreviewUpdate(
   });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
-    throw new Error("Preview release list unavailable");
+    throw new Error("Release list unavailable");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -109,9 +129,9 @@ export async function checkForPreviewUpdate(
     size += value.byteLength;
     if (size > maxResponseBytes) {
       await reader.cancel();
-      throw new Error("Preview release list is too large");
+      throw new Error("Release list is too large");
     }
     body += decoder.decode(value, { stream: true });
   }
-  return latestPreviewUpdate(currentTag, JSON.parse(body + decoder.decode()));
+  return latestReleaseUpdate(currentTag, JSON.parse(body + decoder.decode()));
 }

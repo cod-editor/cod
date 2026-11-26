@@ -31,7 +31,9 @@ if (
     plist.CFBundleShortVersionString !== expectedVersion.split("-")[0] ||
     plist.CFBundleVersion !== expectedVersion.split("-")[0])
 )
-  throw new Error("Packaged preview version does not match the release tag");
+  throw new Error(
+    "Packaged application version does not match the release tag",
+  );
 const schemes = (plist.CFBundleURLTypes ?? []).flatMap(
   (entry) => entry.CFBundleURLSchemes ?? [],
 );

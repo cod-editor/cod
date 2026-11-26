@@ -229,7 +229,7 @@ test("Integration setup can be deferred, reopened and installed only after previ
   }
 });
 
-test("A preview update notice only hands off the asset on explicit activation", async ({}, info) => {
+test("A release update notice only hands off the asset on explicit activation", async ({}, info) => {
   const app = new ChatApp();
   await app.prepare();
   try {
@@ -238,14 +238,14 @@ test("A preview update notice only hands off the asset on explicit activation", 
     await expect(action).toBeHidden();
     await app.app!.evaluate(({ BrowserWindow, ipcMain }) => {
       const state = { opened: 0 };
-      Object.assign(globalThis, { previewNoticeFixture: state });
-      ipcMain.removeHandler("cod:preview-update-open");
-      ipcMain.handle("cod:preview-update-open", () => {
+      Object.assign(globalThis, { releaseNoticeFixture: state });
+      ipcMain.removeHandler("cod:release-update-open");
+      ipcMain.handle("cod:release-update-open", () => {
         state.opened++;
       });
       const window = BrowserWindow.getAllWindows()[0];
       window.setContentSize(760, 650);
-      window.webContents.send("cod:preview-update", "0.1.0-preview.2");
+      window.webContents.send("cod:release-update", "0.1.0-preview.2");
     });
     await expect(action).toBeVisible();
     await expect(action).toHaveAttribute(
@@ -276,19 +276,26 @@ test("A preview update notice only hands off the asset on explicit activation", 
         }),
       ).toBe(true);
     }
+    await app.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(
+        "cod:release-update",
+        "0.1.0",
+      );
+    });
+    await expect(action).toHaveAttribute("title", "Download Cod 0.1.0");
     const handoffs = () =>
-      app.app!.evaluate(() => (globalThis as any).previewNoticeFixture.opened);
+      app.app!.evaluate(() => (globalThis as any).releaseNoticeFixture.opened);
     expect(await handoffs()).toBe(0);
     await action.focus();
     await expect(action).toBeFocused();
     await app.page.screenshot({
-      path: info.outputPath("preview-update-notice.png"),
+      path: info.outputPath("release-update-notice.png"),
     });
     await action.press("Enter");
     await expect.poll(handoffs).toBe(1);
     await app.app!.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].webContents.send(
-        "cod:preview-update",
+        "cod:release-update",
         null,
       );
     });

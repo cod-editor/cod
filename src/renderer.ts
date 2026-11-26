@@ -84,21 +84,21 @@ const layout = createPaneLayout(() => state, invoke, {
   conversationActions: (c) => commands.conversationActions(c),
   nativeLayout: browsers.layout,
 });
-const downloadPreview = paneButton("Download update", async () => {
+const downloadUpdate = paneButton("Download update", async () => {
   try {
-    await window.cod.openPreviewUpdate();
+    await window.cod.openReleaseUpdate();
   } catch {
     setStatus("Could not open the preview download");
   }
 });
-downloadPreview.textContent = "Download";
-downloadPreview.setAttribute("aria-label", "Download update");
-downloadPreview.classList.add("preview-update");
-downloadPreview.hidden = true;
-document.querySelector("#pane-visibility")!.prepend(downloadPreview);
-window.cod.onPreviewUpdate((version) => {
-  downloadPreview.hidden = !version;
-  downloadPreview.title = version ? `Download Cod ${version}` : "";
+downloadUpdate.textContent = "Download";
+downloadUpdate.setAttribute("aria-label", "Download update");
+downloadUpdate.classList.add("release-update");
+downloadUpdate.hidden = true;
+document.querySelector("#pane-visibility")!.prepend(downloadUpdate);
+window.cod.onReleaseUpdate((version) => {
+  downloadUpdate.hidden = !version;
+  downloadUpdate.title = version ? `Download Cod ${version}` : "";
 });
 const navigation = createWorkspaceNavigation(() => state, invoke, {
   folderDialog: (workspace, restoreFocus) =>

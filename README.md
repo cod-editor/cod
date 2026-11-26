@@ -2,7 +2,15 @@
 
 An overbloated mix of code editor, terminal, browser and coding agents. So, a tiny subset of VS Code, essentially.
 
-## Start
+## Install on macOS
+
+Download the Apple Silicon disk image from [Releases](https://github.com/cod-editor/cod/releases). To verify it, download the matching `.sha256` file and run `shasum -a 256 -c Cod-0.1.0-macOS-arm64.dmg.sha256` in the download directory. Use the actual filename for other versions. Open the disk image and drag Cod to Applications.
+
+Cod uses an ad-hoc signature and has no Apple notarization. If macOS blocks the first launch after you verify the download, follow [Apple's instructions for opening a trusted app](https://support.apple.com/en-us/102445#openanyway).
+
+When Cod offers an update, click **Download**, quit Cod, then replace the app in Applications from the new disk image. Workspaces and settings are stored separately.
+
+## Run from source
 
 Use Node.js 24+ and npm. Install and sign in to Codex or Kimi in its own CLI.
 
@@ -13,7 +21,7 @@ npm run prepare:bitwarden
 npm start
 ```
 
-Bitwarden setup is optional. Linux needs Electron's system libraries and a graphical session. Apple Silicon previews are available through [Releases](https://github.com/cod-editor/cod/releases).
+Bitwarden setup is optional. Linux needs Electron's system libraries and a graphical session.
 
 ## Use
 

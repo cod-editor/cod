@@ -330,10 +330,10 @@ body {
   max-width: 100%;
   overflow-x: auto;
 }
-#pane-visibility:has(.preview-update:not([hidden])) {
+#pane-visibility:has(.release-update:not([hidden])) {
   height: auto;
 }
-.preview-update {
+.release-update {
   margin-inline-end: var(--space-1);
   white-space: nowrap;
 }
