@@ -32,7 +32,7 @@ import { app, shell, type BrowserWindow, type Session } from "electron";
 import { BrowserService, type BrowserEvent } from "../browser";
 import type { CertificateIdentity } from "../browser/temporary-certificate";
 import { faviconOrigin } from "../browser/favicon-origin";
-import { AgentPageService } from "../agent-pages";
+import { AgentPageService, resolveAgentPageFile } from "../agent-pages";
 import { BrowserAddons } from "../browser-addons";
 import type {
   BrowserState,
@@ -59,6 +59,10 @@ export class BrowserApplicationService {
   private libraryError?: Error;
   private browserService?: BrowserService;
   private agentPages?: AgentPageService;
+  private agentPageOpens = new Map<
+    string,
+    Promise<{ id: string; paneId: string }>
+  >();
   private browserAddons?: BrowserAddons;
   private selectedBrowserContents?: number;
   private synchronizingBrowserSelection = false;
@@ -178,6 +182,22 @@ export class BrowserApplicationService {
   }
 
   async loadAgentPage(record: BrowserState): Promise<void> {
+    const pending = this.browserInitializations.get(record.id);
+    if (pending) {
+      await pending;
+      return;
+    }
+    if (this.agentPages?.has(record.id)) return;
+    const initialization = this.initializeAgentPage(record);
+    this.browserInitializations.set(record.id, initialization);
+    try {
+      await initialization;
+    } finally {
+      this.browserInitializations.delete(record.id);
+    }
+  }
+
+  private async initializeAgentPage(record: BrowserState): Promise<void> {
     if (!this.agentPages || !record.agentPage)
       throw new Error("Agent page host unavailable");
     const page = await this.agentPages.open({
@@ -187,6 +207,7 @@ export class BrowserApplicationService {
       path: record.agentPage.path,
     });
     record.url = page.url;
+    record.error = undefined;
     record.loading = false;
     if (record.agentPage.submission?.status === "sending")
       record.agentPage.submission.status = "uncertain";
@@ -208,36 +229,112 @@ export class BrowserApplicationService {
     this.store.notify();
   }
 
+  private agentPageWorkspace(workspaceId: string, conversationId: string) {
+    const workspace = this.store.workspace(workspaceId);
+    if (this.store.conversation(conversationId).workspaceId !== workspaceId)
+      throw new Error("Page origin must belong to workspace");
+    return workspace;
+  }
+
   async openAgentPage(
     request: OperationRequest,
   ): Promise<{ id: string; paneId: string }> {
-    const workspace = this.store.workspace(
-      requiredString(request, "workspace"),
+    const workspaceId = requiredString(request, "workspace");
+    const conversationId = requiredString(request, "conversation");
+    const refresh = request.refresh;
+    if (
+      refresh !== undefined &&
+      refresh !== true &&
+      refresh !== false &&
+      refresh !== "true" &&
+      refresh !== "false"
+    )
+      throw new Error("refresh must be true or false");
+    this.agentPageWorkspace(workspaceId, conversationId);
+    const filePath = await resolveAgentPageFile(
+      requiredString(request, "path"),
     );
-    const conversation = this.store.conversation(
-      requiredString(request, "conversation"),
+    const identity = JSON.stringify([workspaceId, conversationId, filePath]);
+    const previous = this.agentPageOpens.get(identity);
+    const opening = (
+      previous?.catch(() => undefined) ?? Promise.resolve()
+    ).then(() =>
+      this.showAgentPage(
+        workspaceId,
+        conversationId,
+        filePath,
+        refresh === true || refresh === "true",
+      ),
     );
-    if (conversation.workspaceId !== workspace.id)
-      throw new Error("Page origin must belong to workspace");
-    const filePath = await realpath(requiredString(request, "path"));
+    this.agentPageOpens.set(identity, opening);
+    try {
+      return await opening;
+    } finally {
+      if (this.agentPageOpens.get(identity) === opening)
+        this.agentPageOpens.delete(identity);
+    }
+  }
+
+  private async showAgentPage(
+    workspaceId: string,
+    conversationId: string,
+    filePath: string,
+    refresh: boolean,
+  ): Promise<{ id: string; paneId: string }> {
+    const workspace = this.agentPageWorkspace(workspaceId, conversationId);
+    const matches = this.store.data.browsers.filter(
+      (record) =>
+        record.workspaceId === workspaceId &&
+        record.agentPage?.conversationId === conversationId &&
+        record.agentPage.path === filePath,
+    );
+    const existing =
+      matches.find((record) => record.paneId === workspace.activePaneId) ??
+      matches[0];
+    if (existing) {
+      const alreadyLoaded =
+        this.agentPages?.has(existing.id) &&
+        !this.browserInitializations.has(existing.id);
+      await this.loadAgentPage(existing);
+      if (refresh && alreadyLoaded) await this.agentPages!.refresh(existing.id);
+      return this.store.changeLayout(() => {
+        const workspace = this.agentPageWorkspace(workspaceId, conversationId);
+        if (
+          !this.store.data.browsers.includes(existing) ||
+          !workspace.panes.some(
+            (pane) =>
+              pane.kind === "browser" &&
+              pane.id === existing.paneId &&
+              pane.browserId === existing.id,
+          )
+        )
+          throw new Error("Registered page was closed while opening");
+        this.store.data.activeWorkspaceId = workspaceId;
+        workspace.activePaneId = existing.paneId;
+        normalizeGroups(workspace);
+        return { id: existing.id, paneId: existing.paneId };
+      });
+    }
     const id = randomUUID(),
       paneId = randomUUID();
     const record: BrowserState = {
       id,
       paneId,
-      workspaceId: workspace.id,
+      workspaceId,
       url: "",
       title: path.basename(filePath),
       loading: true,
       visible: false,
       canGoBack: false,
       canGoForward: false,
-      agentPage: { path: filePath, conversationId: conversation.id },
+      agentPage: { path: filePath, conversationId },
     };
     await this.loadAgentPage(record);
     try {
       return await this.store.change(() => {
+        const workspace = this.agentPageWorkspace(workspaceId, conversationId);
         workspace.panes.push({ id: paneId, kind: "browser", browserId: id });
+        this.store.data.activeWorkspaceId = workspaceId;
         workspace.activePaneId = paneId;
         this.store.data.browsers.push(record);
         return { id, paneId };

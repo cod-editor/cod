@@ -18,7 +18,7 @@ export const commands = {
   "review.submit": ["id", "round", "conversation?", "request-id"],
   "review.deliver": ["id", "round"],
   "review.wait": ["id", "round", "timeout-ms?"],
-  "page.open": ["workspace", "conversation", "path"],
+  "page.open": ["workspace", "conversation", "path", "refresh?"],
   "agent-integration.profiles": [],
   "agent-integration.inspect": ["provider", "profile-path"],
   "agent-integration.install": [

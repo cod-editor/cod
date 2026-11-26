@@ -1570,6 +1570,118 @@ test("Desktop connects by SSH alias from Commands and codctl, then reconnects to
   }
 });
 
+test("Opening a local registered page while viewing Linux returns to its existing desktop pane", async () => {
+  test.skip(process.platform !== "linux", "The workspace host runs on Linux");
+  const desktop = new ChatApp();
+  const linux = new ChatApp();
+  await desktop.prepare();
+  await linux.prepare();
+  linux.socket = path.join(linux.data, "cod.sock");
+  linux.environment.COD_SOCKET_PATH = linux.socket;
+  const host = spawn(
+    process.execPath,
+    ["dist/workspace-host.cjs", linux.data],
+    {
+      env: linux.environment,
+      stdio: "ignore",
+    },
+  );
+  const exited = once(host, "exit");
+  try {
+    await expect
+      .poll(async () => (await linux.raw("capabilities")).code)
+      .toBe(0);
+    const remote = await linux.cli<{ id: string }>(
+      "workspace",
+      "create",
+      "--name",
+      "Invented Linux work",
+      "--focus",
+      "true",
+    );
+    const remoteChat = await linux.newChat(remote.id, "codex");
+    await desktop.start();
+    const local = await desktop.create("Invented local artifact work");
+    const chat = await desktop.newChat(local, "codex");
+    const file = path.join(desktop.folders[0], "local-artifact.html");
+    await writeFile(
+      file,
+      "<h1>Local artifact</h1><label>Answer<input></label>",
+    );
+    const openPage = (workspace: string, conversation: string, page = file) => [
+      "page",
+      "open",
+      "--workspace",
+      workspace,
+      "--conversation",
+      conversation,
+      "--path",
+      page,
+    ];
+    const opened = await desktop.cli<{ id: string; paneId: string }>(
+      ...openPage(local, chat.id),
+    );
+    const { url } = await desktop.cli<{ url: string }>(
+      "browser",
+      "inspect",
+      "--id",
+      opened.id,
+    );
+    await expect
+      .poll(() =>
+        desktop
+          .app!.context()
+          .pages()
+          .some((page) => page.url() === url),
+      )
+      .toBe(true);
+    const page = desktop
+      .app!.context()
+      .pages()
+      .find((page) => page.url() === url)!;
+    const answer = page.getByLabel("Answer");
+    await answer.fill("Unsent local form input");
+
+    await installWorkspaceRelay(desktop);
+    await connectWorkspace(desktop, linux.socket);
+    const header = desktop.page.getByRole("button", {
+      name: "Overview",
+      exact: true,
+    });
+    await expect(header).toHaveText("Invented Linux work (invented-linux)");
+    const remoteRequest = await desktop.raw(
+      ...openPage(remote.id, remoteChat.id),
+    );
+    expect(remoteRequest.code).toBe(1);
+    expect(remoteRequest.stderr).toContain("unavailable in a Linux workspace");
+    expect(
+      (await desktop.raw(...openPage(local, chat.id, file + ".missing"))).code,
+    ).toBe(1);
+    await expect(header).toHaveText("Invented Linux work (invented-linux)");
+
+    expect(await desktop.cli(...openPage(local, chat.id))).toEqual(opened);
+    await expect(header).toHaveText("Invented local artifact work");
+    await expect(desktop.pane(opened.paneId)).toBeVisible();
+    await expect(answer).toHaveValue("Unsent local form input");
+    const desktopState = await desktop.page.evaluate(() =>
+      window.cod.invoke<AppState>({ op: "state" }),
+    );
+    expect(desktopState.remoteWorkspace?.connected).toBe(true);
+    expect(
+      desktopState.browsers.filter((browser) => browser.agentPage),
+    ).toHaveLength(1);
+    expect(await desktop.prompts()).toHaveLength(0);
+  } finally {
+    try {
+      await desktop.cleanup();
+    } finally {
+      host.kill("SIGTERM");
+      await exited;
+      await linux.cleanup();
+    }
+  }
+});
+
 test("Linux connection keeps the native browser context and aligns dialog actions", async ({}, info) => {
   const desktop = new ChatApp();
   await desktop.prepare();
