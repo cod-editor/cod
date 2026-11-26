@@ -131,6 +131,18 @@ function jsonPayload(payload: unknown) {
     throw new Error("Form response cannot override page identity");
   return JSON.parse(encoded);
 }
+export async function resolveAgentPageFile(filePath: string): Promise<string> {
+  if (!path.isAbsolute(filePath))
+    throw new Error("An absolute HTML path is required");
+  const file = await realpath(filePath);
+  if (
+    ![".html", ".htm"].includes(path.extname(file).toLowerCase()) ||
+    !(await stat(file)).isFile()
+  )
+    throw new Error("Registered artifact must be HTML");
+  return file;
+}
+
 export class AgentPageService {
   private pages = new Map<string, Record>();
   private hosts = new Map<string, Record>();
@@ -329,12 +341,7 @@ export class AgentPageService {
       throw new Error("Explicit page identity and absolute HTML path required");
     if (this.pages.has(input.id))
       throw new Error("Agent page ID already exists");
-    const file = await realpath(input.path);
-    if (
-      ![".html", ".htm"].includes(path.extname(file).toLowerCase()) ||
-      !(await stat(file)).isFile()
-    )
-      throw new Error("Registered artifact must be HTML");
+    const file = await resolveAgentPageFile(input.path);
     const host = randomUUID(),
       url = `${SCHEME}://${host}/${encodeURIComponent(path.basename(file))}`;
     // Recheck after asynchronous filesystem validation; never replace a concurrent registration.
@@ -416,6 +423,15 @@ export class AgentPageService {
       if (this.pages.get(input.id) === page) this.close(input.id);
       throw error;
     }
+  }
+  has(id: string): boolean {
+    return this.pages.has(id);
+  }
+  async refresh(id: string): Promise<void> {
+    const page = this.page(id);
+    await page.view.webContents.loadURL(page.url, {
+      extraHeaders: "Cache-Control: no-cache\n",
+    });
   }
   snapshot(id: string) {
     const page = this.page(id);

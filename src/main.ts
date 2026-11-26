@@ -531,12 +531,14 @@ async function displayCommand(request: OperationRequest): Promise<unknown> {
     !requestBelongsToHost(operations.snapshot(true), request)
   )
     throw new Error("Select a tab or workspace for this operation");
+  const navigation = workspaceNavigation;
   const result = await operations.dispatch(request, true);
   if (
     remoteView &&
-    ["workspace.focus", "workspace.create", "workspace.reopen"].includes(
+    (["workspace.focus", "workspace.create", "workspace.reopen"].includes(
       request.op,
-    )
+    ) ||
+      (request.op === "page.open" && navigation === workspaceNavigation))
   ) {
     remoteView = undefined;
     showWorkspaceState();
@@ -715,7 +717,10 @@ async function start(): Promise<void> {
         return prepareDesktopWorkspace(request);
       if (desktopWorkspaceOperations.has(request?.op))
         return connectWorkspaceFromCommand(request, false);
-      if (request?.op === "conversation.transfer")
+      if (
+        request?.op === "conversation.transfer" ||
+        request?.op === "page.open"
+      )
         return displayCommand(request);
       return operations.dispatch(request);
     });
