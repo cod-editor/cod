@@ -343,7 +343,12 @@ export interface AppState {
   >;
   completedCodexImports?: Record<
     string,
-    { id: string; paneId: string; nativeId: string }
+    {
+      id: string;
+      paneId: string;
+      nativeId: string;
+      linkedRollout?: { cwd: string; path: string };
+    }
   >;
   /** Desktop connection status. Never written to workspace data. */
   remoteWorkspace?: import("./remote-workspace/protocol").RemoteWorkspaceView;

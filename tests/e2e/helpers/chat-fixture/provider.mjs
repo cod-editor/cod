@@ -40,6 +40,7 @@ const historyDirectory = recording + ".sessions";
 mkdirSync(historyDirectory, { recursive: true });
 const portable = () => provider === "codex" && configuration().portableRollout;
 const rolloutFile = (id) =>
+  configuration().linkedTransfer?.rolloutPath ??
   path.join(
     process.env.CODEX_HOME,
     "sessions",
@@ -264,7 +265,19 @@ function receive(message, external = false) {
     const initialize = () =>
       config.initializeError
         ? process.exit(17)
-        : reply(message, provider === "kimi" ? { protocolVersion: 1 } : {});
+        : reply(
+            message,
+            provider === "kimi"
+              ? { protocolVersion: 1 }
+              : config.linkedTransfer
+                ? {
+                    userAgent:
+                      "cod/" +
+                      config.linkedTransfer.version +
+                      " (invented relay)",
+                  }
+                : {},
+          );
     if (config.initializeDelayMs) later(initialize, config.initializeDelayMs);
     else initialize();
     return;
@@ -355,6 +368,16 @@ function receive(message, external = false) {
     return;
   }
   if (message.method === "thread/turns/list") {
+    if (configuration().linkedTransfer && params.threadId !== nativeId) {
+      const [header, saved] = readFileSync(
+        rolloutFile(params.threadId),
+        "utf8",
+      ).split("\n");
+      if (JSON.parse(header).payload.id !== params.threadId)
+        throw new Error("Unexpected linked transfer history identity");
+      nativeId = params.threadId;
+      history = JSON.parse(saved);
+    }
     if (params.itemsView === "summary") {
       reply(message, {
         data: history.map(({ id, status }) => ({ id, status })),
@@ -448,7 +471,64 @@ function receive(message, external = false) {
         id: message.id,
         error: { code: -32602, message: "Session not found" },
       });
-    else reply(message, { thread: { id: params.threadId, path: file } });
+    else {
+      if (configuration().linkedTransfer) {
+        nativeId = params.threadId;
+        history = JSON.parse(readFileSync(file, "utf8").split("\n")[1]);
+      }
+      reply(message, { thread: { id: params.threadId, path: file } });
+    }
+    return;
+  }
+  if (message.method === "thread/fork" && configuration().linkedTransfer) {
+    const { cwd, failIndex, archivePath, rolloutPath } =
+      configuration().linkedTransfer;
+    if (
+      !params.ephemeral ||
+      !params.excludeTurns ||
+      params.cwd !== cwd ||
+      params.threadId !== nativeId ||
+      params.lastTurnId !== history.at(-1)?.id ||
+      !existsSync(archivePath)
+    )
+      throw new Error("Unexpected linked transfer indexing request");
+    writeFileSync(
+      recording + ".linked-index",
+      JSON.stringify({ id: params.threadId, path: rolloutPath, cwd }),
+    );
+    if (failIndex)
+      write({
+        id: message.id,
+        error: { code: -32000, message: "Invented linked reindex failure" },
+      });
+    else
+      reply(message, {
+        thread: { id: "invented-ephemeral-index", path: null },
+      });
+    return;
+  }
+  if (
+    message.method === "thread/unsubscribe" &&
+    configuration().linkedTransfer
+  ) {
+    if (params.threadId !== "invented-ephemeral-index")
+      throw new Error("Unexpected linked transfer helper identity");
+    reply(message, { status: "unsubscribed" });
+    return;
+  }
+  if (
+    message.method === "thread/list" &&
+    params.useStateDbOnly &&
+    configuration().linkedTransfer
+  ) {
+    const index = recording + ".linked-index";
+    const row = existsSync(index)
+      ? JSON.parse(readFileSync(index, "utf8"))
+      : undefined;
+    reply(message, {
+      data: row && row.cwd === params.cwd ? [row] : [],
+      nextCursor: null,
+    });
     return;
   }
   if (

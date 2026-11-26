@@ -15,7 +15,8 @@ import {
   codexHome,
   codexRolloutChunkBytes,
   validateCodexRolloutManifest,
-  type CodexRolloutFile,
+  codexRolloutSize,
+  type CodexRolloutManifest,
 } from "./codex-rollout";
 
 const maximumStagedTransfers = 4;
@@ -34,7 +35,7 @@ interface TransferBinding {
 
 interface StageRecord {
   binding: TransferBinding;
-  manifest: CodexRolloutFile;
+  manifest: CodexRolloutManifest;
 }
 
 function stagingRoot() {
@@ -73,7 +74,7 @@ function checkBinding(actual: TransferBinding, expected: TransferBinding) {
     throw new Error("The staged session no longer matches this transfer");
 }
 
-export function codexStageDigest(manifest: CodexRolloutFile) {
+export function codexStageDigest(manifest: CodexRolloutManifest) {
   return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
@@ -175,23 +176,24 @@ export async function appendCodexChunk(
   const directory = stagePath(transferId);
   const { binding: actual, manifest } = await readStage(directory);
   checkBinding(actual, binding);
+  const total = codexRolloutSize(manifest);
   if (
     typeof offset !== "number" ||
     !Number.isSafeInteger(offset) ||
     offset < 0 ||
     offset % codexRolloutChunkBytes !== 0 ||
-    offset >= manifest.size ||
+    offset >= total ||
     typeof encoded !== "string" ||
     encoded.length > Math.ceil(codexRolloutChunkBytes / 3) * 4
   )
     throw new Error("Invalid Codex session chunk");
   const bytes = Buffer.from(encoded, "base64");
-  const length = Math.min(codexRolloutChunkBytes, manifest.size - offset);
+  const length = Math.min(codexRolloutChunkBytes, total - offset);
   if (bytes.length !== length || bytes.toString("base64") !== encoded)
     throw new Error("Invalid Codex session chunk");
   const file = chunkPath(directory);
   const size = await uploaded(file);
-  if (size < offset || size > manifest.size)
+  if (size < offset || size > total)
     throw new Error("Codex session chunks arrived out of order");
   const handle = await open(
     file,
@@ -239,7 +241,7 @@ export async function readCodexStage(
   const { binding: actual, manifest } = await readStage(directory);
   checkBinding(actual, binding);
   const file = chunkPath(directory);
-  if ((await uploaded(file)) !== manifest.size)
+  if ((await uploaded(file)) !== codexRolloutSize(manifest))
     throw new Error("The staged Codex session is incomplete");
   return { file, manifest };
 }
