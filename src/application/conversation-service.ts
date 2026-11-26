@@ -1244,18 +1244,32 @@ export class ConversationApplicationService {
     const pending = conversation.claudeSubmission;
     if (!pending) return;
     let saved: boolean | undefined;
-    try {
+    const probe = async () => {
       const history = await readClaudeSession(
         conversation.cwd,
         conversation.nativeId,
       );
-      const unrecorded = object(conversation.metadata).unrecorded === true;
-      if (history?.messages.length || unrecorded)
-        saved =
-          history?.messages.some((row) => row.uuid === pending.messageId) ??
-          false;
+      if (!history?.messages.length)
+        return object(conversation.metadata).unrecorded === true
+          ? false
+          : undefined;
+      return history.messages.some(
+        (row) =>
+          row.type === "user" &&
+          row.session_id === conversation.nativeId &&
+          row.uuid === pending.messageId,
+      );
+    };
+    try {
+      saved = await probe();
+      if (saved !== true && this.controllers.has(conversation.id)) {
+        // A failed response can precede the native transcript flush.
+        await this.disposeController(conversation.id);
+        saved = await probe();
+      }
     } catch {
-      // A read failure cannot establish that the prompt was never saved.
+      // A read or native release failure cannot establish that the prompt was never saved.
+      saved = undefined;
     }
     if (saved === undefined)
       throw new Error(
@@ -1328,6 +1342,12 @@ export class ConversationApplicationService {
     const conversation = this.store.conversation(requiredString(request, "id"));
     if (conversation.transfer)
       throw new Error("Resolve the pending move to Linux first");
+    const awaitNativeReceipt =
+      conversation.provider === "claude" && !fromQueue && !questionId;
+    const submittedDraftVersion =
+      awaitNativeReceipt && typeof request.draftVersion === "string"
+        ? request.draftVersion
+        : undefined;
     const text = typeof request.text === "string" ? request.text : "";
     if (parseProviderCommand(text))
       throw new Error(
@@ -1431,6 +1451,7 @@ export class ConversationApplicationService {
           text,
           images,
           request.writer as string | undefined,
+          submittedDraftVersion,
         );
       });
       this.scheduleQueue(conversation.id);
@@ -1440,8 +1461,18 @@ export class ConversationApplicationService {
     if (!fromQueue) conversation.queuePaused = false;
     this.activeTurns.add(conversation.id);
     try {
-      // Sending is a barrier after pending coalesced composer writes.
-      if (!fromQueue) await this.store.serialize(() => undefined);
+      // Capture the submitted version after pending composer writes and before native startup.
+      const draftVersion = !fromQueue
+        ? await this.store.serialize(() =>
+            awaitNativeReceipt
+              ? (submittedDraftVersion ??
+                this.store.workspace(conversation.workspaceId).chatDrafts?.[
+                  conversation.paneId
+                ]?.version ??
+                "")
+              : undefined,
+          )
+        : undefined;
       const adapter = await this.ensureController(conversation);
       await adapter.resolveSkills(text, skills);
       this.assertCurrent(conversation);
@@ -1464,13 +1495,6 @@ export class ConversationApplicationService {
       conversation.error = undefined;
       conversation.acknowledgedCompletionRevision =
         conversation.completionRevision ?? 0;
-      const awaitNativeReceipt =
-        conversation.provider === "claude" && !fromQueue && !questionId;
-      const draftVersion = awaitNativeReceipt
-        ? (this.store.workspace(conversation.workspaceId).chatDrafts?.[
-            conversation.paneId
-          ]?.version ?? "")
-        : undefined;
       const clearDraft = () =>
         this.clearSubmittedDraft(
           conversation,
