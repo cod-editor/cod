@@ -22,7 +22,7 @@ Run `codctl context` for the owning conversation, workspace, folders and locatio
 ## Chats and terminals
 
 - Inspect with `conversation inspect --id ID` or use `conversation native-inspect` for provider metadata. Use `conversation options` for available model and reasoning values, and leave authentication to the native provider.
-- Use `conversation create --workspace ID --provider codex|kimi --cwd PATH` for a new chat. Discover an existing session with `conversation discover` and resume it with its native ID and cwd. Opening a saved chat sends no message. Keep a single controller per native session.
+- Use `conversation create --workspace ID --provider codex|claude|kimi --cwd PATH` for a new chat. Discover an existing session with `conversation discover` and resume it with its native ID and cwd. Opening a saved chat sends no message. Keep a single controller per native session.
 - `conversation send --id ID --text TEXT` submits one turn. Images use `--images-file` with a JSON array of `{mimeType,data,name?}` and base64 data, up to eight and 20 MiB total. Check native history before retrying a send or tool result whose delivery is uncertain.
 - Handoff requires an idle chat. `conversation handoff` gives the native CLI ownership in an owned terminal. Exit that CLI before `conversation reclaim`. A completed handoff is never proof that a new prompt ran.
 - `terminal write --id ID --data TEXT` sends the supplied text without an implicit newline. Inspect the terminal for status and bounded output. Detached chat agents and Linux-owned processes have a separate lifetime from desktop terminal tabs.
