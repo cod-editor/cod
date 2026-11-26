@@ -1705,6 +1705,25 @@ browser-action-list::part(action):focus-visible {
   text-align: right;
   user-select: none;
 }
+.review-source-wrap .review-source-width {
+  width: 100%;
+}
+.review-source-wrap .review-source-editor {
+  background: linear-gradient(
+    to right,
+    var(--panel) var(--review-gutter-width),
+    transparent var(--review-gutter-width)
+  );
+}
+.review-source-wrap .review-source-line {
+  padding-left: var(--review-gutter-width);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-source-wrap .review-source-line::before {
+  position: absolute;
+  top: 0;
+}
 .review-source-gutter {
   position: sticky;
   left: 0;

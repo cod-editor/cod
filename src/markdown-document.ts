@@ -2,6 +2,11 @@ import { Marked, type TokensList } from "marked";
 import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 
 const parser = new Marked({ renderer: { html: () => "" } });
+
+export function isMarkdownDocument(path: string): boolean {
+  return /\.md(?:own|arkdown)?$/i.test(path);
+}
+
 export interface MarkdownBlock {
   html: string;
   text: string;

@@ -2402,14 +2402,151 @@ test("Inline source comments keep their anchor, quote and caret when a pane narr
   expect((await inspect(review)).rounds[0].submission).toBeUndefined();
 });
 
+test("Markdown document Review wraps long source at the pane edge and keeps logical anchors", async ({}, info) => {
+  const prose = "A readable paragraph stays in view as its pane gets narrower. "
+    .repeat(3)
+    .trim();
+  const table = `| Review outcome | ${"inventedOutcome".repeat(10)} |`;
+  const lines = [
+    "# Invented review",
+    "",
+    prose,
+    "",
+    "| Scenario | Expected result |",
+    "| --- | --- |",
+    table,
+    "",
+    "## End of review",
+    "A last line below the table.",
+  ];
+  await writeFile(shell.file, lines.join("\n"));
+  const review = await open(await shell.create("Wrapped Markdown review"));
+  const host = pane(review);
+  const editor = source(review);
+  const viewport = host.locator(".review-body");
+  const text = editor.locator(".review-source-text");
+  const paragraph = text.nth(2);
+  const tableRow = text.nth(6);
+  await expect(text).toHaveCount(lines.length);
+  expect(await text.allTextContents()).toEqual(lines);
+  await shell.page.setViewportSize({ width: 920, height: 710 });
+  const edge = async (target: Locator) =>
+    target.evaluate((element) => {
+      const region = element.closest(".review-body")!;
+      const bounds = region.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()];
+      return {
+        rightOverflow:
+          Math.max(...rects.map(({ right }) => right)) -
+          (bounds.left + region.clientWidth),
+        rows: new Set(rects.map(({ top }) => top)).size,
+        scrollOverflow: region.scrollWidth - region.clientWidth,
+      };
+    });
+  await host.screenshot({
+    path: info.outputPath("markdown-source-short-review.png"),
+  });
+  for (const line of [paragraph, tableRow]) {
+    const result = await edge(line);
+    expect(result.rightOverflow).toBeLessThanOrEqual(1);
+    expect(result.rows).toBeGreaterThan(1);
+    expect(result.scrollOverflow).toBe(0);
+  }
+  await text.last().scrollIntoViewIfNeeded();
+  await expect(text.last()).toBeInViewport();
+  await viewport.evaluate((node) => (node.scrollTop = 0));
+
+  // Start just before the first visual wrap and extend with normal keyboard input.
+  await editor.focus();
+  const start = await paragraph.evaluate((row) => {
+    const text = row.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 1);
+    const top = range.getBoundingClientRect().top;
+    for (let offset = 1; offset < text.textContent!.length; offset++) {
+      range.setStart(text, offset);
+      range.setEnd(text, offset + 1);
+      if (range.getBoundingClientRect().top > top) {
+        const start = offset - 4;
+        getSelection()!.setBaseAndExtent(text, start, text, start);
+        return start;
+      }
+    }
+    throw new Error(
+      "The paragraph must wrap before selecting across its visual lines",
+    );
+  });
+  for (let index = 0; index < 12; index++)
+    await shell.page.keyboard.press("Shift+ArrowRight");
+  const quote = prose.slice(start, start + 12);
+  expect(await editor.evaluate(() => getSelection()!.toString())).toBe(quote);
+  await shell.page.keyboard.press(`${modifier}+C`);
+  await expect
+    .poll(() => shell.app!.evaluate(({ clipboard }) => clipboard.readText()))
+    .toBe(quote);
+  await shell.page.keyboard.press(`${modifier}+Shift+M`);
+  const form = editor.locator(
+    '[data-source-line="3"] + .review-comment-editor',
+  );
+  await expect(
+    form.getByRole("textbox", { name: "Comment", exact: true }),
+  ).toBeFocused();
+  await expect(form.locator("blockquote")).toHaveText(quote);
+  await form
+    .getByRole("textbox", { name: "Comment", exact: true })
+    .fill("Keep this phrase together");
+  await form.getByRole("button", { name: "Save comment", exact: true }).click();
+  const card = editor.locator('[data-source-line="3"] + .review-comment');
+  await expect(card.locator(".review-anchor-label")).toHaveText(" / Line 3");
+  await expect(card.locator("blockquote")).toHaveText(quote);
+  await expect(card).toContainText("Keep this phrase together");
+  await shell.page.setViewportSize({ width: 800, height: 710 });
+  await expect(card).toBeVisible();
+  expect((await edge(tableRow)).scrollOverflow).toBe(0);
+  await host.screenshot({
+    path: info.outputPath("markdown-source-short-review-comment.png"),
+  });
+  await host
+    .getByRole("button", { name: "Preview Markdown", exact: true })
+    .click();
+  await expect(
+    host.getByRole("document", { name: "Review preview" }).getByRole("table"),
+  ).toBeVisible();
+  await host.getByRole("button", { name: "Show source", exact: true }).click();
+  await expect(card).toContainText("Keep this phrase together");
+  const logicalTable = editor.locator('[data-source-line="7"]');
+  await logicalTable.hover({ position: { x: 100, y: 45 } });
+  const gutter = host.getByRole("button", {
+    name: "Add comment to line 7",
+    exact: true,
+  });
+  await expect(gutter).toBeVisible();
+  await shell.page.setViewportSize({ width: 920, height: 710 });
+  await expect
+    .poll(async () =>
+      Math.abs(
+        (await gutter.boundingBox())!.y - (await logicalTable.boundingBox())!.y,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+  await gutter.click();
+  await expect(
+    logicalTable.locator("+ .review-comment-editor blockquote"),
+  ).toHaveText(table);
+});
+
 test("Document Review scrolls long lines at the bottom and opens comments from the gutter", async ({}, info) => {
   const lines = Array.from({ length: 75 }, (_, index) =>
     index === 3
       ? "Invented long review line ".repeat(40)
       : `Invented line ${index + 1}`,
   );
-  await writeFile(shell.file, lines.join("\n"));
-  const review = await open(await shell.create("Inline source review"));
+  const file = path.join(path.dirname(shell.file), "source.txt");
+  await writeFile(file, lines.join("\n"));
+  const review = await open(await shell.create("Inline source review"), file);
   const host = pane(review);
   const viewport = host.locator(".review-body");
   const line = host.locator('[data-source-line="4"]');
