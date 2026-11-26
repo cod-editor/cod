@@ -100,6 +100,7 @@ export function createKeyboardNavigation(
   async function focusActiveContent(
     id: string,
     intent = beginFocus(),
+    matchesPane: (pane: PaneState) => boolean = () => true,
   ): Promise<void> {
     const expectedWorkspace = workspace()?.id;
     if (!expectedWorkspace) return;
@@ -113,7 +114,8 @@ export function createKeyboardNavigation(
         return false;
       const pane = active?.panes.find((pane) => pane.id === id);
       if (!pane && existed) return false;
-      if (!pane || active?.activePaneId !== id) return undefined;
+      if (!pane || active?.activePaneId !== id || !matchesPane(pane))
+        return undefined;
       return visible(panes.querySelector<HTMLElement>(`[data-pane-id="${id}"]`))
         ? true
         : undefined;

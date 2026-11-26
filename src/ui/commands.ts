@@ -949,25 +949,27 @@ export function createCommands(
     form.requestSubmit();
   }
 
-  function terminalDialog(target?: { workspace: string; pane: string }): void {
+  async function terminalDialog(
+    target?: { workspace: string; pane: string },
+    intent = keys.beginFocus(),
+  ): Promise<void> {
     const workspace = target
       ? getState().workspaces.find((item) => item.id === target.workspace)
       : activeWorkspace();
     if (!workspace) return;
-    void invoke<{ paneId: string }>("terminal.open", {
-      workspace: workspace.id,
-      ...(target ? { replacePane: target.pane } : {}),
-    })
-      .then((terminal) =>
-        requestAnimationFrame(() =>
-          panes
-            .querySelector<HTMLTextAreaElement>(
-              `[data-pane-id="${terminal.paneId}"] .xterm-helper-textarea`,
-            )
-            ?.focus(),
-        ),
-      )
-      .catch(() => {});
+    const terminal = await invoke<{ id: string; paneId: string }>(
+      "terminal.open",
+      {
+        workspace: workspace.id,
+        ...(target ? { replacePane: target.pane } : {}),
+      },
+    ).catch(() => undefined);
+    if (terminal && activeWorkspace()?.id === workspace.id)
+      await keys.focusActiveContent(
+        terminal.paneId,
+        intent,
+        (pane) => pane.kind === "terminal" && pane.terminalId === terminal.id,
+      );
   }
 
   let choosingFolder = false;
@@ -1444,7 +1446,7 @@ export function createCommands(
             await chats.stop(pane.conversationId);
           break;
         case "terminal.new":
-          terminalDialog();
+          await terminalDialog(undefined, focusIntent);
           break;
         case "browser.new":
           browserDialog();

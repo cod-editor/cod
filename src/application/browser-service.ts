@@ -527,10 +527,16 @@ export class BrowserApplicationService {
     contents.on("before-mouse-event", (event, input) => {
       if (input.type === "mouseDown") this.addressOverlay?.dismiss();
       const modal = this.modalPresentation;
-      if (!modal) return;
-      event.preventDefault();
-      if (input.type === "mouseDown" || input.type === "mouseUp")
-        this.focusShellModal(modal.opening);
+      if (modal) {
+        event.preventDefault();
+        if (input.type === "mouseDown" || input.type === "mouseUp")
+          this.focusShellModal(modal.opening);
+        return;
+      }
+      // Clicking a page can select its pane even if Chromium already owns
+      // keyboard focus and therefore does not emit another focus event.
+      if (input.type === "mouseDown")
+        setImmediate(() => this.syncNativeFocus(contents, id));
     });
     contents.on("before-input-event", (event, input) => {
       if (this.modalPresentation !== undefined) {

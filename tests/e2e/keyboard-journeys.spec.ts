@@ -2166,7 +2166,12 @@ test("Positional pane commands ignore tab content and restore hidden sides witho
   }
 });
 
-for (const replacement of ["none", "keyboard", "native"] as const) {
+for (const replacement of [
+  "none",
+  "keyboard",
+  "native",
+  "already focused native",
+] as const) {
   const cancelled = replacement !== "none";
   test(`A hidden chat ${cancelled ? `does not steal focus after newer ${replacement} navigation` : "regains native keyboard focus when its selection snapshot follows the operation reply"}`, async () => {
     const app = new ChatApp();
@@ -2331,27 +2336,40 @@ for (const replacement of ["none", "keyboard", "native"] as const) {
             ),
           )
           .toBe(true);
-      } else if (replacement === "native") {
-        await app.app!.evaluate(({ webContents }, url) => {
-          const contents = webContents
-            .getAllWebContents()
-            .find((c) => c.getURL() === url)!;
-          contents.focus();
-          contents.sendInputEvent({
-            type: "mouseDown",
-            x: 30,
-            y: 35,
-            button: "left",
-            clickCount: 1,
-          });
-          contents.sendInputEvent({
-            type: "mouseUp",
-            x: 30,
-            y: 35,
-            button: "left",
-            clickCount: 1,
-          });
-        }, url);
+      } else if (
+        replacement === "native" ||
+        replacement === "already focused native"
+      ) {
+        await app.app!.evaluate(
+          ({ webContents }, { url, alreadyFocused }) => {
+            const contents = webContents
+              .getAllWebContents()
+              .find((c) => c.getURL() === url)!;
+            if (alreadyFocused) {
+              // A click in already-focused Chromium need not emit another
+              // focus event. Exercise the pointer path independently.
+              contents.removeAllListeners("focus");
+            }
+            contents.focus();
+            if (alreadyFocused && !contents.isFocused())
+              throw new Error("Native page must already own keyboard focus");
+            contents.sendInputEvent({
+              type: "mouseDown",
+              x: 30,
+              y: 35,
+              button: "left",
+              clickCount: 1,
+            });
+            contents.sendInputEvent({
+              type: "mouseUp",
+              x: 30,
+              y: 35,
+              button: "left",
+              clickCount: 1,
+            });
+          },
+          { url, alreadyFocused: replacement === "already focused native" },
+        );
         await expect
           .poll(() =>
             app.app!.evaluate(() => (globalThis as any).latestSelectedPane),

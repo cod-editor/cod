@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { WorkspaceApp, modifier, tabTo } from "./helpers/workspace-app";
 import type { AppState } from "../../src/types";
 
@@ -89,6 +90,39 @@ async function foreground(id: string) {
 
 test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and three TTY descriptors", async ({}, info) => {
   const workspace = await shell.create("Terminal UI fixture");
+  await shell.app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents;
+    const send = contents.send.bind(contents);
+    let pending: unknown[] | undefined;
+    let holding = true;
+    Object.assign(globalThis, {
+      terminalOpenReplied: false,
+      releaseTerminalState: () => {
+        holding = false;
+        if (pending) send("cod:state", ...pending);
+      },
+    });
+    contents.send = function (channel, ...args) {
+      if (channel === "cod:state" && holding && args[0]?.terminals?.length) {
+        pending = args;
+        return;
+      }
+      send(channel, ...args);
+    };
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+      }
+    )._invokeHandlers;
+    const original = handlers.get("cod:invoke")!;
+    ipcMain.removeHandler("cod:invoke");
+    ipcMain.handle("cod:invoke", async (event, request) => {
+      const result = await original(event, request);
+      if (request.op === "terminal.open")
+        Object.assign(globalThis, { terminalOpenReplied: true });
+      return result;
+    });
+  });
   await shell.page.keyboard.press(`${modifier}+Shift+P`);
   await shell.page
     .getByRole("button", { name: "New terminal", exact: true })
@@ -105,6 +139,19 @@ test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and thr
     (item) => item.workspaceId === workspace,
   )!;
   expect(terminal).toBeDefined();
+  await expect
+    .poll(() =>
+      shell.app!.evaluate(() => (globalThis as any).terminalOpenReplied),
+    )
+    .toBe(true);
+  await expect(shell.page.locator(".xterm")).toHaveCount(0);
+  await shell.page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await shell.app!.evaluate(() => (globalThis as any).releaseTerminalState());
   await ready(terminal.id);
   await expect(shell.pane(terminal.paneId).locator(".xterm")).toBeVisible();
   await expect(input(terminal.paneId)).toBeFocused();
@@ -123,6 +170,56 @@ test("T1 AC1 creates UI and CLI terminals with real xterm keyboard input and thr
   expect(second.id).not.toBe(terminal.id);
   expect((await inspect(second.id)).cwd).toBe(shell.folders[1]);
   await shell.page.screenshot({ path: info.outputPath("real-terminals.png") });
+});
+
+test("New terminal takes keyboard focus from a browser command palette", async () => {
+  const workspace = await shell.create("Terminal from browser");
+  const file = path.join(shell.folders[0], "terminal-origin.html");
+  await writeFile(file, "<title>Local terminal fixture</title>");
+  const url = pathToFileURL(file).href;
+  const record = await shell.cli<{ id: string }>(
+    "browser",
+    "open",
+    "--workspace",
+    workspace,
+    "--url",
+    url,
+  );
+  await expect
+    .poll(
+      async () =>
+        (
+          await shell.cli<{ visible: boolean }>(
+            "browser",
+            "inspect",
+            "--id",
+            record.id,
+          )
+        ).visible,
+    )
+    .toBe(true);
+  await shell.app!.evaluate(({ webContents }, url) => {
+    const browser = webContents
+      .getAllWebContents()
+      .find((view) => view.getURL() === url)!;
+    browser.focus();
+    const modifiers: Electron.KeyboardInputEvent["modifiers"] = [
+      process.platform === "darwin" ? "meta" : "control",
+      "shift",
+    ];
+    browser.sendInputEvent({ type: "keyDown", keyCode: "P", modifiers });
+    browser.sendInputEvent({ type: "keyUp", keyCode: "P", modifiers });
+  }, url);
+  await shell.page
+    .getByRole("button", { name: "New terminal", exact: true })
+    .click();
+  const terminals = async () =>
+    (await shell.cli<{ terminals: Terminal[] }>("state")).terminals.filter(
+      (item) => item.workspaceId === workspace,
+    );
+  await expect.poll(terminals).toHaveLength(1);
+  const [terminal] = await terminals();
+  await expect(input(terminal.paneId)).toBeFocused();
 });
 
 test("terminal input preserves Cyrillic when Cod starts without a locale", async ({}, info) => {
