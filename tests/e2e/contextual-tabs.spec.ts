@@ -204,31 +204,40 @@ test("New typing during an untitled save becomes a normal unsaved file revision"
   await expect(editor(id)).toHaveValue("const before = 1; // newer");
   await expect(app.pane(id).locator(".pane-message")).toHaveCount(0);
   expect(await readFile(target, "utf8")).toBe("const before = 1;");
-  await editor(id).evaluate((element) => {
-    Object.assign(globalThis, { syntaxFrames: [] });
-    element.addEventListener("input", () => {
-      (globalThis as any).syntaxFrames.push(
-        element
-          .closest(".highlighted-editor")!
-          .querySelectorAll(".hljs-keyword").length,
-      );
-    });
-  });
+  const finalText = "const before = 1; // newer\nconst next = 2;";
+  await editor(id).evaluate((element, text) => {
+    const editor = element as HTMLTextAreaElement;
+    const wrapper = editor.closest(".highlighted-editor")!;
+    Object.assign(globalThis, { savedEditorSyntaxFrame: null });
+    const sampleFirstFrame = () => {
+      if (editor.value !== text) return;
+      editor.removeEventListener("input", sampleFirstFrame);
+      // The editor queues its own paint from input before this listener.
+      requestAnimationFrame(() => {
+        (globalThis as any).savedEditorSyntaxFrame = {
+          text: wrapper.querySelector(".editor-colors")!.textContent,
+          keywords: Array.from(
+            wrapper.querySelectorAll(".hljs-keyword"),
+            (token) => token.textContent,
+          ),
+        };
+      });
+    };
+    editor.addEventListener("input", sampleFirstFrame);
+  }, finalText);
   await editor(id).press("End");
   await editor(id).press("Enter");
   await editor(id).pressSequentially("const next = 2;");
-  expect(
-    await app.page.evaluate(() => (globalThis as any).syntaxFrames.at(-1)),
-  ).toBe(2);
-  await editor(id).press(`${modifier}+s`);
   await expect
-    .poll(() => readFile(target, "utf8"))
-    .toBe("const before = 1; // newer\nconst next = 2;");
+    .poll(() =>
+      app.page.evaluate(() => (globalThis as any).savedEditorSyntaxFrame),
+    )
+    .toEqual({ text: finalText + "\n", keywords: ["const", "const"] });
+  await editor(id).press(`${modifier}+s`);
+  await expect.poll(() => readFile(target, "utf8")).toBe(finalText);
   await app.stop();
   await app.start();
-  await expect(editor(id)).toHaveValue(
-    "const before = 1; // newer\nconst next = 2;",
-  );
+  await expect(editor(id)).toHaveValue(finalText);
 });
 
 async function active() {
