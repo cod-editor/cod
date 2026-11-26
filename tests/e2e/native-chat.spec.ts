@@ -137,6 +137,121 @@ test("Routine collaboration stays in ordered activity details through completion
   );
 });
 
+test("Markdown file links resolve encoded Unicode without changing literal paths", async ({}, info) => {
+  await shell.configure({ codex: { finalOnly: true } });
+  const workspace = await shell.create("Invented Markdown reference workspace");
+  const chat = await shell.newChat(workspace, "codex");
+  const folder = shell.folders[0];
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const file = path.join(folder, "заметка #1.md");
+  const encoded = file.split("/").map(encodeURIComponent).join("/");
+  const literal = path.join(folder, "literal%20name.md");
+  const malformed = "malformed-%D0.md";
+  const escapedBoundary = "hidden%2Fnote.md";
+  const escapedDrive = "C%3A/document.md";
+  const contents = "First invented line\nSecond invented line\n";
+  await Promise.all([
+    mkdir(path.join(folder, "hidden")),
+    mkdir(path.join(folder, "C:")),
+  ]);
+  await Promise.all([
+    writeFile(file, contents),
+    writeFile(literal, "Literal percent file"),
+    writeFile(path.join(folder, "literal name.md"), "Decoded twin"),
+    writeFile(path.join(folder, "hidden", "note.md"), "Unexpected target"),
+    writeFile(
+      path.join(folder, "C:", "document.md"),
+      "Unexpected drive target",
+    ),
+  ]);
+
+  await shell.send(
+    chat.id,
+    [
+      `[Open encoded note](${encoded}:2)`,
+      `[Open literal percent name](literal%20name.md)`,
+      `[Malformed reference](${malformed})`,
+      `[Escaped separator](${escapedBoundary})`,
+      `[Escaped drive](${escapedDrive})`,
+    ].join("\n\n"),
+  );
+  const reply = transcript(chat).locator(".chat-message.assistant");
+  const link = (name: string) => reply.getByRole("link", { name, exact: true });
+  const target = () =>
+    shell.page.getByRole("textbox", { name: "File contents" });
+  const statusText = shell.page.locator("#status");
+  await link("Open encoded note").focus();
+  await expect(link("Open encoded note")).toBeFocused();
+  await shell.page.keyboard.press("Enter");
+  await expect(target()).toHaveValue(contents);
+  await expect(target()).toBeFocused();
+  await expect
+    .poll(() =>
+      target().evaluate((editor: HTMLTextAreaElement) => editor.selectionStart),
+    )
+    .toBe(contents.indexOf("\n") + 1);
+  await shell.page.screenshot({
+    path: info.outputPath("encoded-file-reference.png"),
+  });
+
+  await link("Open literal percent name").click();
+  await expect(target()).toHaveValue("Literal percent file");
+  for (const [name, reference] of [
+    ["Malformed reference", malformed],
+    ["Escaped separator", escapedBoundary],
+    ["Escaped drive", escapedDrive],
+  ]) {
+    await link(name).click();
+    await expect(statusText).toHaveText(`File not found: ${reference}`);
+    await expect(target()).toHaveValue("Literal percent file");
+  }
+  expect(
+    await shell.cli(
+      "file",
+      "resolve",
+      "--workspace",
+      workspace,
+      "--path",
+      encoded,
+    ),
+  ).toEqual({ candidates: [] });
+  expect(
+    await shell.cli(
+      "file",
+      "resolve",
+      "--workspace",
+      workspace,
+      "--path",
+      literal,
+    ),
+  ).toEqual({ candidates: [{ path: literal }] });
+
+  const previewLink = "Open encoded reference from preview";
+  const index = path.join(folder, "reference-index.md");
+  await writeFile(
+    index,
+    `[${previewLink}](${encodeURIComponent(path.basename(file))}:2)`,
+  );
+  await shell.cli("file", "open", "--workspace", workspace, "--path", index);
+  await shell.page
+    .getByRole("button", { name: "Preview Markdown", exact: true })
+    .click();
+  await shell.page
+    .getByRole("region", { name: "Markdown preview", exact: true })
+    .locator("iframe")
+    .contentFrame()
+    .getByRole("link", { name: previewLink, exact: true })
+    .click();
+  await expect(target()).toHaveValue(contents);
+});
+
 test("Assistant visualization links open sandboxed HTML beside the chat", async ({}, info) => {
   await shell.configure({ codex: { finalOnly: true } });
   const source = await shell.create("Original visualization workspace");

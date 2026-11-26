@@ -13,6 +13,30 @@ import type { createPaneLayout } from "./pane-layout";
 import type { createFocusManager } from "./focus";
 import type { FileTree } from "./files";
 import type { createCommands } from "./commands";
+
+function decodedFileReference(reference: string): string | undefined {
+  if (!/%[\da-f]{2}/i.test(reference)) return;
+  try {
+    const parts = reference.split("/");
+    const decoded = parts.map((part) => decodeURIComponent(part));
+    // An escaped filename must not change the path separators or root.
+    if (
+      decoded.some(
+        (part, index) =>
+          part !== parts[index] &&
+          (/[/\\\x00-\x1f\x7f]/.test(part) || part === "." || part === ".."),
+      )
+    )
+      return;
+    const path = decoded.join("/");
+    const explicitRoot = /^(?:~\/|[a-z]:)/i;
+    if (explicitRoot.test(path) && !explicitRoot.test(reference)) return;
+    return path;
+  } catch {
+    return;
+  }
+}
+
 interface Views {
   chatOpen: ReturnType<typeof createCommands>["chatOpen"];
   newTab: (workspace: WorkspaceState, pane: PaneState) => HTMLElement;
@@ -428,14 +452,24 @@ export function createWorkspaceView(
       await chat.open("browser.open", { url: reference });
       return;
     }
-    const result = await invoke<{
-      candidates: Array<{ path: string }>;
-      line?: number;
-    }>("file.resolve", {
-      workspace,
-      path: reference,
-      ...(kind === "visualization" && { workspaceOnly: true }),
-    });
+    const resolve = (path: string) =>
+      invoke<{
+        candidates: Array<{ path: string }>;
+        line?: number;
+      }>("file.resolve", {
+        workspace,
+        path,
+        ...(kind === "visualization" && { workspaceOnly: true }),
+      });
+    let result = await resolve(reference);
+    if (!kind && !result.candidates.length) {
+      const decoded = decodedFileReference(reference);
+      if (decoded) {
+        const fallback = await resolve(decoded);
+        if (fallback.line === result.line || fallback.line === undefined)
+          result = fallback;
+      }
+    }
     if (kind === "visualization") {
       const path = result.candidates[0]?.path;
       if (!chat || !path || !/\.html?$/i.test(path) || result.line)
