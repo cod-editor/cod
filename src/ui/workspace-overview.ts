@@ -17,7 +17,13 @@ import {
 } from "../ui-kit";
 import { confirmAction } from "./dialogs";
 import { menu } from "./controls";
-import { commands, formatBinding, resolveKeybinding } from "../keyboard";
+import {
+  commands,
+  formatBinding,
+  isCloseCommand,
+  resolveKeybinding,
+  type CommandId,
+} from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { showActionError } from "./action-feedback";
 import { conversationRemovalReason } from "../conversation-actions";
@@ -49,6 +55,7 @@ export function createWorkspaceOverview(
     openPane: (workspace: string, pane: string) => Promise<void>;
     fallback: () => Promise<void>;
     stageBrowserBackdrop: (dialog: HTMLDialogElement) => Promise<void>;
+    removeConversation: (id: string) => Promise<void>;
   },
 ) {
   let current:
@@ -57,7 +64,7 @@ export function createWorkspaceOverview(
         refresh: () => void;
         cancel: () => void;
         rename: (key: string) => void;
-        closeFromSearch: () => void;
+        closeFromSearch: (id: CommandId) => void;
       }
     | undefined;
   function toggle(renameKey?: string, showClosed = false): void {
@@ -275,10 +282,18 @@ export function createWorkspaceOverview(
           (selected.kind === "workspace" || selected.kind === "conversation")
         )
           hints.push(["Rename", renameBinding]);
-        const action = closeAction(selected);
-        if (action) {
+        const actions = ["tab.close", "conversation.remove"] as const;
+        for (const id of actions) {
+          const action = closeAction(selected, id);
+          // Ordinary tabs and workspaces use the same reversible action for
+          // both shortcuts. Show their ordinary close hint once.
+          if (
+            !action ||
+            (id === "conversation.remove" && selected.kind !== "conversation")
+          )
+            continue;
           const close = commands
-            .find((command) => command.id === "tab.close")
+            .find((command) => command.id === id)
             ?.bindings.filter(
               (binding) =>
                 (!binding.platform || binding.platform === keyboardPlatform) &&
@@ -308,30 +323,31 @@ export function createWorkspaceOverview(
         }),
       );
     }
-    function closeAction(item: NavigationItem | undefined) {
+    function closeAction(item: NavigationItem | undefined, id: CommandId) {
       if (!item || item.closed) return;
       if (item.kind === "workspace") return "Close workspace";
       const state = getState();
+      if (id === "conversation.remove" && item.kind === "conversation") {
+        const conversation = state.conversations.find(
+          (chat) => chat.id === item.id,
+        );
+        if (conversation && !conversationRemovalReason(state, conversation))
+          return "Remove from workspace";
+        return;
+      }
       const pane = state.workspaces
         .find((workspace) => workspace.id === item.workspaceId)
         ?.panes.find((pane) => pane.id === item.paneId);
-      if (pane) return pane.pinned ? undefined : "Close tab";
-      if (item.kind !== "conversation") return;
-      const conversation = state.conversations.find(
-        (chat) => chat.id === item.id,
-      );
-      if (conversation && !conversationRemovalReason(state, conversation))
-        return "Remove from workspace";
+      if (pane && !pane.pinned) return "Close tab";
     }
-    async function closeSelected() {
+    async function closeSelected(id: CommandId) {
       const item = find();
-      const action = closeAction(item);
-      if (!item || !action || closing) return;
+      if (!item || !closeAction(item, id) || closing) return;
       closing = true;
       dialog.querySelector(".action-error")?.remove();
       try {
-        if (action === "Remove from workspace")
-          await invoke("conversation.remove", { id: item.id });
+        if (id === "conversation.remove" && item.kind === "conversation")
+          await destinations.removeConversation(item.id);
         else await navigation.close(item);
         refresh();
       } catch (error) {
@@ -340,8 +356,8 @@ export function createWorkspaceOverview(
         closing = false;
       }
     }
-    function closeFromSearch() {
-      if (document.activeElement === input && !edit) void closeSelected();
+    function closeFromSearch(id: CommandId) {
+      if (document.activeElement === input && !edit) void closeSelected(id);
     }
     function actions(
       item: NavigationItem,
@@ -653,7 +669,7 @@ export function createWorkspaceOverview(
           event.metaKey === (keyboardPlatform === "darwin");
         const match = resolveKeybinding(event, keyboardPlatform, "shell");
         if (!(
-          match?.command === "tab.close" ||
+          isCloseCommand(match?.command) ||
           (searchFocused && modifiedEnter)
         ))
           return;
@@ -661,8 +677,8 @@ export function createWorkspaceOverview(
         event.stopImmediatePropagation();
         if (!searchFocused || event.repeat) return;
         if (renameChord && selectedKey) renameSelected(selectedKey);
-        else if (match?.command === "tab.close" && match.dispatch)
-          closeFromSearch();
+        else if (isCloseCommand(match?.command) && match.dispatch)
+          closeFromSearch(match.command);
       },
       true,
     );
@@ -754,13 +770,13 @@ export function createWorkspaceOverview(
     openClosed: () => toggle(undefined, true),
     rename: (key: string) => toggle(key),
     refresh: () => current?.refresh(),
-    handleCloseShortcut: () => {
+    handleCloseShortcut: (id: CommandId) => {
       if (
         !current?.dialog.open ||
         [...document.querySelectorAll("dialog[open]")].at(-1) !== current.dialog
       )
         return false;
-      current.closeFromSearch();
+      current.closeFromSearch(id);
       return true;
     },
     isOpen: () => !!current,

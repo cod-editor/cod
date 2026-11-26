@@ -26,6 +26,7 @@ import { createFilesFocusToggle } from "./files-focus";
 import {
   commands as commandDefinitions,
   isPlainEscape,
+  isCloseCommand,
   resolveKeybinding,
   formatShortcut,
   type CommandId,
@@ -95,6 +96,7 @@ interface CommandFeatures {
   };
   chat: {
     send: (id: string) => Promise<void>;
+    waitForDraftSave: (id: string) => Promise<void>;
     stop: (id: string) => Promise<void>;
     dismissBackground: (target: Element) => boolean;
     integration: () => void;
@@ -178,6 +180,7 @@ export function createCommands(
     },
     {
       stageBrowserBackdrop: features.stageBrowserBackdrop,
+      removeConversation,
       fallback: async () => {
         const intent = keys.beginFocus();
         const pane = activeWorkspace()?.panes.find(
@@ -367,6 +370,13 @@ export function createCommands(
     dialog.showModal();
     input.focus();
   }
+  async function removeConversation(id: string) {
+    await chats.waitForDraftSave(id);
+    await invoke("conversation.remove", { id });
+    const next = activeWorkspace()?.activePaneId;
+    if (next && document.activeElement === document.body)
+      await keys.focusActiveContent(next);
+  }
   function conversationActions(
     conversation: ConversationState,
     renameOverride?: () => void,
@@ -388,13 +398,9 @@ export function createCommands(
         removalReason ??
         "Keep the native session history. Undo with Reopen closed tab.",
       run: () => {
-        void invoke("conversation.remove", { id: conversation.id })
-          .then(() => {
-            const next = activeWorkspace()?.activePaneId;
-            if (next && document.activeElement === document.body)
-              void keys.focusActiveContent(next);
-          })
-          .catch(() => undefined);
+        void removeConversation(conversation.id).catch((error) =>
+          setStatus(error instanceof Error ? error.message : String(error)),
+        );
       },
     };
     if (conversation.handoffTerminalId) {
@@ -1082,6 +1088,12 @@ export function createCommands(
       ].includes(id)
     )
       return;
+    if (
+      id === "conversation.remove" &&
+      !conversation &&
+      pane?.kind !== "conversation"
+    )
+      return pane ? undefined : "Select a tab first";
     if (id.startsWith("conversation.")) {
       if (!conversation) return "Select a conversation first";
       const action = conversationCommand(id, conversation);
@@ -1219,12 +1231,12 @@ export function createCommands(
     context?: CommandContext,
   ): Promise<void> {
     // macOS forwards Close tab from Electron before the DOM key handler runs.
-    if (id === "tab.close" && overview.handleCloseShortcut()) return;
+    if (isCloseCommand(id) && overview.handleCloseShortcut(id)) return;
     const pending =
       !context && !pendingPaneSwitch?.intent.signal.aborted
         ? pendingPaneSwitch
         : undefined;
-    const switching = id === "tab.close" ? pending : undefined;
+    const switching = isCloseCommand(id) ? pending : undefined;
     const focusIntent = keys.beginFocus();
     if (switching) {
       // Close follows the requested pane even while the old pane still has focus.
@@ -1274,7 +1286,7 @@ export function createCommands(
       w = getState().workspaces.find((item) => item.id === context.workspaceId);
       pane = w?.panes.find((item) => item.id === context.paneId);
     }
-    const conversation = context
+    const conversation = context?.conversationId
       ? (getState().conversations.find(
           (item) => item.id === context.conversationId,
         ) ?? null)
@@ -1676,6 +1688,7 @@ export function createCommands(
               scope: id === "tab.closeAll" ? "all" : "others",
             });
           break;
+        case "conversation.remove":
         case "tab.close":
           if (w && pane) {
             const result = await invoke<{ closed?: boolean }>("pane.close", {

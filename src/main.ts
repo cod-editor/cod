@@ -10,6 +10,7 @@ import {
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
+  isCloseCommand,
   resolveKeybinding,
   formatShortcut,
   configureKeymap,
@@ -620,7 +621,7 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  // Own native macOS close-tab and settings accelerators before DOM/menu
+  // Own native macOS tab-closing and settings accelerators before DOM/menu
   // dispatch. Prevent the DOM duplicate, including when a preview frame has focus.
   // Linux Ctrl+W remains surface-specific (terminal readline owns that key).
   mainWindow.webContents.on("before-input-event", (event, input) => {
@@ -640,7 +641,7 @@ function createWindow(): void {
       !match ||
       (!ownsDevTools &&
         match.command !== "settings" &&
-        !(process.platform === "darwin" && match.command === "tab.close"))
+        !(process.platform === "darwin" && isCloseCommand(match.command)))
     )
       return;
     event.preventDefault();
