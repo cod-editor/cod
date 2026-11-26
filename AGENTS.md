@@ -18,6 +18,7 @@
 
 ## Skills
 
+- [teamlead](.agents/skills/teamlead/SKILL.md) for issue ownership, delivery coordination and retrospectives.
 - [cod-implement](.agents/skills/cod-implement/SKILL.md) for scoped repairs and delivery cleanup.
 - [cod-verify](.agents/skills/cod-verify/SKILL.md) for test runners and UI acceptance.
 - [cod-feasibility](.agents/skills/cod-feasibility/SKILL.md) for unproven integrations.
