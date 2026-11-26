@@ -12,6 +12,7 @@ import {
   chmod,
   rm,
   access,
+  rename,
 } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -150,22 +151,28 @@ try {
   await mkdir(output);
   let resources, executable;
   if (process.platform === "darwin") {
-    await cp(
-      path.join(electronDist, "Electron.app"),
-      path.join(output, "Cod.app"),
-      { recursive: true, verbatimSymlinks: true },
+    const bundle = path.join(output, "Cod.app");
+    await cp(path.join(electronDist, "Electron.app"), bundle, {
+      recursive: true,
+      verbatimSymlinks: true,
+    });
+    resources = path.join(bundle, "Contents/Resources");
+    // Electron reports unpackaged when the main executable is named Electron.
+    executable = "Cod.app/Contents/MacOS/Cod";
+    await rename(
+      path.join(bundle, "Contents/MacOS/Electron"),
+      path.join(output, executable),
     );
-    resources = path.join(output, "Cod.app/Contents/Resources");
-    executable = "Cod.app/Contents/MacOS/Electron";
     await cp(
       path.join(root, "assets/cod.icns"),
       path.join(resources, "cod.icns"),
     );
-    const plist = path.join(output, "Cod.app/Contents/Info.plist");
+    const plist = path.join(bundle, "Contents/Info.plist");
     for (const [key, value] of Object.entries({
       CFBundleName: "Cod",
       CFBundleDisplayName: "Cod",
       CFBundleIdentifier: "dev.cod.desktop",
+      CFBundleExecutable: path.basename(executable),
       CFBundleIconFile: "cod.icns",
       ...(releaseVersion
         ? {

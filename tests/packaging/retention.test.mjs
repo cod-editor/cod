@@ -102,7 +102,7 @@ test("running packages survive pruning until exit and unknown detection preserve
     const latest = path.join(root, "cod-darwin-arm64-200");
     await mkdir(old);
     await mkdir(latest);
-    const executable = path.join(old, "Cod.app/Contents/MacOS/Electron");
+    const executable = path.join(old, "Cod.app/Contents/MacOS/Cod");
     assert.deepEqual(
       await pruneOlderPackages(latest, async () => [executable]),
       [],
