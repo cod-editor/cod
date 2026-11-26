@@ -22,11 +22,10 @@ async function loopbackModel() {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(body));
     };
-    if (request.url?.endsWith("/count_tokens"))
-      return reply({ input_tokens: 30 });
-    if (request.url?.endsWith("/models"))
-      return reply({ data: [], has_more: false });
-    if (request.method !== "POST" || request.url !== "/v1/messages")
+    const route = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (route.endsWith("/count_tokens")) return reply({ input_tokens: 30 });
+    if (route.endsWith("/models")) return reply({ data: [], has_more: false });
+    if (request.method !== "POST" || route !== "/v1/messages")
       return reply({}, 404);
     if (++requests > 12) return reply({}, 429);
     const chunks = [];
@@ -144,7 +143,7 @@ test("Claude Code picker and chat reopen the same native conversation without se
     Object.assign(app.environment, {
       COD_CLAUDE_EXECUTABLE: executable,
       CLAUDE_CONFIG_DIR: path.join(app.temporary, "native-claude"),
-      ANTHROPIC_API_KEY: "invented-loopback-key",
+      ANTHROPIC_API_KEY: "sk-fixture-non-secret",
       ANTHROPIC_BASE_URL: model.endpoint,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     });
