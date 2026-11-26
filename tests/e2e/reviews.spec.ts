@@ -313,6 +313,11 @@ test("Review comment Mod+Enter saves a private multiline draft even with a confl
   const review = await open(await shell.create("Invented keyboard review"));
   const editor = source(review);
   await editor.focus();
+  await editor.press(`${modifier}+Alt+ArrowDown`);
+  await expect(editor).toBeFocused();
+  await expect(
+    pane(review).getByRole("button", { name: "Next change" }),
+  ).toHaveCount(0);
   await editor.press("ArrowDown");
   await editor.press(`${modifier}+Shift+M`);
   const host = pane(review);
@@ -1677,6 +1682,9 @@ test("Whole-file Git review uses frozen contents and sends changed and unchanged
     const input = host.getByRole("textbox", { name: "Comment", exact: true });
     await expect(input).toBeFocused();
     await input.fill(body);
+    await input.press(`${modifier}+Alt+ArrowDown`);
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(body);
     await input.press(`${modifier}+Enter`);
     await expect(
       host
@@ -1684,19 +1692,142 @@ test("Whole-file Git review uses frozen contents and sends changed and unchanged
         .filter({ hasText: body }),
     ).toBeVisible();
   };
+  const next = `${modifier}+Alt+ArrowDown`;
+  const previous = `${modifier}+Alt+ArrowUp`;
+  const firstLine = line("src/aaa.js", 3, "Old");
+  const laterLine = line("src/ccc.js", 24, "Old");
+  const deletedLine = line("000-deleted.txt", 1, "Old");
+  const nextButton = host.getByRole("button", { name: "Next change" });
+  const previousButton = host.getByRole("button", { name: "Previous change" });
+  await expect(nextButton).toHaveAttribute("title", /Next change.*↓/);
+  await expect(previousButton).toHaveAttribute("title", /Previous change.*↑/);
+
   await add(line("src/aaa.js", 3), "Discuss the saved addition");
   await host.getByRole("button", { name: "First change" }).click();
-  await host.getByRole("button", { name: "Next change" }).click();
-  await expect(line("src/ccc.js", 24, "Old")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await host.getByRole("button", { name: "Next change" }).click();
-  await expect(line("000-deleted.txt", 1, "Old")).toHaveText(/removed source/);
+  await expect(firstLine).toHaveAttribute("aria-pressed", "true");
+  await firstLine.focus();
+  await shell.page.keyboard.press(previous);
+  await expect(firstLine).toBeFocused();
+  await expect(previousButton).toBeDisabled();
+
+  async function holdLaterSource() {
+    await shell.app!.evaluate(
+      ({ ipcMain }, file) => {
+        const handlers = (
+          ipcMain as unknown as {
+            _invokeHandlers: Map<string, (...args: any[]) => unknown>;
+          }
+        )._invokeHandlers;
+        const invoke = handlers.get("cod:invoke")!;
+        let release: (() => void) | undefined;
+        ipcMain.removeHandler("cod:invoke");
+        ipcMain.handle("cod:invoke", (event, request) => {
+          if (request.op !== "review.file-source" || request.path !== file)
+            return invoke(event, request);
+          return new Promise((resolve) => {
+            release = () => resolve(invoke(event, request));
+          });
+        });
+        Object.assign(globalThis, {
+          releaseReviewSource: () => {
+            ipcMain.removeHandler("cod:invoke");
+            ipcMain.handle("cod:invoke", invoke);
+            const pending = !!release;
+            release?.();
+            return pending;
+          },
+        });
+      },
+      path.join(canonical, "src", "ccc.js"),
+    );
+    return () =>
+      shell.app!.evaluate(() =>
+        (
+          globalThis as unknown as { releaseReviewSource: () => boolean }
+        ).releaseReviewSource(),
+      );
+  }
+
+  const loadingSource = host.getByText("Loading saved source…");
+  let release = await holdLaterSource();
+  await file("aaa.js").focus();
+  await shell.page.keyboard.press(next);
+  await expect(loadingSource).toBeVisible();
+  await shell.page.keyboard.press("ArrowDown");
+  await expect(file("bbb.js")).toBeFocused();
+  expect(await release()).toBe(true);
+  await expect(laterLine).toHaveAttribute("aria-pressed", "true");
+  await expect(file("bbb.js")).toBeFocused();
+
+  await shell.page.keyboard.press(previous);
+  await expect(firstLine).toBeFocused();
+  release = await holdLaterSource();
+  await shell.page.keyboard.press(next);
+  await expect(loadingSource).toBeVisible();
+  await shell.page.keyboard.press(next);
+  await expect(deletedLine).toBeFocused();
+  expect(await release()).toBe(true);
+  await expect(deletedLine).toBeFocused();
+  await shell.page.keyboard.press(previous);
+  await expect(laterLine).toBeFocused();
+  await shell.page.keyboard.press(previous);
+  await expect(firstLine).toBeFocused();
+
+  await file("aaa.js").focus();
+  await shell.page.keyboard.press(next);
+  await expect(laterLine).toBeFocused();
+  await expect(laterLine).toHaveAttribute("aria-pressed", "true");
+  await shell.page.screenshot({
+    path: info.outputPath("whole-git-review-keyboard.png"),
+  });
+  await shell.page.keyboard.press(next);
+  await expect(deletedLine).toBeFocused();
+  await expect(deletedLine).toHaveText(/removed source/);
   await expect(file("000-deleted.txt")).toHaveAttribute(
     "aria-selected",
     "true",
   );
+  await shell.page.keyboard.press(next);
+  await expect(deletedLine).toBeFocused();
+  await expect(nextButton).toBeDisabled();
+  await file("000-deleted.txt").focus();
+  await shell.page.keyboard.press(previous);
+  await expect(laterLine).toBeFocused();
+  await shell.command("Previous Git change");
+  await expect(firstLine).toBeFocused();
+
+  await shell.command("Keyboard shortcuts");
+  const shortcuts = shell.page.getByRole("dialog", {
+    name: "Keyboard shortcuts",
+  });
+  await shortcuts
+    .getByRole("textbox", { name: "Search shortcuts" })
+    .fill("Git change");
+  await expect(
+    shortcuts.getByText("Next Git change", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    shortcuts.getByText("Previous Git change", { exact: true }),
+  ).toBeVisible();
+  await expect(shortcuts.getByText("Git Review", { exact: true })).toHaveCount(
+    2,
+  );
+  await shell.page.keyboard.press("Escape");
+  await expect(firstLine).toBeFocused();
+
+  await writeFile(
+    path.join(shell.data, "keymap.json"),
+    JSON.stringify({ "review.nextChange": ["Mod+Shift+Down"] }),
+  );
+  await expect(nextButton).toHaveAttribute(
+    "title",
+    /Next change.*(?:Shift|⇧).*↓/,
+  );
+  await shell.page.keyboard.press(next);
+  await expect(file("aaa.js")).toHaveAttribute("aria-selected", "true");
+  await expect(laterLine).toHaveCount(0);
+  await shell.page.keyboard.press(`${modifier}+Shift+ArrowDown`);
+  await expect(laterLine).toBeFocused();
 
   await file("aaa.js").focus();
   await file("aaa.js").press("ArrowDown");

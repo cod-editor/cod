@@ -516,6 +516,52 @@ test("browser reload uses the primary modifier and only owns the page and its br
   }
 });
 
+test("Git change shortcuts use arrows only in Git Review and allow overrides", () => {
+  for (const [arrow, command] of [
+    ["ArrowDown", "review.nextChange"],
+    ["ArrowUp", "review.previousChange"],
+  ] as const) {
+    for (const platform of ["darwin", "linux"] as const) {
+      const key = input(arrow, {
+        code: arrow,
+        altKey: true,
+        metaKey: platform === "darwin",
+        ctrlKey: platform === "linux",
+      });
+      assert.equal(
+        resolveKeybinding(key, platform, "git-review")?.command,
+        command,
+      );
+      for (const surface of [
+        "review",
+        "shell",
+        "editor",
+        "composer",
+        "terminal",
+      ] as const)
+        assert.equal(resolveKeybinding(key, platform, surface), undefined);
+      assert.equal(
+        resolveKeybinding(input(arrow), platform, "git-review"),
+        undefined,
+      );
+    }
+  }
+  try {
+    configureKeymap({ "review.nextChange": ["Mod+Shift+Down"] }, "darwin");
+    const former = input("ArrowDown", { metaKey: true, altKey: true });
+    assert.equal(resolveKeybinding(former, "darwin", "git-review"), undefined);
+    const custom = input("ArrowDown", { metaKey: true, shiftKey: true });
+    assert.equal(
+      resolveKeybinding(custom, "darwin", "git-review")?.command,
+      "review.nextChange",
+    );
+    assert.equal(resolveKeybinding(custom, "darwin", "shell"), undefined);
+    assert.equal(formatShortcut("review.nextChange", "darwin"), "⌘⇧↓");
+  } finally {
+    configureKeymap({}, "darwin");
+  }
+});
+
 test("keymap overrides disable, reject unknown/conflicts atomically and never widen surface authority", () => {
   configureKeymap({}, "darwin");
   assert.equal(formatShortcut("pane.zoom", "darwin"), "⇧Esc");

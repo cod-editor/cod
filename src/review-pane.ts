@@ -147,16 +147,18 @@ export function reviewPane(
     changeIndex = -1,
     lastGitRound = "";
   type Change = { file: string; line: number; side: "old" | "new" };
+  type ChangeFocus = { signal: AbortSignal; origin: Element | null };
   let navigation: Change[] = [],
-    jump: Change | undefined;
+    jump: (Change & { focus?: ChangeFocus }) | undefined;
   function showGitFile(
     file: string,
     point = navigation.find((change) => change.file === file),
+    focus?: ChangeFocus,
   ) {
     gitPath = file;
     writePreference(`review-file.${id}`, { round: selectedRound, path: file });
     selection = end = 0;
-    jump = point;
+    jump = point && { ...point, focus };
     changeIndex = point ? navigation.indexOf(point) : -1;
     draw();
     if (!point) host.scrollTop = 0;
@@ -171,9 +173,14 @@ export function reviewPane(
     for (let index = navigation.length - 1; index >= 0; index--)
       if (matches(navigation[index])) return navigation[index];
   }
-  function stepChange(direction: 1 | -1) {
+  function stepChange(direction: 1 | -1, signal?: AbortSignal) {
     const point = adjacentChange(direction);
-    if (point) showGitFile(point.file, point);
+    if (point)
+      showGitFile(
+        point.file,
+        point,
+        signal && { signal, origin: document.activeElement },
+      );
   }
   let ranges: Range[] = [],
     buttons: HTMLButtonElement[] = [];
@@ -390,7 +397,6 @@ export function reviewPane(
     if (!submit.disabled && !submit.hidden) submit.click();
   });
   const addComment = button("Add comment", () => openComment());
-  addComment.title = shortcutTitle("review.addComment", "Add comment");
   const refresh = button("Refresh round", async () => {
     if (!detail) return;
     await invoke("review.refresh", {
@@ -525,8 +531,24 @@ export function reviewPane(
     stepChange(-1),
   );
   previousChange.classList.add("review-previous-change");
+  host.addEventListener("cod:previous-change", (event) =>
+    stepChange(-1, (event as CustomEvent<AbortSignal>).detail),
+  );
   const nextChange = iconButton("chevron", "Next change", () => stepChange(1));
   nextChange.classList.add("review-next-change");
+  host.addEventListener("cod:next-change", (event) =>
+    stepChange(1, (event as CustomEvent<AbortSignal>).detail),
+  );
+  function updateShortcutTitles() {
+    addComment.title = shortcutTitle("review.addComment", "Add comment");
+    previousChange.title = shortcutTitle(
+      "review.previousChange",
+      "Previous change",
+    );
+    nextChange.title = shortcutTitle("review.nextChange", "Next change");
+  }
+  updateShortcutTitles();
+  document.addEventListener("cod:keymap-changed", updateShortcutTitles);
   const firstChange = button("First change", () => {
     const first = navigation.find((point) => point.file === gitPath);
     if (first) showGitFile(first.file, first);
@@ -957,12 +979,13 @@ export function reviewPane(
               sourceRows.append(note);
             }
           }
-          const target =
-            jump &&
-            diffAnchors.findIndex(
-              (row) => row[jump!.side]?.startLine === jump!.line,
-            );
-          if (target !== undefined && target >= 0) {
+          const requested = jump;
+          const target = requested
+            ? diffAnchors.findIndex(
+                (row) => row[requested.side]?.startLine === requested.line,
+              )
+            : -1;
+          if (requested && target >= 0) {
             jump = undefined;
             selection = end = target;
             for (const [index, line] of buttons.entries()) {
@@ -970,7 +993,20 @@ export function reviewPane(
               line.tabIndex = index === target ? 0 : -1;
             }
             const line = buttons[target];
-            queueMicrotask(() => line.scrollIntoView({ block: "center" }));
+            queueMicrotask(() => {
+              if (!line.isConnected) return;
+              line.scrollIntoView({ block: "center" });
+              const focus = requested.focus;
+              if (
+                focus &&
+                !focus.signal.aborted &&
+                host.closest('[data-pane-id][data-active="true"]') &&
+                (document.activeElement === focus.origin ||
+                  (document.activeElement === document.body &&
+                    !focus.origin?.isConnected))
+              )
+                line.focus({ preventScroll: true });
+            });
           }
         } else
           content.append(
@@ -1295,6 +1331,7 @@ export function reviewPane(
       loading++;
       clearTimeout(diskTimer);
       documentView?.clearAnnotations();
+      document.removeEventListener("cod:keymap-changed", updateShortcutTitles);
       updates.delete(host);
     },
     { once: true },

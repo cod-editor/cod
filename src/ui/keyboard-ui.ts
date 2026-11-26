@@ -12,11 +12,31 @@ import type { createFocusManager } from "./focus";
 export const keyboardPlatform: KeyboardPlatform = /Mac/.test(navigator.platform)
   ? "darwin"
   : "linux";
+const surfaceNames: Record<KeyboardSurface, string> = {
+  shell: "Cod controls",
+  editor: "Editor",
+  composer: "Chat input",
+  terminal: "Terminal",
+  browser: "Web page",
+  "browser-controls": "Browser controls",
+  "agent-page": "Agent page",
+  review: "Review source",
+  "git-review": "Git Review",
+};
 export function keyboardSurface(
   element = document.activeElement,
 ): KeyboardSurface {
   if (element?.closest(".terminal-body")) return "terminal";
   if (element?.matches(".composer textarea")) return "composer";
+  if (
+    element?.closest(
+      '.review-body[data-git-review], #project-panel[aria-label="Review files"]',
+    ) &&
+    !element.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+    )
+  )
+    return "git-review";
   if (element?.closest(".review-line, .review-document")) return "review";
   if (element?.closest(".file-editor")) return "editor";
   if (
@@ -126,24 +146,10 @@ export function showKeyboardShortcuts(
       ].join(" / ");
       const surfaces = [...new Set(bindings.flatMap((b) => b.surfaces))];
       const context =
-        surfaces.length === 8
+        surfaces.length === Object.keys(surfaceNames).length
           ? "Anywhere in Cod"
           : surfaces.length
-            ? surfaces
-                .map(
-                  (s) =>
-                    ({
-                      shell: "Cod controls",
-                      editor: "Editor",
-                      composer: "Chat input",
-                      terminal: "Terminal",
-                      browser: "Web page",
-                      "browser-controls": "Browser controls",
-                      "agent-page": "Agent page",
-                      review: "Review source",
-                    })[s],
-                )
-                .join(", ")
+            ? surfaces.map((surface) => surfaceNames[surface]).join(", ")
             : command.category;
       row(
         command.title,
