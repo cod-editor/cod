@@ -87,6 +87,6 @@ jobs:
           remote_revision=$(git ls-remote --exit-code origin "$tag_ref" "$tag_ref^{}" |
             awk -v ref="$tag_ref" '$2 == ref { direct = $1 } $2 == ref "^{}" { peeled = $1 } END { print peeled ? peeled : direct }')
           [[ "$remote_revision" == "$revision" ]] || exit 1
-          gh release create "$VERSION_TAG" "$DMG" "$DMG.sha256" --verify-tag "${channel[@]}" \
+          gh release create "$VERSION_TAG" "$DMG" --verify-tag "${channel[@]}" \
             --title "$title" \
-            --notes "Apple Silicon build with an ad-hoc signature. See the [README](https://github.com/cod-editor/cod/tree/$VERSION_TAG#install-on-macos) for installation, checksum verification and manual updates."
+            --notes "Apple Silicon build with an ad-hoc signature. GitHub displays the SHA-256 checksum beside the DMG. See the [README](https://github.com/cod-editor/cod/tree/$VERSION_TAG#install-on-macos) for installation and manual updates."
