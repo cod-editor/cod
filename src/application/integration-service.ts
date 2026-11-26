@@ -27,6 +27,14 @@ export class IntegrationApplicationService {
         const options: import("../agent-plugin").IntegrationOptions = {
           provider,
           profilePath: requiredString(request, "profilePath"),
+          ...(request.expectedLinkedTargetHash === undefined
+            ? {}
+            : {
+                expectedLinkedTargetHash: requiredString(
+                  request,
+                  "expectedLinkedTargetHash",
+                ),
+              }),
         };
         return request.op === "agent-integration.inspect"
           ? inspectIntegration(options)

@@ -1,20 +1,14 @@
 import { formField } from "./form-field";
 import { readPreference, writePreference } from "./preferences";
 import type { Invoke } from "./contracts";
-interface Preview {
-  provider: string;
-  profilePath: string;
-  changes: Array<{ path: string; before: string | null; after: string }>;
-  trustInstructions: string;
-  previewHash: string;
-  installed: boolean;
-  backups?: string[];
-}
+import type { IntegrationPreview } from "../agent-plugin";
+type Preview = IntegrationPreview & { backups?: string[] };
 export interface IntegrationProfile {
   provider: string;
   profilePath: string;
   exists: boolean;
   installed: boolean;
+  linked?: boolean;
   error?: string;
 }
 export function createIntegrationSetup(invoke: Invoke, invalidate: () => void) {
@@ -40,7 +34,11 @@ export function createIntegrationSetup(invoke: Invoke, invalidate: () => void) {
     integrationDialog(
       invoke,
       profiles.find((p) => p.provider === provider),
-      () => {
+      (result) => {
+        if (result.linkedSettings) {
+          declined.add(`${result.provider}:${result.profilePath}`);
+          writePreference("integration-declined", [...declined]);
+        }
         void refresh();
       },
     );
@@ -55,8 +53,9 @@ export function createIntegrationSetup(invoke: Invoke, invalidate: () => void) {
     const title = document.createElement("strong");
     title.textContent = `Connect ${provider === "codex" ? "Codex" : provider === "kimi" ? "Kimi" : "Claude Code"} to Cod`;
     const text = document.createElement("p");
-    text.textContent =
-      "Add Cod's workspace commands and status hooks to your agent profile.";
+    text.textContent = profile.linked
+      ? "Review your linked Claude settings before adding the Cod hooks."
+      : "Add Cod's workspace commands and status hooks to your agent profile.";
     const actions = document.createElement("div");
     actions.className = "setup-actions";
     const setup = document.createElement("button");
@@ -81,7 +80,7 @@ export function createIntegrationSetup(invoke: Invoke, invalidate: () => void) {
 export function integrationDialog(
   invoke: Invoke,
   initial?: IntegrationProfile,
-  installed?: () => void,
+  installed?: (result: Preview) => void,
 ): void {
   const dialog = document.createElement("dialog");
   dialog.className = "integration-dialog";
@@ -168,9 +167,96 @@ export function integrationDialog(
       });
   };
   if (!initial) provider.onchange(new Event("change"));
+  const renderFiles = (result: Preview) => {
+    const changes = document.createElement("details");
+    changes.className = "integration-changes";
+    const changesTitle = document.createElement("summary");
+    changesTitle.textContent = `Review ${result.changes.length} file changes`;
+    changes.append(changesTitle);
+    for (const change of result.changes) {
+      const details = document.createElement("details"),
+        summary = document.createElement("summary"),
+        code = document.createElement("pre");
+      summary.textContent = `${change.before === null ? "Create" : "Update"} ${change.path.startsWith(result.profilePath + "/") ? change.path.slice(result.profilePath.length + 1) : change.path}`;
+      summary.title = change.path;
+      code.textContent = change.after;
+      const caption = document.createElement("div");
+      caption.className = "change-caption";
+      caption.textContent = "Proposed contents";
+      details.append(summary, caption, code);
+      if (change.before !== null) {
+        const before = document.createElement("details");
+        const beforeTitle = document.createElement("summary");
+        beforeTitle.textContent = "Current contents";
+        const beforeCode = document.createElement("pre");
+        beforeCode.textContent = change.before;
+        before.append(beforeTitle, beforeCode);
+        details.append(before);
+      }
+      changes.append(details);
+    }
+    previewHost.append(changes);
+  };
+  const renderLinked = (result: Preview) => {
+    const linked = result.linkedSettings!;
+    const target = document.createElement("p");
+    target.className = "integration-linked-target";
+    target.textContent = "Linked settings target";
+    const targetPath = document.createElement("code");
+    targetPath.textContent = linked.target;
+    targetPath.title = linked.path;
+    target.append(document.createElement("br"), targetPath);
+    previewHost.replaceChildren(target);
+    trust.textContent = "";
+    const review = linked.review;
+    if (!review) {
+      status.textContent = "Review the target before viewing the Cod hooks.";
+      submit.textContent = "Review linked settings";
+      return;
+    }
+    if (result.installed) {
+      status.textContent = "Integration is installed.";
+      submit.hidden = true;
+      cancel.textContent = "Done";
+      trust.textContent = result.trustInstructions;
+      installed?.(result);
+      return;
+    }
+    if (Object.keys(review.add).length || Object.keys(review.remove).length) {
+      const instructions = document.createElement("p");
+      instructions.textContent = result.changes.length
+        ? "Prepare the Cod files before editing the linked settings."
+        : "Apply the entries below to the hooks object in the target, keeping your other hooks. Then check settings again.";
+      previewHost.append(instructions);
+      for (const { label, entries } of [
+        { label: "Remove old Cod entries", entries: review.remove },
+        { label: "Add Cod entries", entries: review.add },
+      ]) {
+        if (!Object.keys(entries).length) continue;
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = label;
+        const code = document.createElement("pre");
+        code.textContent = JSON.stringify(entries, null, 2);
+        details.append(summary, code);
+        previewHost.append(details);
+      }
+      status.textContent = result.changes.length
+        ? "Linked settings require a manual edit."
+        : "Cod files are ready.";
+    } else {
+      status.textContent =
+        "The linked hook entries match. Prepare the local Cod files to finish.";
+    }
+    if (result.changes.length) renderFiles(result);
+    submit.textContent = result.changes.length
+      ? "Prepare Cod files"
+      : "Check settings again";
+  };
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (busy) return;
+    const submittedWithFocus = document.activeElement === submit;
     busy = true;
     submit.disabled = true;
     submit.setAttribute("aria-busy", "true");
@@ -178,34 +264,56 @@ export function integrationDialog(
     path.disabled = true;
     const current = generation;
     try {
-      if (preview && !preview.installed) {
-        status.textContent = "Installing integration...";
+      const linked = preview?.linkedSettings;
+      if (
+        preview &&
+        !preview.installed &&
+        (!linked || (linked.review && preview.changes.length > 0))
+      ) {
+        status.textContent = linked
+          ? "Preparing Cod files..."
+          : "Installing integration...";
         const result = await invoke<Preview>(
           "agent-integration.install",
           {
             provider: preview.provider,
             profilePath: preview.profilePath,
             expectedPreviewHash: preview.previewHash,
+            ...(linked ? { expectedLinkedTargetHash: linked.identity } : {}),
           },
           { reportError: false },
         );
         preview = result;
+        if (result.linkedSettings) {
+          renderLinked(result);
+          return;
+        }
         status.textContent = "Integration installed.";
         previewHost.replaceChildren();
         trust.textContent = result.trustInstructions;
         submit.hidden = true;
         cancel.textContent = "Done";
-        installed?.();
+        installed?.(result);
       } else {
         status.textContent = "Reading profile...";
         previewHost.replaceChildren();
         const result = await invoke<Preview>(
           "agent-integration.inspect",
-          { provider: provider.value, profilePath: path.value },
+          {
+            provider: provider.value,
+            profilePath: path.value,
+            ...(linked && !linked.review
+              ? { expectedLinkedTargetHash: linked.identity }
+              : {}),
+          },
           { reportError: false },
         );
         if (current !== generation) return;
         preview = result;
+        if (result.linkedSettings) {
+          renderLinked(result);
+          return;
+        }
         status.textContent = result.installed
           ? "Integration is installed."
           : `${result.changes.length} files will be updated.`;
@@ -214,40 +322,14 @@ export function integrationDialog(
         description.textContent =
           "Adds Cod's workspace skill and task-status hooks to this provider profile. Existing unrelated settings are preserved.";
         previewHost.append(description);
-        const changes = document.createElement("details");
-        changes.className = "integration-changes";
-        const changesTitle = document.createElement("summary");
-        changesTitle.textContent = `Review ${result.changes.length} file changes`;
-        changes.append(changesTitle);
-        for (const change of result.changes) {
-          const details = document.createElement("details"),
-            summary = document.createElement("summary"),
-            code = document.createElement("pre");
-          summary.textContent = `${change.before === null ? "Create" : "Update"} ${change.path.startsWith(result.profilePath + "/") ? change.path.slice(result.profilePath.length + 1) : change.path}`;
-          summary.title = change.path;
-          code.textContent = change.after;
-          const caption = document.createElement("div");
-          caption.className = "change-caption";
-          caption.textContent = "Proposed contents";
-          details.append(summary, caption, code);
-          if (change.before !== null) {
-            const before = document.createElement("details");
-            const beforeTitle = document.createElement("summary");
-            beforeTitle.textContent = "Current contents";
-            const beforeCode = document.createElement("pre");
-            beforeCode.textContent = change.before;
-            before.append(beforeTitle, beforeCode);
-            details.append(before);
-          }
-          changes.append(details);
-        }
-        previewHost.append(changes);
+        renderFiles(result);
         trust.textContent = result.trustInstructions;
         submit.textContent = "Install integration";
         submit.hidden = result.installed;
         cancel.textContent = result.installed ? "Done" : "Cancel";
       }
     } catch (error) {
+      if (preview?.linkedSettings) reset();
       status.textContent =
         error instanceof Error ? error.message : String(error);
     } finally {
@@ -256,6 +338,13 @@ export function integrationDialog(
       submit.removeAttribute("aria-busy");
       provider.disabled = false;
       path.disabled = false;
+      if (
+        preview?.linkedSettings &&
+        submittedWithFocus &&
+        document.activeElement === document.body &&
+        dialog.open
+      )
+        (submit.hidden ? cancel : submit).focus();
     }
   };
   dialog.showModal();

@@ -1068,6 +1068,9 @@ dialog .form-field {
   overflow: auto;
   font-size: calc(var(--ui-font-size) - 1px);
 }
+.integration-linked-target {
+  overflow-wrap: anywhere;
+}
 .integration-preview pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

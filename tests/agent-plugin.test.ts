@@ -7,6 +7,10 @@ import {
   realpath,
   rm,
   mkdir,
+  lstat,
+  readlink,
+  symlink,
+  truncate,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -191,6 +195,211 @@ test("install rejects config races and edited owned hook scripts", async () => {
   } finally {
     await rm(profilePath, { recursive: true, force: true });
   }
+});
+
+test("linked Claude settings show a target before content review and only prepare Cod files", async (context) => {
+  const workspace = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "cod-linked-settings-")),
+  );
+  context.after(() => rm(workspace, { recursive: true, force: true }));
+  const profilePath = path.join(workspace, "claude-profile");
+  await mkdir(profilePath);
+  const target = path.join(workspace, "dotfiles-settings.json");
+  const alias = path.join(profilePath, "settings.json");
+  const existing = {
+    hooks: {
+      Stop: [{ hooks: [{ type: "command", command: "personal-hook" }] }],
+    },
+    env: { EXAMPLE_VALUE: "invented-private-setting" },
+  };
+  const original = JSON.stringify(existing);
+  await writeFile(target, original);
+  await symlink("../dotfiles-settings.json", alias);
+  const originalLink = (await lstat(alias)).ino;
+  const options = {
+    provider: "claude" as const,
+    profilePath,
+    bundleRoot: process.cwd(),
+  };
+  const targetOnly = await inspectIntegration(options);
+  assert.equal(targetOnly.linkedSettings?.target, target);
+  assert.equal(targetOnly.linkedSettings.review, undefined);
+  assert.deepEqual(targetOnly.changes, []);
+  await assert.rejects(
+    installIntegration({
+      ...options,
+      expectedPreviewHash: targetOnly.previewHash,
+    }),
+    /preview changed/,
+  );
+  const reviewOptions = {
+    ...options,
+    expectedLinkedTargetHash: targetOnly.linkedSettings.identity,
+  };
+  const reviewed = await inspectIntegration(reviewOptions);
+  assert.doesNotMatch(
+    JSON.stringify(reviewed),
+    /invented-private-setting|personal-hook/,
+  );
+  assert.equal(Object.keys(reviewed.linkedSettings!.review!.add).length, 5);
+  const prepared = await installIntegration({
+    ...reviewOptions,
+    expectedPreviewHash: reviewed.previewHash,
+  });
+  assert.equal(prepared.installed, false);
+  assert.deepEqual(prepared.changes, []);
+  assert.equal(await readFile(target, "utf8"), original);
+  assert.equal((await lstat(alias)).ino, originalLink);
+  assert.equal(await readlink(alias), "../dotfiles-settings.json");
+
+  // Simulate the user's edit in their dotfiles. Only the proposed entries merge.
+  const updated = {
+    ...existing,
+    hooks: {
+      ...prepared.linkedSettings!.review!.add,
+      Stop: [
+        ...existing.hooks.Stop,
+        ...prepared.linkedSettings!.review!.add.Stop,
+      ],
+    },
+  };
+  await writeFile(target, JSON.stringify(updated));
+  await assert.rejects(inspectIntegration(reviewOptions), /settings changed/);
+  const updatedTarget = await inspectIntegration(options);
+  const final = await inspectIntegration({
+    ...options,
+    expectedLinkedTargetHash: updatedTarget.linkedSettings!.identity,
+  });
+  assert.equal(final.installed, true);
+  assert.equal((await lstat(alias)).ino, originalLink);
+  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), updated);
+
+  const upgrade = {
+    ...options,
+    nodePath: "/fixture/Cod-New",
+    expectedLinkedTargetHash: final.linkedSettings!.identity,
+  };
+  const upgradePreview = await inspectIntegration(upgrade);
+  const upgradePrepared = await installIntegration({
+    ...upgrade,
+    expectedPreviewHash: upgradePreview.previewHash,
+  });
+  assert.equal(upgradePrepared.installed, false);
+  assert.equal(upgradePrepared.backups.length, 1);
+  const replacement = upgradePrepared.linkedSettings!.review!;
+  assert.deepEqual(replacement.remove, prepared.linkedSettings!.review!.add);
+  assert.equal(Object.keys(replacement.add).length, 5);
+  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), updated);
+  const manuallyUpgraded = {
+    ...existing,
+    hooks: {
+      ...replacement.add,
+      Stop: [...existing.hooks.Stop, ...replacement.add.Stop],
+    },
+  };
+  await writeFile(target, JSON.stringify(manuallyUpgraded));
+  const newMetadata = await inspectIntegration(options);
+  const finished = {
+    ...upgrade,
+    expectedLinkedTargetHash: newMetadata.linkedSettings!.identity,
+  };
+  const newPreview = await inspectIntegration(finished);
+  assert.deepEqual(newPreview.linkedSettings!.review, { add: {}, remove: {} });
+  const result = await installIntegration({
+    ...finished,
+    expectedPreviewHash: newPreview.previewHash,
+  });
+  assert.equal(result.installed, true);
+  assert.equal((await lstat(alias)).ino, originalLink);
+  assert.deepEqual(
+    JSON.parse(await readFile(target, "utf8")),
+    manuallyUpgraded,
+  );
+});
+
+test("linked settings reject dangling links, same-content retargets and stale edits", async (context) => {
+  const profilePath = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "cod-linked-settings-race-")),
+  );
+  context.after(() => rm(profilePath, { recursive: true, force: true }));
+  const alias = path.join(profilePath, "settings.json");
+  const target = path.join(profilePath, "original.json");
+  const other = path.join(profilePath, "other.json");
+  const options = {
+    provider: "claude" as const,
+    profilePath,
+    bundleRoot: process.cwd(),
+  };
+  await symlink(target, alias);
+  await assert.rejects(inspectIntegration(options), /target does not exist/);
+  await writeFile(target, '{"invalid":"invented-private-setting"');
+  const metadata = await inspectIntegration(options);
+  assert.equal(metadata.linkedSettings?.target, target);
+  await assert.rejects(
+    inspectIntegration({
+      ...options,
+      expectedLinkedTargetHash: metadata.linkedSettings.identity,
+    }),
+    (error: Error) =>
+      error.message === "Linked Claude settings must contain valid JSON",
+  );
+  await Promise.all([writeFile(target, "{}"), writeFile(other, "{}")]);
+  const approved = await inspectIntegration(options);
+  const reviewed = {
+    ...options,
+    expectedLinkedTargetHash: approved.linkedSettings!.identity,
+  };
+  const review = await inspectIntegration(reviewed);
+  await rm(alias);
+  await symlink(other, alias);
+  await assert.rejects(
+    installIntegration({
+      ...reviewed,
+      expectedPreviewHash: review.previewHash,
+    }),
+    /settings changed/,
+  );
+  const otherMetadata = await inspectIntegration(options);
+  const otherReviewed = {
+    ...options,
+    expectedLinkedTargetHash: otherMetadata.linkedSettings!.identity,
+  };
+  const otherReview = await inspectIntegration(otherReviewed);
+  await writeFile(other, '{"localEdit":true}');
+  await assert.rejects(
+    installIntegration({
+      ...otherReviewed,
+      expectedPreviewHash: otherReview.previewHash,
+    }),
+    /settings changed/,
+  );
+  await assert.rejects(lstat(path.join(profilePath, "cod-integration")), {
+    code: "ENOENT",
+  });
+  assert.equal(await readFile(other, "utf8"), '{"localEdit":true}');
+  assert.equal(await readlink(alias), other);
+
+  await truncate(other, 4 * 1024 * 1024 + 1);
+  const oversized = await inspectIntegration(options);
+  await assert.rejects(
+    inspectIntegration({
+      ...options,
+      expectedLinkedTargetHash: oversized.linkedSettings!.identity,
+    }),
+    /4 MiB review limit/,
+  );
+
+  const directory = path.join(profilePath, "cod-integration");
+  await mkdir(directory);
+  const manifest = path.join(directory, "manifest.json");
+  await writeFile(manifest, "{}");
+  await rm(alias);
+  await symlink(manifest, alias);
+  await assert.rejects(
+    inspectIntegration(options),
+    /outside Cod's managed files/,
+  );
+  assert.equal(await readFile(manifest, "utf8"), "{}");
 });
 
 test("SessionStart delivers operating instructions in the native output shape and Kimi installs a discoverable skill", async () => {

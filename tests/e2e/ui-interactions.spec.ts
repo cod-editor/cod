@@ -1,6 +1,13 @@
 import type { AppState } from "../../src/types";
 import { test, expect } from "@playwright/test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:http";
 import { ChatApp } from "./helpers/chat-fixture/harness";
@@ -224,6 +231,95 @@ test("Integration setup can be deferred, reopened and installed only after previ
     await expect(
       dialog.getByRole("button", { name: "Install integration", exact: true }),
     ).toHaveCount(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Linked Claude integration shows the target and verifies a manual hook edit", async ({}, info) => {
+  const app = new ChatApp();
+  await app.prepare();
+  try {
+    const fixture = await realpath(app.temporary);
+    const profile = path.join(fixture, "claude-profile");
+    const target = path.join(fixture, "dotfiles", "claude-settings.json");
+    const link = path.join(profile, "settings.json");
+    await mkdir(profile);
+    await mkdir(path.dirname(target));
+    const personalHook = {
+      hooks: [{ type: "command", command: "personal-hook" }],
+    };
+    const settings = {
+      examplePreference: "private-fixture-value",
+      hooks: { Stop: [personalHook] },
+    };
+    const original = JSON.stringify(settings);
+    await writeFile(target, original);
+    await symlink(target, link);
+    const linkInode = (await lstat(link)).ino;
+    app.environment.CLAUDE_CONFIG_DIR = profile;
+    await app.start();
+    await app.app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 650);
+    });
+    await app.command("Install agent integration...");
+    const dialog = app.page.getByRole("dialog", {
+      name: "Install agent integration",
+    });
+    const button = (name: string) =>
+      dialog.getByRole("button", { name, exact: true });
+    const status = dialog.getByRole("status");
+    await dialog
+      .getByRole("combobox", { name: "Provider", exact: true })
+      .selectOption("claude");
+    await expect(
+      dialog.getByRole("textbox", { name: "Agent profile directory" }),
+    ).toHaveValue(profile);
+    await button("Preview changes").click();
+    await expect(button("Review linked settings")).toBeFocused();
+    await expect(dialog.getByText(target, { exact: false })).toBeVisible();
+    await expect(dialog.getByText("Add Cod entries")).toHaveCount(0);
+    expect(await readFile(target, "utf8")).toBe(original);
+    await app.page.screenshot({
+      path: info.outputPath("linked-claude-target.png"),
+    });
+
+    await button("Review linked settings").click();
+    await expect(button("Prepare Cod files")).toBeFocused();
+    await expect(dialog.getByText("Add Cod entries")).toBeVisible();
+    await expect(dialog).not.toContainText(
+      /private-fixture-value|personal-hook/,
+    );
+    await button("Prepare Cod files").click();
+    await expect(button("Check settings again")).toBeFocused();
+    await expect(status).toHaveText("Cod files are ready.");
+    await expect(button("Install integration")).toHaveCount(0);
+    expect(await readFile(target, "utf8")).toBe(original);
+    expect((await lstat(link)).ino).toBe(linkInode);
+    await app.page.screenshot({
+      path: info.outputPath("linked-claude-manual.png"),
+    });
+
+    const additions = dialog.getByText("Add Cod entries", { exact: true });
+    await additions.click();
+    const proposed = JSON.parse(
+      (await dialog
+        .locator("details")
+        .filter({ has: app.page.getByText("Add Cod entries", { exact: true }) })
+        .locator("pre")
+        .textContent())!,
+    );
+    const updated = {
+      ...settings,
+      hooks: { ...proposed, Stop: [personalHook, ...proposed.Stop] },
+    };
+    await writeFile(target, JSON.stringify(updated));
+    await button("Check settings again").click();
+    await button("Review linked settings").click();
+    await expect(status).toHaveText("Integration is installed.");
+    await expect(button("Done")).toBeVisible();
+    expect((await lstat(link)).ino).toBe(linkInode);
+    expect(JSON.parse(await readFile(target, "utf8"))).toEqual(updated);
   } finally {
     await app.cleanup();
   }

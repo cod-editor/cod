@@ -20,11 +20,16 @@ export const commands = {
   "review.wait": ["id", "round", "timeout-ms?"],
   "page.open": ["workspace", "conversation", "path", "refresh?"],
   "agent-integration.profiles": [],
-  "agent-integration.inspect": ["provider", "profile-path"],
+  "agent-integration.inspect": [
+    "provider",
+    "profile-path",
+    "expected-linked-target-hash?",
+  ],
   "agent-integration.install": [
     "provider",
     "profile-path",
     "expected-preview-hash",
+    "expected-linked-target-hash?",
   ],
   context: ["conversation?"],
   state: [],
