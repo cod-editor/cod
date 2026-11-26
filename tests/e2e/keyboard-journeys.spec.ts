@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -2174,6 +2175,10 @@ for (const replacement of [
 ] as const) {
   const cancelled = replacement !== "none";
   test(`A hidden chat ${cancelled ? `does not steal focus after newer ${replacement} navigation` : "regains native keyboard focus when its selection snapshot follows the operation reply"}`, async () => {
+    test.skip(
+      replacement === "already focused native" && process.platform !== "linux",
+      "Requires an isolated X11 desktop",
+    );
     const app = new ChatApp();
     await app.prepare();
     await app.configure({ codex: {} });
@@ -2336,23 +2341,65 @@ for (const replacement of [
             ),
           )
           .toBe(true);
-      } else if (
-        replacement === "native" ||
-        replacement === "already focused native"
-      ) {
-        await app.app!.evaluate(
-          ({ webContents }, { url, alreadyFocused }) => {
+      } else if (replacement !== "none") {
+        if (replacement === "already focused native") {
+          const area = (await app
+            .pane(browser.paneId)
+            .getByRole("region", { name: "Browser content" })
+            .boundingBox())!;
+          const bounds = await app.app!.evaluate(
+            ({ BrowserWindow, webContents }, url) => {
+              const contents = webContents
+                .getAllWebContents()
+                .find((c) => c.getURL() === url)!;
+              contents.removeAllListeners("focus");
+              contents.focus();
+              if (!contents.isFocused())
+                throw new Error("Native page must already own keyboard focus");
+              const isFocused = contents.isFocused.bind(contents);
+              Object.assign(globalThis, {
+                receivedNativePress: false,
+                restoreNativeFocusProbe: () => {
+                  contents.isFocused = isFocused;
+                },
+              });
+              contents.prependListener(
+                "before-mouse-event",
+                (_event, input) => {
+                  if (input.type !== "mouseDown") return;
+                  // Model Chromium reporting stale focus despite a delivered
+                  // native click. Ignore that transient bit until selection.
+                  contents.isFocused = () => false;
+                  Object.assign(globalThis, { receivedNativePress: true });
+                },
+              );
+              return BrowserWindow.getAllWindows()[0].getContentBounds();
+            },
+            url,
+          );
+          execFileSync(
+            "xdotool",
+            [
+              "mousemove",
+              "--sync",
+              String(Math.round(bounds.x + area.x + area.width / 2)),
+              String(Math.round(bounds.y + area.y + area.height / 2)),
+              "click",
+              "1",
+            ],
+            { timeout: 5_000 },
+          );
+          await expect
+            .poll(() =>
+              app.app!.evaluate(() => (globalThis as any).receivedNativePress),
+            )
+            .toBe(true);
+        } else {
+          await app.app!.evaluate(({ webContents }, url) => {
             const contents = webContents
               .getAllWebContents()
               .find((c) => c.getURL() === url)!;
-            if (alreadyFocused) {
-              // A click in already-focused Chromium need not emit another
-              // focus event. Exercise the pointer path independently.
-              contents.removeAllListeners("focus");
-            }
             contents.focus();
-            if (alreadyFocused && !contents.isFocused())
-              throw new Error("Native page must already own keyboard focus");
             contents.sendInputEvent({
               type: "mouseDown",
               x: 30,
@@ -2367,16 +2414,18 @@ for (const replacement of [
               button: "left",
               clickCount: 1,
             });
-          },
-          { url, alreadyFocused: replacement === "already focused native" },
-        );
+          }, url);
+        }
         await expect
           .poll(() =>
             app.app!.evaluate(() => (globalThis as any).latestSelectedPane),
           )
           .toBe(browser.paneId);
       }
-      await app.app!.evaluate(() => (globalThis as any).releasePaneSelection());
+      await app.app!.evaluate(() => {
+        (globalThis as any).restoreNativeFocusProbe?.();
+        (globalThis as any).releasePaneSelection();
+      });
       const input = app
         .pane(chat.paneId)
         .getByRole("textbox", { name: "Message", exact: true });

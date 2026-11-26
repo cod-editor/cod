@@ -432,18 +432,26 @@ export class BrowserApplicationService {
     });
     this.browserService.onEvent((event) => this.browserEvent(event));
   }
-  private syncNativeFocus(contents: Electron.WebContents, id: string): void {
+  private syncNativeFocus(
+    contents: Electron.WebContents,
+    id: string,
+    source: "focus" | "pointer" = "focus",
+  ): void {
     if (this.modalPresentation !== undefined) {
       this.focusShellModal(this.modalPresentation.opening);
       return;
     }
-    if (contents.isDestroyed() || !contents.isFocused() || this.store.closing)
+    if (
+      contents.isDestroyed() ||
+      this.store.closing ||
+      (source === "focus" && !contents.isFocused())
+    )
       return;
     const current = this.store.data.browsers.find((item) => item.id === id);
     const owner = this.store.data.workspaces.find(
       (item) => item.id === current?.workspaceId,
     );
-    if (current && !current.visible) {
+    if (source === "focus" && current && !current.visible) {
       // Chromium can focus a newly created hidden WebContents during navigation.
       // Wait until that native focus dispatch finishes, then restore the selected
       // surface only while the hidden contents still owns focus.
@@ -490,8 +498,9 @@ export class BrowserApplicationService {
         // A view that has since blurred must not undo explicit pane navigation.
         if (
           contents.isDestroyed() ||
-          !contents.isFocused() ||
-          this.store.closing
+          this.store.closing ||
+          this.modalPresentation ||
+          (source === "focus" && !contents.isFocused())
         )
           return;
         const browser = this.store.data.browsers.find((item) => item.id === id);
@@ -533,10 +542,10 @@ export class BrowserApplicationService {
           this.focusShellModal(modal.opening);
         return;
       }
-      // Clicking a page can select its pane even if Chromium already owns
-      // keyboard focus and therefore does not emit another focus event.
+      // Queue an actual press in event order. Chromium's focus notification
+      // can be redundant or still pending when the visible page is clicked.
       if (input.type === "mouseDown")
-        setImmediate(() => this.syncNativeFocus(contents, id));
+        this.syncNativeFocus(contents, id, "pointer");
     });
     contents.on("before-input-event", (event, input) => {
       if (this.modalPresentation !== undefined) {
