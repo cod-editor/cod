@@ -1279,11 +1279,11 @@ test("Quit dialog names active local chats across workspaces and bounds the list
     defaultButton: "Cancel",
     message: "6 local agents are active",
     detail: [
-      "Research — Draft summary",
-      "Operations — [hold] Session 2",
-      "Research — Long session " + "x".repeat(28) + "…",
-      "Operations — [hold] Session 4",
-      "Research — [hold] Session 5",
+      "• Research — Draft summary",
+      "• Operations — [hold] Session 2",
+      "• Research — Long session " + "x".repeat(28) + "…",
+      "• Operations — [hold] Session 4",
+      "• Research — [hold] Session 5",
       "… and 1 more",
     ].join("\n"),
   });
@@ -1320,7 +1320,7 @@ test("Detached local chat keeps an approval through restart, with Cancel and Sto
       buttons: ["Leave Running", "Stop", "Cancel"],
       defaultButton: "Cancel",
       message: "One local agent is active",
-      detail: "Detached approval fixture — Approve release draft",
+      detail: "• Detached approval fixture — Approve release draft",
     });
     await expect.poll(() => status(chat.id)).toBe("waiting");
     await shell.quitWithChoice("Leave Running");
