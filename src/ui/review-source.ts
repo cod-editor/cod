@@ -1,5 +1,5 @@
 import { highlight, languageFor } from "../editor-highlight";
-import { documentFragment } from "../markdown-document";
+import { documentFragment, isMarkdownDocument } from "../markdown-document";
 import type { Range as CommentRange } from "../reviews/snapshots";
 import { iconButton } from "../ui-kit";
 
@@ -60,6 +60,8 @@ export function createReviewSource(
 ) {
   const element = document.createElement("div");
   element.className = "review-source-layout";
+  const wrap = isMarkdownDocument(path);
+  element.classList.toggle("review-source-wrap", wrap);
   const editor = document.createElement("div");
   editor.className = "review-source-editor";
   editor.setAttribute("role", "textbox");
@@ -122,13 +124,22 @@ export function createReviewSource(
   width.append(gutter, editor);
   element.append(width);
 
+  const resize = wrap
+    ? new ResizeObserver(() => positionGutterAction())
+    : undefined;
+  resize?.observe(editor);
+
+  function positionGutterAction() {
+    action.style.top = `${lines[actionLine - 1].row.offsetTop}px`;
+  }
+
   function indicate(line: number) {
     actionLine = line;
     const label = `Add comment to line ${line}`;
     action.title = label;
     action.setAttribute("aria-label", label);
     action.hidden = !canComment || line > sourceLineCount;
-    action.style.top = `${lines[line - 1].row.offsetTop}px`;
+    positionGutterAction();
   }
 
   function lineRange(line: number): CommentRange | undefined {
@@ -244,6 +255,7 @@ export function createReviewSource(
   return {
     element,
     editor,
+    dispose: () => resize?.disconnect(),
     readSelection,
     firstRange: () => lineRange(1),
     focus(range?: CommentRange) {

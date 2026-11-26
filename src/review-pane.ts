@@ -1,5 +1,6 @@
 import { diffHunks } from "./diff-hunks";
 import { highlight, languageFor } from "./editor-highlight";
+import { isMarkdownDocument } from "./markdown-document";
 import {
   uiButton,
   actionRow,
@@ -762,6 +763,7 @@ export function reviewPane(
       reuseDocument && !form.hidden ? form : undefined,
     );
     if (!reuseDocument) {
+      documentView?.dispose();
       const label = document.createElement("p");
       label.className = "review-source";
       const sourcePath =
@@ -886,7 +888,7 @@ export function reviewPane(
       previewButton.hidden =
         snapshot.kind !== "document" ||
         detail.target.kind !== "document" ||
-        !/\.md(?:own|arkdown)?$/i.test(detail.target.path);
+        !isMarkdownDocument(detail.target.path);
       previewButton.setAttribute("aria-pressed", String(previewMode));
       previewButton.title = previewMode ? "Show source" : "Preview Markdown";
       previewButton.setAttribute("aria-label", previewButton.title);
@@ -1331,6 +1333,7 @@ export function reviewPane(
       loading++;
       clearTimeout(diskTimer);
       documentView?.clearAnnotations();
+      documentView?.dispose();
       document.removeEventListener("cod:keymap-changed", updateShortcutTitles);
       updates.delete(host);
     },

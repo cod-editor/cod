@@ -257,6 +257,7 @@ export function reviewDocument(
   show();
   return {
     element,
+    dispose: sourceView.dispose,
     capture,
     focus,
     setCommenting(enabled: boolean) {
