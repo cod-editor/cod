@@ -114,7 +114,7 @@ test("Closing workspace results selects a surviving neighbor and supports reopen
     .toHaveLength(1);
 });
 
-test("Overview closes the selected workspace through the existing guard and routes native close to a saved chat", async () => {
+test("Overview closes the selected workspace through the existing guard and routes native removal to a saved chat", async () => {
   const target = await shell.create("Workshop rehearsal");
   const busy = await shell.newChat(target, "codex");
   await shell.send(busy.id, "Hold workshop fixture [hold]");
@@ -146,11 +146,13 @@ test("Overview closes the selected workspace through the existing guard and rout
   );
   const picker = await shell.overview();
   const search = picker.getByRole("combobox");
-  const nativeClose = () =>
-    shell.app!.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.send("cod:command", {
-        command: "tab.close",
-      }),
+  const nativeClose = (command = "tab.close") =>
+    shell.app!.evaluate(
+      ({ BrowserWindow }, command) =>
+        BrowserWindow.getAllWindows()[0].webContents.send("cod:command", {
+          command,
+        }),
+      command,
     );
   const guard = shell.page.getByRole("dialog", {
     name: "Close workspace",
@@ -215,6 +217,8 @@ test("Overview closes the selected workspace through the existing guard and rout
   await rename.press("Escape");
   await expect(search).toBeFocused();
   await nativeClose();
+  await expect(savedRow).toBeVisible();
+  await nativeClose("conversation.remove");
   await expect(savedRow).toHaveCount(0);
   await expect(search).toHaveValue("Saved checklist");
   expect((await shell.state()).activeWorkspaceId).toBe(current);
@@ -548,7 +552,7 @@ test("Commands and Overview expose conversation management with exact targets", 
   for (const label of [
     "Rename conversation",
     "Move conversation to workspace...",
-    "Remove conversation from workspace",
+    "Close and remove from workspace",
     "Continue in CLI",
     "Session info...",
     "Close workspace",
@@ -629,7 +633,7 @@ test("Commands shares busy and queued-message guards with conversation context a
   ).toBeDisabled();
   await expect(
     commands.getByRole("button", {
-      name: "Remove conversation from workspace",
+      name: "Close and remove from workspace",
       exact: true,
     }),
   ).toBeDisabled();

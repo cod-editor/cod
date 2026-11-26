@@ -2023,6 +2023,11 @@ export function createConversationViews({
     },
     integration: integration.open,
     send: sendMessage,
+    async waitForDraftSave(id: string) {
+      await saves.get(id)?.promise;
+      if (dirtyComposers.has(id))
+        throw new Error("Save the unsent message before removing this chat.");
+    },
     stop: stopResponse,
     dismissBackground: dismissBackgroundActivity,
     reconcile() {

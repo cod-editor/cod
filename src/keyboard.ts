@@ -307,8 +307,10 @@ export const commands = [
   ),
   entry(
     "conversation.remove",
-    "Remove conversation from workspace",
+    "Close and remove from workspace",
     "Conversation",
+    [key("KeyW", { mod: true, shift: true })],
+    ["remove conversation from workspace"],
   ),
   entry("conversation.handoff", "Continue in CLI", "Conversation"),
   entry("conversation.reclaim", "Return to chat", "Conversation"),
@@ -331,6 +333,11 @@ export const commands = [
   entry("workspace.reopen", "Reopen closed workspace", "Workspace"),
 ] as const;
 export type CommandId = (typeof commands)[number]["id"];
+export function isCloseCommand(
+  id?: CommandId,
+): id is "tab.close" | "conversation.remove" {
+  return id === "tab.close" || id === "conversation.remove";
+}
 
 function normalizedCode(input: KeyInput): string | undefined {
   // Option changes the produced character (and may begin a dead key). Only

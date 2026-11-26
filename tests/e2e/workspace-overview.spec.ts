@@ -1283,6 +1283,12 @@ test("Overview reconciles review, streaming and removal updates without losing i
   ).toBeDisabled();
   await app.page.keyboard.press("Escape");
   await expect(search()).toBeFocused();
+  await expect
+    .poll(async () => (await app.inspect(chat.id)).status)
+    .toBe("working");
+  await search().press(`${modifier}+Shift+W`);
+  await expect(row("conversation", chat.id)).toBeVisible();
+  expect((await app.inspect(chat.id)).status).toBe("working");
   await action("workspace", workspace, "Close workspace");
   const guard = app.page.getByRole("dialog", {
     name: "Close workspace",
@@ -1998,8 +2004,8 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
   const shortcuts = await footer().locator("kbd").allTextContents();
   expect(shortcuts).toEqual(
     process.platform === "darwin"
-      ? ["Enter", "⌘Enter", "⌘W"]
-      : ["Enter", "Ctrl+Enter", "Ctrl+W"],
+      ? ["Enter", "⌘Enter", "⌘W", "⌘⇧W"]
+      : ["Enter", "Ctrl+Enter", "Ctrl+W", "Ctrl+Shift+W"],
   );
   await expect(footer()).toBeInViewport();
   await overview().screenshot({
@@ -2015,6 +2021,7 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
   await expect(footer()).not.toContainText("Close tab");
   await editor.fill("Taken aside fixture");
   await editor.press(`${modifier}+w`);
+  await editor.press(`${modifier}+Shift+W`);
   await expect(editor).toHaveValue("Taken aside fixture");
   await editor.press("Enter");
   await expect(search()).toHaveValue("Chosen chat");
@@ -2034,7 +2041,9 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
   );
   await expect(selection()).toHaveAccessibleName(/Pinned/);
   await expect(footer()).not.toContainText("Close tab");
+  await expect(footer()).not.toContainText("Remove from workspace");
   await search().press(`${modifier}+w`);
+  await search().press(`${modifier}+Shift+W`);
   expect(
     (await app.workspace(second)).panes.some(
       (pane) => pane.id === selected.paneId,
@@ -2107,7 +2116,7 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
   await expect(selection()).toHaveAttribute("aria-current", "true");
   await expect(footer()).toContainText("Remove from workspace");
   await expect(footer()).toContainText(
-    process.platform === "darwin" ? "⌘⇧Y" : "Ctrl+Shift+Y",
+    process.platform === "darwin" ? "⌘⇧W" : "Ctrl+Shift+W",
   );
   await search().dispatchEvent("keydown", {
     key: "Y",
@@ -2117,8 +2126,9 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     shiftKey: true,
     repeat: true,
   });
-  await expect(selection()).toBeVisible();
   await search().press(`${modifier}+Shift+Y`);
+  await expect(selection()).toBeVisible();
+  await search().press(`${modifier}+Shift+W`);
   await expect(selection()).toHaveCount(0);
   await expect(search()).toBeFocused();
   await expect(search()).toHaveValue("Taken aside fixture");
@@ -2139,4 +2149,167 @@ test("Overview quick actions close a selected tab or remove a saved chat from se
     nativeId: selected.nativeId,
     displayName: "Taken aside fixture",
   });
+
+  await show();
+  await search().fill("Taken aside fixture");
+  await selection().hover();
+  await expect(footer()).toContainText("Close tab");
+  await search().press(`${modifier}+Shift+W`);
+  await expect(selection()).toHaveCount(0);
+  expect(
+    (await app.workspace(second)).panes.some(
+      ({ id }) => id === selected.paneId,
+    ),
+  ).toBe(false);
+});
+
+test("Close and remove shortcut preserves the active chat draft and native session across restart", async () => {
+  const workspace = await app.create("Invented draft removal");
+  const chat = await app.newChat(workspace, "codex");
+  const composer = () =>
+    app
+      .pane(chat.paneId)
+      .getByRole("textbox", { name: "Message", exact: true });
+  const snapshot = () => app.cli<AppState>("state");
+
+  await composer().fill("cut this");
+  await composer().selectText();
+  await composer().press(`${modifier}+x`);
+  await expect(composer()).toHaveValue("");
+  await composer().fill("Preserve this pending draft");
+  await composer().press(`${modifier}+Shift+W`);
+  await expect
+    .poll(async () =>
+      (await snapshot()).conversations.some(({ id }) => id === chat.id),
+    )
+    .toBe(false);
+  await app.stop();
+  await app.start();
+  await app.cli("pane", "reopen", "--workspace", workspace);
+  await expect(composer()).toHaveValue("Preserve this pending draft");
+  expect((await app.inspect(chat.id)).nativeId).toBe(chat.nativeId);
+  expect(await app.prompts()).toEqual([]);
+});
+
+test("Close and remove shortcut closes its browser and terminal targets and archives open workspaces", async () => {
+  const workspace = await app.create("Invented shortcut targets");
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end(
+      '<!doctype html><title>Invented shortcut page</title><input autofocus value="cut this">',
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const browser = await app.cli<{ paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      url,
+    );
+    const readPageInput = () =>
+      app.app!.evaluate(
+        ({ webContents }, url) =>
+          webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === url)
+            ?.executeJavaScript('document.querySelector("input")?.value') ??
+          null,
+        url,
+      );
+    await expect.poll(readPageInput).toBe("cut this");
+    await app.app!.evaluate(async ({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL() === url)!;
+      contents.focus();
+      await contents.executeJavaScript(
+        'document.querySelector("input").select()',
+      );
+    }, url);
+    const browserKey = (keyCode: string, shifted = false) =>
+      app.app!.evaluate(
+        ({ webContents }, { url, keyCode, shifted }) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((item) => item.getURL() === url)!;
+          const modifiers: Array<"meta" | "control" | "shift"> = [
+            process.platform === "darwin" ? "meta" : "control",
+          ];
+          if (shifted) modifiers.push("shift");
+          contents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+          contents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+        },
+        { url, keyCode, shifted },
+      );
+    await browserKey("X");
+    await expect.poll(readPageInput).toBe("");
+    await browserKey("W", true);
+    await expect(app.pane(browser.paneId)).toHaveCount(0);
+
+    const home = await app.cli<{ paneId: string }>(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      "about:blank",
+    );
+    const address = app
+      .pane(home.paneId)
+      .getByRole("combobox", { name: "Address" });
+    await address.focus();
+    await address.press(`${modifier}+Shift+W`);
+    await expect(app.pane(home.paneId)).toHaveCount(0);
+
+    const terminal = await app.cli<{ paneId: string }>(
+      "terminal",
+      "open",
+      "--workspace",
+      workspace,
+      "--cwd",
+      app.folders[0],
+    );
+    const terminalInput = app
+      .pane(terminal.paneId)
+      .getByRole("textbox", { name: "Terminal input" });
+    await terminalInput.focus();
+    await terminalInput.press(`${modifier}+Shift+W`);
+    await expect(app.pane(terminal.paneId)).toHaveCount(0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+
+  await show();
+  await search().fill("Invented shortcut targets");
+  await row("workspace", workspace).hover();
+  await search().press(`${modifier}+Shift+W`);
+  await expect(row("workspace", workspace)).toHaveCount(0);
+  const state = () => app.cli<AppState>("state");
+  await expect
+    .poll(async () =>
+      (await state()).closedWorkspaces?.some(
+        (entry) => entry.workspace.id === workspace,
+      ),
+    )
+    .toBe(true);
+  await overview()
+    .getByRole("button", {
+      name: "Show closed workspaces and cancelled reviews",
+    })
+    .click();
+  await search().focus();
+  const archived = row("closed-workspace", workspace);
+  await archived.hover();
+  await search().press(`${modifier}+Shift+W`);
+  await expect(archived).toBeVisible();
+  await search().press("Enter");
+  await expect
+    .poll(async () =>
+      (await state()).workspaces.some(({ id }) => id === workspace),
+    )
+    .toBe(true);
 });
