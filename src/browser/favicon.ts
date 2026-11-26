@@ -120,6 +120,7 @@ function raster(bytes: Buffer): NativeImage | undefined {
   const entries = bytes.readUInt16LE(4);
   if (entries > 32 || 6 + 16 * entries > bytes.length) return;
   let bitmap: NativeImage | undefined;
+  let bitmapEdge = 0;
   for (let entry = 6; entry < 6 + 16 * entries; entry += 16) {
     const size = bytes.readUInt32LE(entry + 8);
     const start = bytes.readUInt32LE(entry + 12);
@@ -128,7 +129,17 @@ function raster(bytes: Buffer): NativeImage | undefined {
     if (smallPng(image)) {
       const png = nativeImage.createFromBuffer(image);
       if (!png.isEmpty()) return png;
-    } else bitmap ??= bitmapIcon(image);
+    } else {
+      const frame = bitmapIcon(image);
+      if (frame) {
+        const { width, height } = frame.getSize();
+        const edge = Math.max(width, height);
+        if (edge > bitmapEdge) {
+          bitmap = frame;
+          bitmapEdge = edge;
+        }
+      }
+    }
   }
   return bitmap;
 }
@@ -183,6 +194,32 @@ function favoriteArt(image: NativeImage): FavoriteArt | undefined {
   }
 }
 
+function lightFavoriteArt(image: NativeImage): FavoriteArt | undefined {
+  const icon = fit(image, 32);
+  const pixels = icon.toBitmap();
+  let transparent = false;
+  let hasInk = false;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const alpha = pixels[offset + 3]!;
+    if (alpha < 16) {
+      transparent = true;
+      continue;
+    }
+    hasInk = true;
+    // The bitmap channels are premultiplied by alpha.
+    const brightest = Math.max(
+      pixels[offset]!,
+      pixels[offset + 1]!,
+      pixels[offset + 2]!,
+    );
+    if (brightest * 255 > alpha * 72) return;
+  }
+  if (!transparent || !hasInk) return;
+  const png = icon.toPNG();
+  if (png.length && png.length <= 20 * 1024)
+    return { kind: "light", png: pngData(png), ...icon.getSize() };
+}
+
 async function fetchIcon(
   session: Session,
   origin: string,
@@ -215,12 +252,19 @@ export async function loadSiteIcons(
 ): Promise<void> {
   let favicon: string | undefined;
   let largest = 0;
-  const limit = mode === "touch" ? 2 : 4;
-  for (const url of candidates.slice(0, limit)) {
-    if (signal.aborted) return;
+  const declared = candidates.slice(0, mode === "touch" ? 2 : 4);
+  const conventional = pageOrigin + "/favicon.ico";
+  const candidatesWithFallback = [...declared];
+  if (mode !== "touch" && !declared.includes(conventional))
+    candidatesWithFallback.push(conventional);
+  for (const [index, url] of candidatesWithFallback.entries()) {
+    const fallback = index === declared.length;
+    if (signal.aborted || (fallback && favicon)) return;
     const image = await fetchIcon(session, pageOrigin, url, signal);
     if (!image || signal.aborted) continue;
-    const candidate = favoriteArt(image);
+    const candidate =
+      favoriteArt(image) ??
+      (url === conventional ? lightFavoriteArt(image) : undefined);
     const size = candidate ? candidate.width * candidate.height : 0;
     const art = size > largest ? candidate : undefined;
     if (art) largest = size;

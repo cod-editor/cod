@@ -883,18 +883,18 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
       expect(geometry.valueGap).toBeGreaterThanOrEqual(8);
       expect(geometry.trailingInset).toBeGreaterThanOrEqual(12);
     };
-    const checkPaintedSelection = async (name: string) => {
-      const screenshot = await app.page.screenshot({
-        path: info.outputPath(name + ".png"),
-        scale: "css",
-      });
-      const selected = cursor.locator("option:checked");
-      const bounds = await selected.evaluate((option) => {
+    const readBounds = () =>
+      cursor.locator("option:checked").evaluate((option) => {
         const row = option.getBoundingClientRect();
         const range = document.createRange();
         range.selectNodeContents(option);
         const text = range.getBoundingClientRect();
+        const active = document.activeElement;
         return {
+          open: option.closest("select")!.matches(":open"),
+          value: (option as HTMLOptionElement).value,
+          focusedValue:
+            active instanceof HTMLOptionElement ? active.value : null,
           left: Math.floor(row.right - 30),
           right: Math.floor(row.right - 4),
           top: Math.ceil(row.top + 2),
@@ -904,6 +904,10 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
           textHeight: text.height,
         };
       });
+    const expectSelectedCheckmark = async (
+      screenshot: Buffer,
+      bounds: Awaited<ReturnType<typeof readBounds>>,
+    ) => {
       const center = await app.page.evaluate(
         async ({ screenshot, bounds }) => {
           const bytes = Uint8Array.from(atob(screenshot), (byte) =>
@@ -962,6 +966,22 @@ test("Settings native selectors retain keyboard selection and cancellation", asy
         Math.abs(center.y! - bounds.textCenter),
         "paint center relative to option label",
       ).toBeLessThanOrEqual(2);
+    };
+    const checkPaintedSelection = async (name: string) => {
+      await expect(async () => {
+        const bounds = await readBounds();
+        expect(bounds.open, "selector stays open for capture").toBe(true);
+        expect(bounds.focusedValue, "focused option during capture").toBe(
+          "bar",
+        );
+        const screenshot = await app.page.screenshot({ scale: "css" });
+        expect(
+          await readBounds(),
+          "selector geometry for the captured frame",
+        ).toEqual(bounds);
+        await expectSelectedCheckmark(screenshot, bounds);
+        await writeFile(info.outputPath(name + ".png"), screenshot);
+      }).toPass({ timeout: 2_000 });
     };
     await checkClosedControl("block", 14);
     await app.cli("settings", "update", "--values", '{"ui.fontSize":13}');

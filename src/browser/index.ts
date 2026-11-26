@@ -503,15 +503,18 @@ export class BrowserService {
         installScrollbarStyle(view.webContents, this.options.scrollbarCSS);
       const changed = () => this.changed(resource);
       view.webContents.on("will-redirect", (event) => {
-        if (event.isMainFrame) resource.redirected = true;
+        if (!event.isMainFrame) return;
+        resource.redirected = true;
+        resource.favicon = undefined;
       });
       view.webContents.on(
         "did-start-navigation",
-        (_event, _url, inPlace, mainFrame) => {
+        (_event, url, inPlace, mainFrame) => {
           if (!mainFrame || inPlace) return;
           resource.pendingFavicon?.abort();
           resource.pendingFavoriteArt?.abort();
-          resource.favicon = undefined;
+          // Chromium can omit an unchanged favicon event on a reload.
+          if (url !== resource.lastSuccessfulUrl) resource.favicon = undefined;
           resource.faviconCandidates = undefined;
           resource.awaitingDocument = true;
           resource.restoredFailure = false;
@@ -552,7 +555,8 @@ export class BrowserService {
       view.webContents.on("did-start-loading", changed);
       view.webContents.on("did-stop-loading", changed);
       const committed = () => this.updateNavigation(resource);
-      view.webContents.on("did-navigate", () => {
+      view.webContents.on("did-navigate", (_event, url) => {
+        if (url !== resource.lastSuccessfulUrl) resource.favicon = undefined;
         resource.awaitingDocument = false;
         committed();
       });

@@ -12,7 +12,9 @@ export function siteFavoriteArt(
 ): FavoriteArt | undefined {
   if (
     value &&
-    (value.kind === "mark" || value.kind === "cover") &&
+    (value.kind === "mark" ||
+      value.kind === "cover" ||
+      value.kind === "light") &&
     typeof value.png === "string" &&
     value.png.length <= 27_332 &&
     pngData.test(value.png)

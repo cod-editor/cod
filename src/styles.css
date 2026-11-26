@@ -1632,6 +1632,12 @@ browser-action-list::part(action):focus-visible {
   max-width: none;
   max-height: none;
 }
+.browser-home-monogram[data-art="light"] > .site-favicon {
+  box-sizing: content-box;
+  padding: 6px;
+  border-radius: 50%;
+  background: #e0e4ea;
+}
 .browser-home-add {
   justify-content: center;
   color: var(--muted);
