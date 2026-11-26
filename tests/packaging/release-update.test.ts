@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  checkForPreviewUpdate,
-  latestPreviewUpdate,
-  packagedPreviewTag,
-} from "../../src/preview-update.ts";
+  checkForReleaseUpdate,
+  latestReleaseUpdate,
+  packagedReleaseTag,
+} from "../../src/release-update.ts";
 
 function release(tag: string) {
   const name = `Cod-${tag.slice(1)}-macOS-arm64.dmg`;
   return {
     tag_name: tag,
     draft: false,
-    prerelease: true,
+    prerelease: tag.includes("-preview."),
     assets: [
       {
         name,
@@ -24,26 +24,26 @@ function release(tag: string) {
 }
 const initial = "v0.4.0-preview.2";
 
-test("only packaged Apple Silicon previews opt into release checks", () => {
+test("only packaged Apple Silicon builds opt into release checks", () => {
   assert.equal(
-    packagedPreviewTag(true, "darwin", "arm64", initial.slice(1)),
+    packagedReleaseTag(true, "darwin", "arm64", initial.slice(1)),
     initial,
   );
   assert.equal(
-    packagedPreviewTag(false, "darwin", "arm64", initial.slice(1)),
+    packagedReleaseTag(false, "darwin", "arm64", initial.slice(1)),
     undefined,
   );
   assert.equal(
-    packagedPreviewTag(true, "linux", "arm64", initial.slice(1)),
+    packagedReleaseTag(true, "linux", "arm64", initial.slice(1)),
     undefined,
   );
   assert.equal(
-    packagedPreviewTag(true, "darwin", "x64", initial.slice(1)),
+    packagedReleaseTag(true, "darwin", "x64", initial.slice(1)),
     undefined,
   );
-  assert.equal(packagedPreviewTag(true, "darwin", "arm64", "0.4.0"), undefined);
+  assert.equal(packagedReleaseTag(true, "darwin", "arm64", "0.4.0"), "v0.4.0");
   assert.equal(
-    packagedPreviewTag(true, "darwin", "arm64", "0.4.0-preview.02"),
+    packagedReleaseTag(true, "darwin", "arm64", "0.4.0-preview.02"),
     undefined,
   );
 });
@@ -54,7 +54,7 @@ test("choose the newest published preview with the matching uploaded Apple Silic
   const notPreview = { ...release("v0.6.0-preview.0"), prerelease: false };
   const noDiskImage = { ...release("v0.7.0-preview.0"), assets: [] };
   assert.deepEqual(
-    latestPreviewUpdate(initial, [
+    latestReleaseUpdate(initial, [
       release("v0.4.0-preview.9"),
       notPublished,
       newest,
@@ -69,16 +69,45 @@ test("choose the newest published preview with the matching uploaded Apple Silic
     },
   );
   assert.equal(
-    latestPreviewUpdate(initial, [
+    latestReleaseUpdate(initial, [
       release(initial),
       release("v0.3.99-preview.100"),
     ]),
     undefined,
   );
   assert.equal(
-    latestPreviewUpdate("v0.9.99-preview.100", [release("v0.10.0-preview.0")])
+    latestReleaseUpdate("v0.9.99-preview.100", [release("v0.10.0-preview.0")])
       ?.version,
     "0.10.0-preview.0",
+  );
+});
+
+test("stable release discovery excludes previews and inconsistent release tags", () => {
+  const stable = release("v0.4.1");
+  assert.deepEqual(
+    latestReleaseUpdate("v0.4.0", [
+      release("v0.4.0"),
+      release("v0.7.0-preview.1"),
+      release("v0.5.00"),
+      release("v0.6.0\n"),
+      { ...release("v0.6.0"), prerelease: true },
+      { ...release("v0.5.0"), draft: true },
+      stable,
+    ]),
+    { version: "0.4.1", downloadUrl: stable.assets[0].browser_download_url },
+  );
+});
+
+test("preview discovery includes stable releases in version order", () => {
+  const stable = release("v0.4.0");
+  assert.deepEqual(
+    latestReleaseUpdate(initial, [stable, release("v0.4.0-preview.999")]),
+    { version: "0.4.0", downloadUrl: stable.assets[0].browser_download_url },
+  );
+  assert.equal(
+    latestReleaseUpdate(initial, [release("v0.5.0-preview.0"), stable])
+      ?.version,
+    "0.5.0-preview.0",
   );
 });
 
@@ -107,7 +136,7 @@ test("reject misleading release links and incomplete or wrong-platform disk imag
     },
   ]) {
     assert.equal(
-      latestPreviewUpdate(initial, [
+      latestReleaseUpdate(initial, [
         { ...candidate, assets: [{ ...asset, ...change }] },
       ]),
       undefined,
@@ -120,7 +149,7 @@ test("the release request stays on the fixed unauthenticated feed and handles bo
   const respond = (body: unknown) => async () => Response.json(body);
   assert.equal(
     (
-      await checkForPreviewUpdate(
+      await checkForReleaseUpdate(
         initial,
         stop.signal,
         respond([release("v0.5.0-preview.1")]),
@@ -128,7 +157,7 @@ test("the release request stays on the fixed unauthenticated feed and handles bo
     )?.version,
     "0.5.0-preview.1",
   );
-  await checkForPreviewUpdate(initial, stop.signal, async (url, options) => {
+  await checkForReleaseUpdate(initial, stop.signal, async (url, options) => {
     assert.equal(
       url,
       "https://api.github.com/repos/cod-editor/cod/releases?per_page=30",
@@ -143,7 +172,7 @@ test("the release request stays on the fixed unauthenticated feed and handles bo
   });
   const signal = new AbortController().signal;
   await assert.rejects(
-    checkForPreviewUpdate(
+    checkForReleaseUpdate(
       initial,
       signal,
       async () => new Response("", { status: 403 }),
@@ -151,15 +180,15 @@ test("the release request stays on the fixed unauthenticated feed and handles bo
     /unavailable/,
   );
   await assert.rejects(
-    checkForPreviewUpdate(initial, signal, respond({ message: "bad feed" })),
+    checkForReleaseUpdate(initial, signal, respond({ message: "bad feed" })),
     /metadata/,
   );
   await assert.rejects(
-    checkForPreviewUpdate(initial, signal, respond("a".repeat(1024 * 1024))),
+    checkForReleaseUpdate(initial, signal, respond("a".repeat(1024 * 1024))),
     /too large/,
   );
   await assert.rejects(
-    checkForPreviewUpdate(initial, signal, async () => {
+    checkForReleaseUpdate(initial, signal, async () => {
       throw new Error("offline");
     }),
     /offline/,

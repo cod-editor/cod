@@ -589,6 +589,189 @@ test("Site favicons follow the loaded tab and survive in Home pins without a fet
   expect(requests).toEqual([]);
 });
 
+test("Home uses sharp site art while tabs keep small favicons", async ({}, info) => {
+  const pngs = await shell.app!.evaluate(({ nativeImage }) => {
+    const width = 160;
+    const pixels = Buffer.alloc(width * width * 4);
+    const png = () =>
+      nativeImage
+        .createFromBitmap(pixels, { width, height: width })
+        .toPNG()
+        .toString("base64");
+    for (let y = 0; y < width; y++)
+      for (let x = 0; x < width; x++) {
+        const offset = (y * width + x) * 4;
+        const star = Math.abs(x - 80) / 46 + Math.abs(y - 80) / 49 < 1;
+        pixels.set(star ? [255, 243, 220, 255] : [225, 102, 43, 255], offset);
+      }
+    const cover = png();
+    pixels.fill(0);
+    for (let y = 20; y < 140; y++)
+      for (let x = 20; x < 140; x++) {
+        const diamond = Math.abs(x - 80) + Math.abs(y - 80);
+        if (diamond > 60) continue;
+        const color = diamond > 30 ? [154, 190, 252, 255] : [89, 136, 250, 255];
+        pixels.set(color, (y * width + x) * 4);
+      }
+    return { cover, mark: png() };
+  });
+  const assets = {
+    cover: Buffer.from(pngs.cover, "base64"),
+    mark: Buffer.from(pngs.mark, "base64"),
+  };
+  const fixtures: Array<{
+    server: Server;
+    url: string;
+    label: string;
+    requests: string[];
+  }> = [];
+  const serve = async (label: string, links: string) => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      const target = request.url!;
+      requests.push(target);
+      response.setHeader("Cache-Control", "no-store");
+      if (target === "/00-small.png" || target === "/10-art.png") {
+        response.setHeader("Content-Type", "image/png");
+        response.end(
+          target === "/00-small.png"
+            ? fixtureIcon
+            : label === "Atlas"
+              ? assets.cover
+              : assets.mark,
+        );
+      } else if (target === "/") {
+        response.setHeader("Content-Type", "text/html");
+        response.end(
+          `<!doctype html><title>${label}</title><link rel="icon" href="/00-small.png">${links}`,
+        );
+      } else {
+        response.statusCode = 404;
+        response.end();
+      }
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Fixture server did not bind");
+    const fixture = {
+      server,
+      url: `http://127.0.0.1:${address.port}/`,
+      label,
+      requests,
+    };
+    fixtures.push(fixture);
+    return fixture;
+  };
+  try {
+    const atlas = await serve(
+      "Atlas",
+      '<link rel="icon" sizes="160x160" href="/10-art.png">',
+    );
+    const relay = await serve(
+      "Relay",
+      '<link rel="apple-touch-icon" sizes="160x160" href="/10-art.png">',
+    );
+    await serve(
+      "Forum",
+      `<link rel="apple-touch-icon" href="${relay.url}not-same-origin.png">`,
+    );
+    const missing = atlas.url.replace("127.0.0.1", "localhost");
+    const workspace = await shell.create("Favorite artwork fixture");
+    for (const site of [...fixtures, { url: missing, label: "Notebook" }])
+      await shell.cli(
+        "browser",
+        "pin",
+        "--url",
+        site.url,
+        "--title",
+        site.label,
+      );
+    expect(fixtures.every((site) => !site.requests.length)).toBe(true);
+    const tabs: BrowserRecord[] = [];
+    for (const site of fixtures) {
+      tabs.push(
+        await shell.cli<BrowserRecord>(
+          "browser",
+          "open",
+          "--workspace",
+          workspace,
+          "--url",
+          site.url,
+        ),
+      );
+      await expect(
+        shell.page
+          .getByRole("tab", { name: site.label, exact: true })
+          .locator("img.site-favicon"),
+      ).toHaveJSProperty("naturalWidth", 16);
+    }
+    await shell.page.keyboard.press(`${modifier}+t`);
+    const home = () => shell.page.getByRole("region", { name: "Browser home" });
+    const art = (label: string) =>
+      home()
+        .getByRole("button", { name: label, exact: true })
+        .locator(".browser-home-monogram");
+    const image = (label: string) => art(label).locator("img.site-favicon");
+    const verify = async () => {
+      await expect(home()).toBeVisible();
+      await expect(art("Atlas")).toHaveAttribute("data-art", "cover");
+      await expect(image("Atlas")).toHaveJSProperty("naturalWidth", 128);
+      await expect(image("Atlas")).toHaveCSS("width", "64px");
+      await expect(art("Relay")).toHaveAttribute("data-art", "mark");
+      await expect(image("Relay")).toHaveJSProperty("naturalWidth", 120);
+      await expect(image("Relay")).toHaveCSS("width", "52px");
+      await expect(art("Relay")).toHaveCSS(
+        "background-color",
+        "rgba(0, 0, 0, 0)",
+      );
+      await expect(image("Forum")).toHaveJSProperty("naturalWidth", 16);
+      await expect(image("Forum")).toHaveCSS("width", "16px");
+      await expect(art("Notebook")).toHaveText("N");
+      await expect(image("Notebook")).toHaveCount(0);
+      expect(relay.requests).not.toContain("/not-same-origin.png");
+    };
+    await verify();
+    await shell.page.screenshot({
+      path: info.outputPath("home-favorite-art.png"),
+    });
+    await shell.app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(760, 620),
+    );
+    await expect.poll(() => shell.page.evaluate(() => innerWidth)).toBe(760);
+    await expect
+      .poll(async () => (await home().boundingBox())?.width)
+      .toBeLessThan(460);
+    await verify();
+    await shell.page.screenshot({
+      path: info.outputPath("home-favorite-art-narrow.png"),
+    });
+    for (const tab of tabs)
+      await shell.cli(
+        "pane",
+        "close",
+        "--workspace",
+        workspace,
+        "--id",
+        tab.paneId,
+      );
+    await shell.stop();
+    for (const site of fixtures) site.requests.length = 0;
+    await shell.start();
+    await verify();
+    expect(fixtures.every((site) => !site.requests.length)).toBe(true);
+  } finally {
+    for (const fixture of fixtures) {
+      fixture.server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        fixture.server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  }
+});
+
 test("Site favicon accepts JPEG and a PNG embedded in an ICO", async () => {
   fixtureJpeg = Buffer.from(
     await shell.app!.evaluate(

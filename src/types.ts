@@ -1,3 +1,4 @@
+import type { SiteIcons } from "./browser/site-icon-types";
 import type {
   BackgroundActivity,
   PermissionOption,
@@ -320,7 +321,7 @@ export interface WorkspaceState {
 export interface AppState {
   browserDownloads?: import("./browser/download-types").BrowserDownload[];
   sitePermissions?: import("./browser/permission-types").SitePolicy[];
-  pinnedSites?: Array<{ url: string; title: string; favicon?: string }>;
+  pinnedSites?: Array<{ url: string; title: string } & SiteIcons>;
   closedWorkspaces?: Array<{
     workspace: WorkspaceState;
     conversations: ConversationState[];
@@ -362,8 +363,8 @@ export interface OperationRequest {
 }
 
 export interface CodBridge {
-  onPreviewUpdate(callback: (version: string | null) => void): void;
-  openPreviewUpdate(): Promise<void>;
+  onReleaseUpdate(callback: (version: string | null) => void): void;
+  openReleaseUpdate(): Promise<void>;
   toggleDevTools(browserId?: string): Promise<void>;
   onSettings(
     callback: (state: import("./settings").SettingsState) => void,

@@ -3,19 +3,19 @@ set -euo pipefail
 cd "$(dirname -- "$0")/.."
 
 tag=${1:-}
-if [[ $# != 1 || ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.(0|[1-9][0-9]*)$ ]]; then
-  echo "Usage: scripts/macos-preview.sh vX.Y.Z-preview.N" >&2
+if [[ $# != 1 || ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.(0|[1-9][0-9]*))?$ ]]; then
+  echo "Usage: scripts/macos-preview.sh vX.Y.Z or vX.Y.Z-preview.N" >&2
   exit 1
 fi
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
-  echo "This preview requires an Apple Silicon Mac" >&2
+  echo "This release requires an Apple Silicon Mac" >&2
   exit 1
 fi
 
 version=${tag#v}
 name="Cod-$version-macOS-arm64.dmg"
 mkdir -p release
-stage=$(mktemp -d "$PWD/release/.preview-stage.XXXXXXXX")
+stage=$(mktemp -d "$PWD/release/.release-stage.XXXXXXXX")
 mount="$stage/mount"
 mkdir "$mount"
 mounted=false
@@ -32,7 +32,11 @@ artifact=$(node -p 'JSON.parse(process.argv[1]).artifact' "$package")
 mkdir "$stage/image"
 ditto "$artifact/Cod.app" "$stage/image/Cod.app"
 ln -s /Applications "$stage/image/Applications"
-hdiutil create -volname "Cod Preview" -srcfolder "$stage/image" -fs HFS+ -format UDZO "$stage/$name" >&2
+volume=Cod
+if [[ "$tag" == *-preview.* ]]; then
+  volume="Cod Preview"
+fi
+hdiutil create -volname "$volume" -srcfolder "$stage/image" -fs HFS+ -format UDZO "$stage/$name" >&2
 hdiutil verify "$stage/$name" >&2
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$stage/$name" >&2
 mounted=true
@@ -43,5 +47,6 @@ ditto "$artifact/codctl" "$stage/installed/codctl"
 node tests/support/electron/check-package.mjs "$stage/installed" "$version" >&2
 hdiutil detach "$mount" >&2
 mounted=false
-mv "$stage/$name" "release/$name"
+(cd "$stage" && shasum -a 256 "$name" > "$name.sha256")
+mv "$stage/$name" "$stage/$name.sha256" release/
 printf '%s\n' "$name"

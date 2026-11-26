@@ -330,10 +330,10 @@ body {
   max-width: 100%;
   overflow-x: auto;
 }
-#pane-visibility:has(.preview-update:not([hidden])) {
+#pane-visibility:has(.release-update:not([hidden])) {
   height: auto;
 }
-.preview-update {
+.release-update {
   margin-inline-end: var(--space-1);
   white-space: nowrap;
 }
@@ -1605,12 +1605,25 @@ browser-action-list::part(action):focus-visible {
   width: 64px;
   height: 64px;
   border-radius: 15px;
+  overflow: hidden;
   font-size: 32px;
   color: #fff;
+  background: var(--monogram-background);
+}
+.browser-home-monogram:has(> .site-favicon) {
+  background: transparent;
 }
 .browser-home-monogram > .site-favicon {
-  width: 32px;
-  height: 32px;
+  width: auto;
+  height: auto;
+  max-width: 52px;
+  max-height: 52px;
+}
+.browser-home-monogram[data-art="cover"] > .site-favicon {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
 }
 .browser-home-add {
   justify-content: center;

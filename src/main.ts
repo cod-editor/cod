@@ -3,10 +3,10 @@ import os from "node:os";
 import { DiagnosticJournal } from "./diagnostics";
 import { startupBuildInfo } from "./build-info";
 import {
-  checkForPreviewUpdate,
-  packagedPreviewTag,
-  type PreviewUpdate,
-} from "./preview-update";
+  checkForReleaseUpdate,
+  packagedReleaseTag,
+  type ReleaseUpdate,
+} from "./release-update";
 import { watchFile, unwatchFile } from "node:fs";
 import {
   nativeKeyInput,
@@ -119,9 +119,9 @@ async function reloadKeymap(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null;
-let previewUpdate: PreviewUpdate | undefined;
-function startPreviewChecks(): void {
-  const current = packagedPreviewTag(
+let releaseUpdate: ReleaseUpdate | undefined;
+function startReleaseChecks(): void {
+  const current = packagedReleaseTag(
     app.isPackaged,
     process.platform,
     process.arch,
@@ -131,16 +131,16 @@ function startPreviewChecks(): void {
   const stop = new AbortController();
   const refresh = async () => {
     try {
-      const update = await checkForPreviewUpdate(current, stop.signal);
-      if (stop.signal.aborted || update?.version === previewUpdate?.version)
+      const update = await checkForReleaseUpdate(current, stop.signal);
+      if (stop.signal.aborted || update?.version === releaseUpdate?.version)
         return;
-      previewUpdate = update;
+      releaseUpdate = update;
       mainWindow?.webContents.send(
-        "cod:preview-update",
+        "cod:release-update",
         update?.version ?? null,
       );
     } catch {
-      // The preview notice is optional. Keep the last successful result if the feed is unavailable.
+      // The release notice is optional. Keep the last successful result if the feed is unavailable.
     }
   };
   void refresh();
@@ -680,8 +680,8 @@ function createWindow(): void {
     if (url !== rendererUrl) event.preventDefault();
   });
   mainWindow.webContents.on("did-finish-load", () => {
-    if (previewUpdate)
-      mainWindow?.webContents.send("cod:preview-update", previewUpdate.version);
+    if (releaseUpdate)
+      mainWindow?.webContents.send("cod:release-update", releaseUpdate.version);
   });
   void mainWindow.loadFile(rendererPath);
 }
@@ -724,9 +724,9 @@ async function start(): Promise<void> {
       )
         throw new Error("Untrusted renderer request");
     };
-    ipcMain.handle("cod:preview-update-open", async (event) => {
+    ipcMain.handle("cod:release-update-open", async (event) => {
       requireShellRenderer(event);
-      if (previewUpdate) await shell.openExternal(previewUpdate.downloadUrl);
+      if (releaseUpdate) await shell.openExternal(releaseUpdate.downloadUrl);
     });
     ipcMain.handle("cod:devtools", (event, id: unknown) => {
       if (
@@ -1146,7 +1146,7 @@ async function start(): Promise<void> {
     };
     refreshKeyboardMenu();
     createWindow();
-    startPreviewChecks();
+    startReleaseChecks();
     canOpenUrls = true;
     for (const url of [
       ...pendingUrls.splice(0),
