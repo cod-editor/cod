@@ -170,6 +170,18 @@ export class ReviewApplicationService {
     }
     if (request.op === "review.inspect") return this.reviews.inspect(id);
     if (request.op === "review.detail") return this.reviews.detail(id);
+    if (request.op === "review.file-tree")
+      return this.reviews.fileTree(
+        id,
+        requiredString(request, "roundId"),
+        requiredString(request, "path"),
+      );
+    if (request.op === "review.file-source")
+      return this.reviews.fileSource(
+        id,
+        requiredString(request, "roundId"),
+        requiredString(request, "path"),
+      );
     if (request.op === "review.changed") return this.reviews.changed(id);
     if (request.op === "review.changes")
       return this.reviews.documentChanges(id);

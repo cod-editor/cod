@@ -20,6 +20,8 @@ import { menu } from "./ui/controls";
 import type { AppState, ReviewSummary } from "./types";
 import type { Invoke } from "./ui/contracts";
 import type { ReviewService } from "./reviews/index";
+import type { ReviewedGitFile } from "./reviews/git-source";
+import type { ReviewFilesSource } from "./ui/files";
 type Detail = Awaited<ReturnType<ReviewService["detail"]>>;
 type Range = import("./reviews/snapshots").Range;
 function revisionLabels(ref: string, commit: string | null) {
@@ -46,7 +48,22 @@ function diffPathLabel(path: string): HTMLElement {
   return label;
 }
 
+function fileTreeOrder(left: string, right: string): number {
+  const a = left.split("/"),
+    b = right.split("/");
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    const depthOrder = Number(i < b.length - 1) - Number(i < a.length - 1);
+    return depthOrder || a[i].localeCompare(b[i]);
+  }
+  return a.length - b.length;
+}
+
 const updates = new WeakMap<HTMLElement, (state: AppState) => void>();
+const fileTrees = new WeakMap<HTMLElement, ReviewFilesSource>();
+export function reviewFileTree(element?: HTMLElement | null) {
+  if (element) return fileTrees.get(element);
+}
 export function updateReview(element: HTMLElement, state: AppState) {
   updates.get(element)?.(state);
 }
@@ -55,6 +72,7 @@ export function reviewPane(
   paneId: string,
   initial: AppState,
   invoke: Invoke,
+  filesChanged: (source: ReviewFilesSource) => void,
 ): HTMLElement {
   const host = document.createElement("div");
   host.className = "pane-body review-body";
@@ -121,7 +139,42 @@ export function reviewPane(
   let previewMode = readPreference<boolean>(`review-preview.${id}`, false);
   let shownError = false;
   let diskTimer: ReturnType<typeof setTimeout> | undefined;
-  let diffAnchors: Array<{ old?: Range; new?: Range; hunk: string }> = [];
+  let diffAnchors: Array<{ old?: Range; new?: Range }> = [];
+  let gitPath: string | undefined,
+    gitRequest = "",
+    gitFile: ReviewedGitFile | undefined,
+    gitError = "",
+    changeIndex = -1,
+    lastGitRound = "";
+  type Change = { file: string; line: number; side: "old" | "new" };
+  let navigation: Change[] = [],
+    jump: Change | undefined;
+  function showGitFile(
+    file: string,
+    point = navigation.find((change) => change.file === file),
+  ) {
+    gitPath = file;
+    writePreference(`review-file.${id}`, { round: selectedRound, path: file });
+    selection = end = 0;
+    jump = point;
+    changeIndex = point ? navigation.indexOf(point) : -1;
+    draw();
+    if (!point) host.scrollTop = 0;
+  }
+  function adjacentChange(direction: 1 | -1): Change | undefined {
+    if (changeIndex >= 0) return navigation[changeIndex + direction];
+    const path = gitPath;
+    if (!path) return direction > 0 ? navigation[0] : navigation.at(-1);
+    const matches = (point: Change) =>
+      direction * fileTreeOrder(point.file, path) > 0;
+    if (direction > 0) return navigation.find(matches);
+    for (let index = navigation.length - 1; index >= 0; index--)
+      if (matches(navigation[index])) return navigation[index];
+  }
+  function stepChange(direction: 1 | -1) {
+    const point = adjacentChange(direction);
+    if (point) showGitFile(point.file, point);
+  }
   let ranges: Range[] = [],
     buttons: HTMLButtonElement[] = [];
   const header = toolbar(),
@@ -155,7 +208,7 @@ export function reviewPane(
     try {
       const range = editing
         ? undefined
-        : (markdownDraftRange() ?? selectedRange());
+        : (pending?.range ?? markdownDraftRange() ?? selectedRange());
       await invoke(editing ? "review.comment-edit" : "review.comment-add", {
         id,
         roundId: selectedRound,
@@ -228,7 +281,7 @@ export function reviewPane(
         editing = undefined;
         staleEditor = false;
         save.disabled = false;
-        remember(textRange);
+        remember(documentView ? textRange : selectedRange());
         draw();
         status.textContent = "";
         input.focus();
@@ -262,7 +315,9 @@ export function reviewPane(
     staleEditor = false;
     save.disabled = false;
     restored = true;
-    remember(textRange);
+    remember(
+      documentView ? textRange : (existingComment?.anchor ?? selectedRange()),
+    );
     form.hidden = false;
     if (existingComment?.outdated) comments.after(form);
     else if (documentView)
@@ -278,7 +333,7 @@ export function reviewPane(
     input.focus();
   }
   input.addEventListener("input", () => {
-    remember(markdownDraftRange() ?? textRange);
+    remember(pending?.range ?? markdownDraftRange() ?? textRange);
     submit.disabled = !!input.value.trim();
   });
   function focusSelection() {
@@ -306,9 +361,14 @@ export function reviewPane(
       const side = rows.some((row) => !row.new) ? "old" : "new";
       if (
         !rows.length ||
-        rows.some((row) => !row[side] || row.hunk !== rows[0].hunk)
+        rows.some(
+          (row, index) =>
+            !row[side] ||
+            row[side]!.path !== rows[0][side]?.path ||
+            row[side]!.startLine !== (rows[0][side]?.startLine ?? 0) + index,
+        )
       )
-        throw new Error("Select lines in the same file, hunk and side");
+        throw new Error("Select consecutive lines on the same file and side");
       return { ...rows[0][side]!, endLine: rows.at(-1)![side]!.endLine };
     }
     const a = ranges[Math.min(selection, end)],
@@ -319,7 +379,11 @@ export function reviewPane(
   }
   host.addEventListener("cod:add-comment", () => {
     const round = detail?.rounds.find((r) => r.id === selectedRound);
-    if (round?.status === "draft" && round.id === detail?.currentRoundId)
+    if (
+      round?.status === "draft" &&
+      round.id === detail?.currentRoundId &&
+      !addComment.disabled
+    )
       openComment();
   });
   host.addEventListener("cod:submit-review", () => {
@@ -455,7 +519,21 @@ export function reviewPane(
   const controls = document.createElement("div");
   controls.className = "review-controls";
   controls.append(more, previewButton, submit);
-  header.append(context, controls);
+  const gitControls = document.createElement("div");
+  gitControls.className = "review-change-controls";
+  const previousChange = iconButton("chevron", "Previous change", () =>
+    stepChange(-1),
+  );
+  previousChange.classList.add("review-previous-change");
+  const nextChange = iconButton("chevron", "Next change", () => stepChange(1));
+  nextChange.classList.add("review-next-change");
+  const firstChange = button("First change", () => {
+    const first = navigation.find((point) => point.file === gitPath);
+    if (first) showGitFile(first.file, first);
+  });
+  const position = document.createElement("span");
+  gitControls.append(previousChange, position, nextChange, firstChange);
+  header.append(context, gitControls, controls);
   host.append(
     header,
     status,
@@ -506,6 +584,125 @@ export function reviewPane(
     );
     roundSelect.value = round.id;
     const snapshot = detail.snapshots[round.snapshotId];
+    gitControls.hidden = detail.target.kind !== "diff";
+    host.toggleAttribute("data-git-review", !gitControls.hidden);
+    const gitHunks =
+      detail.target.kind === "diff" ? diffHunks(snapshot.text) : [];
+    if (detail.target.kind === "diff") {
+      const enteringRound = lastGitRound !== round.id;
+      if (enteringRound) {
+        lastGitRound = round.id;
+        changeIndex = -1;
+        const saved = readPreference<{ round: string; path: string } | null>(
+          `review-file.${id}`,
+          null,
+        );
+        const original =
+          (pending?.roundId === round.id ? pending.range?.path : undefined) ??
+          (saved?.round === round.id ? saved.path : undefined);
+        gitPath =
+          snapshot.files.find(({ oldPath }) => oldPath === original)?.newPath ??
+          original ??
+          snapshot.files
+            .map(({ newPath, oldPath }) => newPath ?? oldPath)
+            .filter((file) => file !== null)
+            .sort(fileTreeOrder)[0];
+      }
+      navigation = snapshot.files
+        .flatMap((file, index) => {
+          const display = file.newPath ?? file.oldPath;
+          if (!display) return [];
+          return (gitHunks[index] ?? []).flatMap((hunk) => {
+            let previousChanged = false;
+            return hunk.rows.flatMap((row): Change[] => {
+              const changed = row.kind !== "context";
+              const first = changed && !previousChanged;
+              previousChanged = changed;
+              return first
+                ? [
+                    {
+                      file: display,
+                      line: row.newLine ?? row.oldLine!,
+                      side: row.newLine === undefined ? "old" : "new",
+                    },
+                  ]
+                : [];
+            });
+          });
+        })
+        .sort((left, right) => fileTreeOrder(left.file, right.file));
+      if (enteringRound && !pending?.body.trim()) {
+        changeIndex = navigation.findIndex((point) => point.file === gitPath);
+        jump = navigation[changeIndex];
+      }
+      const root = detail.target.repoRoot;
+      const fileKey = JSON.stringify([round.id, gitPath]);
+      if (gitPath && gitRequest !== fileKey) {
+        gitRequest = fileKey;
+        gitFile = undefined;
+        gitError = "";
+        void invoke<ReviewedGitFile>(
+          "review.file-source",
+          { id, roundId: round.id, path: gitPath },
+          { reportError: false },
+        ).then(
+          (file) => {
+            if (gitRequest !== fileKey) return;
+            gitFile = file;
+            draw();
+          },
+          () => {
+            if (gitRequest !== fileKey) return;
+            gitError = "Saved source is unavailable";
+            draw();
+          },
+        );
+      }
+      if (!gitPath) {
+        gitRequest = fileKey;
+        gitFile = undefined;
+      }
+      const changes = new Map<string, string>();
+      for (const { oldPath, newPath } of snapshot.files) {
+        const path = newPath ?? oldPath;
+        if (path)
+          changes.set(
+            path,
+            !oldPath ? "A" : !newPath ? "D" : oldPath === newPath ? "M" : "R",
+          );
+      }
+      const commentsByFile = new Map<string, number>();
+      for (const comment of round.comments) {
+        const path =
+          snapshot.files.find(({ oldPath }) => oldPath === comment.anchor.path)
+            ?.newPath ?? comment.anchor.path;
+        commentsByFile.set(path, (commentsByFile.get(path) ?? 0) + 1);
+      }
+      const files: ReviewFilesSource = {
+        key: JSON.stringify([id, round.id, snapshot.id]),
+        root,
+        selected: gitPath,
+        changes,
+        comments: commentsByFile,
+        list: (path) =>
+          invoke(
+            "review.file-tree",
+            { id, roundId: round.id, path },
+            { reportError: false },
+          ),
+        select: (path) => showGitFile(path),
+      };
+      fileTrees.set(host, files);
+      filesChanged(files);
+      position.textContent =
+        changeIndex >= 0 ? `${changeIndex + 1}/${navigation.length}` : "—";
+      previousChange.disabled = !adjacentChange(-1);
+      nextChange.disabled = !adjacentChange(1);
+      firstChange.disabled = !navigation.some(
+        (point) => point.file === gitPath,
+      );
+    }
+
     if (pending && !restored) {
       restored = true;
       input.value = pending.body;
@@ -549,8 +746,12 @@ export function reviewPane(
         detail.target.kind === "document"
           ? detail.target.path
           : detail.target.repoRoot;
-      label.textContent = sourcePath;
+      label.textContent =
+        detail.target.kind === "diff" && gitPath
+          ? gitPath.slice(sourcePath.length + 1)
+          : sourcePath;
       label.title = `Saved revision ${snapshot.hash}`;
+      label.hidden = detail.target.kind === "diff" && Boolean(gitPath);
       content.replaceChildren(label);
       if (detail.target.kind === "diff") {
         const comparison = document.createElement("p");
@@ -574,6 +775,7 @@ export function reviewPane(
       ranges = [];
       diffAnchors = [];
       buttons = [];
+      let sourceRows: HTMLElement = content;
       function add(
         prefix: string,
         text: string,
@@ -657,7 +859,7 @@ export function reviewPane(
             },
           ]);
         };
-        content.append(line);
+        sourceRows.append(line);
       }
       previewButton.hidden =
         snapshot.kind !== "document" ||
@@ -688,89 +890,107 @@ export function reviewPane(
         content.append(documentView.element);
       } else {
         documentView = undefined;
-        const files = diffHunks(snapshot.text);
-        const highlightSource =
-          snapshot.text.length <= 200_000 &&
-          files.flat().reduce((count, hunk) => count + hunk.rows.length, 0) <=
-            2_000;
-        const repoPrefix = sourcePath.endsWith("/")
-          ? sourcePath
-          : `${sourcePath}/`;
-        for (const [fileIndex, file] of snapshot.files.entries()) {
-          const paths = [...new Set([file.oldPath, file.newPath])].filter(
-            (filePath) => filePath !== null,
+        if (gitFile && gitPath) {
+          const heading = document.createElement("h3");
+          heading.className = "review-diff-file";
+          const paths = [...new Set([gitFile.oldPath, gitFile.newPath])].filter(
+            (path) => path !== null,
           );
-          if (paths.length) {
-            const heading = document.createElement("h3");
-            heading.className = "review-diff-file";
-            paths.forEach((filePath, index) => {
-              if (index) heading.append(" → ");
-              heading.append(
-                diffPathLabel(
-                  filePath.startsWith(repoPrefix)
-                    ? filePath.slice(repoPrefix.length)
-                    : filePath,
-                ),
-              );
-            });
-            heading.title = paths.join(" → ");
-            heading.setAttribute("aria-description", heading.title);
-            content.append(heading);
-          }
-          for (const [hunkIndex, hunk] of (files[fileIndex] ?? []).entries()) {
-            const header = document.createElement("pre");
-            header.className = "review-diff-hunk";
-            header.textContent = hunk.header;
-            content.append(header);
-            for (const row of hunk.rows) {
-              const old =
-                row.oldLine !== undefined && file.oldPath
-                  ? {
-                      path: file.oldPath,
-                      side: "old" as const,
-                      startLine: row.oldLine,
-                      endLine: row.oldLine,
-                    }
-                  : undefined;
-              const next =
-                row.newLine !== undefined && file.newPath
-                  ? {
-                      path: file.newPath,
-                      side: "new" as const,
-                      startLine: row.newLine,
-                      endLine: row.newLine,
-                    }
-                  : undefined;
-              const anchor = next ?? old;
-              if (!anchor) continue;
-              const mark =
-                row.kind === "removed" ? "-" : row.kind === "added" ? "+" : " ";
-              add(
-                `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  `,
-                row.text,
-                `${anchor.side === "old" ? "Old" : "New"} line ${anchor.startLine} ${anchor.path}`,
-                anchor,
-                highlightSource,
-              );
-              buttons.at(-1)!.dataset.diffKind = row.kind;
-              diffAnchors.push({
-                old,
-                new: next,
-                hunk: `${fileIndex}:${hunkIndex}`,
-              });
-              if (row.noNewline) {
-                const note = document.createElement("div");
-                note.className = "review-diff-note";
-                note.textContent = "No newline at end of file";
-                content.append(note);
-              }
+          paths.forEach((path, index) => {
+            if (index) heading.append(" → ");
+            heading.append(diffPathLabel(path.slice(sourcePath.length + 1)));
+          });
+          heading.title = paths.join(" → ");
+          heading.setAttribute("aria-description", heading.title);
+          content.append(heading);
+          if (!gitFile.complete)
+            content.append(
+              labelPart(
+                gitFile.rows.length
+                  ? "Only saved change lines are available"
+                  : "Saved source is unavailable",
+              ),
+            );
+          const rows = gitFile.rows;
+          const syntax =
+            rows.length <= 2_000 &&
+            rows.reduce((size, row) => size + row.text.length, 0) <= 200_000;
+          sourceRows = document.createElement("div");
+          sourceRows.className = "review-git-source";
+          content.append(sourceRows);
+          for (const row of rows) {
+            const old =
+              row.oldLine !== undefined && gitFile.oldPath
+                ? {
+                    path: gitFile.oldPath,
+                    side: "old" as const,
+                    startLine: row.oldLine,
+                    endLine: row.oldLine,
+                  }
+                : undefined;
+            const next =
+              row.newLine !== undefined && gitFile.newPath
+                ? {
+                    path: gitFile.newPath,
+                    side: "new" as const,
+                    startLine: row.newLine,
+                    endLine: row.newLine,
+                  }
+                : undefined;
+            const anchor = next ?? old;
+            if (!anchor) continue;
+            const mark =
+              row.kind === "removed" ? "-" : row.kind === "added" ? "+" : " ";
+            add(
+              `${mark}${String(row.oldLine ?? "").padStart(4)} ${String(row.newLine ?? "").padStart(4)}  `,
+              row.text,
+              `${anchor.side === "old" ? "Old" : "New"} line ${anchor.startLine} ${anchor.path}`,
+              anchor,
+              syntax,
+            );
+            buttons.at(-1)!.dataset.diffKind = row.kind;
+            diffAnchors.push({ old, new: next });
+            if (row.noNewline) {
+              const note = document.createElement("div");
+              note.className = "review-diff-note";
+              note.textContent = "No newline at end of file";
+              sourceRows.append(note);
             }
           }
-        }
+          const target =
+            jump &&
+            diffAnchors.findIndex(
+              (row) => row[jump!.side]?.startLine === jump!.line,
+            );
+          if (target !== undefined && target >= 0) {
+            jump = undefined;
+            selection = end = target;
+            for (const [index, line] of buttons.entries()) {
+              line.setAttribute("aria-pressed", String(index === target));
+              line.tabIndex = index === target ? 0 : -1;
+            }
+            const line = buttons[target];
+            queueMicrotask(() => line.scrollIntoView({ block: "center" }));
+          }
+        } else
+          content.append(
+            labelPart(
+              gitError ||
+                (gitPath ? "Loading saved source…" : "Choose a file in Files"),
+            ),
+          );
       }
     }
     comments.replaceChildren();
     for (const comment of round.comments) {
+      if (
+        detail.target.kind === "diff" &&
+        !comment.outdated &&
+        gitFile &&
+        (comment.anchor.side === "old" ? gitFile.oldPath : gitFile.newPath) !==
+          comment.anchor.path
+      )
+        continue;
       const item = document.createElement("div"),
         body = document.createElement("p");
       item.className = "review-comment";
@@ -868,12 +1088,27 @@ export function reviewPane(
             ? round.comments.find((c) => c.id === editing)!.anchor
             : (markdownDraftRange() ?? selectedRange()),
         );
-      else buttons[Math.min(end, buttons.length - 1)]?.after(form);
+      else {
+        const saved = pending?.range;
+        const index = saved
+          ? diffAnchors.findIndex(
+              (row) =>
+                saved.side &&
+                row[saved.side]?.path === saved.path &&
+                row[saved.side]?.endLine === saved.endLine,
+            )
+          : end;
+        const line = buttons[index];
+        if (line) line.after(form);
+        else comments.after(form);
+      }
     }
     compare.disabled =
       detail.target.kind !== "document" || detail.rounds.length < 2;
     addComment.disabled =
-      round.status !== "draft" || round.id !== detail.currentRoundId;
+      round.status !== "draft" ||
+      round.id !== detail.currentRoundId ||
+      (detail.target.kind === "diff" && !buttons.length);
     documentView?.setCommenting(!addComment.disabled);
     submit.textContent = round.comments.length ? "Send feedback" : "Approve";
     submit.disabled =
@@ -1006,7 +1241,10 @@ export function reviewPane(
         : undefined;
     if (connected !== remoteConnected) {
       remoteConnected = connected;
-      if (connected === true) version = -1;
+      if (connected === true) {
+        version = -1;
+        if (gitError) gitRequest = "";
+      }
     }
     if (connected === false) {
       status.textContent = "Reconnect to use this review.";

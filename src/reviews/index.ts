@@ -17,6 +17,7 @@ import {
   type Snapshot,
   type Target,
 } from "./snapshots.ts";
+import { reviewedGitFile, reviewedGitTree } from "./git-source.ts";
 interface Comment {
   id: string;
   body: string;
@@ -274,6 +275,62 @@ export class ReviewService {
     }
     return clone({ ...review, snapshots });
   }
+  private async gitRound(id: string, roundId: string) {
+    const state = await this.read(),
+      review = this.review(state, id);
+    if (review.target.kind !== "diff")
+      throw new Error("A Git review is required");
+    const snapshot = state.snapshots[this.round(review, roundId).snapshotId];
+    const roots =
+      review.scopeFolders ??
+      (await this.options.workspaceFolders(review.workspaceId));
+    return { root: review.target.repoRoot, snapshot, roots };
+  }
+  async fileTree(id: string, roundId: string, directory: string) {
+    const { root, snapshot, roots } = await this.gitRound(id, roundId);
+    return reviewedGitTree(snapshot, root, roots, directory);
+  }
+  async fileSource(id: string, roundId: string, filePath: string) {
+    const { root, snapshot, roots } = await this.gitRound(id, roundId);
+    return reviewedGitFile(snapshot, root, roots, filePath);
+  }
+  private async selectedAnchor(
+    snapshot: Snapshot,
+    review: Review,
+    range: Range,
+  ) {
+    if (
+      review.target.kind === "diff" &&
+      range?.path &&
+      (range.side === "old" || range.side === "new")
+    ) {
+      try {
+        // Existing hunk lines remain independently verifiable from the saved patch.
+        return anchor(snapshot, review.target, range);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          ![
+            "Path is absent on saved diff side",
+            "Anchor crosses absent diff lines",
+          ].includes(error.message)
+        )
+          throw error;
+      }
+      const roots =
+        review.scopeFolders ??
+        (await this.options.workspaceFolders(review.workspaceId));
+      const source = await reviewedGitFile(
+        snapshot,
+        review.target.repoRoot,
+        roots,
+        range.path,
+        range.side,
+      );
+      return anchor(snapshot, review.target, range, source);
+    }
+    return anchor(snapshot, review.target, range);
+  }
   private openReview(
     workspaceId: string,
     target: Target,
@@ -344,14 +401,14 @@ export class ReviewService {
     );
   }
   addComment(args: Mutation & { body: string; range: Range }) {
-    return this.mutate((state) => {
+    return this.mutate(async (state) => {
       validBody(args.body);
       const { review, round } = this.editable(state, args);
       if (round.comments.length >= 100)
         throw new Error("Review round comment limit exceeded");
-      const selected = anchor(
+      const selected = await this.selectedAnchor(
         state.snapshots[round.snapshotId],
-        review.target,
+        review,
         args.range,
       );
       round.comments.push({
@@ -391,15 +448,15 @@ export class ReviewService {
     });
   }
   reanchorComment(args: Mutation & { commentId: string; range: Range }) {
-    return this.mutate((state) => {
+    return this.mutate(async (state) => {
       const { review, round } = this.editable(state, args);
       const comment = round.comments.find(
         (comment) => comment.id === args.commentId,
       );
       if (!comment) throw new Error("Unknown comment");
-      const selected = anchor(
+      const selected = await this.selectedAnchor(
         state.snapshots[round.snapshotId],
-        review.target,
+        review,
         args.range,
       );
       comment.history.push(clone(comment.anchor));
@@ -461,7 +518,8 @@ export class ReviewService {
         changed:
           current.snapshot.hash !== saved.hash ||
           current.snapshot.base !== saved.base ||
-          current.snapshot.head !== saved.head,
+          current.snapshot.head !== saved.head ||
+          current.snapshot.workingBase !== saved.workingBase,
         unavailable: false,
       };
     } catch {

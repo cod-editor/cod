@@ -41,7 +41,11 @@ interface Match {
   text: string;
 }
 
-function git(cwd: string, args: string[]): Promise<string> {
+function git(
+  cwd: string,
+  args: string[],
+  noLazyFetch = false,
+): Promise<string> {
   const environment = { ...process.env };
   // Git must address cwd, not an inherited repository/index/object store or injected config.
   for (const key of Object.keys(environment)) {
@@ -76,6 +80,7 @@ function git(cwd: string, args: string[]): Promise<string> {
           ...environment,
           GIT_OPTIONAL_LOCKS: "0",
           GIT_TERMINAL_PROMPT: "0",
+          ...(noLazyFetch ? { GIT_NO_LAZY_FETCH: "1" } : {}),
         },
       },
       (error, stdout) => {
@@ -91,6 +96,39 @@ function git(cwd: string, args: string[]): Promise<string> {
       },
     );
   });
+}
+
+export interface ReviewGitPath {
+  oldPath: string | null;
+  newPath: string | null;
+}
+
+function reviewDiffOutput(output: string): {
+  patch: string;
+  paths: ReviewGitPath[];
+} {
+  if (!output) return { patch: "", paths: [] };
+  const separator = output.indexOf("\0\0");
+  if (separator < 0) throw new Error("Invalid Git review file list");
+  const entries = output.slice(0, separator).split("\0");
+  const paths: ReviewGitPath[] = [];
+  for (let index = 0; index < entries.length;) {
+    const status = entries[index++].split(" ").at(-1)?.[0];
+    const first = entries[index++];
+    const second = status === "R" || status === "C" ? entries[index++] : first;
+    if (!status || !first || !second)
+      throw new Error("Invalid Git review file entry");
+    paths.push({
+      oldPath: status === "A" ? null : first,
+      newPath: status === "D" ? null : second,
+    });
+  }
+  return { patch: output.slice(separator + 2), paths };
+}
+
+export interface ReviewTreeEntry {
+  name: string;
+  kind: "file" | "directory";
 }
 
 export class ProjectService {
@@ -426,7 +464,10 @@ export class ProjectService {
     }
     return { repoRoot: repo.root, files };
   }
-  async diff(options: { repoRoot: string; base?: string; head?: string }) {
+  async diff(
+    options: { repoRoot: string; base?: string; head?: string },
+    forReview = false,
+  ) {
     const repo = await this.repository(options.repoRoot);
     if ((options.base === undefined) !== (options.head === undefined))
       throw new Error("Both base and head are required");
@@ -454,8 +495,9 @@ export class ProjectService {
     const workingBase =
       repo.head ??
       (await git(repo.root, ["hash-object", "-t", "tree", "/dev/null"])).trim();
-    const patch = await git(repo.root, [
+    const output = await git(repo.root, [
       "diff",
+      ...(forReview ? ["--raw", "-z", "--patch", "--find-renames"] : []),
       "--no-ext-diff",
       "--no-textconv",
       "--no-color",
@@ -464,6 +506,105 @@ export class ProjectService {
       ...(base && head ? [base, head] : [workingBase]),
       "--",
     ]);
-    return { repoRoot: repo.root, base, head, patch, truncated: false };
+    const { patch, paths } = forReview
+      ? reviewDiffOutput(output)
+      : { patch: output, paths: undefined };
+    return {
+      repoRoot: repo.root,
+      base,
+      head,
+      patch,
+      truncated: false,
+      ...(forReview ? { workingBase: repo.head, paths } : {}),
+    };
+  }
+
+  private async reviewTree(
+    repoRoot: string,
+    revision: string,
+    relative: string,
+  ) {
+    if (
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision) ||
+      relative.split("/").some((part) => part === "." || part === "..") ||
+      relative.includes("\0") ||
+      isAbsolute(relative)
+    )
+      throw new Error("Invalid saved Git source address");
+    const root = await realpath(repoRoot);
+    // The round captures a canonical repository and its workspace roots.
+    // Validate that boundary without doing repository discovery on each click.
+    this.rootFor(await this.roots(), root);
+    if (
+      root !== repoRoot ||
+      (await git(root, ["rev-parse", "--show-toplevel"])).replace(
+        /\r?\n$/,
+        "",
+      ) !== root
+    )
+      throw new Error("Saved review repository is unavailable");
+    const output = await git(
+      root,
+      ["ls-tree", "-z", relative ? `${revision}:${relative}` : revision],
+      true,
+    );
+    const entries = output
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        const [mode, kind, id] = line.slice(0, tab).split(" ");
+        return { name: line.slice(tab + 1), mode, kind, id };
+      });
+    if (entries.length > MAX_ENTRIES)
+      throw new Error("Saved review directory is too large");
+    return { root, entries };
+  }
+
+  async listReviewTree(
+    repoRoot: string,
+    revision: string,
+    relative: string,
+  ): Promise<ReviewTreeEntry[]> {
+    const { entries } = await this.reviewTree(repoRoot, revision, relative);
+    return entries
+      .filter((entry) => entry.kind === "tree" || entry.kind === "blob")
+      .map((entry) => ({
+        name: entry.name,
+        kind: entry.kind === "tree" ? "directory" : "file",
+      }));
+  }
+
+  async readReviewBlob(
+    repoRoot: string,
+    revision: string,
+    relative: string,
+  ): Promise<string> {
+    const slash = relative.lastIndexOf("/");
+    const { root, entries } = await this.reviewTree(
+      repoRoot,
+      revision,
+      slash === -1 ? "" : relative.slice(0, slash),
+    );
+    const entry = entries.find(
+      (candidate) => candidate.name === relative.slice(slash + 1),
+    );
+    if (
+      !entry ||
+      !["100644", "100755"].includes(entry.mode) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(entry.id)
+    )
+      throw new Error("Saved review source is unavailable");
+    const size = Number(await git(root, ["cat-file", "-s", entry.id], true));
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE)
+      throw new Error("Saved review source exceeds 2 MiB");
+    const text = await git(root, ["cat-file", "blob", entry.id], true);
+    if (
+      text.includes("\0") ||
+      text.includes("\ufffd") ||
+      Buffer.byteLength(text) !== size
+    )
+      throw new Error("Binary or invalid UTF-8 review source");
+    return text;
   }
 }

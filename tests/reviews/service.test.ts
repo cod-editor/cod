@@ -6,6 +6,7 @@ import {
   mkdir,
   writeFile,
   readFile,
+  rename,
   rm,
   stat,
 } from "node:fs/promises";
@@ -222,6 +223,59 @@ test("R3 real Git diff anchors validate old/new deleted lines and resolved branc
         base: "--help",
         head,
       }),
+    );
+  }));
+
+test("Git whole-file anchors validate the requested saved side beyond the patch", () =>
+  fixture(async ({ root, file, make }) => {
+    git(root, "init", "-b", "main");
+    git(root, "add", "--all");
+    git(root, "commit", "-m", "base");
+    const base = git(root, "rev-parse", "HEAD");
+    const added = join(root, "added.txt");
+    await writeFile(added, "Only on new side\n");
+    git(root, "add", "--all");
+    git(root, "commit", "-m", "addition");
+    const service = make();
+    let review = await service.openDiff({
+      workspaceId: "workspace",
+      repoRoot: root,
+      base,
+      head: "HEAD",
+    });
+    const add = (path: string, side: "old" | "new") =>
+      service.addComment({
+        id: review.id,
+        roundId: review.currentRoundId,
+        expectedVersion: review.version,
+        body: "Check this line",
+        range: { path, side, startLine: 1, endLine: 1 },
+      });
+    await assert.rejects(() => add(added, "old"), /absent on saved diff side/);
+    review = await add(file, "old");
+    review = await add(file, "new");
+    const detail = await service.detail(review.id);
+    assert.deepEqual(
+      detail.rounds[0].comments.map(({ quote, anchor }) => [
+        quote,
+        anchor.side,
+      ]),
+      [
+        ["first", "old"],
+        ["first", "new"],
+      ],
+    );
+    await rename(join(root, ".git"), join(root, ".git-unavailable"));
+    assert.equal(
+      (await service.fileSource(review.id, review.currentRoundId, added))
+        .complete,
+      false,
+    );
+    await assert.rejects(() => add(file, "new"), /absent on saved diff side/);
+    review = await add(added, "new");
+    assert.equal(
+      (await service.detail(review.id)).rounds[0].comments.at(-1)?.quote,
+      "Only on new side",
     );
   }));
 

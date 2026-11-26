@@ -20,7 +20,7 @@ export function createNavigationWidths(invoke: Invoke) {
   }
   function apply(next: WorkspaceState | undefined) {
     workspace = next;
-    handle.hidden = next?.settings?.filesVisible !== true;
+    handle.hidden = host.hidden;
     if (!dragging) paint(next?.settings?.filesWidth ?? 210);
   }
   async function save(width: number, workspaceId: string) {
