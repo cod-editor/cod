@@ -746,6 +746,7 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
     const split = () =>
       app.page.getByRole("button", { name: "Toggle split view", exact: true });
     const neutral = "rgb(169, 175, 188)";
+    const blue = "rgb(97, 175, 239)";
     const expectSplit = async (
       description: string,
       pressed: boolean,
@@ -773,7 +774,7 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
       path: info.outputPath("fresh-toggle-split.png"),
     });
     await split().click();
-    await expectSplit("Both panes visible", true, neutral, neutral);
+    await expectSplit("Both panes visible · Focus left", true, blue, neutral);
     await expect(composer).toBeFocused();
     await expect(composer).toHaveValue("Keep the only conversation draft.");
     const opened = await app.cli<AppState>("state");
@@ -783,7 +784,7 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
       "empty",
     );
     await app.page.keyboard.press("Alt+2");
-    await expectSplit("Both panes visible", true, neutral, neutral);
+    await expectSplit("Both panes visible · Focus right", true, neutral, blue);
     await expect(split()).toMatchAriaSnapshot(
       '- button "Toggle split view" [pressed]',
     );
@@ -791,23 +792,43 @@ test("Fresh workspace opens an empty right pane without duplicating its existing
       path: info.outputPath("split-right-focused.png"),
     });
     await composer.click();
-    await expectSplit("Both panes visible", true, neutral, neutral);
+    await expectSplit("Both panes visible · Focus left", true, blue, neutral);
     await app.page.keyboard.press("Alt+2");
-    await expectSplit("Both panes visible", true, neutral, neutral);
+    await expectSplit("Both panes visible · Focus right", true, neutral, blue);
     await app.page.keyboard.press("Shift+Escape");
-    await expectSplit("Only right pane visible", false, "none", neutral);
+    await expectSplit(
+      "Only right pane visible · Focus right",
+      false,
+      "none",
+      blue,
+    );
     await expect(composer).toBeHidden();
     await app.stop();
     await app.start();
     const restored = app.pane(draft).locator(".composer textarea");
     await expect(restored).toBeHidden();
-    await expectSplit("Only right pane visible", false, "none", neutral);
+    await expectSplit(
+      "Only right pane visible · Focus right",
+      false,
+      "none",
+      blue,
+    );
     await split().press("Enter");
-    await expectSplit("Both panes visible", true, neutral, neutral);
+    await expectSplit("Both panes visible · Focus right", true, neutral, blue);
     await app.page.keyboard.press("Shift+Escape");
-    await expectSplit("Only right pane visible", false, "none", neutral);
+    await expectSplit(
+      "Only right pane visible · Focus right",
+      false,
+      "none",
+      blue,
+    );
     await app.page.keyboard.press("Alt+1");
-    await expectSplit("Only left pane visible", false, neutral, "none");
+    await expectSplit(
+      "Only left pane visible · Focus left",
+      false,
+      blue,
+      "none",
+    );
     await expect(restored).toBeFocused();
     await expect(restored).toHaveValue("Keep the only conversation draft.");
     await expect(app.page.locator(".tab-group:visible")).toHaveCount(1);

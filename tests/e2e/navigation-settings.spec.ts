@@ -306,6 +306,17 @@ test("Header split mode follows position while the Files panel stays independent
   try {
     await app.start();
     const workspace = await app.create("Spatial layout");
+    const split = app.page.getByRole("button", {
+      name: "Toggle split view",
+      exact: true,
+    });
+    const leftFill = split.locator(".split-left");
+    const rightFill = split.locator(".split-right");
+    const blue = "rgb(97, 175, 239)";
+    const gray = "rgb(169, 175, 188)";
+    await expect(split).toHaveAttribute("aria-description", "No split");
+    await expect(leftFill).toHaveCSS("fill", "none");
+    await expect(rightFill).toHaveCSS("fill", "none");
     await app.cli(
       "workspace",
       "add-folder",
@@ -326,30 +337,51 @@ test("Header split mode follows position while the Files panel stays independent
       .pane(file.paneId)
       .getByRole("textbox", { name: "File contents", exact: true });
     const composer = app.page.locator(".composer textarea");
-    const split = app.page.getByRole("button", {
-      name: "Toggle split view",
-      exact: true,
-    });
     const files = app.page.getByRole("button", {
       name: "Toggle files",
       exact: true,
     });
     await expect(split).toHaveAttribute("aria-pressed", "true");
-    await expect(split).toHaveCSS("color", "rgb(97, 175, 239)");
     await files.click();
-    await editor.focus();
+    await editor.click();
+    await expect(leftFill).toHaveCSS("fill", blue);
+    await expect(rightFill).toHaveCSS("fill", gray);
+    await expect(split).toHaveAttribute(
+      "aria-description",
+      "Both panes visible · Focus left",
+    );
+    await app.page.screenshot({
+      path: info.outputPath("titlebar-split-both-left.png"),
+    });
     await split.click();
     await expect(editor).toBeFocused();
     await expect(composer).toBeHidden();
     await expect(files).toHaveAttribute("aria-pressed", "true");
+    await expect(split).toHaveAttribute("aria-pressed", "false");
+    await expect(leftFill).toHaveCSS("fill", blue);
+    await expect(rightFill).toHaveCSS("fill", "none");
+    await app.page.screenshot({
+      path: info.outputPath("titlebar-split-only-left.png"),
+    });
 
     await app.page.keyboard.press("Alt+2");
     await expect(composer).toBeFocused();
     await expect(editor).toBeHidden();
+    await expect(leftFill).toHaveCSS("fill", "none");
+    await expect(rightFill).toHaveCSS("fill", blue);
+    await expect(split).toHaveAttribute(
+      "aria-description",
+      "Only right pane visible · Focus right",
+    );
+    await app.page.screenshot({
+      path: info.outputPath("titlebar-split-only-right.png"),
+    });
     await app.page.keyboard.press("Shift+Escape");
     await expect(composer).toBeFocused();
     await expect(editor).toBeVisible();
     await expect(split).toHaveAttribute("aria-pressed", "true");
+    await expect(leftFill).toHaveCSS("fill", gray);
+    await expect(rightFill).toHaveCSS("fill", blue);
     const before = await app.cli<AppState>("state");
     const left = before.workspaces
       .find((item) => item.id === workspace)!
@@ -370,7 +402,7 @@ test("Header split mode follows position while the Files panel stays independent
     ).not.toBe(0);
     expect(await app.cli<AppState>("state")).toEqual(before);
     await app.page.screenshot({
-      path: info.outputPath("side-by-side-pane-switch.png"),
+      path: info.outputPath("titlebar-split-both-right.png"),
     });
   } finally {
     await app.cleanup();

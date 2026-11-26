@@ -1620,7 +1620,9 @@ test("Held and rapid pane cycling preserves the latest target while selection is
 
     const split = app.page.getByRole("button", { name: "Toggle split view" });
     await keys.press("Alt+Enter");
-    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only left pane visible · Focus left",
+    );
     const arm = () =>
       app.app!.evaluate(() => {
         const state = (globalThis as any).paneBurst;
@@ -1637,7 +1639,9 @@ test("Held and rapid pane cycling preserves the latest target while selection is
     await expect
       .poll(burstState)
       .toMatchObject({ targets: [right.paneId, left.paneId] });
-    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only left pane visible · Focus left",
+    );
     await expect(editor).toBeFocused();
 
     await arm();
@@ -1652,7 +1656,9 @@ test("Held and rapid pane cycling preserves the latest target while selection is
     await expect.poll(burstState).toMatchObject({ closed: right.paneId });
     await expect(composer).toHaveCount(0);
     await keys.press("Alt+1");
-    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only left pane visible · Focus left",
+    );
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("Keep the unsaved file during a burst.");
   } finally {
@@ -2485,7 +2491,7 @@ test("Revealing a parked native page keeps the outgoing chat visible until the p
   }
 });
 
-test("Pane cycling keeps the visibility icon stable and reaches a parked editor, terminal and native page", async ({}, info) => {
+test("Pane cycling updates the focus icon and reaches a parked editor, terminal and native page", async ({}, info) => {
   const app = new ChatApp();
   await prepareKeyboardProfile(app);
   Object.assign(app.environment, {
@@ -2533,6 +2539,20 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
     const caption = (paneId: string) => tab(paneId).locator(".tab-label");
     const bright = "rgb(220, 224, 229)";
     const muted = "rgb(169, 175, 188)";
+    const blue = "rgb(97, 175, 239)";
+    const expectSplitFocus = async (side: "left" | "right") => {
+      await expect(split).toHaveAccessibleDescription(
+        `Both panes visible · Focus ${side}`,
+      );
+      await expect(split.locator(".split-left")).toHaveCSS(
+        "fill",
+        side === "left" ? blue : muted,
+      );
+      await expect(split.locator(".split-right")).toHaveCSS(
+        "fill",
+        side === "right" ? blue : muted,
+      );
+    };
     await editor.fill("Keep the unsaved release notes.");
     await editor.press("End");
     await editor.press("Alt+Tab");
@@ -2541,7 +2561,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
     expect((await app.workspace(workspace)).groups).toHaveLength(1);
 
     await split.click();
-    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    await expectSplitFocus("left");
     const rightGroup = (await app.workspace(workspace)).groups.find(
       (group) => group.id !== left,
     )!;
@@ -2585,9 +2605,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
       .getByRole("textbox", { name: "Terminal input", exact: true });
     const region = (id: string) =>
       app.page.locator(`.tab-group[data-group-id="${id}"]`);
-    const svg = split.locator("svg");
-    const glyph = await svg.evaluate((element) => element.outerHTML);
-    // A mouse selection changes the caption, not the layout drawing or either selected tab.
+    // A mouse selection changes focus and keeps both tab selections.
     await tab(file.paneId).click();
     await expect(caption(file.paneId)).toHaveCSS("color", bright);
     await expect(caption(shell.paneId)).toHaveCSS("color", muted);
@@ -2606,6 +2624,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
           filter: body.filter,
         };
       });
+    await expectSplitFocus("left");
     const leftChrome = await tabChrome(file.paneId);
     const rightChrome = await tabChrome(shell.paneId);
     await app.page.screenshot({
@@ -2618,8 +2637,7 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
     await expect(caption(shell.paneId)).toHaveCSS("color", bright);
     await expect(region(right)).toHaveAccessibleDescription("Active pane");
     await expect(region(left)).toHaveAccessibleDescription("Other pane");
-    await expect(split).toHaveAccessibleDescription("Both panes visible");
-    expect(await svg.evaluate((element) => element.outerHTML)).toBe(glyph);
+    await expectSplitFocus("right");
     expect(await tabChrome(file.paneId)).toEqual(leftChrome);
     expect(await tabChrome(shell.paneId)).toEqual(rightChrome);
     await app.page.keyboard.type("printf 'Invented terminal result\\n'");
@@ -2650,14 +2668,20 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
     await expect.poll(() => app.page.evaluate(() => innerWidth)).toBe(1280);
 
     await terminal.press("Alt+Enter");
-    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only right pane visible · Focus right",
+    );
     await terminal.press("Alt+Shift+Tab");
-    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only left pane visible · Focus left",
+    );
     await expect(terminal).toBeHidden();
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("Keep the unsaved release notes.");
     await editor.press("Alt+Tab");
-    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only right pane visible · Focus right",
+    );
     await expect(terminal).toBeFocused();
     await expect(editor).toBeHidden();
 
@@ -2709,29 +2733,35 @@ test("Pane cycling keeps the visibility icon stable and reaches a parked editor,
         { url: targetUrl, keyCode, modifiers },
       );
     await nativePress("Enter", ["alt"]);
-    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    await expectSplitFocus("right");
     await nativePress("Tab", ["alt", "isautorepeat"]);
     await expect(editor).toBeFocused();
     await expect
       .poll(() => app.page.evaluate(() => document.hasFocus()))
       .toBe(true);
-    await expect(split).toHaveAccessibleDescription("Both panes visible");
+    await expectSplitFocus("left");
     await editor.press("Alt+Shift+Tab");
     await expect
       .poll(inspectBrowser)
       .toMatchObject({ focused: true, id: "entry", start: 5, end: 11 });
-    expect(await svg.evaluate((element) => element.outerHTML)).toBe(glyph);
+    await expectSplitFocus("right");
 
     await nativePress("Enter", ["alt"]);
-    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only right pane visible · Focus right",
+    );
     await nativePress("Tab", ["alt", "shift", "isautorepeat"]);
-    await expect(split).toHaveAccessibleDescription("Only left pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only left pane visible · Focus left",
+    );
     await expect(editor).toBeFocused();
     await expect
       .poll(() => app.page.evaluate(() => document.hasFocus()))
       .toBe(true);
     await editor.press("Alt+Tab");
-    await expect(split).toHaveAccessibleDescription("Only right pane visible");
+    await expect(split).toHaveAccessibleDescription(
+      "Only right pane visible · Focus right",
+    );
     await expect
       .poll(inspectBrowser)
       .toMatchObject({ focused: true, id: "entry", start: 5, end: 11 });

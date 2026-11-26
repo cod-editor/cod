@@ -61,8 +61,20 @@ export function createPaneLayout(
   function applyWorkspaceSettings(workspace?: WorkspaceState): void {
     const [left, right] = workspace ? orderedGroups(workspace) : [];
     const bothVisible = !!right && !left.hidden && !right.hidden;
-    splitLeft.dataset.state = right && !left.hidden ? "visible" : "outline";
-    splitRight.dataset.state = right && !right.hidden ? "visible" : "outline";
+    const focusedSide =
+      right && workspace?.activeGroupId === right.id ? "right" : "left";
+    splitLeft.dataset.state =
+      !right || left.hidden
+        ? "outline"
+        : focusedSide === "left"
+          ? "focused"
+          : "visible";
+    splitRight.dataset.state =
+      !right || right.hidden
+        ? "outline"
+        : focusedSide === "right"
+          ? "focused"
+          : "visible";
     const layout = !workspace
       ? "Open a workspace first"
       : !right
@@ -71,9 +83,10 @@ export function createPaneLayout(
           ? "Both panes visible"
           : `Only ${right.hidden ? "left" : "right"} pane visible`;
     splitButton.disabled = !workspace;
-    splitButton.title = `${shortcutTitle("pane.zoom", "Toggle split view")} · ${layout}`;
+    const description = right ? `${layout} · Focus ${focusedSide}` : layout;
+    splitButton.title = `${shortcutTitle("pane.zoom", "Toggle split view")} · ${description}`;
     splitButton.setAttribute("aria-pressed", String(bothVisible));
-    splitButton.setAttribute("aria-description", layout);
+    splitButton.setAttribute("aria-description", description);
     const settings = workspace?.settings;
     filesPanel.hidden = settings?.filesVisible !== true;
     filesButton.disabled = !workspace;

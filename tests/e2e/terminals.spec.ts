@@ -768,6 +768,7 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   });
   await expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
   await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toHaveCSS("color", "rgb(169, 175, 188)");
   await expect(trigger).toHaveAttribute("title", /Quick Terminal.+`/);
   const button = (await trigger.boundingBox())!;
   const split = (await shell.page
@@ -783,6 +784,7 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await trigger.click();
   await expect(quickInput).toBeFocused();
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(trigger).toHaveCSS("color", "rgb(97, 175, 239)");
   await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("combobox")).toHaveCount(0);
   const first = (await shell.cli<AppState>("state")).quickTerminals!.find(
@@ -807,6 +809,8 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await expect(dialog).toHaveCount(0);
   await expect(input(ordinary.paneId)).toBeFocused();
   await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await shell.page.mouse.move(0, 0);
+  await expect(trigger).toHaveCSS("color", "rgb(169, 175, 188)");
   await trigger.click();
   await expect(quickInput).toBeFocused();
   await quickInput.press("Control+[");
@@ -836,6 +840,7 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   await expect(trigger).toHaveAttribute("title", /Quick Terminal.+F7/);
   await shell.page.keyboard.press("Alt+F7");
   await expect(quickInput).toBeFocused();
+  await expect(trigger).toHaveCSS("color", "rgb(97, 175, 239)");
   await expect(
     dialog.getByRole("region", { name: "Terminal output" }),
   ).toContainText("QUICK_HIDDEN_OUTPUT");
@@ -867,6 +872,7 @@ test("Quick Terminal inherits its focused local cwd, retains its shell across hi
   });
   await shell.page.keyboard.press("Alt+F7");
   await expect(dialog).toHaveCount(0);
+  await expect(trigger).toHaveCSS("color", "rgb(169, 175, 188)");
   const narrowButton = (await trigger.boundingBox())!;
   expect(narrowButton.x).toBeGreaterThanOrEqual(0);
   expect(narrowButton.x + narrowButton.width).toBeLessThanOrEqual(440);
