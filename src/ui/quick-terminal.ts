@@ -32,6 +32,7 @@ export function createQuickTerminal(
     | undefined;
 
   const trigger = iconButton("terminal", "Quick Terminal", toggle);
+  trigger.classList.add("quick-terminal-trigger");
   trigger.disabled = true;
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-expanded", "false");

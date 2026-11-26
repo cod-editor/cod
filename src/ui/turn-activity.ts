@@ -115,7 +115,13 @@ function activityDetails(
   const label = document.createElement("span");
   if (live) {
     label.className = "current-tool";
-    label.textContent = activity.at(-1)?.dataset.compactCaption ?? "Tool";
+    label.textContent = activity.reduce(
+      (caption, tool) =>
+        tool.dataset.collaborationActivity
+          ? caption
+          : (tool.dataset.compactCaption ?? caption),
+      text,
+    );
     summary.append(label, icon("chevron"));
     details.classList.add("live-activity");
   } else {
@@ -266,6 +272,8 @@ export function compactToolCaption(
   info: Record<string, unknown> | null,
 ): string {
   if (info?.type === "functionCallOutput")
+    return toolCaption(info).slice(0, 100);
+  if (info?.type === "collabAgentToolCall" && typeof info.tool === "string")
     return toolCaption(info).slice(0, 100);
   if (typeof info?.title === "string" && info.title.trim())
     return info.title.trim().slice(0, 100);
