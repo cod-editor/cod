@@ -2194,3 +2194,69 @@ browser-action-list::part(action):focus-visible {
   color: var(--text-muted);
   cursor: pointer;
 }
+
+.file-row[aria-selected="true"] {
+  background: var(--element-selected);
+}
+[aria-label="Review files"] .file-status,
+.review-file-count {
+  flex: none;
+  text-align: right;
+}
+[aria-label="Review files"] .file-status {
+  width: 1.5ch;
+  padding-left: 0;
+}
+.review-file-count {
+  width: 3ch;
+  color: var(--text-accent);
+  font-variant-numeric: tabular-nums;
+}
+.review-change-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.review-body[data-git-review] {
+  display: flex;
+  flex-direction: column;
+}
+.review-body[data-git-review] > .review-content {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  padding: 0;
+}
+.review-body[data-git-review] .review-diff-file,
+.review-body[data-git-review] .review-diff-comparison {
+  margin-inline: var(--space-3);
+}
+.review-change-controls .review-previous-change svg {
+  transform: rotate(-90deg);
+}
+.review-change-controls .review-next-change svg {
+  transform: rotate(90deg);
+}
+.review-git-source {
+  flex: 1 0 auto;
+  font-family: monospace;
+  font-size: var(--editor-font-size);
+  --old-separator: calc(8px + 5.5ch);
+  --new-separator: calc(8px + 10.5ch);
+  --review-gutters: linear-gradient(
+    to right,
+    transparent var(--old-separator),
+    var(--line) var(--old-separator),
+    var(--line) calc(var(--old-separator) + 1px),
+    transparent calc(var(--old-separator) + 1px) var(--new-separator),
+    var(--line) var(--new-separator),
+    var(--line) calc(var(--new-separator) + 1px),
+    transparent calc(var(--new-separator) + 1px)
+  );
+  background-image: var(--review-gutters);
+}
+.review-git-source > .review-line {
+  background-image: var(--review-gutters);
+}

@@ -212,6 +212,8 @@ export const commands = {
 } satisfies Record<string, string[]>;
 export const trustedReviewOperations = [
   "review.detail",
+  "review.file-tree",
+  "review.file-source",
   "review.cancel",
   "review.comment-add",
   "review.comment-edit",

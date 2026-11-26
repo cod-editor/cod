@@ -1,7 +1,7 @@
 import { test, expect, type Locator } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
-import { mkdir, writeFile, realpath, readFile } from "node:fs/promises";
+import { mkdir, writeFile, realpath, readFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
@@ -406,13 +406,20 @@ test("Review AC2 separate real repositories retain old/new diff anchors and priv
     );
     opened.push(review);
     const headings = pane(review).getByRole("heading", { level: 3 });
-    await expect(headings).toHaveCount(2);
-    await expect(
-      headings.filter({ hasText: "same ü file.txt" }),
-    ).toHaveAccessibleDescription(canonicalFile);
+    const tree = shell.page.getByRole("tree", { name: "Review files" });
+    await expect(headings).toHaveCount(1);
+    await tree
+      .getByRole("treeitem", { name: "other.txt", exact: true })
+      .click();
     await expect(
       headings.filter({ hasText: "other.txt" }),
     ).toHaveAccessibleDescription(await realpath(secondFile));
+    await tree
+      .getByRole("treeitem", { name: "same ü file.txt", exact: true })
+      .click();
+    await expect(
+      headings.filter({ hasText: "same ü file.txt" }),
+    ).toHaveAccessibleDescription(canonicalFile);
     if (index === 0)
       await pane(review).screenshot({
         path: testInfo.outputPath("review-two-file-diff.png"),
@@ -1431,7 +1438,7 @@ test("Diff review keeps unchanged context neutral and anchors keyboard comments 
     chat.id,
   );
   const host = pane(review);
-  await expect(host.locator(".review-diff-hunk")).toHaveCount(2);
+  await expect(host.locator(".review-line")).toHaveCount(32);
   const context = host
     .locator('.review-line[data-diff-kind="context"]')
     .filter({ hasText: "unchanged 1" })
@@ -1556,7 +1563,7 @@ test("Diff review highlights Java source while preserving line text and comment 
     "public",
     "class",
   ]);
-  await expect(plainText.locator("span")).toHaveCount(0);
+
   await expect(host.locator(".review-line img")).toHaveCount(0);
   expect(await added.textContent()).toBe("+        3  " + newLine);
   expect(await removed.textContent()).toBe("-   3       " + oldLine);
@@ -1579,6 +1586,173 @@ test("Diff review highlights Java source while preserving line text and comment 
     "Removed return value",
   );
   await expect(removed).toBeFocused();
+  await shell.page
+    .getByRole("tree", { name: "Review files" })
+    .getByRole("treeitem", { name: "notes.txt", exact: true })
+    .click();
+  await expect(plainText).toBeVisible();
+  await expect(plainText.locator("span")).toHaveCount(0);
+});
+
+test("Whole-file Git review uses frozen contents and sends changed and unchanged anchors together", async ({}, info) => {
+  const workspace = await shell.create("Whole-file review");
+  const folder = shell.folders[0];
+  const canonical = await realpath(folder);
+  await mkdir(path.join(folder, "src"));
+  const changed = path.join(folder, "src", "aaa.js");
+  const untouched = path.join(folder, "src", "bbb.js");
+  const later = path.join(folder, "src", "ccc.js");
+  const removed = path.join(folder, "000-deleted.txt");
+  const before = Array.from(
+    { length: 25 },
+    (_, index) => `// retained line ${index + 1}`,
+  );
+  await writeFile(changed, before.join("\n") + "\n");
+  await writeFile(untouched, "export const original = 42;\n");
+  await writeFile(later, before.join("\n") + "\n");
+  await writeFile(removed, "The removed source\n");
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: folder,
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    });
+  git("add", "--all");
+  git("commit", "-m", "Invented baseline");
+  const after = [...before];
+  after[2] = "export const savedChange = 43;";
+  await writeFile(changed, after.join("\n") + "\n");
+  const laterLines = [...before];
+  laterLines[23] = "export const lateChange = 44;";
+  await writeFile(later, laterLines.join("\n") + "\n");
+  await unlink(removed);
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const origin = await shell.newChat(workspace, "codex");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    origin.id,
+  );
+  await writeFile(changed, "// live file changed after review opened\n");
+  await writeFile(untouched, "export const live = 444;\n");
+
+  const host = pane(review);
+  const tree = shell.page.getByRole("tree", { name: "Review files" });
+  const file = (name: string) =>
+    tree.getByRole("treeitem", { name, exact: true });
+  const line = (relative: string, number: number, side = "New") =>
+    host.getByRole("button", {
+      name: `${side} line ${number} ${path.join(canonical, relative)}`,
+      exact: true,
+    });
+  await expect(file("aaa.js")).toHaveAttribute("aria-selected", "true");
+  await expect(line("src/aaa.js", 25)).toHaveText(/retained line 25/);
+  await expect(line("src/aaa.js", 3)).toHaveText(/savedChange = 43/);
+  await file("aaa.js").focus();
+  await shell.page.screenshot({
+    path: info.outputPath("whole-git-review-changed.png"),
+  });
+  const add = async (target: Locator, body: string) => {
+    await target.focus();
+    await shell.page.keyboard.press(`${modifier}+Shift+M`);
+    const input = host.getByRole("textbox", { name: "Comment", exact: true });
+    await expect(input).toBeFocused();
+    await input.fill(body);
+    await input.press(`${modifier}+Enter`);
+    await expect(
+      host
+        .getByLabel("Draft comment", { exact: true })
+        .filter({ hasText: body }),
+    ).toBeVisible();
+  };
+  await add(line("src/aaa.js", 3), "Discuss the saved addition");
+  await host.getByRole("button", { name: "First change" }).click();
+  await host.getByRole("button", { name: "Next change" }).click();
+  await expect(line("src/ccc.js", 24, "Old")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await host.getByRole("button", { name: "Next change" }).click();
+  await expect(line("000-deleted.txt", 1, "Old")).toHaveText(/removed source/);
+  await expect(file("000-deleted.txt")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await file("aaa.js").focus();
+  await file("aaa.js").press("ArrowDown");
+  await expect(file("bbb.js")).toBeFocused();
+  await file("bbb.js").press("Enter");
+  await expect(file("bbb.js")).toHaveAttribute("aria-selected", "true");
+  await expect(line("src/bbb.js", 1)).toHaveText(/original = 42/);
+  await host.getByRole("button", { name: "Previous change" }).click();
+  await expect(line("src/aaa.js", 3, "Old")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await file("bbb.js").click();
+  await host.getByRole("button", { name: "Next change" }).click();
+  await expect(line("src/ccc.js", 24, "Old")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await file("bbb.js").click();
+  await file("ccc.js").click();
+  await expect(line("src/ccc.js", 24, "Old")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(line("src/ccc.js", 1)).toHaveText(/retained line 1/);
+  await file("bbb.js").click();
+  await add(line("src/bbb.js", 1), "Name the original constant");
+  const source = host.locator(".review-git-source");
+  expect((await source.boundingBox())!.height).toBeGreaterThan(120);
+  await shell.page.screenshot({
+    path: info.outputPath("whole-git-review-unchanged.png"),
+  });
+  const round = (await inspect(review)).rounds[0];
+  expect(round.commentCount).toBe(2);
+  await host
+    .getByRole("button", { name: "Send feedback", exact: true })
+    .click();
+  await expect
+    .poll(async () => Boolean((await inspect(review)).rounds[0].submission))
+    .toBe(true);
+  const envelope = JSON.parse(
+    (await inspect(review)).rounds[0].submission!.envelope,
+  );
+  expect(envelope.comments).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        quote: "export const savedChange = 43;",
+        anchor: expect.objectContaining({ startLine: 3, side: "new" }),
+      }),
+      expect.objectContaining({
+        quote: "export const original = 42;",
+        anchor: expect.objectContaining({ startLine: 1, side: "new" }),
+      }),
+    ]),
+  );
+  await expect.poll(async () => (await shell.prompts()).length).toBe(1);
 });
 
 test("Diff review headings keep paths and revision labels compact in a narrow pane", async ({}, info) => {
@@ -1653,10 +1827,18 @@ test("Diff review headings keep paths and revision labels compact in a narrow pa
     exact: true,
   });
   const headings = content.getByRole("heading", { level: 3 });
-  await expect(headings).toHaveCount(2);
+  await expect(headings).toHaveCount(1);
+  const tree = shell.page.getByRole("tree", { name: "Review files" });
+  await tree.getByRole("treeitem", { name: same, exact: true }).click();
   const regular = headings.filter({ hasText: /^model\.txt$/ });
   await expect(regular).toHaveText(same);
   await expect(regular).toHaveAccessibleDescription(path.join(canonical, same));
+  expect(
+    await regular.evaluate((node) => node.scrollWidth - node.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  await tree
+    .getByRole("treeitem", { name: "renamed report.txt", exact: true })
+    .click();
   const renamed = headings.filter({ hasText: `${old} → ${next}` });
   const fullRename = `${path.join(canonical, old)} → ${path.join(canonical, next)}`;
   await expect(renamed).toHaveAttribute("title", fullRename);
@@ -1669,7 +1851,7 @@ test("Diff review headings keep paths and revision labels compact in a narrow pa
   await expect
     .poll(async () => (await host.boundingBox())!.width)
     .toBeLessThan(390);
-  for (const label of [comparison, regular, renamed]) {
+  for (const label of [comparison, renamed]) {
     expect(
       await label.evaluate((node) => node.scrollWidth - node.clientWidth),
     ).toBeLessThanOrEqual(1);

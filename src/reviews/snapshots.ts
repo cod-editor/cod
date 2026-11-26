@@ -19,6 +19,7 @@ export interface Snapshot {
   text: string;
   base: string | null;
   head: string | null;
+  workingBase?: string | null;
   files: DiffFile[];
 }
 export const hash = (text: string) =>
@@ -166,6 +167,7 @@ export async function capture(
   let text: string,
     base: string | null = null,
     head: string | null = null,
+    workingBase: string | null | undefined,
     files: DiffFile[] = [];
   if (target.kind === "document") {
     if (!path.isAbsolute(target.path))
@@ -205,7 +207,7 @@ export async function capture(
     target = { kind: "document", path: canonical };
   } else {
     const project = new ProjectService({ roots });
-    const diff = await project.diff(target);
+    const diff = await project.diff(target, true);
     if (diff.truncated || Buffer.byteLength(diff.patch) > 8 * 1024 * 1024)
       throw new Error("Incomplete diff cannot be reviewed");
     text = diff.patch;
@@ -213,8 +215,31 @@ export async function capture(
       throw new Error("Binary or invalid UTF-8 diff");
     base = diff.base;
     head = diff.head;
+    workingBase = diff.head ? undefined : diff.workingBase;
     target = { ...target, repoRoot: diff.repoRoot };
     files = manifest(text, diff.repoRoot);
+    const paths = diff.paths ?? [];
+    if (files.length !== paths.length)
+      throw new Error("Git review file indexes do not match");
+    paths.forEach((entry, index) => {
+      const saved = files[index];
+      const resolve = (relative: string | null) => {
+        if (relative === null) return null;
+        const absolute = path.resolve(diff.repoRoot, relative);
+        if (absolute === diff.repoRoot || !inside(diff.repoRoot, absolute))
+          throw new Error("Diff path escapes repository");
+        return absolute;
+      };
+      const oldPath = resolve(entry.oldPath),
+        newPath = resolve(entry.newPath);
+      if (
+        (saved.oldPath && saved.oldPath !== oldPath) ||
+        (saved.newPath && saved.newPath !== newPath)
+      )
+        throw new Error("Git review file paths do not match");
+      saved.oldPath = oldPath;
+      saved.newPath = newPath;
+    });
   }
   return {
     target,
@@ -225,6 +250,7 @@ export async function capture(
       text,
       base,
       head,
+      ...(workingBase !== undefined ? { workingBase } : {}),
       files,
     },
   };
@@ -249,6 +275,7 @@ export function anchor(
   snapshot: Snapshot,
   target: Target,
   range: Range,
+  source?: import("./git-source.ts").ReviewedGitFile,
 ): { anchor: Anchor; quote: string } {
   if (range.fragment) {
     if (
@@ -305,12 +332,30 @@ export function anchor(
     const entry = snapshot.files.find(
       (entry) => (side === "old" ? entry.oldPath : entry.newPath) === file,
     );
-    if (!entry) throw new Error("Path is absent on saved diff side");
-    values = [];
-    for (let line = range.startLine; line <= range.endLine; line++) {
-      if (!Object.hasOwn(entry[side], line))
-        throw new Error("Anchor crosses absent diff lines");
-      values.push(entry[side][line]);
+    if (
+      source?.complete &&
+      (side === "old" ? source.oldPath : source.newPath) === file
+    ) {
+      values = source.rows
+        .filter((row) => {
+          const line = side === "old" ? row.oldLine : row.newLine;
+          return (
+            line !== undefined &&
+            line >= range.startLine &&
+            line <= range.endLine
+          );
+        })
+        .map((row) => row.text);
+      if (values.length !== range.endLine - range.startLine + 1)
+        throw new Error("Anchor crosses absent saved source lines");
+    } else {
+      if (!entry) throw new Error("Path is absent on saved diff side");
+      values = [];
+      for (let line = range.startLine; line <= range.endLine; line++) {
+        if (!Object.hasOwn(entry[side], line))
+          throw new Error("Anchor crosses absent diff lines");
+        values.push(entry[side][line]);
+      }
     }
   }
   const quote = values.join("\n");

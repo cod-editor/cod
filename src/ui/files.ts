@@ -12,9 +12,20 @@ interface Entry {
   kind: "file" | "directory";
   root: string;
 }
+export interface ReviewFilesSource {
+  key: string;
+  root: string;
+  selected?: string;
+  changes: Map<string, string>;
+  comments: Map<string, number>;
+  list: (directory: string) => Promise<Array<Omit<Entry, "root">>>;
+  select: (file: string) => void;
+}
+
 export class FileTree {
   private timer: ReturnType<typeof setInterval>;
   private workspace?: WorkspaceState;
+  private review?: ReviewFilesSource;
   private key = "";
   private generation = 0;
   private groupSequence = 0;
@@ -22,6 +33,8 @@ export class FileTree {
   private refreshing = false;
   private directories = new Set<{
     element: HTMLElement;
+    path: string;
+    reveal: () => void;
     refresh: () => Promise<void>;
   }>();
   private expanded = readPreference<Record<string, boolean>>(
@@ -60,7 +73,7 @@ export class FileTree {
       }
     });
     host.oncontextmenu = (event) => {
-      if (event.defaultPrevented || !this.workspace) return;
+      if (event.defaultPrevented || !this.workspace || this.review) return;
       event.preventDefault();
       const id = this.workspace.id;
       menu({ x: event.clientX, y: event.clientY }, [
@@ -72,6 +85,7 @@ export class FileTree {
       ]);
     };
     this.timer = setInterval(() => {
+      if (this.review) return;
       void this.refreshChanges();
       for (const directory of this.directories) {
         if (directory.element.isConnected) void directory.refresh();
@@ -84,10 +98,34 @@ export class FileTree {
     this.generation++;
     this.directories.clear();
   }
-  update(workspace: WorkspaceState | undefined): void {
+  update(
+    workspace: WorkspaceState | undefined,
+    review?: ReviewFilesSource,
+  ): void {
     this.workspace = workspace;
-    const key = JSON.stringify([workspace?.id, workspace?.folders]);
-    if (key === this.key) return;
+    const previousReview = this.review;
+    this.review = review;
+    const key = JSON.stringify([
+      workspace?.id,
+      workspace?.folders,
+      review?.key,
+    ]);
+    if (key === this.key) {
+      if (review?.selected && review.selected !== previousReview?.selected) {
+        for (const directory of this.directories)
+          if (
+            directory.element.isConnected &&
+            review.selected.startsWith(directory.path + "/")
+          )
+            directory.reveal();
+      }
+      if (review)
+        for (const row of this.host.querySelectorAll<HTMLElement>(
+          "[data-entry-kind=file]",
+        ))
+          this.decorate(row);
+      return;
+    }
     this.key = key;
     this.generation++;
     this.directories.clear();
@@ -95,9 +133,9 @@ export class FileTree {
     this.host.tabIndex = 0;
     void this.refreshChanges();
     this.host.setAttribute("role", "tree");
-    this.host.setAttribute("aria-label", "File tree");
+    this.host.setAttribute("aria-label", review ? "Review files" : "File tree");
     if (!workspace) return;
-    for (const root of workspace.folders)
+    for (const root of review ? [review.root] : workspace.folders)
       this.host.append(
         this.directory(root, root.split("/").pop() || root, 0, true),
       );
@@ -138,16 +176,25 @@ export class FileTree {
       refreshing = false,
       enterAfterRefresh = false;
     const workspaceId = this.workspace!.id,
+      expansionKey = this.review
+        ? `review:${this.review.root}:${path}`
+        : `${workspaceId}:${path}`,
+      review = this.review,
       generation = this.generation;
     const refresh = async () => {
       if (children.hidden || refreshing) return;
       refreshing = true;
       try {
-        const entries = await this.invoke<Entry[]>(
-          "project.list",
-          { workspace: workspaceId, path },
-          { reportError: false },
-        );
+        const entries = review
+          ? (await review.list(path)).map((entry) => ({
+              ...entry,
+              root: review.root,
+            }))
+          : await this.invoke<Entry[]>(
+              "project.list",
+              { workspace: workspaceId, path },
+              { reportError: false },
+            );
         if (generation !== this.generation || !group.isConnected) return;
         const nextSignature = JSON.stringify(entries);
         if (nextSignature === signature) return;
@@ -205,10 +252,9 @@ export class FileTree {
           children.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
       }
     };
-    this.directories.add({ element: group, refresh });
     const toggle = async (force?: boolean) => {
       const open = force ?? Boolean(children.hidden);
-      this.expanded[`${workspaceId}:${path}`] = open;
+      this.expanded[expansionKey] = open;
       writePreference("file-expansion", this.expanded);
       children.hidden = !open;
       if (!open) enterAfterRefresh = false;
@@ -218,6 +264,14 @@ export class FileTree {
       row.querySelector(".folder-state")?.replaceWith(nextIcon);
       if (open) await refresh();
     };
+    this.directories.add({
+      element: group,
+      refresh,
+      path,
+      reveal: () => {
+        if (children.hidden) void toggle(true);
+      },
+    });
     row.onclick = () => void toggle();
     row.addEventListener("blur", () => {
       enterAfterRefresh = false;
@@ -290,13 +344,14 @@ export class FileTree {
             ]
           : []),
       ]);
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      context(e.clientX, e.clientY);
-    };
-    if (this.expanded[`${this.workspace?.id}:${path}`] ?? root)
-      void toggle(true);
+    if (!review)
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        context(e.clientX, e.clientY);
+      };
+    const revealed = review?.selected?.startsWith(path + "/");
+    if ((this.expanded[expansionKey] ?? root) || revealed) void toggle(true);
     return group;
   }
   private file(entry: Entry, depth: number): HTMLElement {
@@ -315,7 +370,10 @@ export class FileTree {
     label.textContent = entry.name;
     row.append(icon("file"), label);
     this.decorate(row);
-    const open = () => void this.openFile(entry.path);
+    const open = () => {
+      if (this.review) this.review.select(entry.path);
+      else void this.openFile(entry.path);
+    };
     row.onclick = open;
     row.onkeydown = (e) => {
       if (e.key === "Enter") {
@@ -323,48 +381,74 @@ export class FileTree {
         open();
       } else this.navigate(e, row);
     };
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      menu({ x: e.clientX, y: e.clientY }, [
-        { label: "Open", key: "Enter", run: open },
-        {
-          label: "Review document",
-          run: () =>
-            void this.invoke("review.open-document", {
-              workspace: this.workspace!.id,
-              path: entry.path,
-            }),
-        },
-        ...(/\.md$/i.test(entry.path)
-          ? [
-              {
-                label: "Markdown preview",
-                run: () =>
-                  void this.invoke("preview.open", {
-                    workspace: this.workspace!.id,
-                    path: entry.path,
-                  }),
-              },
-            ]
-          : []),
-      ]);
-    };
+    if (!this.review)
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        menu({ x: e.clientX, y: e.clientY }, [
+          { label: "Open", key: "Enter", run: open },
+          {
+            label: "Review document",
+            run: () =>
+              void this.invoke("review.open-document", {
+                workspace: this.workspace!.id,
+                path: entry.path,
+              }),
+          },
+          ...(/\.md$/i.test(entry.path)
+            ? [
+                {
+                  label: "Markdown preview",
+                  run: () =>
+                    void this.invoke("preview.open", {
+                      workspace: this.workspace!.id,
+                      path: entry.path,
+                    }),
+                },
+              ]
+            : []),
+        ]);
+      };
     return row;
   }
   private decorate(row: HTMLElement): void {
-    const status = this.changes.get(row.dataset.path ?? "");
+    const file = row.dataset.path ?? "";
+    const status = this.review
+      ? this.review.changes.get(file)
+      : this.changes.get(file);
     row.querySelector(".file-status")?.remove();
-    if (status) {
+    row.querySelector(".review-file-count")?.remove();
+    if (status || this.review) {
       const badge = document.createElement("span");
       badge.className = "file-status";
-      badge.textContent = status;
+      badge.textContent = status ?? "";
+      if (!status) badge.setAttribute("aria-hidden", "true");
       row.append(badge);
     }
+    if (this.review) {
+      row.setAttribute("aria-selected", String(this.review.selected === file));
+      const count = this.review.comments.get(file);
+      const badge = document.createElement("span");
+      badge.className = "review-file-count";
+      badge.textContent = count ? String(count) : "";
+      badge.setAttribute("aria-hidden", "true");
+      const changed = { A: "Added", D: "Removed", M: "Modified", R: "Renamed" }[
+        status as "A" | "D" | "M" | "R"
+      ];
+      const description = [
+        changed,
+        count ? `${count} ${count === 1 ? "comment" : "comments"}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      if (description) row.setAttribute("aria-description", description);
+      else row.removeAttribute("aria-description");
+      row.append(badge);
+    } else row.removeAttribute("aria-selected");
   }
   private async refreshChanges(): Promise<void> {
     const workspace = this.workspace;
-    if (!workspace?.folders.length || this.refreshing) return;
+    if (!workspace?.folders.length || this.refreshing || this.review) return;
     this.refreshing = true;
     try {
       const result = await this.invoke<{
@@ -393,7 +477,7 @@ export class FileTree {
             file.worktreeStatus.trim() || file.indexStatus.trim() || "M",
           );
       }
-      if (this.workspace?.id !== workspace.id) return;
+      if (this.workspace?.id !== workspace.id || this.review) return;
       this.changes = changes;
       for (const row of this.host.querySelectorAll<HTMLElement>("[data-path]"))
         this.decorate(row);

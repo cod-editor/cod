@@ -1,7 +1,7 @@
 import { webLinkMenu } from "./web-links";
 import { localFileAddress } from "../browser/address";
 import { actionButton as paneButton } from "./action-feedback";
-import { reviewPane, updateReview } from "../review-pane";
+import { reviewFileTree, reviewPane, updateReview } from "../review-pane";
 import { previewPane, diffPane } from "../resource-panes";
 import type { AppState, WorkspaceState, PaneState } from "../types";
 import type { Invoke } from "./contracts";
@@ -174,7 +174,6 @@ export function createWorkspaceView(
           modalOpen)
       )
         clearBrowserReveal();
-      projects.update(workspace);
       for (const [id, view] of resourcePanes)
         if (
           !getState().workspaces.some((workspace) =>
@@ -209,6 +208,16 @@ export function createWorkspaceView(
         const content = layout.render(workspace);
         if (panes.firstElementChild !== content) panes.replaceChildren(content);
       }
+      projects.update(
+        workspace,
+        selected?.kind === "review"
+          ? reviewFileTree(
+              resourcePanes
+                .get(selected.id)
+                ?.querySelector<HTMLElement>(".review-body"),
+            )
+          : undefined,
+      );
       if (reveal && previous && selected && record)
         showBrowserReveal(selected.id, record.url, reveal, previous);
       const chat =
@@ -359,7 +368,21 @@ export function createWorkspaceView(
     } else if (pane.kind === "review") {
       const previous = container.querySelector<HTMLElement>(".review-body");
       if (previous) updateReview(previous, getState());
-      else content = reviewPane(pane.reviewId, pane.id, getState(), invoke);
+      else
+        content = reviewPane(
+          pane.reviewId,
+          pane.id,
+          getState(),
+          invoke,
+          (files) => {
+            const state = getState();
+            const active = state.workspaces.find(
+              (item) => item.id === state.activeWorkspaceId,
+            );
+            if (active?.id === workspace.id && active.activePaneId === pane.id)
+              projects.update(active, files);
+          },
+        );
     } else if (pane.kind === "preview" || pane.kind === "diff") {
       if (!container.childElementCount)
         content =

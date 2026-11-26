@@ -88,7 +88,16 @@ export function createPaneLayout(
     splitButton.setAttribute("aria-pressed", String(bothVisible));
     splitButton.setAttribute("aria-description", description);
     const settings = workspace?.settings;
-    filesPanel.hidden = settings?.filesVisible !== true;
+    const active = workspace?.panes.find(
+      ({ id }) => id === workspace.activePaneId,
+    );
+    const gitReview =
+      active?.kind === "review" &&
+      getState().reviews?.some(
+        (review) =>
+          review.id === active.reviewId && review.target.kind === "diff",
+      );
+    filesPanel.hidden = !(settings?.filesVisible ?? gitReview);
     filesButton.disabled = !workspace;
     filesButton.setAttribute("aria-pressed", String(!filesPanel.hidden));
     filesButton.title = workspace
@@ -160,7 +169,7 @@ export function createPaneLayout(
     if (workspace)
       void invoke("workspace.settings", {
         id: workspace.id,
-        settings: { filesVisible: workspace.settings?.filesVisible !== true },
+        settings: { filesVisible: filesPanel.hidden },
       });
   }
   function renderWorkspace(workspace: WorkspaceState): HTMLElement {

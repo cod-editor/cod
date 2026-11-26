@@ -90,7 +90,8 @@ export function createFilesFocusToggle(
           : captured,
       );
     }
-    if (w.settings?.filesVisible !== true) {
+    const host = document.querySelector<HTMLElement>("#project-panel");
+    if (host?.hidden) {
       await invoke("workspace.settings", {
         id: w.id,
         settings: { filesVisible: true },
@@ -106,7 +107,6 @@ export function createFilesFocusToggle(
       )
         return;
     }
-    const host = document.querySelector<HTMLElement>("#project-panel");
     (
       host?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]') ??
       host?.querySelector<HTMLElement>('[role="treeitem"]') ??
