@@ -764,12 +764,18 @@ function createWindow(): void {
 
 async function start(): Promise<void> {
   try {
+    const linux = process.platform === "linux";
     const claudeApi = new ClaudeApiSettings(
       dataDirectory,
-      process.platform === "darwin" &&
+      (linux || process.platform === "darwin") &&
         !app.commandLine.hasSwitch("use-mock-keychain")
         ? safeStorage
         : undefined,
+      linux
+        ? app.commandLine.getSwitchValue("password-store") === "basic"
+          ? "disabled-linux-keyring"
+          : "linux-keyring"
+        : "keychain",
     );
     operations = new ApplicationOperations(
       dataDirectory,

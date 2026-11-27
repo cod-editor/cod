@@ -18,9 +18,9 @@ export type ClaudeApiCrypto = {
 };
 
 type ClaudeApiRoute = { endpoint: string; token: string };
+type ClaudeApiStorage = "keychain" | "linux-keyring" | "disabled-linux-keyring";
 const maxCiphertextBytes = 64 * 1024;
 const unavailable = "Secure Claude API storage is unavailable on this device.";
-const locked = "Allow Cod to access Keychain and try again.";
 
 function parseRoute(value: unknown): ClaudeApiRoute {
   const route = value as Partial<ClaudeApiRoute> | null;
@@ -56,17 +56,62 @@ export class ClaudeApiSettings {
   private readonly root: string;
   private readonly file: string;
   private readonly crypto?: ClaudeApiCrypto;
+  private readonly storage: ClaudeApiStorage;
   private queue: Promise<unknown> = Promise.resolve();
   private version = 0;
 
-  constructor(root: string, crypto?: ClaudeApiCrypto) {
+  constructor(
+    root: string,
+    crypto?: ClaudeApiCrypto,
+    storage: ClaudeApiStorage = "keychain",
+  ) {
     this.root = root;
     this.crypto = crypto;
+    this.storage = storage;
     this.file = path.join(root, "claude-api.enc");
   }
 
   get revision(): number {
     return this.version;
+  }
+
+  private get lockedMessage(): string {
+    return this.storage === "keychain"
+      ? "Allow Cod to access Keychain and try again."
+      : "Unlock the system keyring and restart Cod to use saved authentication.";
+  }
+
+  private async encryptionAvailable(): Promise<boolean> {
+    return (
+      this.storage !== "disabled-linux-keyring" &&
+      ((await this.crypto?.isAsyncEncryptionAvailable().catch(() => false)) ??
+        false)
+    );
+  }
+
+  private protectedCiphertext(bytes: Buffer): boolean {
+    if (this.storage === "keychain") return true;
+    // Electron 45's async availability includes Chromium's known-key POSIX
+    // fallback (v10). Only the actual wallet/Secret Service (v11) and portal
+    // (v12) outputs attest that a protected key was selected.
+    const tag = bytes.toString("latin1", 0, 3);
+    return bytes.length > 3 && (tag === "v11" || tag === "v12");
+  }
+
+  private async linuxKeyringReady(): Promise<boolean> {
+    if (!(await this.encryptionAvailable())) return false;
+    // Probe only with a public constant. The credential encrypted below must
+    // independently pass the same check before any file is written.
+    const probe = await this.crypto
+      ?.encryptStringAsync("Cod credential storage check")
+      .catch(() => undefined);
+    return !!probe && this.protectedCiphertext(probe);
+  }
+
+  private async emptyStatus(): Promise<ClaudeApiStatus> {
+    return this.storage === "keychain" || (await this.linuxKeyringReady())
+      ? { kind: "native" }
+      : { kind: "unavailable" };
   }
 
   private run<T>(action: () => Promise<T>): Promise<T> {
@@ -94,10 +139,10 @@ export class ClaudeApiSettings {
         size < 1 ||
         size > maxCiphertextBytes
       )
-        throw new Error(locked);
+        throw new Error(this.lockedMessage);
       const buffer = Buffer.alloc(size + 1);
       const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-      if (bytesRead !== size) throw new Error(locked);
+      if (bytesRead !== size) throw new Error(this.lockedMessage);
       return buffer.subarray(0, bytesRead);
     } finally {
       await file.close();
@@ -109,12 +154,15 @@ export class ClaudeApiSettings {
     try {
       const data = await this.ciphertext();
       if (!data) return;
-      if (!(await this.crypto.isAsyncEncryptionAvailable()))
-        throw new Error(locked);
+      if (
+        !this.protectedCiphertext(data) ||
+        !(await this.encryptionAvailable())
+      )
+        throw new Error(this.lockedMessage);
       const { result } = await this.crypto.decryptStringAsync(data);
       return parseRoute(JSON.parse(result));
     } catch {
-      throw new Error(locked);
+      throw new Error(this.lockedMessage);
     }
   }
 
@@ -128,23 +176,26 @@ export class ClaudeApiSettings {
         case "status":
           try {
             const saved = await this.route();
-            return saved
-              ? { kind: "saved", endpoint: saved.endpoint }
-              : { kind: "native" };
+            if (saved) return { kind: "saved", endpoint: saved.endpoint };
+            return await this.emptyStatus();
           } catch {
             return { kind: "locked" };
           }
         case "save": {
           const route = parseRoute(request);
+          if (this.storage !== "keychain" && !(await this.linuxKeyringReady()))
+            throw new Error(unavailable);
           if (
-            !(await this.crypto.isAsyncEncryptionAvailable().catch(() => false))
+            this.storage === "keychain" &&
+            !(await this.encryptionAvailable())
           )
-            throw new Error(locked);
+            throw new Error(this.lockedMessage);
           const bytes = await this.crypto
             .encryptStringAsync(JSON.stringify(route))
             .catch(() => {
-              throw new Error(locked);
+              throw new Error(this.lockedMessage);
             });
+          if (!this.protectedCiphertext(bytes)) throw new Error(unavailable);
           const temporary = `${this.file}.${randomUUID()}.tmp`;
           try {
             if (bytes.length < 1 || bytes.length > maxCiphertextBytes)
@@ -165,7 +216,7 @@ export class ClaudeApiSettings {
             throw new Error("Could not remove Claude API authentication.");
           });
           this.version++;
-          return { kind: "native" };
+          return this.emptyStatus();
         default:
           throw new Error("Unknown Claude API settings action.");
       }
