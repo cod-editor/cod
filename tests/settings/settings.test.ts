@@ -191,6 +191,92 @@ test("Claude API route rejects unsafe or incomplete changes and never falls back
   await settings.command({ action: "remove" });
   assert.deepEqual(await readFile(other), saved);
 });
+
+test("Linux Claude API storage rejects fallback, unknown and forced basic keyrings", async (t) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "cod-claude-keyring-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { crypto } = fixtureCrypto();
+  let tag = "v10";
+  let failedAfterProbe = false;
+  let lastEncrypted = "";
+  let decryptions = 0;
+  const linuxCrypto: ClaudeApiCrypto = {
+    ...crypto,
+    async encryptStringAsync(value) {
+      lastEncrypted = value;
+      const actualTag = failedAfterProbe && value.startsWith("{") ? "v10" : tag;
+      return Buffer.concat([
+        Buffer.from(actualTag),
+        await crypto.encryptStringAsync(value),
+      ]);
+    },
+    async decryptStringAsync(value) {
+      decryptions++;
+      return crypto.decryptStringAsync(value.subarray(3));
+    },
+  };
+  const file = path.join(directory, "claude-api.enc");
+  const auth = new ClaudeApiSettings(directory, linuxCrypto, "linux-keyring");
+  const disabled = new ClaudeApiSettings(
+    directory,
+    linuxCrypto,
+    "disabled-linux-keyring",
+  );
+  const payload = {
+    action: "save",
+    endpoint: "https://gateway.example/",
+    token: "invented-token",
+  } as const;
+  for (const weak of ["v10", "v99"]) {
+    tag = weak;
+    assert.deepEqual(await auth.command({ action: "status" }), {
+      kind: "unavailable",
+    });
+    await assert.rejects(auth.command(payload), /unavailable/);
+    assert.equal(lastEncrypted.includes(payload.token), false);
+    await assert.rejects(readFile(file), { code: "ENOENT" });
+  }
+  tag = "v11";
+  assert.deepEqual(await auth.command({ action: "status" }), {
+    kind: "native",
+  });
+  for (const protectedTag of ["v11", "v12"]) {
+    tag = protectedTag;
+    await auth.command(payload);
+    const before = await readFile(file);
+    assert.equal(before.toString("latin1", 0, 3), protectedTag);
+    assert.equal(
+      await auth
+        .environment({})
+        .then(
+          (environment) => environment.ANTHROPIC_AUTH_TOKEN === payload.token,
+        ),
+      true,
+    );
+    assert.deepEqual(await disabled.command({ action: "status" }), {
+      kind: "locked",
+    });
+    await assert.rejects(disabled.environment({}), /keyring/);
+    failedAfterProbe = true;
+    await assert.rejects(auth.command(payload), /unavailable/);
+    assert.deepEqual(await readFile(file), before);
+    failedAfterProbe = false;
+  }
+  const validBody = (await readFile(file)).subarray(3);
+  const calls = decryptions;
+  await writeFile(file, Buffer.concat([Buffer.from("v10"), validBody]));
+  assert.deepEqual(await auth.command({ action: "status" }), {
+    kind: "locked",
+  });
+  await assert.rejects(
+    auth.environment({ ANTHROPIC_API_KEY: "invented-inherited-token" }),
+    /keyring/,
+  );
+  assert.equal(decryptions, calls);
+});
+
 test("settings preserve last good values, reject overwrite of broken JSON, serialize updates and reset", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "cod-settings-"));
   try {

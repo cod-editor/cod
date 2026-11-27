@@ -286,10 +286,14 @@ test("Claude Code picker and chat reopen the same native conversation without se
 });
 
 test("Claude API authentication survives a desktop restart without exposing the token", async ({}, info) => {
+  const linux = process.platform === "linux";
   test.skip(
-    process.platform !== "darwin" ||
-      process.env.COD_VERIFY_MACOS_KEYCHAIN !== "1",
-    "Needs a disposable macOS Keychain and a Playwright loader without --use-mock-keychain",
+    !(
+      (process.platform === "darwin" &&
+        process.env.COD_VERIFY_MACOS_KEYCHAIN === "1") ||
+      (linux && process.env.COD_VERIFY_LINUX_KEYRING === "1")
+    ),
+    "Needs a disposable system keyring and a Playwright loader without its mock keyring switches",
   );
   test.setTimeout(90_000);
   const app = new WorkspaceApp();
@@ -322,11 +326,15 @@ test("Claude API authentication survives a desktop restart without exposing the 
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     });
     await app.start();
-    expect(
-      await app.app!.evaluate(({ app }) =>
-        app.commandLine.hasSwitch("use-mock-keychain"),
-      ),
-    ).toBe(false);
+    const assertRealKeyring = async () => {
+      expect(
+        await app.app!.evaluate(({ app }) => [
+          app.commandLine.hasSwitch("use-mock-keychain"),
+          app.commandLine.getSwitchValue("password-store") === "basic",
+        ]),
+      ).toEqual([false, false]);
+    };
+    await assertRealKeyring();
     const workspace = await app.create("Invented authentication workspace");
     await app.cli(
       "workspace",
@@ -377,9 +385,10 @@ test("Claude API authentication survives a desktop restart without exposing the 
     await app.page.screenshot({
       path: info.outputPath("claude-api-saved.png"),
     });
-    expect(
-      (await readFile(path.join(app.data, "claude-api.enc"))).includes(token),
-    ).toBe(false);
+    const routeFile = path.join(app.data, "claude-api.enc");
+    const ciphertext = await readFile(routeFile);
+    expect(ciphertext.includes(token)).toBe(false);
+    if (linux) expect(ciphertext.toString("latin1", 0, 3)).toMatch(/^v1[12]$/);
     expect(
       JSON.stringify(await app.cli("settings", "get")).includes(token),
     ).toBe(false);
@@ -411,11 +420,7 @@ test("Claude API authentication survives a desktop restart without exposing the 
     const calls = model.requests;
     await app.stop();
     await app.start();
-    expect(
-      await app.app!.evaluate(({ app }) =>
-        app.commandLine.hasSwitch("use-mock-keychain"),
-      ),
-    ).toBe(false);
+    await assertRealKeyring();
     await openApi();
     await expect(url()).toHaveValue(model.endpoint + "/");
     await expect(secret()).toHaveValue("");
@@ -433,6 +438,105 @@ test("Claude API authentication survives a desktop restart without exposing the 
       latest.messages.filter((message) => message.role === "user"),
     ).toHaveLength(2);
     expect(JSON.stringify(latest).includes(token)).toBe(false);
+
+    if (linux) {
+      const keyringBus = app.environment.DBUS_SESSION_BUS_ADDRESS;
+      expect(keyringBus).toBeTruthy();
+      const missingKeyringBus = `unix:path=${path.join(app.temporary, "missing-keyring-bus")}`;
+      await app.stop();
+      app.environment.DBUS_SESSION_BUS_ADDRESS = missingKeyringBus;
+      await app.start();
+      await assertRealKeyring();
+      // The pinned Electron returns true and encrypts with a known key when
+      // the D-Bus session is missing. Test against the real fallback.
+      const fallback = await app.app!.evaluate(async ({ safeStorage }) => {
+        const available = await safeStorage.isAsyncEncryptionAvailable();
+        const ciphertext =
+          await safeStorage.encryptStringAsync("public fixture");
+        return [available, ciphertext.toString("latin1", 0, 3)];
+      });
+      expect(fallback).toEqual([true, "v10"]);
+      await openApi();
+      await expect(
+        settings()
+          .getByRole("status")
+          .filter({ hasText: "Unlock the system keyring" }),
+      ).toBeVisible();
+      await app.page.screenshot({
+        path: info.outputPath("claude-api-locked.png"),
+      });
+      expect(await readFile(routeFile)).toEqual(ciphertext);
+      await settings()
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+      const recoveryDraft = "Continue from the invented saved draft";
+      const callsBeforeRetry = model.requests;
+      await composer().fill(recoveryDraft);
+      await composer().press(`${modifier}+Enter`);
+      await expect(
+        app.page.getByText(/Unlock the system keyring/).first(),
+      ).toBeVisible();
+      await expect(composer()).toHaveValue(recoveryDraft);
+      expect(model.requests).toBe(callsBeforeRetry);
+      expect(
+        (await current())?.messages.filter(
+          (message) => message.role === "user",
+        ),
+      ).toHaveLength(2);
+      await app.stop();
+      app.environment.DBUS_SESSION_BUS_ADDRESS = keyringBus;
+      await app.start();
+      await expect(composer()).toHaveValue(recoveryDraft);
+      expect(model.requests).toBe(callsBeforeRetry);
+      await composer().press(`${modifier}+Enter`);
+      await expect.poll(() => model.requests).toBe(callsBeforeRetry + 1);
+      await expect(composer()).toHaveValue("");
+      await expect.poll(async () => (await current())?.status).toBe("ready");
+      const recovered = (await current())!;
+      expect(recovered.nativeId).toBe(first.nativeId);
+      expect(
+        recovered.messages.filter((message) => message.role === "user"),
+      ).toHaveLength(3);
+
+      await app.stop();
+      app.environment.DBUS_SESSION_BUS_ADDRESS = missingKeyringBus;
+      await app.start();
+      await openApi();
+      await settings()
+        .getByRole("button", { name: "Remove saved authentication" })
+        .click();
+      await expect(
+        settings()
+          .getByRole("status")
+          .filter({ hasText: "A system keyring is unavailable" }),
+      ).toBeVisible();
+      await expect(url()).toBeHidden();
+      await app.page.screenshot({
+        path: info.outputPath("claude-api-unavailable.png"),
+      });
+      expect(
+        await app.page.evaluate(async () => {
+          try {
+            await window.cod.claudeApiSettings({
+              action: "save",
+              endpoint: "https://gateway.example/",
+              token: "invented-fallback-token",
+            });
+            return false;
+          } catch {
+            return true;
+          }
+        }),
+      ).toBe(true);
+      await expect
+        .poll(() =>
+          access(routeFile).then(
+            () => true,
+            () => false,
+          ),
+        )
+        .toBe(false);
+    }
   } finally {
     try {
       await app.cleanup();

@@ -4,6 +4,7 @@ import type {
 } from "../application/claude-api-settings";
 import { actionRow, uiButton } from "../ui-kit";
 import { formField } from "./form-field";
+import { keyboardPlatform } from "./keyboard-ui";
 
 export function claudeApiSettingsEntry(): HTMLElement {
   const row = document.createElement("div");
@@ -49,9 +50,13 @@ export function claudeApiSettingsEntry(): HTMLElement {
       next.kind === "saved"
         ? "Saved for local Claude Code chats."
         : next.kind === "locked"
-          ? "Allow Keychain access to unlock saved authentication."
+          ? keyboardPlatform === "darwin"
+            ? "Allow Keychain access to unlock saved authentication."
+            : "Unlock the system keyring and restart Cod to use saved authentication."
           : next.kind === "unavailable"
-            ? "Secure storage is unavailable on this device."
+            ? keyboardPlatform === "darwin"
+              ? "Secure storage is unavailable on this device."
+              : "A system keyring is unavailable in this desktop session."
             : "Claude Code uses its native authentication.";
   };
   let busy = false;
