@@ -1180,6 +1180,7 @@ export function reviewPane(
         queued: "Feedback queued",
         dispatching: "Sending feedback",
         acknowledged: "Feedback sent",
+        cancelled: "Feedback cancelled before sending",
         uncertain: "Delivery uncertain. Check native history before retrying.",
       }[round.submission.delivery.status];
       delivery.append(text);

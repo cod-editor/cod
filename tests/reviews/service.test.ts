@@ -355,6 +355,101 @@ test("R4 durable idempotent submissions and guarded dispatch recovery never rese
     );
   }));
 
+test("Queuing and cancelling review feedback compete without changing submitted history", () =>
+  fixture(async ({ file, make }) => {
+    const service = make();
+    let review = await service.openDocument({
+      workspaceId: "workspace",
+      path: file,
+    });
+    const submitRound = async (requestId: string) => {
+      const args = {
+        id: review.id,
+        roundId: review.currentRoundId,
+        expectedVersion: review.version,
+        conversationId: "target",
+        requestId,
+      };
+      const submission = await service.submit(args);
+      return {
+        args,
+        submission,
+        target: {
+          id: review.id,
+          roundId: args.roundId,
+          submissionId: submission.id,
+        },
+      };
+    };
+    const nextRound = async () => {
+      await writeFile(file, `new fixture at version ${review.version}\n`);
+      const current = await service.inspect(review.id);
+      review = await service.refresh({
+        id: review.id,
+        expectedRoundId: current.currentRoundId,
+        expectedVersion: current.version,
+      });
+    };
+
+    const uncertain = await submitRound("uncertain-fixture");
+    await service.markDispatching(uncertain.target);
+    await service.markUncertain({
+      ...uncertain.target,
+      reason: "Uncertain fixture",
+    });
+    await nextRound();
+    const dispatching = await submitRound("dispatching-fixture");
+    const beforeDispatch = await service.inspect(review.id);
+    const [dispatch, staleCancel] = await Promise.allSettled([
+      service.markDispatching(dispatching.target),
+      service.cancelQueued(review.id, beforeDispatch.version),
+    ]);
+    assert.equal(dispatch.status, "fulfilled");
+    assert.equal(staleCancel.status, "rejected");
+    const duringDispatch = await service.inspect(review.id);
+    await assert.rejects(
+      service.cancelQueued(review.id, duringDispatch.version),
+    );
+    assert.deepEqual(await service.inspect(review.id), duringDispatch);
+
+    await nextRound();
+    review = await service.addComment({
+      id: review.id,
+      roundId: review.currentRoundId,
+      expectedVersion: review.version,
+      body: "Keep the cancelled feedback",
+      range: { startLine: 1, endLine: 1 },
+    });
+    const queued = await submitRound("queued-fixture");
+    await nextRound();
+    const delivered = await submitRound("delivered-fixture");
+    await service.markDispatching(delivered.target);
+    await service.acknowledge({
+      ...delivered.target,
+      receipt: { nativeId: "invented-native" },
+    });
+    const beforeCancel = await service.inspect(review.id);
+    const [, lateDispatch] = await Promise.all([
+      service.cancelQueued(review.id, beforeCancel.version),
+      service.markDispatching(queued.target),
+    ]);
+    assert.equal(lateDispatch.delivery.status, "cancelled");
+    const reopened = make();
+    const restored = await reopened.inspect(review.id);
+    assert.deepEqual(
+      restored.rounds.map((round) => round.submission?.delivery.status),
+      ["uncertain", "uncertain", "cancelled", "acknowledged"],
+    );
+    assert.equal(restored.currentRoundId, delivered.target.roundId);
+    assert.equal(restored.rounds[2].status, "cancelled");
+    assert.equal(restored.rounds[2].commentCount, 1);
+    assert.equal(
+      restored.rounds[2].submission?.envelope,
+      queued.submission.envelope,
+    );
+    assert.deepEqual(await reopened.submit(queued.args), lateDispatch);
+  }));
+
 test("R5 invalid anchors, binary/oversized documents and quota failures preserve previous committed state", () =>
   fixture(async ({ root, file, data, make }) => {
     const service = make(12000);

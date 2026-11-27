@@ -236,7 +236,44 @@ export function createWorkspaceNavigation(
         { label: "Open terminal", key: "Enter", run: open },
         ...tabActions,
       ];
-    return [{ label: "Open review", key: "Enter", run: open }, ...tabActions];
+    const review = state.reviews?.find((review) => review.id === item.id);
+    const queued = review?.rounds.filter(
+      (round) => round.submission?.delivery.status === "queued",
+    );
+    const feedbackActions: MenuAction[] =
+      review && queued?.length
+        ? [
+            {
+              label: "Cancel queued feedback…",
+              run: () => {
+                const affected =
+                  queued.length === 1
+                    ? `round ${queued[0].number}`
+                    : `${queued.length} rounds`;
+                const confirmation = confirmAction(
+                  "Cancel queued feedback?",
+                  `Feedback from ${affected} will stay in review history and will no longer be sent.`,
+                  "Cancel queued feedback",
+                  () =>
+                    invoke("review.cancel-queued", {
+                      id: review.id,
+                      expectedVersion: review.version,
+                    }),
+                  undefined,
+                  "Keep queued",
+                );
+                confirmation.addEventListener("close", handlers.restoreFocus, {
+                  once: true,
+                });
+              },
+            },
+          ]
+        : [];
+    return [
+      { label: "Open review", key: "Enter", run: open },
+      ...feedbackActions,
+      ...tabActions,
+    ];
   }
   async function focusWorkspace(id: string): Promise<void> {
     if (id !== getState().activeWorkspaceId)

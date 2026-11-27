@@ -3,6 +3,7 @@ import type { AppState, ConversationState } from "../types";
 import { conversationLabel } from "../message-label.ts";
 import { browserLabel } from "./browser-label.ts";
 import { isBrowserHome } from "../browser/view-state.ts";
+import { isReviewFeedbackPending } from "../reviews/delivery.ts";
 
 export type NavigationKind =
   "workspace" | "conversation" | "browser" | "terminal" | "review";
@@ -103,14 +104,16 @@ export function projectNavigation(
       (review) =>
         review.workspaceId === workspace.id &&
         (review.status === "draft" ||
-          (includeClosed && review.status === "cancelled") ||
+          (includeClosed &&
+            (review.status === "cancelled" ||
+              review.rounds.some(
+                (round) => round.submission?.delivery.status === "cancelled",
+              ))) ||
           workspace.panes.some(
             (pane) => pane.kind === "review" && pane.reviewId === review.id,
           ) ||
-          review.rounds.some(
-            (round) =>
-              round.submission &&
-              round.submission.delivery.status !== "acknowledged",
+          review.rounds.some((round) =>
+            isReviewFeedbackPending(round.submission?.delivery.status),
           )),
     );
     const hasActiveChild =

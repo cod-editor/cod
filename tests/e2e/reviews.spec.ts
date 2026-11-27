@@ -8,6 +8,7 @@ import { ChatApp, type Provider } from "./helpers/chat-fixture/harness";
 import { tabTo, modifier } from "./helpers/workspace-app";
 import type { AppState, ConversationState } from "../../src/types";
 import { LocalProviderOwner } from "../../src/providers/local-owner-client";
+import type { ReviewDeliveryStatus } from "../../src/reviews/delivery";
 interface Opened {
   reviewId: string;
   roundId: string;
@@ -18,7 +19,7 @@ interface Opened {
 interface Submission {
   id: string;
   envelope: string;
-  delivery: { status: "queued" | "dispatching" | "acknowledged" | "uncertain" };
+  delivery: { status: ReviewDeliveryStatus };
 }
 interface Summary {
   id?: string;
@@ -862,6 +863,210 @@ test("Review closed panes reopen from Overview and private drafts protect worksp
   await expect(
     shell.pane(reopened.id).getByLabel("Draft comment", { exact: true }),
   ).toContainText("Keep accessible after pane close");
+});
+
+test("Overview cancels only queued feedback from a closed Git Review and preserves history after restart", async ({}, info) => {
+  const workspace = await shell.create("Example review workspace");
+  const chat = await shell.newChat(workspace, "kimi");
+  const folder = shell.folders[0];
+  await shell.cli(
+    "workspace",
+    "add-folder",
+    "--id",
+    workspace,
+    "--path",
+    folder,
+  );
+  const gitOptions = {
+    cwd: folder,
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    },
+  };
+  execFileSync("git", ["add", "--", path.basename(shell.file)], gitOptions);
+  execFileSync("git", ["commit", "-qm", "Invented baseline"], gitOptions);
+  await writeFile(shell.file, "first line\nolder invented change\nlast line\n");
+  const review = await shell.cli<Opened>(
+    "review",
+    "open-diff",
+    "--workspace",
+    workspace,
+    "--repo-root",
+    folder,
+    "--conversation",
+    chat.id,
+  );
+  await comment(
+    review,
+    "Preserve this old observation",
+    pane(review)
+      .locator(".review-line")
+      .filter({ hasText: "older invented change" }),
+  );
+  await shell.send(chat.id, "[hold] keep the older review feedback queued");
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("working");
+  const requestId = randomUUID();
+  const queued = await submit(review, chat.id, requestId);
+  expect(queued.delivery.status).toBe("queued");
+  await shell.cli("conversation", "interrupt", "--id", chat.id);
+  await expect
+    .poll(async () => (await shell.inspect(chat.id)).status)
+    .toBe("ready");
+  await writeFile(shell.file, "first line\nnewer invented change\nlast line\n");
+  const latest = await shell.cli<Summary>(
+    "review",
+    "refresh",
+    "--id",
+    review.reviewId,
+    "--expected-round",
+    review.roundId,
+  );
+  const sent = await submit(
+    review,
+    chat.id,
+    randomUUID(),
+    latest.currentRoundId,
+  );
+  await expect
+    .poll(
+      async () => (await inspect(review)).rounds[1].submission?.delivery.status,
+    )
+    .toBe("acknowledged");
+  await shell.cli(
+    "pane",
+    "close",
+    "--workspace",
+    workspace,
+    "--id",
+    review.paneId,
+  );
+
+  const overview = await shell.overview();
+  const search = overview.getByRole("combobox", {
+    name: "Search Overview",
+    exact: true,
+  });
+  const reviewRow = (within: Locator) =>
+    within.locator(
+      `.overview-item[data-navigation-key="review:${review.reviewId}"]`,
+    );
+  const row = reviewRow(overview);
+  const menuAction = shell.page.getByRole("button", {
+    name: "Cancel queued feedback…",
+    exact: true,
+  });
+  const confirmation = shell.page.getByRole("dialog", {
+    name: "Cancel queued feedback?",
+    exact: true,
+  });
+  const confirm = confirmation.getByRole("button", {
+    name: "Cancel queued feedback",
+    exact: true,
+  });
+  await expect(row).toBeVisible();
+  const outside = await socketRequest({
+    op: "review.cancel-queued",
+    id: review.reviewId,
+    expectedVersion: (await inspect(review)).version,
+  });
+  expect(outside.ok).toBe(false);
+
+  await row.click({ button: "right" });
+  await expect(menuAction).toBeVisible();
+  await shell.page.screenshot({
+    path: info.outputPath("queued-review-menu.png"),
+  });
+  await menuAction.click();
+  const keep = confirmation.getByRole("button", {
+    name: "Keep queued",
+    exact: true,
+  });
+  await expect(keep).toBeFocused();
+  await expect(confirmation).toContainText("Feedback from round 1");
+  await shell.page.screenshot({
+    path: info.outputPath("queued-review-confirmation.png"),
+  });
+  await shell.page.keyboard.press("Escape");
+  await expect(search).toBeFocused();
+  expect((await inspect(review)).rounds[0].submission?.delivery.status).toBe(
+    "queued",
+  );
+
+  await shell.page.keyboard.press("Shift+F10");
+  await tabTo(shell.page, menuAction);
+  await shell.page.keyboard.press("Enter");
+  await tabTo(shell.page, confirm);
+  await shell.page.keyboard.press("Enter");
+  await expect(confirmation).not.toBeVisible();
+  await expect(search).toBeFocused();
+  await expect(row).toHaveCount(0);
+  expect(
+    (await inspect(review)).rounds.map(
+      (round) => round.submission?.delivery.status,
+    ),
+  ).toEqual(["cancelled", "acknowledged"]);
+  expect(await feedbackPrompts(queued.id)).toHaveLength(0);
+  expect(await feedbackPrompts(sent.id)).toHaveLength(1);
+  await shell.page.screenshot({
+    path: info.outputPath("queued-review-resolved.png"),
+  });
+
+  await shell.stop();
+  await shell.start();
+  const restoredOverview = await shell.overview();
+  const restoredRow = reviewRow(restoredOverview);
+  await expect(restoredRow).toHaveCount(0);
+  const waiter = await waitProcess(review, review.roundId).result;
+  expect(waiter.code, waiter.stderr).toBe(0);
+  expect(JSON.parse(waiter.stdout)).toMatchObject({ status: "cancelled" });
+  const replayed = await submit(review, chat.id, requestId);
+  expect(replayed.id).toBe(queued.id);
+  expect(replayed.delivery.status).toBe("cancelled");
+  const redelivery = await shell.cli<Submission>(
+    "review",
+    "deliver",
+    "--id",
+    review.reviewId,
+    "--round",
+    review.roundId,
+  );
+  expect(redelivery).toEqual(replayed);
+  expect(await feedbackPrompts(queued.id)).toHaveLength(0);
+  await restoredOverview
+    .getByRole("button", {
+      name: "Show closed workspaces and cancelled reviews",
+      exact: true,
+    })
+    .click();
+  await expect(restoredRow).toBeVisible();
+  await restoredRow.click();
+  const reopened = await shell.cli<Opened>(
+    "review",
+    "show",
+    "--id",
+    review.reviewId,
+  );
+  const host = pane(reopened);
+  const round = host.getByRole("combobox", { name: "Round", exact: true });
+  await expect(round).toHaveValue(latest.currentRoundId);
+  await round.selectOption(review.roundId);
+  await expect(
+    host.getByRole("region", { name: "Delivery status", exact: true }),
+  ).toContainText("Feedback cancelled before sending");
+  await expect(
+    host.getByLabel("Unsent comment", { exact: true }),
+  ).toContainText("Preserve this old observation");
+  await expect(
+    host.getByRole("button", { name: "Deliver queued feedback", exact: true }),
+  ).toHaveCount(0);
 });
 
 test("Review keyboard ranges and comment edits keep immutable quotes and show disk changes", async ({}, testInfo) => {

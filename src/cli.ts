@@ -54,10 +54,6 @@ async function main(): Promise<void> {
         })) as ReviewSummary;
         const round = summary.rounds.find((r) => r.id === request.round);
         if (!round) throw new Error("Unknown review round");
-        if (round.submission) {
-          process.stdout.write(JSON.stringify(round.submission) + "\n");
-          return;
-        }
         if (round.status === "cancelled") {
           process.stdout.write(
             JSON.stringify({
@@ -66,6 +62,10 @@ async function main(): Promise<void> {
               roundId: round.id,
             }) + "\n",
           );
+          return;
+        }
+        if (round.submission) {
+          process.stdout.write(JSON.stringify(round.submission) + "\n");
           return;
         }
         if (Date.now() >= deadline) {

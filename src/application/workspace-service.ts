@@ -1,3 +1,4 @@
+import { isReviewFeedbackPending } from "../reviews/delivery";
 import { tabInsertionIndex } from "../tab-order";
 import {
   acknowledgeConversation,
@@ -1155,8 +1156,7 @@ export class WorkspaceApplicationService {
                   (round.id === review.currentRoundId &&
                     round.status === "draft" &&
                     round.commentCount > 0) ||
-                  (round.submission &&
-                    round.submission.delivery.status !== "acknowledged"),
+                  isReviewFeedbackPending(round.submission?.delivery.status),
               ),
             )
           )
