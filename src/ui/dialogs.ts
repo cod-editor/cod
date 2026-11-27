@@ -133,13 +133,14 @@ export function confirmAction(
   label: string,
   action: () => Promise<unknown>,
   ariaLabel = title,
+  cancelLabel = "Cancel",
 ): HTMLDialogElement {
   const dialog = dialogSurface(ariaLabel);
   const { body, actions } = dialogRegions(dialog, title);
   const description = document.createElement("p");
   description.textContent = text;
   const cancel = keyHintButton(
-    actionButton("Cancel", async () => dialog.close()),
+    actionButton(cancelLabel, async () => dialog.close()),
     "Esc",
   );
   const accept = actionButton(label, async () => {

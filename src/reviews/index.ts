@@ -18,6 +18,7 @@ import {
   type Target,
 } from "./snapshots.ts";
 import { reviewedGitFile, reviewedGitTree } from "./git-source.ts";
+import type { ReviewDeliveryStatus } from "./delivery.ts";
 interface Comment {
   id: string;
   body: string;
@@ -32,7 +33,7 @@ interface Submission {
   conversationId: string;
   envelope: string;
   delivery: {
-    status: "queued" | "dispatching" | "acknowledged" | "uncertain";
+    status: ReviewDeliveryStatus;
     receipt?: Record<string, string>;
     reason?: string;
   };
@@ -605,6 +606,25 @@ export class ReviewService {
       return this.summary(review);
     });
   }
+  cancelQueued(id: string, expectedVersion: number) {
+    return this.mutate((state) => {
+      const review = this.review(state, id);
+      if (review.version !== expectedVersion)
+        throw new Error(
+          "Review changed. Reopen the menu to confirm queued feedback.",
+        );
+      let cancelled = false;
+      for (const round of review.rounds) {
+        if (round.submission?.delivery.status !== "queued") continue;
+        round.submission.delivery = { status: "cancelled" };
+        round.status = "cancelled";
+        cancelled = true;
+      }
+      if (!cancelled) throw new Error("No unsent feedback to cancel");
+      review.version++;
+      return this.summary(review);
+    });
+  }
   submit(args: Mutation & { conversationId: string; requestId: string }) {
     return this.mutate(async (state) => {
       if (!args.requestId || args.requestId.length > 128)
@@ -680,6 +700,7 @@ export class ReviewService {
   markDispatching(args: DeliveryTarget) {
     return this.mutate((state) => {
       const { review, submission } = this.delivery(state, args);
+      if (submission.delivery.status === "cancelled") return submission;
       if (submission.delivery.status !== "queued")
         throw new Error("Only definitely unsent queued feedback can dispatch");
       submission.delivery = { status: "dispatching" };

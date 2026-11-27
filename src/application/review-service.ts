@@ -1,6 +1,7 @@
 import { trustedReviewOperations } from "../command-catalog";
 import { randomUUID } from "node:crypto";
 import { ReviewService } from "../reviews";
+import { isReviewFeedbackPending } from "../reviews/delivery";
 import type { OperationRequest } from "../types";
 import { ApplicationStateStore } from "./state";
 import type { ConversationApplicationService } from "./conversation-service";
@@ -227,6 +228,11 @@ export class ReviewApplicationService {
         throw new Error("Unknown review operation");
       if (!Number.isInteger(request.expectedVersion))
         throw new Error("An expected review version is required");
+      if (request.op === "review.cancel-queued") {
+        const cancelled = await this.reviews.cancelQueued(id, expectedVersion);
+        await this.refreshReviews();
+        return cancelled;
+      }
       const mutation = {
         id,
         roundId: requiredString(request, "roundId"),
@@ -286,7 +292,7 @@ export class ReviewApplicationService {
     const submission = summary.rounds.find((r) => r.id === roundId)?.submission;
     if (!submission) throw new Error("Round is not submitted");
     if (
-      submission.delivery.status === "acknowledged" ||
+      !isReviewFeedbackPending(submission.delivery.status) ||
       this.reviewDispatches.has(submission.id)
     )
       return submission;
@@ -332,7 +338,8 @@ export class ReviewApplicationService {
       } else if (submission.delivery.status === "queued") {
         await this.conversations.ensureReady(conversation);
         this.conversations.assertCurrent(conversation);
-        await this.reviews.markDispatching(target);
+        const dispatch = await this.reviews.markDispatching(target);
+        if (dispatch.delivery.status === "cancelled") return dispatch;
         await this.refreshReviews();
         try {
           this.conversations.assertCurrent(conversation);
@@ -362,12 +369,15 @@ export class ReviewApplicationService {
         (r) => r.id === roundId,
       )!.submission;
     } catch (error) {
-      if (
-        submission.delivery.status === "queued" &&
-        this.conversations.isCurrent(conversation)
-      ) {
-        conversation.status = "failed";
-        conversation.error = `Feedback remains queued: ${error instanceof Error ? error.message : String(error)}`;
+      if (submission.delivery.status === "queued") {
+        const current = (await this.reviews.inspect(id)).rounds.find(
+          (round) => round.id === roundId,
+        )?.submission;
+        if (current?.delivery.status === "cancelled") return current;
+        if (this.conversations.isCurrent(conversation)) {
+          conversation.status = "failed";
+          conversation.error = `Feedback remains queued: ${error instanceof Error ? error.message : String(error)}`;
+        }
       }
       throw error;
     } finally {
@@ -383,6 +393,7 @@ export class ReviewApplicationService {
       "review.refresh",
       "review.submit",
       "review.cancel",
+      "review.cancel-queued",
       "review.comment-add",
       "review.comment-edit",
       "review.comment-delete",

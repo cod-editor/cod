@@ -220,6 +220,7 @@ export const trustedReviewOperations = [
   "review.file-tree",
   "review.file-source",
   "review.cancel",
+  "review.cancel-queued",
   "review.comment-add",
   "review.comment-edit",
   "review.comment-delete",
