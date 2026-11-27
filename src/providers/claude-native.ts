@@ -74,6 +74,7 @@ type ClaudeSessionOptions = {
   environment?: () => Promise<NodeJS.ProcessEnv>;
   nativeId: string;
   resume: boolean;
+  persistSession?: boolean;
   canUseTool?: Options["canUseTool"];
 };
 
@@ -109,7 +110,7 @@ export async function openClaudeSession(
         ? { resume: options.nativeId }
         : { sessionId: options.nativeId }),
       pathToClaudeCodeExecutable: options.executable,
-      persistSession: true,
+      persistSession: options.persistSession ?? true,
       settingSources: [],
       strictMcpConfig: true,
       tools: { type: "preset", preset: "claude_code" },

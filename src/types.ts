@@ -193,6 +193,7 @@ export interface QueuedMessage {
 
 export interface ConversationState {
   initialSelection?: import("./providers/types").ProviderOptions["current"];
+  claudeSelection?: import("./providers/types").ProviderOptions["current"];
   queuedMessages?: QueuedMessage[];
   reservedQuestionAnswers?: string[];
   queuePaused?: boolean;

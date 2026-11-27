@@ -278,7 +278,11 @@ export function createConversationViews({
   const draftProviders = new Map<string, string>();
   interface DraftModelState {
     location: string;
-    target: { workspace: string; paneId: string };
+    target: {
+      workspace: string;
+      paneId: string;
+      expectedProvider: "codex" | "claude";
+    };
     attempted?: string;
     read?: Promise<ProviderOptions>;
     options?: ProviderOptions;
@@ -306,14 +310,24 @@ export function createConversationViews({
       });
     return state.read;
   }
-  function draftModelChoices(workspace: WorkspaceState, pane: PaneState) {
+  function draftModelChoices(
+    workspace: WorkspaceState,
+    pane: PaneState,
+    provider: "codex" | "claude",
+  ) {
     const draft = workspace.chatDrafts?.[pane.id];
-    const saved = draft?.initialSelection;
-    const target = { workspace: workspace.id, paneId: pane.id };
+    const saved =
+      draft?.provider === provider ? draft.initialSelection : undefined;
+    const target = {
+      workspace: workspace.id,
+      paneId: pane.id,
+      expectedProvider: provider,
+    };
     const remote = getState().remoteWorkspace;
     const owner = remote?.ids.includes(workspace.id) ? remote : undefined;
     const location = JSON.stringify([
       workspace.id,
+      provider,
       owner ? [owner.alias, owner.connected] : null,
       draft?.cwd ?? workspace.folders[0],
     ]);
@@ -355,6 +369,8 @@ export function createConversationViews({
 
     for (const option of ["model", "reasoning"] as const) {
       const choices = option === "model" ? options?.models : options?.reasoning;
+      if (provider === "claude" && option === "reasoning" && !choices?.length)
+        continue;
       const stored = saved?.[option];
       const value =
         stored ?? (matchesDraft ? options.current[option] : undefined);
@@ -415,7 +431,9 @@ export function createConversationViews({
           draftModels.get(pane.id) === state;
         let opened = false;
         try {
-          const loaded = await readDraftOptions(state);
+          const loaded =
+            (provider === "claude" && state.options) ||
+            (await readDraftOptions(state));
           if (
             !active() ||
             loading.canceled ||
@@ -451,8 +469,8 @@ export function createConversationViews({
               });
             invalidate();
           };
-          if (!available.length && !currentValue) {
-            state.error = "Choose a Codex model that offers reasoning effort.";
+          if (!available.length && !currentValue && option === "reasoning") {
+            state.error = `Choose a ${providerLabel(provider)} model that offers reasoning effort.`;
             return;
           }
           invalidate();
@@ -472,8 +490,7 @@ export function createConversationViews({
           opened = true;
         } catch {
           if (active() && !loading.canceled)
-            state.error =
-              "Could not load Codex choices. Reopen the menu to retry, or send with your saved selection.";
+            state.error = `Could not load ${providerLabel(provider)} choices. Reopen the menu to retry.`;
         } finally {
           state.loading = undefined;
           trigger.setAttribute("aria-busy", "false");
@@ -604,8 +621,8 @@ export function createConversationViews({
         })),
       );
     actions.append(provider);
-    if (selected === "codex")
-      actions.append(draftModelChoices(workspace, pane));
+    if (selected === "codex" || selected === "claude")
+      actions.append(draftModelChoices(workspace, pane, selected));
     composer.append(input, actions);
     bindImages(composer, input, pane.id);
     const conflict = draftConflict(pane.id, pane.id);
@@ -949,7 +966,12 @@ export function createConversationViews({
           providerOptions.set(conversation.id, result);
           for (const current of panes.querySelectorAll<HTMLElement>(
             `.model-choices[data-conversation-id="${conversation.id}"]`,
-          ))
+          )) {
+            if (result.warning)
+              showActionError(
+                new Error(result.warning),
+                current.closest(".composer") ?? current,
+              );
             reconcileView(
               current,
               modelChoices(
@@ -958,6 +980,7 @@ export function createConversationViews({
                 ) ?? conversation,
               ),
             );
+          }
         })
         .catch(() => undefined)
         .finally(() => optionsLoading.delete(conversation.id));
@@ -980,7 +1003,10 @@ export function createConversationViews({
           option,
           optionKey,
           choiceLabel(
-            choices.find((choice) => choice.value === value) ?? choices[0],
+            choices.find((choice) => choice.value === value) ??
+              (conversation.provider === "claude" && options.current[option]
+                ? { value, label: value }
+                : choices[0]),
           ),
         );
         button.disabled = conversation.status !== "ready";
