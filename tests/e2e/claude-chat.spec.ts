@@ -15,6 +15,7 @@ const followUpReply = "The previous prompt included an image.";
 
 async function loopbackModel(expectedAuthorization?: string) {
   let requests = 0;
+  const turns: Array<{ text: string; model: string; effort?: string }> = [];
   let imageSent = false;
   let previousImageSent = false;
   const server = createServer(async (request, response) => {
@@ -46,6 +47,7 @@ async function loopbackModel(expectedAuthorization?: string) {
         : [{ type: "text", text: message.content }];
     const content = blocks(users.at(-1));
     const text = content.map((block) => block.text ?? "").join("");
+    turns.push({ text, model: body.model, effort: body.output_config?.effort });
     const earlierImage = users
       .slice(0, -1)
       .some((message: Parameters<typeof blocks>[0]) =>
@@ -100,6 +102,7 @@ async function loopbackModel(expectedAuthorization?: string) {
     throw new Error("No loopback endpoint");
   return {
     endpoint: `http://127.0.0.1:${address.port}`,
+    turns,
     get requests() {
       return requests;
     },
@@ -276,6 +279,179 @@ test("Claude Code picker and chat reopen the same native conversation without se
     await app.page.screenshot({
       path: info.outputPath("claude-resumed-image-chat.png"),
     });
+  } finally {
+    try {
+      await app.cleanup();
+    } finally {
+      await model.close();
+    }
+  }
+});
+
+test("Claude composer picks native model and effort without sending, then restores the same chat choices", async ({}, info) => {
+  test.skip(
+    process.platform !== "linux",
+    "Uses the isolated glibc native Claude runner",
+  );
+  test.setTimeout(90_000);
+  const app = new WorkspaceApp();
+  const model = await loopbackModel("Bearer invented-option-token");
+  try {
+    await app.prepare();
+    const executable = path.resolve(
+      "node_modules",
+      "@anthropic-ai",
+      `claude-agent-sdk-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    await access(executable);
+    const profile = path.join(app.temporary, "native-model-claude");
+    for (const name of [
+      "CLAUDECODE",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_EFFORT_LEVEL",
+      "ANTHROPIC_MODEL",
+      "ANTHROPIC_DEFAULT_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "COD_CLAUDE_ARGS",
+    ])
+      delete app.environment[name];
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: executable,
+      CLAUDE_CONFIG_DIR: profile,
+      ANTHROPIC_AUTH_TOKEN: "invented-option-token",
+      ANTHROPIC_BASE_URL: model.endpoint,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    await app.start();
+    const workspace = await app.create("Invented model selection workspace");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const selector = (name: string) =>
+      app.page.getByRole("button", { name, exact: true });
+    const transcript = () =>
+      app.page.getByRole("region", {
+        name: "Conversation transcript",
+        exact: true,
+      });
+    const imageDraft = firstPrompt + "[Image 1]";
+    const choose = async (control: string, choice: string) => {
+      await selector(control).click();
+      await selector(choice).click();
+      await expect(selector(control)).toBeFocused();
+    };
+    const conversation = async () =>
+      (await app.cli<AppState>("state")).conversations.find(
+        (c) => c.workspaceId === workspace,
+      );
+
+    await choose("Provider", "Claude Code");
+    await expect(composer()).toHaveAttribute(
+      "placeholder",
+      "Message Claude Code...",
+    );
+    await composer().fill(firstPrompt);
+    await composer().evaluate((node, data) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.items.add(
+        new File(
+          [Uint8Array.from(atob(data), (value) => value.charCodeAt(0))],
+          "invented.png",
+          { type: "image/png" },
+        ),
+      );
+      node.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, pixel);
+    await expect(app.page.locator(".composer-images img")).toHaveCount(1);
+    await selector("Model").focus();
+    await app.page.keyboard.press("Enter");
+    await expect(selector("Sonnet")).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("claude-model-choice.png"),
+    });
+    await app.page.keyboard.press("Escape");
+    await expect(selector("Model")).toBeFocused();
+    await choose("Model", "Sonnet");
+    await expect(selector("Model")).toContainText("Sonnet");
+    await selector("Reasoning effort").click();
+    await expect(selector("Low")).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("claude-effort-choice.png"),
+    });
+    await selector("Low").click();
+    await expect(selector("Reasoning effort")).toBeFocused();
+    await expect(selector("Reasoning effort")).toContainText("Low");
+    await expect(composer()).toHaveValue(imageDraft);
+    await expect(app.page.locator(".composer-images img")).toHaveCount(1);
+    expect(model.requests).toBe(0);
+    expect(await conversation()).toBeUndefined();
+    await app.page.screenshot({
+      path: info.outputPath("claude-composer-selections.png"),
+    });
+    await app.stop();
+    await app.start();
+    await expect(composer()).toHaveValue(imageDraft);
+    await expect(app.page.locator(".composer-images img")).toHaveCount(1);
+    await expect(selector("Model")).toContainText("Sonnet");
+    await expect(selector("Reasoning effort")).toContainText("Low");
+    expect(model.requests).toBe(0);
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(imageReply);
+    await expect.poll(async () => (await conversation())?.status).toBe("ready");
+    const first = (await conversation())!;
+    expect(
+      first.messages.filter((message) => message.role === "user"),
+    ).toHaveLength(1);
+    expect(model.imageSent).toBe(true);
+    expect(
+      model.turns.find(({ text }) => text.includes(firstPrompt)),
+    ).toMatchObject({
+      model: expect.stringMatching(/^claude-sonnet-/),
+      effort: "low",
+    });
+    await choose("Reasoning effort", "High");
+    await expect(selector("Reasoning effort")).toContainText("High");
+    const calls = model.requests;
+    await app.stop();
+    await app.start();
+    await expect(selector("Model")).toContainText("Sonnet");
+    await expect(selector("Reasoning effort")).toContainText("High");
+    expect(model.requests).toBe(calls);
+    expect((await conversation())?.nativeId).toBe(first.nativeId);
+    await composer().fill(followUp);
+    await composer().press(`${modifier}+Enter`);
+    await expect(transcript()).toContainText(followUpReply);
+    await expect.poll(async () => (await conversation())?.status).toBe("ready");
+    expect(
+      model.turns.find(({ text }) => text.includes(followUp)),
+    ).toMatchObject({
+      model: expect.stringMatching(/^claude-sonnet-/),
+      effort: "high",
+    });
+    const latest = (await conversation())!;
+    expect(latest.nativeId).toBe(first.nativeId);
+    expect(
+      latest.messages.filter((message) => message.role === "user"),
+    ).toHaveLength(2);
+    expect(model.previousImageSent).toBe(true);
   } finally {
     try {
       await app.cleanup();

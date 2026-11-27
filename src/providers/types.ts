@@ -75,6 +75,7 @@ export type ProviderEvent = {
 );
 export interface AdapterOptions {
   claudeEnvironment?: () => Promise<NodeJS.ProcessEnv>;
+  claudeSelection?: ProviderOptions["current"];
   cwd: string;
   executable?: string;
   /** Primarily for installations using a launcher, and subprocess contract tests. */
@@ -105,8 +106,9 @@ export interface ProviderOptions {
   reasoning: NativeChoice[];
   /** Native binding/config response values, never optimistic local selections. */
   current: { model?: string; reasoning?: string };
-  /** Codex explicit overrides for future turns; not confirmed native active values. */
+  /** Explicit host overrides, independent of native defaults. */
   pending?: { model?: string; reasoning?: string };
+  warning?: string;
   selectionEffect: "next-turn" | "immediate";
 }
 export interface ProviderCapabilities {

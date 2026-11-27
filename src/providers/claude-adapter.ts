@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ModelInfo,
   Options,
   SDKMessage,
   SDKUserMessage,
@@ -16,6 +17,7 @@ import { claudePromptText, trailingImageMarker } from "../message-label.ts";
 import type {
   AdapterOptions,
   Conversation,
+  DraftOptionChange,
   ImageAttachment,
   InspectionSection,
   ProviderAdapter,
@@ -33,6 +35,69 @@ type EventBody = ProviderEvent extends infer E
   : never;
 type PermissionCallback = NonNullable<Options["canUseTool"]>;
 type PermissionResult = NonNullable<Awaited<ReturnType<PermissionCallback>>>;
+
+function modelChoice(models: ModelInfo[], value?: string) {
+  return (
+    models.find((model) => model.value === (value ?? "default")) ??
+    (value
+      ? (models.find(
+          (model) => model.value !== "default" && model.resolvedModel === value,
+        ) ?? models.find((model) => model.resolvedModel === value))
+      : undefined)
+  );
+}
+
+function effortChoices(model?: ModelInfo) {
+  return model?.supportsEffort === false
+    ? []
+    : (model?.supportedEffortLevels ?? []);
+}
+
+function nativeModels(models: ModelInfo[]) {
+  return models.map(({ value, displayName }) => ({
+    value,
+    label: displayName,
+  }));
+}
+
+function invalidChoice(option: string): never {
+  throw new ProviderOptionError(
+    "invalid-selection",
+    `Choose an available Claude Code ${option}`,
+  );
+}
+
+function draftOptions(
+  models: ModelInfo[],
+  selection: ProviderOptions["current"],
+  change?: DraftOptionChange,
+): ProviderOptions {
+  const pending = { ...selection };
+  if (change?.option === "model") {
+    if (change.value && !models.some((model) => model.value === change.value))
+      invalidChoice("model");
+    pending.model = change.value === "default" ? undefined : change.value;
+  }
+  const model = modelChoice(models, pending.model);
+  const efforts = effortChoices(model);
+  if (change?.option === "reasoning") {
+    const effort = efforts.find((entry) => entry === change.value);
+    if (change.value && !effort) invalidChoice("effort");
+    pending.reasoning = effort;
+  } else if (
+    pending.reasoning &&
+    !efforts.some((entry) => entry === pending.reasoning)
+  ) {
+    delete pending.reasoning;
+  }
+  return {
+    models: nativeModels(models).filter((choice) => choice.value !== "default"),
+    reasoning: efforts.map((value) => ({ value, label: value })),
+    current: {},
+    pending,
+    selectionEffect: "next-turn",
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -72,6 +137,8 @@ export class ClaudeAdapter implements ProviderAdapter {
   private streamedItem?: string;
   private sentText = new Set<string>();
   private model?: string;
+  private selection: ProviderOptions["current"] = {};
+  private selectionWarning?: string;
 
   private readonly options: AdapterOptions;
 
@@ -182,6 +249,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     } catch {
       throw new Error("Could not open the native Claude Code session");
     }
+    await this.restoreSelection();
     if (this.closed) {
       await this.native.dispose();
       throw new Error("Claude Code controller was closed");
@@ -463,48 +531,146 @@ export class ClaudeAdapter implements ProviderAdapter {
 
   async getOptions(): Promise<ProviderOptions> {
     const models = await this.query().supportedModels();
+    const selected = this.getSelection().model;
+    const model = modelChoice(models, selected);
+    const reasoning = effortChoices(model).map((value) => ({
+      value,
+      label: value,
+    }));
     return {
-      models: models.map(({ value, displayName }) => ({
-        value,
-        label: displayName,
-      })),
-      reasoning: [],
-      current: this.getSelection(),
-      selectionEffect: "immediate",
+      models: nativeModels(models),
+      reasoning: reasoning.length
+        ? [{ value: "default", label: "Use provider default" }, ...reasoning]
+        : [],
+      current: {
+        model: model?.value ?? selected,
+        ...(reasoning.length && {
+          reasoning: this.selection.reasoning ?? "default",
+        }),
+      },
+      pending: { ...this.selection },
+      warning: this.selectionWarning,
+      selectionEffect: "next-turn",
     };
   }
 
-  async getDraftOptions(): Promise<ProviderOptions> {
-    throw new ProviderOptionError(
-      "unavailable",
-      "Select a model in the opened Claude Code session",
+  async getDraftOptions(
+    selection: ProviderOptions["current"],
+    change?: DraftOptionChange,
+  ): Promise<ProviderOptions> {
+    const { cwd, executable, args, env, claudeEnvironment } = this.options;
+    if (!executable) throw new Error("Claude Code executable is unavailable");
+    const end = deferred<void>();
+    this.opening = openClaudeSession(
+      {
+        cwd,
+        executable,
+        args,
+        env,
+        environment: claudeEnvironment,
+        nativeId: randomUUID(),
+        resume: false,
+        persistSession: false,
+      },
+      (async function* () {
+        await end.promise;
+      })(),
     );
+    try {
+      this.native = await this.opening;
+      this.opening = undefined;
+      await this.native.ready;
+      return draftOptions(
+        await this.query().supportedModels(),
+        selection,
+        change,
+      );
+    } finally {
+      end.resolve();
+      await this.native?.dispose();
+    }
   }
 
-  getSelection() {
-    return this.model ? { model: this.model } : {};
+  getSelection(): ProviderOptions["current"] {
+    return {
+      ...(this.model && { model: this.model }),
+      ...(this.selection.model && { model: this.selection.model }),
+      ...(this.selection.reasoning &&
+        this.selection.reasoning !== "default" && {
+          reasoning: this.selection.reasoning,
+        }),
+    };
+  }
+
+  private async restoreSelection() {
+    const saved = this.options.claudeSelection;
+    if (!saved?.model && !saved?.reasoning) return;
+    const query = this.query();
+    const models = await query.supportedModels();
+    const model = modelChoice(models, saved.model);
+    const effort = effortChoices(model).find(
+      (value) => value === saved.reasoning,
+    );
+    const selection = {
+      model: saved.model ? model?.value : undefined,
+      reasoning: saved.reasoning === "default" ? "default" : effort,
+    };
+    if (selection.model) await query.setModel(selection.model);
+    if (selection.reasoning)
+      await query.applyFlagSettings({
+        effortLevel: selection.reasoning === "default" ? null : effort,
+      });
+    this.selection = {
+      ...(selection.model && { model: selection.model }),
+      ...(selection.reasoning && { reasoning: selection.reasoning }),
+    };
+    if (
+      (saved.model && !selection.model) ||
+      (saved.reasoning && !selection.reasoning)
+    )
+      this.selectionWarning =
+        "A saved Claude Code choice is unavailable. Using the current provider choice.";
   }
 
   async setOption(selection: ProviderSelection) {
-    if (selection.option !== "model")
-      throw new ProviderOptionError(
-        "invalid-selection",
-        "Claude Code effort is not selectable in Cod",
-      );
     if (this.active)
       throw new ProviderOptionError(
         "busy",
         "Wait until Claude Code finishes the turn",
       );
-    const options = await this.getOptions();
-    if (!options.models.some(({ value }) => value === selection.value))
-      throw new ProviderOptionError(
-        "invalid-selection",
-        "Choose a model returned by Claude Code",
+    const query = this.query();
+    const models = await query.supportedModels();
+    if (selection.option === "model") {
+      const model = models.find(({ value }) => value === selection.value);
+      if (!model) invalidChoice("model");
+      if (
+        this.selection.reasoning &&
+        this.selection.reasoning !== "default" &&
+        !effortChoices(model).some(
+          (value) => value === this.selection.reasoning,
+        )
+      ) {
+        await query.applyFlagSettings({
+          model: model.value,
+          effortLevel: null,
+        });
+        delete this.selection.reasoning;
+      } else {
+        await query.setModel(model.value);
+      }
+      this.selection.model = model.value;
+    } else {
+      const efforts = effortChoices(
+        modelChoice(models, this.getSelection().model),
       );
-    await this.query().setModel(selection.value);
-    this.model = selection.value;
-    return { ...options, current: this.getSelection() };
+      const effort = efforts.find((value) => value === selection.value);
+      if (!effort && (selection.value !== "default" || !efforts.length))
+        invalidChoice("effort");
+      await query.applyFlagSettings({ effortLevel: effort ?? null });
+      this.selection.reasoning = selection.value;
+    }
+    this.selectionWarning = undefined;
+    return this.getOptions();
   }
 
   async inspect(section: InspectionSection) {

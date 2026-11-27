@@ -29,7 +29,6 @@ import {
   type LocalProviderOwner,
 } from "../providers/local-owner-client";
 import {
-  createCodexAdapter,
   createProviderAdapter,
   type ProviderAdapter,
   type ProviderEvent,
@@ -190,6 +189,13 @@ export class ConversationApplicationService {
     const controller = this.controllers.get(conversation.id);
     if (!controller && conversation.initialSelection)
       return { ...conversation.initialSelection };
+    if (!controller && conversation.claudeSelection?.model) {
+      const { model, reasoning } = conversation.claudeSelection;
+      return {
+        model,
+        ...(reasoning && reasoning !== "default" && { reasoning }),
+      };
+    }
     if (!controller)
       throw new Error(
         "The source chat model is unavailable. Open the chat or use New chat with provider defaults.",
@@ -429,15 +435,28 @@ export class ConversationApplicationService {
       const workspace = this.store.workspace(workspaceId);
       const pane = this.store.pane(workspace, paneId);
       const draft = workspace.chatDrafts?.[paneId];
+      const provider = draft?.provider ?? "codex";
       if (
         pane.kind !== "document" ||
         !!pane.filePath ||
-        (draft?.provider ?? "codex") !== "codex"
+        (provider !== "codex" && provider !== "claude")
       )
-        throw new Error("This pane no longer has an unsent Codex chat");
-      return { workspace, draft, cwd: this.draftCwd(workspace, paneId) };
+        throw new Error(
+          "This pane no longer has an unsent chat with model choices",
+        );
+      return {
+        workspace,
+        draft,
+        provider,
+        cwd: this.draftCwd(workspace, paneId),
+      };
     };
     const original = target();
+    if (
+      request.expectedProvider !== undefined &&
+      request.expectedProvider !== original.provider
+    )
+      throw new Error("This draft provider changed. Open model choices again.");
     const selection = { ...original.draft?.initialSelection };
     let change: DraftOptionChange | undefined;
     if (selecting) {
@@ -451,11 +470,16 @@ export class ConversationApplicationService {
             : requiredString(request, "value"),
       };
     }
-    const resolved = await resolveProviderExecutable("codex");
-    const adapter = createCodexAdapter({
+    const resolved = await resolveProviderExecutable(original.provider);
+    const claudeApi =
+      original.provider === "claude" ? this.claudeApi : undefined;
+    const adapter = createProviderAdapter(original.provider, {
       cwd: original.cwd,
       executable: resolved.executable,
       args: resolved.args,
+      ...(claudeApi && {
+        claudeEnvironment: () => claudeApi.environment(process.env),
+      }),
     });
     this.replays.add(adapter);
     let options: ProviderOptions;
@@ -470,6 +494,7 @@ export class ConversationApplicationService {
       const current = target();
       if (
         original.workspace !== current.workspace ||
+        original.provider !== current.provider ||
         original.cwd !== current.cwd ||
         selection.model !== current.draft?.initialSelection?.model ||
         selection.reasoning !== current.draft?.initialSelection?.reasoning
@@ -486,7 +511,7 @@ export class ConversationApplicationService {
       const updated = {
         text: "",
         ...draft,
-        provider: "codex" as const,
+        provider: original.provider,
         initialSelection: options.pending,
       };
       (workspace.chatDrafts ??= {})[paneId] = updated;
@@ -572,7 +597,7 @@ export class ConversationApplicationService {
       restoreDraft &&
       workspace.chatDrafts?.[restoreDraft.id]?.provider === provider
         ? {
-            initialSelection:
+            [provider === "claude" ? "claudeSelection" : "initialSelection"]:
               workspace.chatDrafts[restoreDraft.id].initialSelection,
           }
         : {}),
@@ -861,6 +886,9 @@ export class ConversationApplicationService {
           : undefined,
       env,
       ...(auth && { claudeEnvironment: () => auth.environment(env) }),
+      ...(conversation.provider === "claude" && {
+        claudeSelection: conversation.claudeSelection,
+      }),
       onEvent:
         onEvent ??
         ((event: ProviderEvent) => this.providerEvent(conversation.id, event)),
@@ -2570,16 +2598,26 @@ export class ConversationApplicationService {
         const conversation = this.store.conversation(
           requiredString(request, "id"),
         );
-        const adapter = await this.ensureController(conversation);
-        const result = await adapter.setOption({
-          option: request.option,
-          value: requiredString(request, "value"),
-        });
-        if (conversation.initialSelection) {
-          conversation.initialSelection = adapter.getSelection();
-          this.store.schedulePersist(true);
+        const claude = conversation.provider === "claude";
+        if (claude) this.reserve(conversation.id);
+        try {
+          const adapter = await this.ensureController(conversation);
+          const result = await adapter.setOption({
+            option: request.option,
+            value: requiredString(request, "value"),
+          });
+          if (claude) {
+            this.assertCurrent(conversation);
+            conversation.claudeSelection = result.pending;
+            this.store.schedulePersist(true);
+          } else if (conversation.initialSelection) {
+            conversation.initialSelection = adapter.getSelection();
+            this.store.schedulePersist(true);
+          }
+          return result;
+        } finally {
+          if (claude) this.release(conversation.id);
         }
-        return result;
       }
 
       case "conversation.start":
