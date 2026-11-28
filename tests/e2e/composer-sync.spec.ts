@@ -29,6 +29,110 @@ async function draft(workspace: string, paneId: string) {
   )?.chatDrafts?.[paneId];
 }
 
+test("Archived composer attachments leave the renderer and restore from disk", async ({}, info) => {
+  const home = await shell.create("Invented active workspace");
+  const session = await shell.page.context().newCDPSession(shell.page);
+  const usedHeap = async () => {
+    await session.send("HeapProfiler.collectGarbage");
+    return (await session.send("Runtime.getHeapUsage")).usedSize;
+  };
+  const initial = await usedHeap();
+  const archived: Array<{ workspace: string; paneId: string; index: number }> =
+    [];
+  for (let index = 0; index < 6; index++) {
+    const workspace = await shell.create(`Invented draft ${index}`);
+    const chat =
+      index % 2 ? await shell.newChat(workspace, "codex") : undefined;
+    if (chat)
+      await expect
+        .poll(async () => (await shell.inspect(chat.id)).status)
+        .toBe("ready");
+    const paneId =
+      chat?.paneId ?? (await shell.workspace(workspace)).activePaneId!;
+    const pane = shell.pane(paneId);
+    const input = pane.getByRole("textbox", { name: "Message", exact: true });
+    await expect(input).toBeEnabled();
+    await shell.page.evaluate(
+      async ({ workspace, paneId, index }) => {
+        // Unique natural-size images prevent both V8 and the image cache from
+        // deduplicating away the memory retained by the archived drafts.
+        const canvas = document.createElement("canvas");
+        canvas.width = 1024;
+        canvas.height = 768;
+        const context = canvas.getContext("2d")!;
+        const image = context.createImageData(canvas.width, canvas.height);
+        for (let offset = 0; offset < image.data.length; offset += 65536)
+          crypto.getRandomValues(image.data.subarray(offset, offset + 65536));
+        for (let alpha = 3; alpha < image.data.length; alpha += 4)
+          image.data[alpha] = 255;
+        context.putImageData(image, 0, 0);
+        await window.cod.invoke({
+          op: "conversation.composer",
+          workspace,
+          paneId,
+          text: `Invented unsent draft ${index} [Image 1]`,
+          ...(index % 2 === 0 && { provider: "claude" }),
+          images: [
+            {
+              reference: 1,
+              mimeType: "image/png",
+              name: `invented-${index}.png`,
+              data: canvas.toDataURL("image/png").split(",")[1],
+            },
+          ],
+        });
+      },
+      { workspace, paneId, index },
+    );
+    await expect(pane.locator(".composer-images img")).toHaveCount(1);
+    const edited = `Invented final draft ${index} [Image 1]`;
+    await input.fill(edited);
+    await expect
+      .poll(() => {
+        const body = readWorkspaceChatDraftBody(shell.data, workspace, paneId);
+        return body ? JSON.parse(body).text : undefined;
+      })
+      .toBe(edited);
+    await shell.cli("workspace", "close", "--id", workspace);
+    await shell.cli("workspace", "focus", "--id", home);
+    await expect(pane).toHaveCount(0);
+    archived.push({ workspace, paneId, index });
+  }
+  await expect(
+    shell.page.getByRole("button", { name: "Overview", exact: true }),
+  ).toHaveText("Invented active workspace");
+  const retained = (await usedHeap()) - initial;
+  await info.attach("archived-composer-heap", {
+    body: JSON.stringify({ retainedBytes: retained }),
+    contentType: "application/json",
+  });
+  // The six images contain more than 20 MiB of unique encoded data. Allow
+  // ordinary startup and navigation allocations around the collection check.
+  expect(retained).toBeLessThan(12 * 1024 * 1024);
+  await session.detach();
+
+  for (const { workspace, paneId, index } of archived.slice(0, 2)) {
+    await shell.cli("workspace", "reopen", "--id", workspace);
+    const pane = shell.pane(paneId);
+    await expect(
+      pane.getByRole("textbox", { name: "Message", exact: true }),
+    ).toHaveValue(`Invented final draft ${index} [Image 1]`);
+    const image = pane.locator(".composer-images img");
+    await expect(image).toHaveAttribute("alt", `invented-${index}.png`);
+    expect(
+      await image.evaluate(async (element: HTMLImageElement) => {
+        await element.decode();
+        return element.naturalWidth;
+      }),
+    ).toBe(1024);
+    if (index === 0) {
+      await expect(
+        pane.getByRole("button", { name: "Provider", exact: true }),
+      ).toHaveText("Claude Code");
+    }
+  }
+});
+
 test("CLI composer updates reach an already hydrated chat with images and skills", async () => {
   const workspace = await shell.create("External draft fixture");
   const chat = await shell.newChat(workspace, "codex");
