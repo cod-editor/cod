@@ -348,6 +348,7 @@ test("Claude permission modes confirm locally and retain the same idle chat", as
       verification.confirmPermissionDialog();
     });
     await expect(mode()).toContainText("Bypass confirmations");
+    await expect(mode()).toBeEnabled();
     await expect(mode()).toBeFocused();
     await expect(composer()).toHaveValue("Run the bypass fixture");
     expect(model.requests).toBe(beforeBypass);
@@ -375,6 +376,7 @@ test("Claude permission modes confirm locally and retain the same idle chat", as
     const beforeDefault = model.requests;
     await selectMode("Default permissions");
     await expect(mode()).toContainText("Default permissions");
+    await expect(mode()).toBeEnabled();
     expect(model.requests).toBe(beforeDefault);
     await send("Run the restored default fixture");
     await expect(button("Deny")).toBeVisible();
@@ -386,6 +388,7 @@ test("Claude permission modes confirm locally and retain the same idle chat", as
     await ready();
     await selectMode("Bypass confirmations");
     await expect(mode()).toContainText("Bypass confirmations");
+    await expect(mode()).toBeEnabled();
     await composer().fill("Invented draft survives restart");
     await expect
       .poll(
