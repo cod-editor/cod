@@ -16,6 +16,7 @@ import { ApplicationStateStore } from "./application/state";
 import type { BrowserWindow, Session } from "electron";
 import { desktopWorkspaceOperations, operations } from "./command-catalog";
 import type { BuildInfo } from "./build-info";
+import type { ClaudePermissionChoice } from "./providers/types";
 import { LocalProviderOwner } from "./providers/local-owner-client";
 import type {
   AppState,
@@ -58,7 +59,7 @@ export class ApplicationOperations {
       send: (request) => this.conversations.sendConversation(request),
     });
     this.store.onDidChange = (state) =>
-      this.onDidChange?.(this.withQuickTerminals(state));
+      this.onDidChange?.(this.withDesktopState(state));
     this.store.beforeNotify = () => this.browserHost?.synchronizeNativeViews();
     this.terminals = new TerminalApplicationService(this.store);
     this.terminals.onDidTerminal = (event) => this.onDidTerminal?.(event);
@@ -185,7 +186,30 @@ export class ApplicationOperations {
     return this.store.data.activeWorkspaceId;
   }
   snapshot(forUi = false): AppState {
-    return this.withQuickTerminals(this.store.snapshot(forUi));
+    const state = this.store.snapshot(forUi);
+    return forUi
+      ? this.withDesktopState(state)
+      : this.withQuickTerminals(state);
+  }
+
+  private withDesktopState(state: AppState): AppState {
+    for (const conversation of state.conversations) {
+      const mode = this.conversations.claudePermissionMode(conversation.id);
+      if (mode) conversation.claudePermissionMode = mode;
+    }
+    return this.withQuickTerminals(state);
+  }
+
+  setClaudePermissionMode(
+    id: string,
+    mode: ClaudePermissionChoice,
+    confirm: (label: string) => Promise<boolean>,
+  ): Promise<void> {
+    if (!this.browserHost)
+      throw new Error(
+        "Claude Code permission changes require the desktop client",
+      );
+    return this.conversations.setClaudePermissionMode(id, mode, confirm);
   }
 
   private withQuickTerminals(state: AppState): AppState {

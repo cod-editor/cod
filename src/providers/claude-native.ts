@@ -75,6 +75,7 @@ type ClaudeSessionOptions = {
   nativeId: string;
   resume: boolean;
   persistSession?: boolean;
+  allowBypass?: boolean;
   canUseTool?: Options["canUseTool"];
 };
 
@@ -115,6 +116,7 @@ export async function openClaudeSession(
       strictMcpConfig: true,
       tools: { type: "preset", preset: "claude_code" },
       permissionMode: "default",
+      ...(options.allowBypass && { allowDangerouslySkipPermissions: true }),
       includePartialMessages: true,
       extraArgs: { "replay-user-messages": null },
       canUseTool: options.canUseTool,

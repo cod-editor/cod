@@ -192,6 +192,8 @@ export interface QueuedMessage {
 }
 
 export interface ConversationState {
+  /** Effective Claude mode projected into the desktop snapshot only. */
+  claudePermissionMode?: import("./providers/types").ClaudePermissionMode;
   initialSelection?: import("./providers/types").ProviderOptions["current"];
   claudeSelection?: import("./providers/types").ProviderOptions["current"];
   queuedMessages?: QueuedMessage[];
@@ -390,6 +392,10 @@ export interface CodBridge {
   claudeApiSettings(
     request: import("./application/claude-api-settings").ClaudeApiRequest,
   ): Promise<import("./application/claude-api-settings").ClaudeApiStatus>;
+  setClaudePermissionMode(
+    id: string,
+    mode: import("./providers/types").ClaudePermissionChoice,
+  ): Promise<void>;
   getKeymap(): Promise<import("./keyboard").KeymapState>;
   onKeymap(callback: (state: import("./keyboard").KeymapState) => void): void;
   openKeymap(): Promise<void>;

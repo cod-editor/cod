@@ -45,10 +45,21 @@ import { confirmAction } from "./dialogs";
 import type { AppState, PaneState, WorkspaceState } from "../types";
 import type { Invoke } from "./contracts";
 import type {
+  ClaudePermissionChoice,
+  ClaudePermissionMode,
   DraftOptionChange,
   NativeChoice,
   ProviderOptions,
 } from "../providers/types";
+
+const claudePermissionLabels: Record<ClaudePermissionMode, string> = {
+  default: "Default permissions",
+  bypassPermissions: "Bypass confirmations",
+  acceptEdits: "Accept edits",
+  plan: "Plan mode",
+  dontAsk: "Don't ask",
+  auto: "Auto permissions",
+};
 
 function optionLabel(
   option: DraftOptionChange["option"],
@@ -773,6 +784,7 @@ export function createConversationViews({
   >();
   const optionsLoading = new Set<string>();
   const pendingOptions = new Map<string, string>();
+  const changingClaudePermissions = new Set<string>();
   function imageStrip(
     images: ChatImage[],
     remove?: (index: number) => void,
@@ -1071,7 +1083,71 @@ export function createConversationViews({
         };
         host.append(button);
       }
+    if (conversation.provider === "claude")
+      host.append(claudePermissionChoice(conversation));
     return host;
+  }
+
+  function claudePermissionChoice(
+    conversation: import("../types").ConversationState,
+  ): HTMLButtonElement {
+    const { id, claudePermissionMode: current } = conversation;
+    const button = choiceTrigger(
+      current ? claudePermissionLabels[current] : "Permission mode",
+    );
+    button.dataset.focusKey = `claude-permissions:${id}`;
+    button.setAttribute("aria-label", "Permission mode");
+    button.classList.add("composer-choice-permission");
+    button.classList.toggle("bypassing", current === "bypassPermissions");
+    const busy = changingClaudePermissions.has(id);
+    button.disabled =
+      busy ||
+      !current ||
+      conversation.status !== "ready" ||
+      conversation.pendingPermissions.length > 0 ||
+      Boolean(
+        conversation.claudeSubmission || conversation.queuedMessages?.length,
+      );
+    button.setAttribute("aria-busy", String(busy));
+    button.title =
+      current && !button.disabled
+        ? claudePermissionLabels[current]
+        : "Claude Code must be idle with no pending requests";
+    button.setAttribute("aria-description", button.title);
+    button.onclick = () => {
+      if (button.disabled) return;
+      const modes: ClaudePermissionChoice[] = ["default", "bypassPermissions"];
+      menu(
+        button,
+        modes.map((mode) => ({
+          label: claudePermissionLabels[mode],
+          selected: current === mode,
+          run: () => {
+            button.focus({ preventScroll: true });
+            if (mode === current || changingClaudePermissions.has(id)) return;
+            changingClaudePermissions.add(id);
+            button.setAttribute("aria-busy", "true");
+            void window.cod
+              .setClaudePermissionMode(id, mode)
+              .catch((error) =>
+                showActionError(error, button.closest(".composer") ?? panes),
+              )
+              .finally(() => {
+                changingClaudePermissions.delete(id);
+                const controls = panes.querySelector<HTMLElement>(
+                  `.model-choices[data-conversation-id="${id}"]`,
+                );
+                const latest = getState().conversations.find(
+                  (chat) => chat.id === id,
+                );
+                if (controls && latest)
+                  reconcileView(controls, modelChoices(latest));
+              });
+          },
+        })),
+      );
+    };
+    return button;
   }
 
   const renderQuestion = createAsyncQuestions(invoke, invalidate);

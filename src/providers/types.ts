@@ -1,6 +1,12 @@
 import type { InspectionSection, ProviderInspection } from "./inspection.ts";
 export type { InspectionSection, ProviderInspection } from "./inspection.ts";
 export type ProviderId = "codex" | "kimi" | "claude";
+export type ClaudePermissionMode =
+  import("@anthropic-ai/claude-agent-sdk").PermissionMode;
+export type ClaudePermissionChoice = Extract<
+  ClaudePermissionMode,
+  "default" | "bypassPermissions"
+>;
 export type ProviderState =
   "starting" | "ready" | "working" | "waiting" | "failed" | "closed";
 export interface Conversation {
@@ -60,6 +66,7 @@ export type ProviderEvent = {
       details: unknown;
     }
   | { type: "permission-resolved"; requestId: string }
+  | { type: "permission-mode" }
   | {
       type: "message-meta";
       itemId: string;
@@ -74,6 +81,7 @@ export type ProviderEvent = {
   | { type: "diagnostic"; message: string }
 );
 export interface AdapterOptions {
+  claudeBypassAllowed?: boolean;
   claudeEnvironment?: () => Promise<NodeJS.ProcessEnv>;
   claudeSelection?: ProviderOptions["current"];
   cwd: string;

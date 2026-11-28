@@ -27,6 +27,9 @@ const bridge: CodBridge = {
   claudeApiSettings(request) {
     return ipcRenderer.invoke("cod:claude-api-settings", request);
   },
+  setClaudePermissionMode(id, mode) {
+    return ipcRenderer.invoke("cod:claude-permission-mode", id, mode);
+  },
   getKeymap() {
     return ipcRenderer.invoke("cod:keymap");
   },
