@@ -36,6 +36,7 @@ type EventBody = ProviderEvent extends infer E
   : never;
 type PermissionCallback = NonNullable<Options["canUseTool"]>;
 type PermissionResult = NonNullable<Awaited<ReturnType<PermissionCallback>>>;
+type ActiveTurn = ReturnType<typeof deferred<TurnOutcome>>;
 
 function modelChoice(models: ModelInfo[], value?: string) {
   return (
@@ -130,11 +131,18 @@ export class ClaudeAdapter implements ProviderAdapter {
   private reading?: Promise<void>;
   private disposal?: Promise<void>;
   private input = deferred<SDKUserMessage | undefined>();
-  private active?: ReturnType<typeof deferred<TurnOutcome>>;
+  private active?: ActiveTurn;
   private submission?: { id: string; accepted(): void };
   private interrupting = false;
   private listeners = new Set<(event: ProviderEvent) => void>();
-  private permissions = new Map<string, (result: PermissionResult) => void>();
+  private permissions = new Map<
+    string,
+    {
+      finish(result: PermissionResult): void;
+      turn?: ActiveTurn;
+      agentId?: string;
+    }
+  >();
   private streamedItem?: string;
   private sentText = new Set<string>();
   private model?: string;
@@ -298,8 +306,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         this.active = undefined;
         this.submission = undefined;
         this.input.resolve(undefined);
-        for (const settle of this.permissions.values())
-          settle({ behavior: "deny", message: this.failure.message });
+        this.closePermissions(this.failure.message);
         this.emit({ type: "error", message: this.failure.message });
       }
     }
@@ -392,6 +399,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (event.type !== "result" || !this.active) return;
     const active = this.active;
     this.active = undefined;
+    this.closePermissions("Claude Code turn ended", active);
     const interrupted = this.interrupting;
     this.interrupting = false;
     if (
@@ -426,12 +434,19 @@ export class ClaudeAdapter implements ProviderAdapter {
     submission.accepted();
   }
 
+  private closePermissions(message: string, turn?: ActiveTurn) {
+    for (const permission of this.permissions.values())
+      if (!turn || (permission.turn === turn && !permission.agentId))
+        permission.finish({ behavior: "deny", message });
+  }
+
   private readonly canUseTool: PermissionCallback = (
     tool,
     input,
-    { signal, toolUseID },
+    { signal, toolUseID, agentID },
   ) => {
-    if (signal.aborted || this.closed)
+    const active = this.active;
+    if ((!active && !agentID) || signal.aborted || this.closed || this.failure)
       return Promise.resolve({
         behavior: "deny",
         message: "Claude Code permission request closed",
@@ -447,11 +462,24 @@ export class ClaudeAdapter implements ProviderAdapter {
         if (!this.permissions.delete(requestId)) return;
         signal.removeEventListener("abort", close);
         this.emit({ type: "permission-resolved", requestId });
-        if (!this.closed && !this.failure)
+        if (
+          active &&
+          this.active === active &&
+          !this.closed &&
+          !this.failure &&
+          ![...this.permissions.values()].some(
+            (permission) => permission.turn === active,
+          )
+        )
           this.emit({ type: "state", state: "working" });
         resolve({ ...result, toolUseID });
       };
-      this.permissions.set(requestId, finish);
+      // Native subagents may outlive the foreground turn.
+      this.permissions.set(requestId, {
+        finish,
+        turn: active,
+        agentId: agentID,
+      });
       signal.addEventListener("abort", close, { once: true });
       this.emit({
         type: "permission",
@@ -462,17 +490,17 @@ export class ClaudeAdapter implements ProviderAdapter {
         ],
         details: { title: tool, input },
       });
-      this.emit({ type: "state", state: "waiting" });
+      if (active) this.emit({ type: "state", state: "waiting" });
     });
   };
 
   async permission(id: string, choice: string) {
-    const settle = this.permissions.get(id);
-    if (!settle || (choice !== "allow" && choice !== "deny"))
+    const permission = this.permissions.get(id);
+    if (!permission || (choice !== "allow" && choice !== "deny"))
       throw new Error(
         "That Claude Code permission choice is no longer available",
       );
-    settle(
+    permission.finish(
       choice === "allow"
         ? { behavior: "allow" }
         : { behavior: "deny", message: "User declined" },
@@ -572,8 +600,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.permissionModeChange?.reject(
       new Error("Claude Code controller closed"),
     );
-    for (const settle of this.permissions.values())
-      settle({ behavior: "deny", message: "Controller closed" });
+    this.closePermissions("Controller closed");
     this.active?.reject(new Error("Claude Code controller closed"));
     this.active = undefined;
     this.input.resolve(undefined);
