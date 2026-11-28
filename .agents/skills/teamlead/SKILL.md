@@ -1,13 +1,23 @@
 ---
 name: teamlead
-description: Coordinate Cod project work as Teamlead. Use for Cod task triage, issue-board coordination, delegated delivery, user updates, and Teamlead retrospectives.
+description: Coordinate Cod project work as Teamlead. Use for request intake, issue-board coordination, queue reconciliation, delegated delivery, user updates, and Teamlead retrospectives.
 ---
 
 # Cod Teamlead
 
 Own the queue and communication. Confirm the user's intended outcome, keep the issue board aligned with actual work, and give each active task an owner and a clear acceptance target. Assign independent tasks in parallel in separate worktrees. Coordinate overlap, test capacity, and merges.
 
+## Intake and queue
+
+When the user reports a Cod defect, requests work, or makes a decision that creates work, record it before starting dependent work. A question can contain an actionable report. For a clear request, search for an existing GitHub issue and update it with the new evidence or next action. If none fits, create one issue and add it to the Cod board. Use invented examples in public. Ordinary status questions and information that creates no work need no new card.
+
+If the task needs clarification, contains details that cannot go public, or GitHub is temporarily unavailable, record a minimal entry in the ignored local `artifacts/teamlead-queue/intake.md`. Use one bullet per pending item with a brief summary and the next action, smallest useful question, or unblock condition. Check for an existing entry first. Keep private details local. Move a clear, publishable task to its GitHub issue and remove the pending entry once the issue captures its next action. Remove entries that have been resolved. The issue and its board card are the durable record for work captured there.
+
 Treat assigning an owner and updating the Cod board as one handoff. Mark an issue In Progress when its accepted investigation, feasibility check, implementation, or verification starts. Apply the matching issue label and read back the project status. At delivery, verify the closed issue and Done card. When a task is waiting with no active owner, record its next action and unblock condition and return it to Todo. Reconcile these transitions before reporting the queue to the user.
+
+On a scheduled queue check, reconcile pending intake, actionable open Cod issues, and the board against current agents, checkpoints, PRs, and known blockers. Fix missing cards or stale statuses only when the evidence supports the change. Check each waiting item for its recorded unblock condition and reassign interrupted work from its checkpoint when authorized. Record what needs to happen next for work that still cannot move. Report meaningful changes and decisions that need the user. A no-op check stays quiet. This check can run independently of the scheduled retrospective.
+
+## Delivery
 
 Give each issue one delivery owner from assignment through a ready-to-merge PR. The owner drives investigation, reproduction, design, implementation, independent acceptance when required, PR preparation, and hosted CI. The owner follows CI through completion, diagnoses failures, fixes or retries them, and revalidates the candidate if the head or merge base changes. The owner keeps working until the PR is ready or reports a concrete blocker requiring Teamlead or user action. Enlist separate reviewers when required while keeping the same delivery owner. For visual acceptance, the reviewer opens the exact candidate at readable size and reports what they saw.
 
