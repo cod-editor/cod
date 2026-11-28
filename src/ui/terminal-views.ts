@@ -2,6 +2,7 @@ import { terminalTextSize, appearanceSettings } from "./appearance";
 import { resolveKeybinding } from "../keyboard";
 import { keyboardPlatform } from "./keyboard-ui";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import type {
   AppState,
@@ -22,6 +23,8 @@ interface TerminalSession {
   container: HTMLElement;
   terminal: Terminal;
   fit: FitAddon;
+  webgl?: WebglAddon;
+  webglUnavailable?: boolean;
   observer: ResizeObserver;
   sequence: number;
   ready: boolean;
@@ -166,14 +169,22 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
 
   function requestTerminalFit(session: TerminalSession): void {
     requestAnimationFrame(() => {
-      if (!session.container.isConnected) return;
+      if (terminalSessions.get(session.id) !== session) return;
       const host =
         session.container.querySelector<HTMLElement>(".terminal-output");
-      if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+      if (
+        !host?.isConnected ||
+        host.clientWidth === 0 ||
+        host.clientHeight === 0
+      ) {
+        releaseTerminalRenderer(session);
+        return;
+      }
       if (session.terminal.options.fontSize !== terminalTextSize())
         session.terminal.options.fontSize = terminalTextSize();
       Object.assign(session.terminal.options, terminalOptions());
       session.fit.fit();
+      useTerminalRenderer(session);
       const record = session.binding.record();
       if (
         record &&
@@ -190,6 +201,32 @@ export function createTerminalViews(getState: () => AppState, invoke: Invoke) {
           .catch(() => undefined);
       }
     });
+  }
+
+  function useTerminalRenderer(session: TerminalSession): void {
+    if (session.webgl || session.webglUnavailable) return;
+    // The WebGL renderer draws connected block and box glyphs at cell edges.
+    // Keep the DOM renderer when the system cannot provide a WebGL context.
+    const addon = new WebglAddon();
+    try {
+      session.terminal.loadAddon(addon);
+    } catch {
+      session.webglUnavailable = true;
+      addon.dispose();
+      return;
+    }
+    session.webgl = addon;
+    addon.onContextLoss(() => {
+      if (session.webgl !== addon) return;
+      session.webglUnavailable = true;
+      releaseTerminalRenderer(session);
+    });
+  }
+
+  function releaseTerminalRenderer(session: TerminalSession): void {
+    const addon = session.webgl;
+    session.webgl = undefined;
+    addon?.dispose();
   }
 
   function writeTerminalEvent(

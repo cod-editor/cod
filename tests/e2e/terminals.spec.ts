@@ -28,7 +28,7 @@ const alive = (pid: number) => {
     return false;
   }
 };
-test.beforeEach(async () => {
+test.beforeEach(async ({}, info) => {
   shell = new WorkspaceApp();
   await shell.prepare();
   Object.assign(shell.environment, {
@@ -37,6 +37,12 @@ test.beforeEach(async () => {
     BASH_SILENCE_DEPRECATION_WARNING: "1",
     HISTFILE: "/dev/null",
   });
+  if (info.tags.includes("@software-webgl"))
+    shell.launchArguments.push(
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+    );
   await shell.start();
 });
 test.afterEach(async () => {
@@ -46,6 +52,125 @@ const inspect = (id: string) =>
   shell.cli<Terminal>("terminal", "inspect", "--id", id);
 const write = (id: string, data: string) =>
   shell.cli("terminal", "write", "--id", id, "--data", data);
+
+test(
+  "Terminal WebGL joins block rows and releases the context when hidden",
+  { tag: "@software-webgl" },
+  async ({}, info) => {
+    test.skip(
+      process.platform !== "linux",
+      "Software Chromium context on isolated Linux",
+    );
+    const workspace = await shell.create("Invented terminal rendering");
+    const terminal = await open(workspace);
+    const region = shell.pane(terminal.paneId).getByRole("region", {
+      name: "Terminal output",
+      exact: true,
+    });
+    const show = () =>
+      shell.cli(
+        "pane",
+        "focus",
+        "--workspace",
+        workspace,
+        "--id",
+        terminal.paneId,
+      );
+    const canvases = region.locator(".xterm-screen > canvas");
+    const text = "│ Invented русский │";
+    const block = "████████████████████";
+    const fixture = [
+      "╭──────────────────╮",
+      text,
+      "╰──────────────────╯",
+      block,
+      block,
+    ];
+    const withColor = fixture
+      .map((line) => `\\033[38;2;215;119;87m\\033[48;2;0;0;0m${line}\\033[0m`)
+      .join("\\n");
+    const geometry = await inspect(terminal.id);
+    const receipt = await command(
+      terminal.id,
+      `printf 'TERM:%s\\n' "$TERM"; stty size; printf '${withColor}\\n'`,
+    );
+    expect(receipt).toContain("TERM:xterm-256color");
+    expect(receipt).toContain(`${geometry.rows} ${geometry.cols}`);
+    await expect(region).toContainText(text);
+    await expect(canvases).not.toHaveCount(0);
+    const screenshot = await region.screenshot({
+      path: info.outputPath("terminal-contiguous-blocks.png"),
+      scale: "css",
+    });
+    const height =
+      (await region
+        .locator(".xterm-screen")
+        .evaluate((node) => node.getBoundingClientRect().height)) /
+      geometry.rows;
+    const longestBand = await shell.page.evaluate(async (data) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(40, 0, 1, canvas.height).data;
+      let longest = 0;
+      let current = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        const colored =
+          pixels[offset] === 215 &&
+          pixels[offset + 1] === 119 &&
+          pixels[offset + 2] === 87;
+        current = colored ? current + 1 : 0;
+        longest = Math.max(current, longest);
+      }
+      return longest;
+    }, screenshot.toString("base64"));
+    expect(longestBand).toBeGreaterThanOrEqual(Math.floor(height * 2) - 1);
+
+    await region.evaluate((node) =>
+      Object.assign(window, { terminalFixtureOutput: node }),
+    );
+    const other = await open(workspace);
+    await expect(shell.pane(other.paneId)).toBeVisible();
+    await expect
+      .poll(() =>
+        shell.page.evaluate(() => {
+          const { terminalFixtureOutput } = window as typeof window & {
+            terminalFixtureOutput: Element;
+          };
+          return terminalFixtureOutput.querySelectorAll(
+            ".xterm-screen > canvas",
+          ).length;
+        }),
+      )
+      .toBe(0);
+    await show();
+    await expect(canvases).not.toHaveCount(0);
+    await expect(region).toContainText(text);
+    const simulatedLoss = await region.evaluate((node) => {
+      for (const canvas of node.querySelectorAll<HTMLCanvasElement>(
+        ".xterm-screen > canvas",
+      )) {
+        const loss = canvas
+          .getContext("webgl2")
+          ?.getExtension("WEBGL_lose_context");
+        if (loss) {
+          loss.loseContext();
+          return true;
+        }
+      }
+      return false;
+    });
+    expect(simulatedLoss).toBe(true);
+    await expect(canvases).toHaveCount(0, { timeout: 10_000 });
+    await command(terminal.id, "printf '%s\\n' 'Usable after context loss'");
+    await expect(region).toContainText("Usable after context loss");
+  },
+);
 async function output(id: string, expression: RegExp) {
   await expect.poll(async () => (await inspect(id)).output).toMatch(expression);
   return (await inspect(id)).output;
