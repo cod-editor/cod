@@ -601,6 +601,7 @@ export function createConversationViews({
     const actions = document.createElement("div");
     actions.className = "composer-actions";
     const provider = choiceTrigger(providerLabel(selected));
+    provider.dataset.focusKey = `provider:${pane.id}`;
     provider.setAttribute("aria-label", "Provider");
     provider.disabled = remote === true || !!draftModels.get(pane.id)?.saving;
     provider.onclick = () =>
