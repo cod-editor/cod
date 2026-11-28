@@ -1,10 +1,15 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
 import type { AppState } from "../../src/types";
 import { modifier, WorkspaceApp } from "./helpers/workspace-app";
+import { ChatApp } from "./helpers/chat-fixture/harness";
+
+const execute = promisify(execFile);
 
 const pixel =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==";
@@ -279,6 +284,138 @@ test("Claude Code picker and chat reopen the same native conversation without se
     await app.page.screenshot({
       path: info.outputPath("claude-resumed-image-chat.png"),
     });
+  } finally {
+    try {
+      await app.cleanup();
+    } finally {
+      await model.close();
+    }
+  }
+});
+
+test("A new chat keeps a native provider choice beside a browser during a shell refresh", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Uses X11 native menu input");
+  const app = new ChatApp();
+  const model = await loopbackModel("Bearer invented-switch-token");
+  try {
+    await app.prepare();
+    await app.configure({ codex: {} });
+    const executable = path.resolve(
+      "node_modules",
+      "@anthropic-ai",
+      `claude-agent-sdk-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    await access(executable);
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: executable,
+      CLAUDE_CONFIG_DIR: path.join(app.temporary, "native-switch-claude"),
+      ANTHROPIC_AUTH_TOKEN: "invented-switch-token",
+      ANTHROPIC_BASE_URL: model.endpoint,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    await app.start();
+    const workspace = await app.create("Invented split chat");
+    await app.cli(
+      "browser",
+      "open",
+      "--workspace",
+      workspace,
+      "--url",
+      model.endpoint,
+    );
+    await app.command("New chat");
+    await expect(app.page.locator(".browser-content:visible")).toHaveCount(1);
+    const provider = () =>
+      app.page.getByRole("button", { name: "Provider", exact: true });
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    await expect(provider()).toContainText("Codex");
+    await composer().fill("An invented unsent draft");
+    await app.app!.evaluate(({ Menu }) => {
+      const popup = Menu.prototype.popup;
+      Menu.prototype.popup = function (options) {
+        if (this.items.some((item) => item.label === "Claude Code")) {
+          Object.assign(globalThis, { providerMenuShown: false });
+          this.once("menu-will-show", () => {
+            Object.assign(globalThis, { providerMenuShown: true });
+          });
+          const item = this.items.find(
+            (entry) => entry.label === "Claude Code",
+          )!;
+          const click = item.click;
+          item.click = (...args: unknown[]) => {
+            Object.assign(globalThis, { providerMenuSelected: true });
+            click.apply(item, args);
+          };
+        }
+        return popup.call(this, options);
+      };
+    });
+    await provider().focus();
+    await app.page.keyboard.press("Enter");
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { providerMenuShown?: boolean })
+              .providerMenuShown,
+        ),
+      )
+      .toBe(true);
+    await app.cli(
+      "workspace",
+      "rename",
+      "--id",
+      workspace,
+      "--name",
+      "Invented split chat updated",
+    );
+    await expect(
+      app.page.getByRole("button", { name: "Overview", exact: true }),
+    ).toHaveText("Invented split chat updated");
+    await execute("xdotool", [
+      "key",
+      "--delay",
+      "80",
+      "--clearmodifiers",
+      "Home",
+      "Down",
+      "Down",
+      "Return",
+    ]);
+    await expect
+      .poll(() =>
+        app.app!.evaluate(
+          () =>
+            (
+              globalThis as typeof globalThis & {
+                providerMenuSelected?: boolean;
+              }
+            ).providerMenuSelected,
+        ),
+      )
+      .toBe(true);
+    await expect(provider()).toContainText("Claude Code");
+    await expect(provider()).toBeFocused();
+    await expect(composer()).toHaveAttribute(
+      "placeholder",
+      "Message Claude Code...",
+    );
+    await expect(composer()).toHaveValue("An invented unsent draft");
+    await expect(
+      app.page.getByRole("button", { name: "Model", exact: true }),
+    ).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("claude-provider-next-to-browser.png"),
+    });
+    await app.stop();
+    await app.start();
+    await expect(provider()).toContainText("Claude Code");
+    await expect(composer()).toHaveValue("An invented unsent draft");
+    expect((await app.cli<AppState>("state")).conversations).toHaveLength(0);
+    expect(await app.prompts()).toHaveLength(0);
+    expect(model.requests).toBe(0);
   } finally {
     try {
       await app.cleanup();
