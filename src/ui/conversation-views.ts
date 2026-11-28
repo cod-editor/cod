@@ -493,7 +493,7 @@ export function createConversationViews({
               run: () => apply(),
             },
             ...available.map((entry) => ({
-              label: optionLabel(option, entry),
+              label: entry.menuLabel ?? optionLabel(option, entry),
               selected: currentValue === entry.value,
               run: () => apply(entry.value),
             })),
@@ -1040,7 +1040,7 @@ export function createConversationViews({
           menu(
             button,
             currentChoices.map((choice) => ({
-              label: choiceLabel(choice),
+              label: choice.menuLabel ?? choiceLabel(choice),
               selected: choice.value === currentValue,
               run: () => {
                 button.focus({ preventScroll: true });

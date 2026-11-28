@@ -972,13 +972,18 @@ test("Claude composer picks native model and effort without sending, then restor
     await expect(app.page.locator(".composer-images img")).toHaveCount(1);
     await selector("Model").focus();
     await app.page.keyboard.press("Enter");
-    await expect(selector("Sonnet")).toBeVisible();
+    const sonnetChoice = app.page.getByRole("button", {
+      name: /^Sonnet \(claude-sonnet-[^)]+\)$/,
+    });
+    await expect(sonnetChoice).toBeVisible();
+    const sonnetLabel = (await sonnetChoice.textContent())!;
+    const sonnetModel = sonnetLabel.match(/\((claude-sonnet-[^)]+)\)$/)![1];
     await app.page.screenshot({
       path: info.outputPath("claude-model-choice.png"),
     });
     await app.page.keyboard.press("Escape");
     await expect(selector("Model")).toBeFocused();
-    await choose("Model", "Sonnet");
+    await choose("Model", sonnetLabel);
     await expect(selector("Model")).toContainText("Sonnet");
     await selector("Reasoning effort").click();
     await expect(selector("Low")).toBeVisible();
@@ -1013,11 +1018,29 @@ test("Claude composer picks native model and effort without sending, then restor
     expect(
       model.turns.find(({ text }) => text.includes(firstPrompt)),
     ).toMatchObject({
-      model: expect.stringMatching(/^claude-sonnet-/),
+      model: sonnetModel,
       effort: "low",
     });
+    await selector("Model").click();
+    const establishedMenu = app.page.locator("dialog.context-menu[open]");
+    await expect(establishedMenu).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("claude-established-model-choice.png"),
+    });
+    await expect(
+      establishedMenu.getByText(sonnetLabel, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      establishedMenu.getByRole("button", { name: sonnetLabel }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await app.page.keyboard.press("Escape");
+    await expect(selector("Model")).toBeFocused();
     await choose("Reasoning effort", "High");
     await expect(selector("Reasoning effort")).toContainText("High");
+    await expect(selector("Reasoning effort")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
     const calls = model.requests;
     await app.stop();
     await app.start();
@@ -1032,7 +1055,7 @@ test("Claude composer picks native model and effort without sending, then restor
     expect(
       model.turns.find(({ text }) => text.includes(followUp)),
     ).toMatchObject({
-      model: expect.stringMatching(/^claude-sonnet-/),
+      model: sonnetModel,
       effort: "high",
     });
     const latest = (await conversation())!;

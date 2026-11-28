@@ -100,6 +100,7 @@ export interface AdapterOptions {
 export interface NativeChoice {
   value: string;
   label: string;
+  menuLabel?: string;
 }
 export interface ProviderSelection {
   option: "model" | "reasoning";
