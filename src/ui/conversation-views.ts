@@ -1105,6 +1105,7 @@ export function createConversationViews({
       !current ||
       conversation.status !== "ready" ||
       conversation.pendingPermissions.length > 0 ||
+      Boolean(conversation.backgroundActivities?.some(isRunningActivity)) ||
       Boolean(
         conversation.claudeSubmission || conversation.queuedMessages?.length,
       );

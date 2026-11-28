@@ -3,6 +3,8 @@ import type {
   ModelInfo,
   Options,
   SDKMessage,
+  SDKTaskNotificationMessage,
+  SDKTaskStartedMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -16,6 +18,7 @@ import { emptyHistory, stageClaudeHistory } from "../conversation-history.ts";
 import { claudePromptText, trailingImageMarker } from "../message-label.ts";
 import type {
   AdapterOptions,
+  BackgroundActivity,
   ClaudePermissionMode,
   Conversation,
   DraftOptionChange,
@@ -142,6 +145,10 @@ export class ClaudeAdapter implements ProviderAdapter {
       turn?: ActiveTurn;
       agentId?: string;
     }
+  >();
+  private agentTasks = new Map<
+    string,
+    { runId?: string; activity: BackgroundActivity }
   >();
   private streamedItem?: string;
   private sentText = new Set<string>();
@@ -307,6 +314,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         this.submission = undefined;
         this.input.resolve(undefined);
         this.closePermissions(this.failure.message);
+        this.emit({ type: "state", state: "failed" });
         this.emit({ type: "error", message: this.failure.message });
       }
     }
@@ -335,6 +343,14 @@ export class ClaudeAdapter implements ProviderAdapter {
     }
     if (event.type === "system" && event.subtype === "init") {
       this.model = event.model;
+      return;
+    }
+    if (
+      event.type === "system" &&
+      (event.subtype === "task_started" ||
+        event.subtype === "task_notification")
+    ) {
+      this.nativeAgentTask(event);
       return;
     }
     if (event.type === "stream_event" && !event.parent_tool_use_id) {
@@ -397,6 +413,13 @@ export class ClaudeAdapter implements ProviderAdapter {
           });
       }
     if (event.type !== "result" || !this.active) return;
+    // A resumed worker can settle an orphaned task before the next user prompt.
+    if (
+      event.session_id === this.id &&
+      event.origin?.kind === "task-notification" &&
+      !event.user_message_uuid
+    )
+      return;
     const active = this.active;
     this.active = undefined;
     this.closePermissions("Claude Code turn ended", active);
@@ -425,6 +448,55 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.emit({ type: "completed", outcome });
     this.emit({ type: "state", state: "ready" });
     active.resolve(outcome);
+  }
+
+  private nativeAgentTask(
+    event: SDKTaskStartedMessage | SDKTaskNotificationMessage,
+  ): void {
+    if (event.session_id !== this.id || event.ambient || event.skip_transcript)
+      return;
+    const previous = this.agentTasks.get(event.task_id);
+    if (event.subtype === "task_started") {
+      if (
+        event.task_type !== "local_agent" ||
+        (previous &&
+          (event.run_id === previous.runId ||
+            (event.run_id && previous.runId && event.run_id < previous.runId)))
+      )
+        return;
+      const activity: BackgroundActivity = {
+        id: `claude-agent:${event.task_id}`,
+        kind: "agent",
+        label: event.description.trim().slice(0, 160) || "Claude Code agent",
+        state: "running",
+        startedAt: Date.now(),
+      };
+      this.agentTasks.delete(event.task_id);
+      this.agentTasks.set(event.task_id, { runId: event.run_id, activity });
+      const evicted =
+        this.agentTasks.size > 64
+          ? this.agentTasks.keys().next().value
+          : undefined;
+      if (evicted !== undefined) this.agentTasks.delete(evicted);
+      this.emit({
+        type: "background",
+        activity,
+        removeId: evicted === undefined ? undefined : `claude-agent:${evicted}`,
+      });
+      return;
+    }
+    if (
+      !previous ||
+      previous.activity.state !== "running" ||
+      (event.run_id && previous.runId && event.run_id !== previous.runId)
+    )
+      return;
+    previous.activity = {
+      ...previous.activity,
+      state: event.status === "stopped" ? "interrupted" : event.status,
+      finishedAt: Date.now(),
+    };
+    this.emit({ type: "background", activity: previous.activity });
   }
 
   private acceptPrompt(id: string) {

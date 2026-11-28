@@ -19,15 +19,27 @@ const imageReply = "The invented pixel is green.";
 const followUp = "What did the previous prompt contain?";
 const followUpReply = "The previous prompt included an image.";
 
+type AgentFixture = {
+  trigger: string;
+  children: Array<{
+    description: string;
+    prompt: string;
+    run_in_background: boolean;
+    release: Promise<void>;
+  }>;
+};
+
 async function loopbackModel(
   expectedAuthorization?: string,
   fixtureTools: ReadonlyMap<string, string> = new Map(),
+  fixtureAgents?: AgentFixture,
 ) {
   let requests = 0;
   const turns: Array<{ text: string; model: string; effort?: string }> = [];
   const offeredTools = new Set<string>();
   let imageSent = false;
   let previousImageSent = false;
+  let agentsOffered = false;
   const server = createServer(async (request, response) => {
     const reply = (body: unknown, status = 200) => {
       response.writeHead(status, { "content-type": "application/json" });
@@ -91,7 +103,7 @@ async function loopbackModel(
         ? fixtureTools.get(fixturePrompt)
         : undefined;
     if (toolFile) offeredTools.add(fixturePrompt);
-    const block = toolFile
+    const tool = toolFile
       ? {
           type: "tool_use",
           id: "toolu_" + randomUUID().replaceAll("-", ""),
@@ -101,34 +113,56 @@ async function loopbackModel(
             description: "Write an invented fixture marker",
           },
         }
-      : { type: "text", text: answer };
-    const stopReason = toolFile ? "tool_use" : "end_turn";
+      : undefined;
+    const child = fixtureAgents?.children.find(({ prompt }) =>
+      text.includes(prompt),
+    );
+    if (child) await child.release;
+    const agentTools =
+      !agentsOffered && fixtureAgents && text.includes(fixtureAgents.trigger)
+        ? fixtureAgents.children.map(({ release: _release, ...input }) => ({
+            type: "tool_use",
+            id: "toolu_" + randomUUID().replaceAll("-", ""),
+            name: "Agent",
+            input: { ...input, subagent_type: "general-purpose" },
+          }))
+        : [];
+    if (agentTools.length) agentsOffered = true;
+    const output = [...(tool ? [tool] : []), ...agentTools];
+    const stopReason = output.length ? "tool_use" : "end_turn";
+    const contentBlocks = output.length
+      ? output
+      : [{ type: "text", text: answer }];
     if (!body.stream)
-      return reply({ ...message, content: [block], stop_reason: stopReason });
+      return reply({
+        ...message,
+        content: contentBlocks,
+        stop_reason: stopReason,
+      });
     response.writeHead(200, { "content-type": "text/event-stream" });
     const send = (type: string, value: object = {}) =>
       response.write(
         `event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`,
       );
     send("message_start", { message });
-    send("content_block_start", {
-      index: 0,
-      content_block:
-        block.type === "tool_use"
-          ? { ...block, input: {} }
-          : { ...block, text: "" },
-    });
-    send("content_block_delta", {
-      index: 0,
-      delta:
-        block.type === "tool_use"
-          ? {
-              type: "input_json_delta",
-              partial_json: JSON.stringify(block.input),
-            }
-          : { type: "text_delta", text: answer },
-    });
-    send("content_block_stop", { index: 0 });
+    for (const [index, block] of contentBlocks.entries()) {
+      send("content_block_start", {
+        index,
+        content_block:
+          "input" in block ? { ...block, input: {} } : { ...block, text: "" },
+      });
+      send("content_block_delta", {
+        index,
+        delta:
+          "input" in block
+            ? {
+                type: "input_json_delta",
+                partial_json: JSON.stringify(block.input),
+              }
+            : { type: "text_delta", text: block.text },
+      });
+      send("content_block_stop", { index });
+    }
     send("message_delta", {
       delta: { stop_reason: stopReason, stop_sequence: null },
       usage,
@@ -1269,6 +1303,163 @@ test("Claude API authentication survives a desktop restart without exposing the 
         .toBe(false);
     }
   } finally {
+    try {
+      await app.cleanup();
+    } finally {
+      await model.close();
+    }
+  }
+});
+
+test("Claude composer shows foreground and background subagent activity exactly once", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Uses isolated native Claude");
+  test.setTimeout(90_000);
+  const app = new WorkspaceApp();
+  const hold = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const foreground = hold();
+  const background = hold();
+  const trigger = "Start the invented parallel agents";
+  const model = await loopbackModel("Bearer invented-agent-token", new Map(), {
+    trigger,
+    children: [
+      {
+        description: "Invented foreground",
+        prompt: "Return FOREGROUND-RESULT",
+        run_in_background: false,
+        release: foreground.promise,
+      },
+      {
+        description: "Invented background",
+        prompt: "Return BACKGROUND-RESULT",
+        run_in_background: true,
+        release: background.promise,
+      },
+    ],
+  });
+  try {
+    await app.prepare();
+    const executable = path.resolve(
+      "node_modules",
+      "@anthropic-ai",
+      `claude-agent-sdk-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    await access(executable);
+    for (const name of [
+      "CLAUDECODE",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "ANTHROPIC_API_KEY",
+    ])
+      delete app.environment[name];
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: executable,
+      // Authorize only this invented Agent fixture. No user Claude settings are loaded.
+      COD_CLAUDE_ARGS: JSON.stringify(["--allowedTools", "Agent"]),
+      CLAUDE_CONFIG_DIR: path.join(app.temporary, "native-agents"),
+      ANTHROPIC_AUTH_TOKEN: "invented-agent-token",
+      ANTHROPIC_BASE_URL: model.endpoint,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    await app.start();
+    const workspace = await app.create("Invented Claude activity workspace");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const button = (name: string) =>
+      app.page.getByRole("button", { name, exact: true });
+    const agentList = app.page.getByRole("list", {
+      name: "Background agents",
+      exact: true,
+    });
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const current = async () =>
+      (await app.cli<AppState>("state")).conversations.find(
+        (chat) => chat.workspaceId === workspace,
+      );
+    const activities = async () =>
+      (await current())?.backgroundActivities?.map(({ label, state }) => ({
+        label,
+        state,
+      }));
+    await button("Provider").click();
+    await button("Claude Code").click();
+    await composer().fill(trigger);
+    await composer().press(`${modifier}+Enter`);
+    await expect(button("Agents, 2 running")).toBeVisible();
+    await button("Agents, 2 running").press("Enter");
+    await expect(agentList.getByRole("listitem")).toHaveCount(2);
+    await expect(agentList.getByText("Invented foreground")).toBeVisible();
+    await expect(agentList.getByText("Invented background")).toBeVisible();
+    await app.page.screenshot({
+      path: info.outputPath("claude-two-running-agents.png"),
+    });
+
+    foreground.resolve();
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+    await expect(button("Agents, 1 running")).toBeVisible();
+    await expect(button("Permission mode")).toBeDisabled();
+    await expect(
+      agentList
+        .getByRole("listitem")
+        .filter({ hasText: "Invented foreground" }),
+    ).toContainText("Completed");
+    const { stdout } = await execute("pgrep", [
+      "-P",
+      String(app.app!.process().pid),
+      "^claude$",
+    ]);
+    const providerPids = stdout.trim().split("\n");
+    expect(providerPids).toHaveLength(1);
+    process.kill(Number(providerPids[0]), "SIGKILL");
+    await expect.poll(async () => (await current())?.status).toBe("failed");
+    await expect(button("Agents, 1 running")).toHaveCount(0);
+    const settled = [
+      { label: "Invented foreground", state: "completed" },
+      { label: "Invented background", state: "unknown" },
+    ];
+    await expect.poll(activities).toEqual(expect.arrayContaining(settled));
+    expect(await activities()).toHaveLength(2);
+    background.resolve();
+    const nativeId = (await current())?.nativeId;
+    const requests = model.requests;
+    await app.stop();
+    await app.start();
+    await expect(button("Agents, 1 running")).toHaveCount(0);
+    await expect.poll(activities).toEqual(expect.arrayContaining(settled));
+    expect(await activities()).toHaveLength(2);
+    expect((await current())?.nativeId).toBe(nativeId);
+    expect(model.requests).toBe(requests);
+
+    await composer().fill(followUp);
+    await composer().press(`${modifier}+Enter`);
+    await expect(
+      app.page.getByText(followUpReply, { exact: true }),
+    ).toBeVisible();
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+    expect(
+      (await current())?.messages.filter(
+        ({ role, text }) => role === "user" && text === followUp,
+      ),
+    ).toHaveLength(1);
+    expect((await current())?.nativeId).toBe(nativeId);
+  } finally {
+    foreground.resolve();
+    background.resolve();
     try {
       await app.cleanup();
     } finally {
