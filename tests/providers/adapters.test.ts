@@ -6,6 +6,7 @@ import {
   createCodexAdapter,
   createKimiAdapter,
 } from "../../src/providers/index.ts";
+import { nativeModels } from "../../src/providers/claude-adapter.ts";
 import { codexHistoryPage } from "../../src/providers/codex-history.ts";
 import { RpcTransport } from "../../src/providers/transport.ts";
 import type {
@@ -847,4 +848,37 @@ test("Codex history reduces pages, projects oversized images, and keeps unrelate
   } finally {
     await transport.close();
   }
+});
+
+test("Claude picker labels model IDs from native metadata and leaves unknown versions explicit", () => {
+  assert.deepEqual(
+    nativeModels([
+      {
+        value: "fable",
+        displayName: "Fable",
+        description: "",
+        resolvedModel: "invented-fable-5-1",
+      },
+      { value: "opus", displayName: "Opus", description: "" },
+      {
+        value: "sonnet",
+        displayName: "invented-gateway-model",
+        description: "",
+        resolvedModel: "invented-gateway-model",
+      },
+    ]),
+    [
+      {
+        value: "fable",
+        label: "Fable",
+        menuLabel: "Fable (invented-fable-5-1)",
+      },
+      { value: "opus", label: "Opus", menuLabel: "Opus (version unavailable)" },
+      {
+        value: "sonnet",
+        label: "invented-gateway-model",
+        menuLabel: "invented-gateway-model",
+      },
+    ],
+  );
 });

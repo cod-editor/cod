@@ -58,10 +58,15 @@ function effortChoices(model?: ModelInfo) {
     : (model?.supportedEffortLevels ?? []);
 }
 
-function nativeModels(models: ModelInfo[]) {
-  return models.map(({ value, displayName }) => ({
+export function nativeModels(models: ModelInfo[]) {
+  return models.map(({ value, displayName, resolvedModel }) => ({
     value,
     label: displayName,
+    menuLabel: resolvedModel
+      ? displayName === resolvedModel
+        ? displayName
+        : `${displayName} (${resolvedModel})`
+      : `${displayName} (version unavailable)`,
   }));
 }
 
