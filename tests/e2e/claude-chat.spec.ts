@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import path from "node:path";
@@ -411,6 +411,131 @@ test("Claude permission modes confirm locally and retain the same idle chat", as
     } finally {
       await model.close();
     }
+  }
+});
+
+test("Claude failure closes approvals without restoring an active turn", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Uses isolated native Claude");
+  const app = new WorkspaceApp();
+  const first = "Trigger the invented provider failure";
+  const queued = "An invented queued follow-up";
+  const draft = "An invented unsent draft";
+  try {
+    await app.prepare();
+    const profile = path.join(app.temporary, "native-failure");
+    await mkdir(profile);
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: path.resolve(
+        "tests/e2e/helpers/claude-failed-turn.mjs",
+      ),
+      CLAUDE_CONFIG_DIR: profile,
+    });
+    const signal = (name: string) => writeFile(path.join(profile, name), "");
+    const received = async (): Promise<string[]> =>
+      (await readFile(path.join(profile, "received.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).message.content[0].text);
+
+    await app.start();
+    const workspace = await app.create("Invented Claude failure workspace");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const button = (name: string) =>
+      app.page.getByRole("button", { name, exact: true });
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const current = async () =>
+      (await app.cli<AppState>("state")).conversations.find(
+        (chat) => chat.workspaceId === workspace,
+      );
+    const send = async (prompt: string) => {
+      await composer().fill(prompt);
+      await composer().press(`${modifier}+Enter`);
+    };
+    await button("Provider").click();
+    await button("Claude Code").click();
+    await send(first);
+    await expect(button("Deny")).toHaveCount(2);
+    await expect(button("Stop")).toBeVisible();
+    await button("Deny").first().click();
+    await expect(button("Deny")).toHaveCount(1);
+    await expect.poll(async () => (await current())?.status).toBe("waiting");
+    const chat = (await current())!;
+    await send(queued);
+    await expect
+      .poll(async () => (await current())?.queuedMessages?.[0]?.text)
+      .toBe(queued);
+    await composer().fill(draft);
+
+    await signal("fail-turn");
+    await expect.poll(async () => (await current())?.status).toBe("failed");
+    await signal("cancel-permissions");
+    await expect(button("Permission mode")).toHaveText("Accept edits");
+    expect(await current()).toMatchObject({
+      id: chat.id,
+      status: "failed",
+      pendingPermissions: [],
+      queuePaused: true,
+      queuedMessages: [{ text: queued, status: "queued" }],
+    });
+    await expect(button("Stop")).toHaveCount(0);
+    await expect(button("Deny")).toHaveCount(0);
+    expect(await received()).toEqual([first]);
+
+    await app.stop();
+    await app.start();
+    await expect(composer()).toHaveValue(draft);
+    await expect(button("Continue queue")).toBeVisible();
+    expect(await received()).toEqual([first]);
+    await button("Continue queue").click();
+    await expect.poll(received).toEqual([first, queued]);
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+    await expect(composer()).toHaveValue(draft);
+    await expect(button("Continue queue")).toHaveCount(0);
+    expect(await current()).toMatchObject({
+      id: chat.id,
+      nativeId: chat.nativeId,
+    });
+
+    await signal("background-approval");
+    await expect(button("Deny")).toHaveCount(1);
+    await expect(button("Stop")).toHaveCount(0);
+    await button("Deny").click();
+    await expect(button("Deny")).toHaveCount(0);
+    await expect.poll(async () => (await current())?.status).toBe("ready");
+
+    await send(first);
+    await expect.poll(received).toEqual([first, queued, first]);
+    await expect.poll(async () => (await current())?.status).toBe("failed");
+    await button("Overview").click();
+    const overview = app.page.getByRole("dialog", { name: "Overview" });
+    await overview
+      .locator(
+        `button.overview-item[data-navigation-key="conversation:${chat.id}"]`,
+      )
+      .hover();
+    await overview
+      .getByRole("combobox", { name: "Search Overview" })
+      .press("Shift+F10");
+    const menu = app.page.locator(".context-menu");
+    await expect(
+      menu.getByRole("button", { name: "Continue in CLI", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      menu.getByRole("button", { name: "Remove from workspace", exact: true }),
+    ).toBeEnabled();
+    await app.page.screenshot({
+      path: info.outputPath("claude-failed-overview.png"),
+    });
+  } finally {
+    await app.cleanup();
   }
 });
 
