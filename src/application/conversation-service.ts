@@ -1247,6 +1247,7 @@ export class ConversationApplicationService {
         this.controllerInitializations.has(id) ||
         conversation.status !== "ready" ||
         conversation.handoffTerminalId ||
+        hasRunningBackground(conversation) ||
         conversation.pendingPermissions.length ||
         conversation.claudeSubmission ||
         conversation.queuedMessages?.length
