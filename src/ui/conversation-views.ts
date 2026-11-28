@@ -179,6 +179,7 @@ export function createConversationViews({
   const seenVersions = new Map<string, string>();
   const dirtyComposers = new Set<string>();
   const composerConflicts = new Map<string, ComposerDraft>();
+  let openComposers = new Set<string | undefined>();
   const saves = new Map<
     string,
     { again: boolean; textOnly: boolean; promise: Promise<void> }
@@ -282,7 +283,10 @@ export function createConversationViews({
           "Could not save this unsent message. Keep Cod open and try again.",
         );
       })
-      .finally(() => saves.delete(key));
+      .finally(() => {
+        saves.delete(key);
+        releaseClosedDraft(key);
+      });
     return entry.promise;
   }
 
@@ -938,6 +942,7 @@ export function createConversationViews({
         setStatus(`Could not attach image: ${String(error)}`);
       } finally {
         loadingImages.delete(key);
+        releaseClosedDraft(key);
       }
     };
     input.addEventListener("paste", (e) => {
@@ -2060,15 +2065,46 @@ export function createConversationViews({
     invalidate();
   }
 
+  function releaseClosedDraft(key: string) {
+    if (
+      openComposers.has(key) ||
+      dirtyComposers.has(key) ||
+      saves.has(key) ||
+      loadingImages.has(key) ||
+      pendingSends.has(key) ||
+      pendingStarts.has(key) ||
+      checkingRemoteSends.has(key)
+    )
+      return;
+    // Closed panes restore their saved drafts. Clear the cached payload and
+    // its version markers together so reopening hydrates it again.
+    attachmentDrafts.delete(key);
+    composerDrafts.delete(key);
+    skillDrafts.delete(key);
+    composerConflicts.delete(key);
+    hydratedComposers.delete(key);
+    versions.delete(key);
+    seenVersions.delete(key);
+  }
+
   function reconcile() {
-    for (const workspace of getState().workspaces)
+    const state = getState();
+    openComposers = new Set(
+      state.workspaces.flatMap((workspace) =>
+        workspace.panes.map((pane) =>
+          pane.kind === "conversation" ? pane.conversationId : pane.id,
+        ),
+      ),
+    );
+    for (const workspace of state.workspaces)
       for (const [paneId, draft] of Object.entries(
         workspace.chatDrafts ?? {},
       )) {
-        const conversation = getState().conversations.find(
+        const conversation = state.conversations.find(
           (c) => c.paneId === paneId,
         );
         const key = conversation?.id ?? paneId;
+        if (!openComposers.has(key)) continue;
         const version = draft.version ?? "";
         const unconfirmed = remoteSend(key);
         if (
@@ -2106,6 +2142,7 @@ export function createConversationViews({
           void persistComposer(key);
         } else acceptDraft(key, paneId, draft);
       }
+    for (const key of attachmentDrafts.keys()) releaseClosedDraft(key);
   }
   const views = new Map<string, HTMLElement>();
   function stable(
