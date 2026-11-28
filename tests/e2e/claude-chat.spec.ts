@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
@@ -18,9 +19,13 @@ const imageReply = "The invented pixel is green.";
 const followUp = "What did the previous prompt contain?";
 const followUpReply = "The previous prompt included an image.";
 
-async function loopbackModel(expectedAuthorization?: string) {
+async function loopbackModel(
+  expectedAuthorization?: string,
+  fixtureTools: ReadonlyMap<string, string> = new Map(),
+) {
   let requests = 0;
   const turns: Array<{ text: string; model: string; effort?: string }> = [];
+  const offeredTools = new Set<string>();
   let imageSent = false;
   let previousImageSent = false;
   const server = createServer(async (request, response) => {
@@ -76,9 +81,30 @@ async function loopbackModel(expectedAuthorization?: string) {
       stop_sequence: null,
       usage,
     };
-    const block = { type: "text", text: answer };
+    const fixturePrompt = users
+      .flatMap((item: Parameters<typeof blocks>[0]) => blocks(item))
+      .map((block: Block) => block.text ?? "")
+      .filter((value: string) => fixtureTools.has(value))
+      .at(-1);
+    const toolFile =
+      fixturePrompt && !offeredTools.has(fixturePrompt)
+        ? fixtureTools.get(fixturePrompt)
+        : undefined;
+    if (toolFile) offeredTools.add(fixturePrompt);
+    const block = toolFile
+      ? {
+          type: "tool_use",
+          id: "toolu_" + randomUUID().replaceAll("-", ""),
+          name: "Bash",
+          input: {
+            command: `printf invented > ${toolFile}`,
+            description: "Write an invented fixture marker",
+          },
+        }
+      : { type: "text", text: answer };
+    const stopReason = toolFile ? "tool_use" : "end_turn";
     if (!body.stream)
-      return reply({ ...message, content: [block], stop_reason: "end_turn" });
+      return reply({ ...message, content: [block], stop_reason: stopReason });
     response.writeHead(200, { "content-type": "text/event-stream" });
     const send = (type: string, value: object = {}) =>
       response.write(
@@ -87,15 +113,24 @@ async function loopbackModel(expectedAuthorization?: string) {
     send("message_start", { message });
     send("content_block_start", {
       index: 0,
-      content_block: { ...block, text: "" },
+      content_block:
+        block.type === "tool_use"
+          ? { ...block, input: {} }
+          : { ...block, text: "" },
     });
     send("content_block_delta", {
       index: 0,
-      delta: { type: "text_delta", text: answer },
+      delta:
+        block.type === "tool_use"
+          ? {
+              type: "input_json_delta",
+              partial_json: JSON.stringify(block.input),
+            }
+          : { type: "text_delta", text: answer },
     });
     send("content_block_stop", { index: 0 });
     send("message_delta", {
-      delta: { stop_reason: "end_turn", stop_sequence: null },
+      delta: { stop_reason: stopReason, stop_sequence: null },
       usage,
     });
     send("message_stop");
@@ -123,6 +158,261 @@ async function loopbackModel(expectedAuthorization?: string) {
     },
   };
 }
+
+test("Claude permission modes confirm locally and retain the same idle chat", async ({}, info) => {
+  test.skip(process.platform !== "linux", "Uses isolated native Claude");
+  test.setTimeout(90_000);
+  const app = new WorkspaceApp();
+  const markers = new Map([
+    ["Run the default fixture", "fixture-default"],
+    ["Run the bypass fixture", "fixture-bypass"],
+    ["Run the restored default fixture", "fixture-restored"],
+  ]);
+  const model = await loopbackModel(
+    "Bearer invented-permissions-token",
+    markers,
+  );
+  try {
+    await app.prepare();
+    const executable = path.resolve(
+      "node_modules",
+      "@anthropic-ai",
+      `claude-agent-sdk-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    await access(executable);
+    for (const name of [
+      "CLAUDECODE",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "ANTHROPIC_API_KEY",
+      "COD_CLAUDE_ARGS",
+    ])
+      delete app.environment[name];
+    Object.assign(app.environment, {
+      COD_CLAUDE_EXECUTABLE: executable,
+      CLAUDE_CONFIG_DIR: path.join(app.temporary, "native-permissions"),
+      ANTHROPIC_AUTH_TOKEN: "invented-permissions-token",
+      ANTHROPIC_BASE_URL: model.endpoint,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    await app.start();
+    const workspace = await app.create("Invented Claude permission workspace");
+    await app.cli(
+      "workspace",
+      "add-folder",
+      "--id",
+      workspace,
+      "--path",
+      app.folders[0],
+    );
+    const button = (name: string) =>
+      app.page.getByRole("button", { name, exact: true });
+    const mode = () => button("Permission mode");
+    const composer = () =>
+      app.page.getByRole("textbox", { name: "Message", exact: true });
+    const current = async () =>
+      (await app.cli<AppState>("state")).conversations.find(
+        (chat) => chat.workspaceId === workspace,
+      );
+    const ready = () =>
+      expect.poll(async () => (await current())?.status).toBe("ready");
+    const send = async (prompt: string) => {
+      await composer().fill(prompt);
+      await composer().press(`${modifier}+Enter`);
+    };
+    const selectMode = async (name: string) => {
+      await mode().focus();
+      await mode().press("Enter");
+      await button(name).click();
+    };
+    await button("Provider").click();
+    await button("Claude Code").click();
+    await send("Run the default fixture");
+    await expect(button("Deny")).toBeVisible();
+    await expect(mode()).toContainText("Default permissions");
+    await expect(mode()).toBeDisabled();
+    const chat = (await current())!;
+    const pending = chat.pendingPermissions.map(({ id }) => id);
+    expect(pending).toHaveLength(1);
+    const refused = await app.page.evaluate(async (id) => {
+      try {
+        await window.cod.setClaudePermissionMode(id, "bypassPermissions");
+        return "";
+      } catch (error) {
+        return String(error);
+      }
+    }, chat.id);
+    expect(refused).toContain("idle with no pending requests");
+    expect((await current())?.pendingPermissions.map(({ id }) => id)).toEqual(
+      pending,
+    );
+    await button("Deny").click();
+    await ready();
+    await expect(
+      access(path.join(app.folders[0], "fixture-default")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const remoteReply = await new Promise<{ ok: boolean; error?: string }>(
+      (resolve, reject) => {
+        const socket = createConnection(app.socket);
+        socket.setTimeout(3_000, () =>
+          socket.destroy(new Error("Socket timeout")),
+        );
+        socket.setEncoding("utf8");
+        let text = "";
+        socket.on("connect", () =>
+          socket.write(
+            JSON.stringify({
+              op: "conversation.claude-permission-mode",
+              id: chat.id,
+              mode: "bypassPermissions",
+              trustedUi: true,
+            }) + "\n",
+          ),
+        );
+        socket.on("data", (chunk) => {
+          text += chunk;
+          if (text.includes("\n")) {
+            socket.destroy();
+            try {
+              resolve(JSON.parse(text));
+            } catch (error) {
+              reject(error);
+            }
+          }
+        });
+        socket.on("error", reject);
+      },
+    );
+    expect(remoteReply.ok).toBe(false);
+
+    await app.app!.evaluate(({ dialog }) => {
+      const original = dialog.showMessageBox.bind(dialog);
+      dialog.showMessageBox = ((
+        ...args: Parameters<typeof dialog.showMessageBox>
+      ) => {
+        const options = args.at(-1) as import("electron").MessageBoxOptions;
+        if (options.title !== "Claude Code permissions")
+          return original(...args);
+        const verification = globalThis as typeof globalThis & {
+          permissionDialogs?: Array<{ defaultId?: number; cancelId?: number }>;
+          confirmPermissionDialog?: () => void;
+        };
+        (verification.permissionDialogs ??= []).push({
+          defaultId: options.defaultId,
+          cancelId: options.cancelId,
+        });
+        if (verification.permissionDialogs.length === 2)
+          return new Promise<import("electron").MessageBoxReturnValue>(
+            (resolve) => {
+              verification.confirmPermissionDialog = () => {
+                delete verification.confirmPermissionDialog;
+                resolve({ response: 1, checkboxChecked: false });
+              };
+            },
+          );
+        return Promise.resolve({
+          response: verification.permissionDialogs.length === 1 ? 0 : 1,
+          checkboxChecked: false,
+        });
+      }) as typeof dialog.showMessageBox;
+    });
+    await composer().fill("Run the bypass fixture");
+    const beforeBypass = model.requests;
+    await selectMode("Bypass confirmations");
+    await expect(mode()).not.toHaveAttribute("aria-busy", "true");
+    await expect(mode()).toContainText("Default permissions");
+    await selectMode("Bypass confirmations");
+    await expect(mode()).toHaveAttribute("aria-busy", "true");
+    const blocked = await app.raw(
+      "conversation",
+      "send",
+      "--id",
+      chat.id,
+      "--text",
+      "A prompt that must not queue during consent",
+    );
+    expect(blocked.code).not.toBe(0);
+    expect(blocked.stderr).toContain("permission change to finish");
+    expect((await current())?.queuedMessages ?? []).toHaveLength(0);
+    await expect(composer()).toHaveValue("Run the bypass fixture");
+    await app.app!.evaluate(() => {
+      const verification = globalThis as typeof globalThis & {
+        confirmPermissionDialog?: () => void;
+      };
+      if (!verification.confirmPermissionDialog)
+        throw new Error("The native confirmation is not open");
+      verification.confirmPermissionDialog();
+    });
+    await expect(mode()).toContainText("Bypass confirmations");
+    await expect(mode()).toBeFocused();
+    await expect(composer()).toHaveValue("Run the bypass fixture");
+    expect(model.requests).toBe(beforeBypass);
+    expect(
+      await app.app!.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { permissionDialogs?: unknown[] })
+            .permissionDialogs,
+      ),
+    ).toEqual([
+      { defaultId: 0, cancelId: 0 },
+      { defaultId: 0, cancelId: 0 },
+    ]);
+    await app.page.screenshot({
+      path: info.outputPath("claude-permission-bypass.png"),
+    });
+    await composer().press(`${modifier}+Enter`);
+    await ready();
+    expect(
+      await readFile(path.join(app.folders[0], "fixture-bypass"), "utf8"),
+    ).toBe("invented");
+    expect((await current())?.nativeId).toBe(chat.nativeId);
+    await expect(button("Deny")).toHaveCount(0);
+
+    const beforeDefault = model.requests;
+    await selectMode("Default permissions");
+    await expect(mode()).toContainText("Default permissions");
+    expect(model.requests).toBe(beforeDefault);
+    await send("Run the restored default fixture");
+    await expect(button("Deny")).toBeVisible();
+    await expect(mode()).toBeDisabled();
+    await app.page.screenshot({
+      path: info.outputPath("claude-permission-pending.png"),
+    });
+    await button("Deny").click();
+    await ready();
+    await selectMode("Bypass confirmations");
+    await expect(mode()).toContainText("Bypass confirmations");
+    await composer().fill("Invented draft survives restart");
+    await expect
+      .poll(
+        async () =>
+          (await app.cli<AppState>("state")).workspaces.find(
+            ({ id }) => id === workspace,
+          )?.chatDrafts?.[chat.paneId]?.text,
+      )
+      .toBe("Invented draft survives restart");
+    const beforeRestart = model.requests;
+    await app.stop();
+    await app.start();
+    await expect(mode()).toContainText("Default permissions");
+    await expect(composer()).toHaveValue("Invented draft survives restart");
+    expect((await current())?.nativeId).toBe(chat.nativeId);
+    expect(model.requests).toBe(beforeRestart);
+    expect(
+      (await current())?.messages.filter(({ role }) => role === "user"),
+    ).toHaveLength(3);
+  } finally {
+    try {
+      await app.cleanup();
+    } finally {
+      await model.close();
+    }
+  }
+});
 
 test("Claude Code picker and chat reopen the same native conversation without sending", async ({}, info) => {
   test.skip(

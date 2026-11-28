@@ -967,6 +967,9 @@ a {
 .model-choices .composer-choice-reasoning {
   flex-shrink: 0;
 }
+.model-choices .composer-choice-permission.bypassing {
+  color: #e5c07b;
+}
 .markdown-message {
   white-space: normal;
 }

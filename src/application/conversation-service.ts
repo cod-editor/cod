@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { NativeAdapter } from "../providers/adapter";
+import { ClaudeAdapter } from "../providers/claude-adapter";
 import {
   verifyLinkedCodexRollout,
   type LinkedCodexRollout,
@@ -57,7 +58,11 @@ import type {
   OperationRequest,
 } from "../types";
 import { ApplicationStateStore } from "./state";
-import type { DraftOptionChange, ProviderOptions } from "../providers/types";
+import type {
+  ClaudePermissionChoice,
+  DraftOptionChange,
+  ProviderOptions,
+} from "../providers/types";
 import type { TerminalApplicationService } from "./terminal-service";
 import { requiredString, providerId, object } from "./request";
 export interface ConversationViewPort {
@@ -77,6 +82,7 @@ export class ConversationApplicationService {
   private generations = new Map<string, number>();
   private activeTurns = new Set<string>();
   private claudeAdmissions = new Set<string>();
+  private claudePermissionChanges = new Set<string>();
   private externalTurns = new Set<string>();
   private steering = new Set<string>();
   private pendingToolResults = new Map<string, number>();
@@ -835,6 +841,7 @@ export class ConversationApplicationService {
   async adapterFor(
     conversation: ConversationState,
     onEvent?: (event: ProviderEvent) => void,
+    allowClaudeBypass = false,
   ): Promise<ProviderAdapter> {
     const resolved = await resolveProviderExecutable(conversation.provider);
     if (this.store.closing) throw new Error("Cod is shutting down");
@@ -887,6 +894,7 @@ export class ConversationApplicationService {
       env,
       ...(auth && { claudeEnvironment: () => auth.environment(env) }),
       ...(conversation.provider === "claude" && {
+        claudeBypassAllowed: allowClaudeBypass,
         claudeSelection: conversation.claudeSelection,
       }),
       onEvent:
@@ -1117,6 +1125,7 @@ export class ConversationApplicationService {
 
   async loadController(
     conversation: ConversationState,
+    replaceForClaudePermission?: ClaudePermissionChoice,
   ): Promise<ProviderAdapter> {
     if (conversation.handoffTerminalId)
       throw new Error(
@@ -1139,6 +1148,7 @@ export class ConversationApplicationService {
         this.claudeRevisions.get(existing) !== this.claudeApi.revision;
       if (
         conversation.status !== "failed" &&
+        replaceForClaudePermission === undefined &&
         (!credentialsChanged ||
           conversation.status === "working" ||
           conversation.status === "waiting")
@@ -1153,7 +1163,11 @@ export class ConversationApplicationService {
       this.assertCurrent(conversation);
     }
     await this.recoverIdleClaudeSubmission(conversation);
-    const adapter = await this.adapterFor(conversation);
+    const adapter = await this.adapterFor(
+      conversation,
+      undefined,
+      replaceForClaudePermission === "bypassPermissions",
+    );
     this.assertCurrent(conversation);
     this.controllers.set(conversation.id, adapter);
     const staged = emptyHistory();
@@ -1204,6 +1218,86 @@ export class ConversationApplicationService {
       throw new Error(
         conversation.error ?? "The native Claude Code connection ended",
       );
+  }
+
+  claudePermissionMode(id: string) {
+    const adapter = this.controllers.get(id);
+    return adapter instanceof ClaudeAdapter
+      ? adapter.permissionMode
+      : undefined;
+  }
+
+  private assertStableClaudePermissions(id: string): void {
+    if (this.claudePermissionChanges.has(id))
+      throw new Error("Wait for the Claude Code permission change to finish");
+  }
+
+  async setClaudePermissionMode(
+    id: string,
+    mode: ClaudePermissionChoice,
+    confirm: (label: string) => Promise<boolean>,
+  ): Promise<void> {
+    const conversation = this.store.conversation(id);
+    const original = this.controllers.get(id);
+    const assertIdle = () => {
+      this.assertCurrent(conversation);
+      if (
+        this.store.data.activeWorkspaceId !== conversation.workspaceId ||
+        this.controllers.get(id) !== original ||
+        this.controllerInitializations.has(id) ||
+        conversation.status !== "ready" ||
+        conversation.handoffTerminalId ||
+        conversation.pendingPermissions.length ||
+        conversation.claudeSubmission ||
+        conversation.queuedMessages?.length
+      )
+        throw new Error("Claude Code must be idle with no pending requests");
+    };
+    if (
+      conversation.provider !== "claude" ||
+      !(original instanceof ClaudeAdapter)
+    )
+      throw new Error(
+        "Open the local Claude Code chat before changing permissions",
+      );
+    assertIdle();
+    if (original.permissionMode === mode) return;
+    this.reserve(id);
+    this.claudePermissionChanges.add(id);
+    try {
+      if (
+        mode === "bypassPermissions" &&
+        !(await confirm(conversationLabel(conversation, this.store.data)))
+      )
+        return;
+      assertIdle();
+      const apply = async () => {
+        const adapter = await this.loadController(conversation, mode);
+        if (!(adapter instanceof ClaudeAdapter))
+          throw new Error("Claude Code controller is unavailable");
+        if (mode === "bypassPermissions") {
+          try {
+            await adapter.enablePermissionBypass();
+            this.assertCurrent(conversation);
+          } catch {
+            await this.loadController(conversation, "default");
+            throw new Error("Claude Code did not allow bypass confirmations");
+          }
+        }
+        return adapter;
+      };
+      const replacement = apply();
+      this.controllerInitializations.set(id, replacement);
+      try {
+        await replacement;
+      } finally {
+        if (this.controllerInitializations.get(id) === replacement)
+          this.controllerInitializations.delete(id);
+      }
+    } finally {
+      this.claudePermissionChanges.delete(id);
+      this.release(id);
+    }
   }
 
   validateImages(
@@ -1408,6 +1502,7 @@ export class ConversationApplicationService {
     questionId?: string,
   ): Promise<{ id: string; status: string; messageId?: string }> {
     const conversation = this.store.conversation(requiredString(request, "id"));
+    this.assertStableClaudePermissions(conversation.id);
     if (conversation.transfer)
       throw new Error("Resolve the pending move to Linux first");
     const awaitNativeReceipt =
@@ -1447,6 +1542,7 @@ export class ConversationApplicationService {
       )
     )
       throw new Error("Claude Code already saved that prompt.");
+    this.assertStableClaudePermissions(conversation.id);
     if (!fromQueue && request.pageId && this.isActive(conversation.id))
       throw new Error("Origin conversation is busy");
     if (
@@ -1505,6 +1601,7 @@ export class ConversationApplicationService {
       await this.store.change(() => {
         if (this.store.closing) throw new Error("Cod is shutting down");
         this.assertCurrent(conversation);
+        this.assertStableClaudePermissions(conversation.id);
         if ((conversation.queuedMessages?.length ?? 0) >= 100)
           throw new Error("Message queue is full");
         (conversation.queuedMessages ??= []).push({
@@ -2013,6 +2110,7 @@ export class ConversationApplicationService {
 
   async interruptConversation(id: string): Promise<{ id: string }> {
     const conversation = this.store.conversation(id);
+    this.assertStableClaudePermissions(id);
     const adapter = this.controllers.get(id);
     if (!adapter)
       throw new Error("Conversation has no running provider controller");
@@ -2038,6 +2136,10 @@ export class ConversationApplicationService {
       (item) => item.id === id,
     );
     if (!conversation) return;
+    if (event.type === "permission-mode") {
+      this.store.notify();
+      return;
+    }
     if (event.type === "background") {
       const activities = conversation.backgroundActivities ?? [];
       const next = activities.filter((item) => item.id !== event.removeId);

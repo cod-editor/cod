@@ -849,6 +849,35 @@ async function start(): Promise<void> {
         return claudeApi.command(request);
       },
     );
+    ipcMain.handle(
+      "cod:claude-permission-mode",
+      (event, id: unknown, mode: unknown) => {
+        requireShellRenderer(event);
+        const parent = mainWindow;
+        if (
+          !parent ||
+          remoteView ||
+          typeof id !== "string" ||
+          (mode !== "default" && mode !== "bypassPermissions")
+        )
+          throw new Error(
+            "Choose a permission mode in the local Claude Code chat",
+          );
+        return operations.setClaudePermissionMode(id, mode, async (label) => {
+          const { response } = await dialog.showMessageBox(parent, {
+            type: "warning",
+            title: "Claude Code permissions",
+            message: "Bypass Claude Code confirmations?",
+            detail: `Claude Code may run tools without asking in “${label}” until it reconnects. Managed rules still apply.`,
+            buttons: ["Cancel", "Bypass confirmations"],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          return response === 1 && mainWindow === parent && !remoteView;
+        });
+      },
+    );
     ipcMain.handle("cod:keymap", (event) => {
       requireShellRenderer(event);
       return keymapState;

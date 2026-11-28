@@ -16,6 +16,7 @@ import { emptyHistory, stageClaudeHistory } from "../conversation-history.ts";
 import { claudePromptText, trailingImageMarker } from "../message-label.ts";
 import type {
   AdapterOptions,
+  ClaudePermissionMode,
   Conversation,
   DraftOptionChange,
   ImageAttachment,
@@ -137,6 +138,8 @@ export class ClaudeAdapter implements ProviderAdapter {
   private streamedItem?: string;
   private sentText = new Set<string>();
   private model?: string;
+  private observedPermissionMode: ClaudePermissionMode = "default";
+  private permissionModeChange?: ReturnType<typeof deferred<void>>;
   private selection: ProviderOptions["current"] = {};
   private selectionWarning?: string;
 
@@ -149,6 +152,12 @@ export class ClaudeAdapter implements ProviderAdapter {
 
   get nativeId() {
     return this.id;
+  }
+
+  get permissionMode() {
+    return this.failure || this.closed
+      ? undefined
+      : this.observedPermissionMode;
   }
 
   subscribe(listener: (event: ProviderEvent) => void) {
@@ -237,6 +246,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         environment: this.options.claudeEnvironment,
         nativeId: id,
         resume: Boolean(history),
+        allowBypass: this.options.claudeBypassAllowed,
         canUseTool: this.canUseTool,
       },
       this.inputs(),
@@ -303,6 +313,19 @@ export class ClaudeAdapter implements ProviderAdapter {
       event.session_id === this.id
     )
       this.acceptPrompt(event.uuid);
+    if (
+      event.type === "system" &&
+      (event.subtype === "init" || event.subtype === "status") &&
+      event.session_id === this.id &&
+      event.permissionMode
+    ) {
+      if (event.permissionMode !== this.observedPermissionMode) {
+        this.observedPermissionMode = event.permissionMode;
+        this.emit({ type: "permission-mode" });
+      }
+      if (event.permissionMode === "bypassPermissions")
+        this.permissionModeChange?.resolve();
+    }
     if (event.type === "system" && event.subtype === "init") {
       this.model = event.model;
       return;
@@ -517,8 +540,38 @@ export class ClaudeAdapter implements ProviderAdapter {
     }));
   }
 
+  async enablePermissionBypass(): Promise<void> {
+    if (
+      !this.options.claudeBypassAllowed ||
+      this.active ||
+      this.permissions.size ||
+      this.permissionModeChange
+    )
+      throw new Error("Claude Code permissions cannot change in this session");
+    const confirmed = deferred<void>();
+    this.permissionModeChange = confirmed;
+    const timer = setTimeout(
+      () => confirmed.reject(new Error("Claude Code did not confirm the mode")),
+      5_000,
+    );
+    try {
+      await Promise.all([
+        this.query().setPermissionMode("bypassPermissions"),
+        confirmed.promise,
+      ]);
+      if (this.permissionMode !== "bypassPermissions")
+        throw new Error("Claude Code did not keep the requested mode");
+    } finally {
+      clearTimeout(timer);
+      this.permissionModeChange = undefined;
+    }
+  }
+
   private async close() {
     this.closed = true;
+    this.permissionModeChange?.reject(
+      new Error("Claude Code controller closed"),
+    );
     for (const settle of this.permissions.values())
       settle({ behavior: "deny", message: "Controller closed" });
     this.active?.reject(new Error("Claude Code controller closed"));
